@@ -39,12 +39,7 @@ pub struct YardError {
 
 impl YardError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            hint: None,
-            data: None,
-        }
+        Self { code, message: message.into(), hint: None, data: None }
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {

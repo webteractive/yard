@@ -1,19 +1,11 @@
 use assert_cmd::Command;
 
 fn yard(args: &[&str]) -> std::process::Output {
-    Command::cargo_bin("yard")
-        .unwrap()
-        .args(args)
-        .output()
-        .unwrap()
+    Command::cargo_bin("yard").unwrap().args(args).output().unwrap()
 }
 
 fn first_line(out: &std::process::Output) -> String {
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_string()
+    String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or_default().to_string()
 }
 
 #[test]

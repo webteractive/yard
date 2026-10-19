@@ -11,15 +11,8 @@ pub const RESOLVER_REMOVE: &str = "resolver.remove";
 pub const STATUS: &str = "status";
 
 /// Everything the helper accepts. `ca.trust` / `ca.untrust` join in M3.
-pub const VERBS: [&str; 7] = [
-    NGINX_START,
-    NGINX_STOP,
-    NGINX_RELOAD,
-    NGINX_TEST_CONFIG,
-    RESOLVER_INSTALL,
-    RESOLVER_REMOVE,
-    STATUS,
-];
+pub const VERBS: [&str; 7] =
+    [NGINX_START, NGINX_STOP, NGINX_RELOAD, NGINX_TEST_CONFIG, RESOLVER_INSTALL, RESOLVER_REMOVE, STATUS];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolverParams {

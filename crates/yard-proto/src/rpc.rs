@@ -18,12 +18,7 @@ pub struct Request {
 
 impl Request {
     pub fn new(id: u64, method: &str, params: Value) -> Self {
-        Self {
-            jsonrpc: JSONRPC.into(),
-            id: Some(id),
-            method: method.into(),
-            params,
-        }
+        Self { jsonrpc: JSONRPC.into(), id: Some(id), method: method.into(), params }
     }
 }
 
@@ -41,11 +36,7 @@ impl From<YardError> for RpcError {
             ErrorCode::MethodNotFound => -32601,
             _ => -32000,
         };
-        Self {
-            code,
-            message: e.message.clone(),
-            data: e,
-        }
+        Self { code, message: e.message.clone(), data: e }
     }
 }
 
@@ -61,21 +52,11 @@ pub struct Response {
 
 impl Response {
     pub fn ok(id: u64, result: Value) -> Self {
-        Self {
-            jsonrpc: JSONRPC.into(),
-            id,
-            result: Some(result),
-            error: None,
-        }
+        Self { jsonrpc: JSONRPC.into(), id, result: Some(result), error: None }
     }
 
     pub fn err(id: u64, error: YardError) -> Self {
-        Self {
-            jsonrpc: JSONRPC.into(),
-            id,
-            result: None,
-            error: Some(error.into()),
-        }
+        Self { jsonrpc: JSONRPC.into(), id, result: None, error: Some(error.into()) }
     }
 
     pub fn into_result(self) -> Result<Value, YardError> {
@@ -96,11 +77,7 @@ pub struct Notification {
 
 impl Notification {
     pub fn event(event: Event) -> Self {
-        Self {
-            jsonrpc: JSONRPC.into(),
-            method: "event".into(),
-            params: event,
-        }
+        Self { jsonrpc: JSONRPC.into(), method: "event".into(), params: event }
     }
 }
 
@@ -108,8 +85,7 @@ impl Notification {
 /// inside strings, so the only raw newline is the terminator.
 pub fn encode_line<T: Serialize>(value: &T) -> Vec<u8> {
     let mut line = serde_json::to_vec(value).unwrap_or_else(|e| {
-        serde_json::to_vec(&YardError::internal(format!("unserializable message: {e}")))
-            .unwrap_or_default()
+        serde_json::to_vec(&YardError::internal(format!("unserializable message: {e}"))).unwrap_or_default()
     });
     line.push(b'\n');
     line
@@ -142,14 +118,8 @@ mod tests {
 
     #[test]
     fn protocol_errors_use_standard_codes() {
-        assert_eq!(
-            RpcError::from(YardError::new(ErrorCode::MethodNotFound, "x")).code,
-            -32601
-        );
-        assert_eq!(
-            RpcError::from(YardError::new(ErrorCode::InvalidRequest, "x")).code,
-            -32600
-        );
+        assert_eq!(RpcError::from(YardError::new(ErrorCode::MethodNotFound, "x")).code, -32601);
+        assert_eq!(RpcError::from(YardError::new(ErrorCode::InvalidRequest, "x")).code, -32600);
     }
 
     #[test]

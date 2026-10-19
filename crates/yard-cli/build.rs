@@ -19,12 +19,7 @@ fn main() {
     let secs = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
-        });
+        .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
     println!("cargo:rustc-env=YARD_BUILD_DATE={}", civil_date(secs));
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 

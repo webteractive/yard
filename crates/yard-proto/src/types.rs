@@ -46,14 +46,8 @@ pub enum SiteSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SiteKind {
-    Php {
-        path: String,
-        docroot: String,
-        php: String,
-    },
-    Proxy {
-        target: String,
-    },
+    Php { path: String, docroot: String, php: String },
+    Proxy { target: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,65 +179,37 @@ mod tests {
     #[test]
     fn profile_values() {
         assert_eq!(
-            (
-                Profile::Trial.tld(),
-                Profile::Trial.http_port(),
-                Profile::Trial.https_port()
-            ),
+            (Profile::Trial.tld(), Profile::Trial.http_port(), Profile::Trial.https_port()),
             ("yard", 8080, 8443)
         );
         assert_eq!(
-            (
-                Profile::Default.tld(),
-                Profile::Default.http_port(),
-                Profile::Default.https_port()
-            ),
+            (Profile::Default.tld(), Profile::Default.http_port(), Profile::Default.https_port()),
             ("test", 80, 443)
         );
-        assert_eq!(
-            serde_json::to_value(Profile::Trial).unwrap(),
-            json!("trial")
-        );
+        assert_eq!(serde_json::to_value(Profile::Trial).unwrap(), json!("trial"));
     }
 
     #[test]
     fn unit_state_is_tagged() {
         let s = UnitState::Backoff { retry_in_ms: 2000 };
-        assert_eq!(
-            serde_json::to_value(&s).unwrap(),
-            json!({"state":"backoff","retry_in_ms":2000})
-        );
-        assert_eq!(
-            serde_json::to_value(UnitState::Running).unwrap(),
-            json!({"state":"running"})
-        );
+        assert_eq!(serde_json::to_value(&s).unwrap(), json!({"state":"backoff","retry_in_ms":2000}));
+        assert_eq!(serde_json::to_value(UnitState::Running).unwrap(), json!({"state":"running"}));
     }
 
     #[test]
     fn port_enums_are_snake_case() {
-        assert_eq!(
-            serde_json::to_value(PortMode::Preferred).unwrap(),
-            json!("preferred")
-        );
+        assert_eq!(serde_json::to_value(PortMode::Preferred).unwrap(), json!("preferred"));
         assert_eq!(
             serde_json::to_value(PortStatus::ExternalNotListening).unwrap(),
             json!("external_not_listening")
         );
-        assert_eq!(
-            serde_json::to_value(HolderKind::BrewServices).unwrap(),
-            json!("brew_services")
-        );
-        assert_eq!(
-            serde_json::to_value(CheckStatus::Warn).unwrap(),
-            json!("warn")
-        );
+        assert_eq!(serde_json::to_value(HolderKind::BrewServices).unwrap(), json!("brew_services"));
+        assert_eq!(serde_json::to_value(CheckStatus::Warn).unwrap(), json!("warn"));
     }
 
     #[test]
     fn site_kind_is_tagged() {
-        let k = SiteKind::Proxy {
-            target: "http://127.0.0.1:3000".into(),
-        };
+        let k = SiteKind::Proxy { target: "http://127.0.0.1:3000".into() };
         assert_eq!(
             serde_json::to_value(&k).unwrap(),
             json!({"kind":"proxy","target":"http://127.0.0.1:3000"})

@@ -3,14 +3,8 @@
 use clap::{Parser, Subcommand};
 
 /// `0.1.0 (abc1234, 2026-10-19)` — clap prefixes the binary name.
-pub const LONG_VERSION: &str = concat!(
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("YARD_BUILD_COMMIT"),
-    ", ",
-    env!("YARD_BUILD_DATE"),
-    ")"
-);
+pub const LONG_VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), " (", env!("YARD_BUILD_COMMIT"), ", ", env!("YARD_BUILD_DATE"), ")");
 
 #[derive(Debug, Parser)]
 #[command(
