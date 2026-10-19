@@ -161,3 +161,21 @@ async fn nginx_does_not_inherit_helper_sockets() {
     helper.stop_nginx().await.unwrap();
     assert!(!inherited, "nginx holds a socket it inherited from the helper");
 }
+
+#[tokio::test]
+async fn nginx_refuses_a_root_others_can_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write_nginx_conf(free_port());
+    let resolver = tempfile::tempdir().unwrap();
+    let helper = spawn_helper(&fx, resolver.path()).await;
+    let root = fx.paths.root();
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    let start = helper.start_nginx().await.unwrap_err();
+    assert_eq!(start.code, ErrorCode::HelperRefused, "{start:?}");
+    assert!(start.message.contains("writable by other users"), "{}", start.message);
+    assert_eq!(helper.test_nginx().await.unwrap_err().code, ErrorCode::HelperRefused);
+    assert_eq!(helper.status().await.unwrap().nginx_pid, None);
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+}

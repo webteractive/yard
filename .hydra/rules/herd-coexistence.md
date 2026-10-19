@@ -17,6 +17,8 @@ triggers:
 - The default profile is **trial**: TLD `yard`, nginx-http 8080, nginx-https 8443,
   dnsmasq 53535. Do not change the default, and do not run `yard ports profile default`
   on this machine except to check that it is refused with Herd named as the holder.
+  The switch is also refused while `/etc/resolver/<tld>` lacks Yard's marker, so with
+  Herd quit it still fails with `RESOLVER_FOREIGN` rather than half-switching.
 - Yard **only reads** Herd's files (`~/Library/Application Support/Herd/`, mainly
   `config/valet/`). Never write, move or delete anything there, and never quit Herd
   or its services. Stopping Herd is `yard takeover`'s job, and it asks first.

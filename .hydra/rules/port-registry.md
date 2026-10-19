@@ -14,7 +14,8 @@ triggers:
 - No unit binds a port the registry has not granted (`ports.toml`, spec §7). A new
   listener means a new registry entry with a mode. A proxy target is an `external`
   entry `proxy:<name>`.
-- Checks happen at three points: allocation (no two entries share a port), pre-start
+- Checks happen at three points: allocation (`Registry::parse` rejects two non-external
+  entries on one port as `CONFIG_INVALID` at the later line), pre-start
   (a bind probe, which on failure goes straight to `Failed` with the holder and does not
   back off, since retrying cannot free a foreign port), and runtime (health probes plus
   a 30 s scan of idle registered ports that emits `port.conflict`).
@@ -29,8 +30,9 @@ triggers:
 - Holders come from `/usr/sbin/lsof` plus `proc_pidpath`, not the `libproc` crate (its
   bindgen build needs libclang and adds BSD-3/ISC licenses).
 - A unit's own running port counts as free for that unit. A busy port whose unit is
-  `Running` has status `yard`, which matters because a root-owned nginx is invisible to
-  lsof as the user.
+  `Running` has status `yard`: lsof does see nginx (its workers run as the user and
+  hold the listening sockets), but only as a plain `nginx` process, so whether it is
+  Yard's comes from the unit, not the holder.
 - Socket tests take `crate::PORT_TESTS`: macOS hands out ephemeral ports in sequence,
   so parallel tests otherwise land on each other's ports.
 - Holder classification (`ports::holder::classify`) is pure and tested: Herd, brew

@@ -36,6 +36,7 @@ pub async fn install(ctx: &Ctx) -> Outcome {
     } else {
         Paths::from_vars(None, Some(owner.home.clone()))?
     };
+    let paths = Paths::new(helper_root(paths.root(), owner.uid)?);
     let brew = Brew::detect(&|p: &Path| p.exists())?;
 
     let binary = Path::new(HELPER_BINARY);
@@ -77,8 +78,17 @@ pub async fn install(ctx: &Ctx) -> Outcome {
     Ok(0)
 }
 
-pub fn uninstall(ctx: &Ctx) -> Outcome {
+pub async fn uninstall(ctx: &Ctx) -> Outcome {
     require_root("uninstall")?;
+    // nginx outlives the helper's launchd job, and only the helper can stop it.
+    if let Err(e) = HelperClient::new(HELPER_SOCKET).stop_nginx().await
+        && e.code != ErrorCode::HelperNotInstalled
+    {
+        eprintln!(
+            "warning: could not stop nginx ({}); its pid is in run/nginx.pid under the data root",
+            e.message
+        );
+    }
     let _ = launchctl(&["bootout", &format!("system/{HELPER_LABEL}")]);
     for file in [PLIST, HELPER_BINARY] {
         match std::fs::remove_file(file) {
@@ -96,6 +106,16 @@ pub fn uninstall(ctx: &Ctx) -> Outcome {
         out
     });
     Ok(0)
+}
+
+/// The data root the helper's plist names: absolute, since the helper runs from `/`, and
+/// writable by nobody but the owner, since root runs nginx from it.
+fn helper_root(root: &Path, owner_uid: u32) -> Result<PathBuf, YardError> {
+    let root = std::path::absolute(root).map_err(|e| {
+        YardError::new(ErrorCode::InvalidArgument, format!("cannot resolve {}: {e}", root.display()))
+    })?;
+    yard_helper::root_dir::check(&root, owner_uid)?;
+    Ok(root)
 }
 
 fn require_root(verb: &str) -> Result<(), YardError> {
@@ -172,4 +192,26 @@ fn remove_resolvers(dir: &Path) -> Result<Vec<String>, YardError> {
 
 fn io(path: &Path, e: std::io::Error) -> YardError {
     YardError::internal(format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn me() -> u32 {
+        // SAFETY: getuid cannot fail.
+        unsafe { libc::getuid() }
+    }
+
+    #[test]
+    fn helper_root_is_absolute_and_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(helper_root(dir.path(), me()).unwrap(), dir.path());
+        assert!(helper_root(Path::new("yard-dev"), me()).unwrap().is_absolute());
+
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(helper_root(&shared, me()).unwrap_err().code, ErrorCode::HelperRefused);
+    }
 }

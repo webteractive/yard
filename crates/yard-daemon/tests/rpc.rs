@@ -19,7 +19,7 @@ use yard_proto::{CheckStatus, DoctorReport, ErrorCode, PROTOCOL_VERSION, YardErr
 
 struct Daemon {
     fx: Fixture,
-    _resolver: TempDir,
+    resolver: TempDir,
     parked: TempDir,
     opts: DaemonOptions,
     stop: Option<oneshot::Sender<()>>,
@@ -54,7 +54,7 @@ async fn prepared(extra_ports: &str) -> Daemon {
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
     let opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf(), resolver.path());
-    Daemon { fx, _resolver: resolver, parked, opts, stop: None, task: None }
+    Daemon { fx, resolver, parked, opts, stop: None, task: None }
 }
 
 impl Daemon {
@@ -246,6 +246,115 @@ async fn parked_mkdir_emits_site_added() {
 }
 
 #[tokio::test]
+async fn status_reports_a_failed_reconcile() {
+    let d = prepared("").await;
+    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    std::fs::write(d.fx.paths.nginx_override("blog"), "yard-test-broken;\n").unwrap();
+
+    std::fs::create_dir(d.parked.path().join("shop")).unwrap();
+    assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
+    d.shutdown().await.unwrap();
+}
+
+/// `config_error.code` from `status`, polled until it is `want` (or 5 s pass).
+async fn config_error_becomes(c: &mut Client, want: Value) -> Value {
+    let mut code = Value::Null;
+    for _ in 0..50 {
+        code = c.call("status", Value::Null).await.unwrap()["config_error"]["code"].clone();
+        if code == want {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    code
+}
+
+#[tokio::test]
+async fn override_edit_is_tested_and_applied() {
+    let d = prepared("").await;
+    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let over = d.fx.paths.nginx_override("blog");
+
+    std::fs::write(&over, "yard-test-broken;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
+    std::fs::write(&over, "client_max_body_size 2G;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, Value::Null).await, Value::Null);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_nginx_refuses_a_broken_config() {
+    let d = prepared("").await;
+    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    std::fs::write(d.fx.paths.nginx_override("blog"), "yard-test-broken;\n").unwrap();
+
+    let e = c.call("units.restart", json!({"unit": "nginx"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NginxConfigInvalid);
+    let units = c.call("status", Value::Null).await.unwrap()["units"].clone();
+    let nginx = units.as_array().unwrap().iter().find(|u| u["name"] == "nginx").unwrap().clone();
+    assert_eq!(nginx["state"], "running", "nginx keeps serving: {nginx}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn docroot_created_after_the_project_is_picked_up() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let blog = d.parked.path().join("blog");
+    std::fs::create_dir(&blog).unwrap();
+    let docroot = |sites: &Value| {
+        sites
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "blog")
+            .map(|s| s["docroot"].as_str().unwrap().to_string())
+    };
+    let mut seen = None;
+    for _ in 0..50 {
+        seen = docroot(&c.call("sites.list", Value::Null).await.unwrap());
+        if seen.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen.as_deref().is_some_and(|d| !d.ends_with("/public")), "blog is served from its root first");
+
+    // `laravel new` creates public/ seconds after the project directory.
+    std::fs::create_dir(blog.join("public")).unwrap();
+    for _ in 0..50 {
+        seen = docroot(&c.call("sites.list", Value::Null).await.unwrap());
+        if seen.as_deref().is_some_and(|d| d.ends_with("/public")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen.as_deref().is_some_and(|d| d.ends_with("/public")), "{seen:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn profile_switch_refuses_a_foreign_resolver() {
+    let d = prepared("").await.start().await;
+    // Herd's file. The check comes before any probe of 80/443, which tests never bind.
+    std::fs::write(d.resolver.path().join("test"), "nameserver 127.0.0.1\n").unwrap();
+    let before = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    let mut c = d.client().await;
+
+    let e = c.call("ports.profile", json!({"profile": "default"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ResolverForeign, "{e:?}");
+    assert!(e.message.contains("test"), "{}", e.message);
+    assert_eq!(std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap(), before);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn hand_edit_of_sites_toml_is_picked_up() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;
@@ -273,7 +382,16 @@ async fn foreign_listener_on_idle_port_emits_conflict() {
     let mut c = d.client().await;
     c.call("subscribe", json!({"topics": ["ports"]})).await.unwrap();
 
-    let _held = std::net::TcpListener::bind(("127.0.0.1", p)).unwrap();
+    // The daemon's scan binds the idle port for a moment to probe it; retry past that.
+    let mut held = None;
+    for _ in 0..100 {
+        if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", p)) {
+            held = Some(l);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let _held = held.expect("the port is ours between scans");
     let conflict = c
         .event_where(Duration::from_secs(5), |e| e["type"] == "port_conflict" && e["unit"] == "redis")
         .await

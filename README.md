@@ -72,7 +72,7 @@ error, 3 `yardd` is not running.
 | `yard ports` | yes | Registered ports with their mode, status and holder. |
 | `yard ports check` | optional | Probes every registered port now; exits 1 on a conflict. |
 | `yard ports set <unit> <port>`, `pin`, `unpin`, `range <a-b>`, `profile <trial\|default>` | yes | Changes the port registry. |
-| `yard restart <unit>` | yes | Restarts nginx, dnsmasq or `php-fpm-<version>`. |
+| `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 
 ## Development

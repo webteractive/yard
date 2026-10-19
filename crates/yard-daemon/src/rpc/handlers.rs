@@ -9,9 +9,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use toml_edit::{Array, value};
 use yard_core::config::{TomlFile, load_yard};
+use yard_core::paths::RESOLVER_MARKER;
+
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
 use yard_proto::methods::{
@@ -22,6 +24,9 @@ use yard_proto::{
     DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
     VersionInfo, YardError,
 };
+
+/// Herd's `.test` resolver is the foreign file this check usually meets.
+const HERD_APP: &str = "/Applications/Herd.app";
 
 pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value, YardError> {
     match method {
@@ -65,7 +70,7 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         }
         methods::UNITS_RESTART => {
             let p: UnitParams = parse(params)?;
-            json(ctx.supervisor().restart(&p.unit).await)
+            json(restart(ctx, &p.unit).await)
         }
         _ => Err(YardError::new(ErrorCode::MethodNotFound, format!("yardd has no method {method:?}"))),
     }
@@ -86,7 +91,7 @@ async fn snapshot(ctx: &Context) -> Result<Snapshot, YardError> {
         Some(s) => Ok(s),
         None => Err(ctx
             .reconciler
-            .config_error()
+            .last_error()
             .await
             .unwrap_or_else(|| YardError::internal("yardd has not finished its first reconcile"))),
     }
@@ -144,7 +149,7 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
             .unwrap_or_default(),
         units: ctx.supervisor().list(),
         sites: snapshot.as_ref().map_or(0, |s| s.resolution.sites.len()),
-        config_error: ctx.reconciler.config_error().await,
+        config_error: ctx.reconciler.last_error().await,
     })
 }
 
@@ -225,6 +230,17 @@ async fn park(ctx: &Context, p: PathParams, add: bool) -> Result<(), YardError> 
     reconcile(ctx).await
 }
 
+/// A restarted nginx loads every override, so a broken one is refused here instead of
+/// taking every site down. Without a helper the restart itself reports that.
+async fn restart(ctx: &Context, unit: &str) -> Result<(), YardError> {
+    if unit == "nginx"
+        && let Ok(rejected @ Err(_)) = ctx.reconciler.test_nginx().await
+    {
+        return rejected;
+    }
+    ctx.supervisor().restart(unit).await
+}
+
 async fn doctor(ctx: &Context) -> DoctorReport {
     let state = ctx.reconciler.state().await;
     doctor::run(DoctorInput {
@@ -284,6 +300,19 @@ async fn edit_ports(
 
 /// A profile switch may land on the ports nginx already holds; those count as free.
 async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
+    // Herd may be quit with its ports free, but its resolver still claims `.test`.
+    let tld = load_yard(&ctx.paths)?.tld.unwrap_or_else(|| profile.tld().to_string());
+    let file = ctx.resolver_dir.join(&tld);
+    if std::fs::read_to_string(&file).is_ok_and(|t| t.lines().next() != Some(RESOLVER_MARKER)) {
+        let owner = if tld == "test" && Path::new(HERD_APP).exists() { "Herd" } else { "another tool" };
+        return Err(YardError::new(
+            ErrorCode::ResolverForeign,
+            format!("{} belongs to {owner}, so .{tld} would not reach Yard", file.display()),
+        )
+        .with_hint(
+            "stay on the trial profile until yard takeover, or set `tld` in yard.toml to another name",
+        ));
+    }
     let nginx_running =
         ctx.supervisor().list().iter().any(|u| u.name == "nginx" && u.state == UnitState::Running);
     let current = Registry::load(&ctx.paths)?;

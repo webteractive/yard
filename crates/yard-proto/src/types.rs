@@ -168,6 +168,7 @@ pub struct StatusInfo {
     pub parked: Vec<String>,
     pub units: Vec<UnitInfo>,
     pub sites: usize,
+    /// Why the last reconcile failed, until one succeeds; the last good state keeps serving.
     pub config_error: Option<YardError>,
 }
 

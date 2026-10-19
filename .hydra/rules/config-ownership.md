@@ -31,8 +31,15 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
 - Every config change that touches `nginx/` runs `nginx -t` through the helper. On
   failure, roll back the whole write set and return `NGINX_CONFIG_INVALID` with
   nginx's output.
+- User overrides are applied too: the watcher sees `nginx/overrides/` and calls
+  `Reconciler::apply_overrides`, which runs `nginx -t` and reloads only if it passes.
+  `yard restart nginx` tests first and refuses a broken config, so a typo in an
+  override never takes sites down.
 - A TOML parse error never takes sites down. Keep the last good snapshot and report
-  `CONFIG_INVALID` with file, line and column.
+  `CONFIG_INVALID` with file, line and column. Values that would break a render are
+  parse errors too (`tld` against `valid_tld`, two units on one port), located at
+  their span. Every failed reconcile is kept in `State.last_error`, which `status`
+  and `doctor` report until a reconcile succeeds.
 - **Quote every path** in rendered output. The data root is
   `~/Library/Application Support/Yard`, and that space breaks unquoted nginx, fpm and ini values.
 - Yard never writes project `.env` files (spec non-goal).

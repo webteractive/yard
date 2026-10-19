@@ -23,8 +23,9 @@ pub struct State {
     pub paths: Paths,
     pub brew: Brew,
     pub snapshot: Option<Snapshot>,
-    /// Set while a TOML file does not parse; the snapshot keeps serving meanwhile.
-    pub config_error: Option<YardError>,
+    /// Why the last reconcile failed (a TOML that does not parse, nginx rejecting the
+    /// config, …), until one succeeds. The snapshot keeps serving meanwhile.
+    pub last_error: Option<YardError>,
     /// The resolver file the helper last wrote, as `(tld, port)`.
     pub applied_resolver: Option<(String, u16)>,
     pub hashes: Hashes,
@@ -33,6 +34,6 @@ pub struct State {
 impl State {
     pub fn new(paths: Paths, brew: Brew) -> Result<Self, YardError> {
         let hashes = Hashes::load(&paths.hashes())?;
-        Ok(Self { paths, brew, snapshot: None, config_error: None, applied_resolver: None, hashes })
+        Ok(Self { paths, brew, snapshot: None, last_error: None, applied_resolver: None, hashes })
     }
 }

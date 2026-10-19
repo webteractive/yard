@@ -132,6 +132,20 @@ impl Registry {
                 (DNSMASQ.to_string(), pinned(DNSMASQ_PORT)),
             ])
         });
+        // Two units binding one port can only come from a hand edit; Yard never allocates
+        // that. External entries may share a port: two proxies can target one app.
+        let mut seen: BTreeMap<u16, &str> = BTreeMap::new();
+        for (unit, e) in entries.iter().filter(|(_, e)| e.mode != PortMode::External) {
+            if let Some(first) = seen.insert(e.port, unit) {
+                let text = text.unwrap_or_default();
+                let at = [first, unit.as_str()]
+                    .iter()
+                    .filter_map(|u| text.find(&format!("{u} ")).map(|i| i..i + u.len()))
+                    .max_by_key(|r| r.start);
+                let message = format!("port {} is registered to both {first}, {unit}", e.port);
+                return Err(config_error(file, text, at, &message));
+            }
+        }
         Ok(Registry { range, auto_fallback: raw.auto_fallback.unwrap_or(false), profile, entries })
     }
 
@@ -562,6 +576,15 @@ mailpit-http = { port = 33001, mode = "auto" }
         );
         r.pin("dnsmasq").unwrap();
         assert_eq!(r.entries["dnsmasq"], PortEntry { port: 53535, mode: PortMode::Pinned, preferred: None });
+    }
+
+    #[test]
+    fn duplicate_port_is_a_config_error() {
+        let text = "[ports]\nnginx-http = { port = 8080, mode = \"pinned\" }\ndnsmasq = { port = 8080, mode = \"pinned\" }\n";
+        let e = Registry::parse(Some(text), file()).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        assert!(e.message.contains("8080") && e.message.contains("dnsmasq, nginx-http"), "{}", e.message);
+        assert_eq!(e.data.unwrap()["line"], 3);
     }
 
     #[test]

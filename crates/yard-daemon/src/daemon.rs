@@ -109,7 +109,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
         Err(e) => tracing::error!("first reconcile failed: {}", describe(&e)),
     }
-    let watcher = watch::spawn(ctx.clone(), opts.debounce);
+    // Docroots are rechecked on the port scan's cadence.
+    let watcher = watch::spawn(ctx.clone(), opts.debounce, opts.port_scan_interval);
     let scan = portscan::spawn(ctx.clone(), opts.port_scan_interval);
 
     rpc::server::serve(listener, ctx.clone(), shutdown).await;

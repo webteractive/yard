@@ -53,7 +53,7 @@ impl View {
     fn from_state(state: &State) -> Option<View> {
         let snap = state.snapshot.as_ref()?;
         Some(View {
-            config_error: state.config_error.clone(),
+            config_error: None,
             default_php: snap.yard.default_php,
             tld: Some(snap.tld.clone()),
             registry: Some(snap.registry.clone()),
@@ -115,7 +115,11 @@ impl View {
 pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     let paths = input.paths;
     let brew = input.brew;
-    let view = input.state.and_then(View::from_state).unwrap_or_else(|| View::from_files(paths));
+    let mut view = input.state.and_then(View::from_state).unwrap_or_else(|| View::from_files(paths));
+    // yardd's last failure covers more than a parse error: nginx rejecting the config, say.
+    if let Some(e) = input.state.and_then(|s| s.last_error.clone()) {
+        view.config_error = Some(e);
+    }
     let exists = |p: &Path| p.exists();
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let mut checks = vec![];
@@ -201,7 +205,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         None => warn("sites", "not checked while the configuration does not parse", view.config_hint()),
     });
 
-    checks.extend(units(&input.units));
+    checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
 }
 
@@ -333,7 +337,14 @@ fn generated(paths: &Paths, hashes: &Hashes) -> Check {
     )
 }
 
-fn units(units: &[UnitInfo]) -> Vec<Check> {
+fn units(units: &[UnitInfo], daemon_running: bool) -> Vec<Check> {
+    if daemon_running && units.is_empty() {
+        return vec![fail(
+            "units",
+            "yardd runs no units, so no site is served",
+            "fix what the config check names; yardd retries on the next change",
+        )];
+    }
     let mut checks: Vec<Check> = units
         .iter()
         .filter_map(|u| {

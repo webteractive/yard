@@ -79,8 +79,8 @@ impl Reconciler {
         self.state.lock().await.snapshot.clone()
     }
 
-    pub async fn config_error(&self) -> Option<YardError> {
-        self.state.lock().await.config_error.clone()
+    pub async fn last_error(&self) -> Option<YardError> {
+        self.state.lock().await.last_error.clone()
     }
 
     /// A copy, so `doctor` does not hold up a reconcile while it waits on the helper.
@@ -88,10 +88,45 @@ impl Reconciler {
         self.state.lock().await.clone()
     }
 
+    /// After a hand edit of `nginx/overrides/`: test nginx, then reload it or report why
+    /// not. Nothing is rendered, so nothing is rolled back; nginx keeps the old config.
+    pub async fn apply_overrides(&self) -> Result<(), YardError> {
+        let mut state = self.state.lock().await;
+        self.test_nginx().await?.inspect_err(|e| state.last_error = Some(e.clone()))?;
+        if state.last_error.as_ref().is_some_and(|e| e.code == ErrorCode::NginxConfigInvalid) {
+            state.last_error = None;
+        }
+        match self.supervisor.reload("nginx").await {
+            Err(e) if !matches!(e.code, ErrorCode::HelperRefused | ErrorCode::HelperNotInstalled) => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// A served PHP site whose detected docroot changed since the last reconcile, e.g.
+    /// `public/` appearing after `laravel new` created the project. FSEvents does not see
+    /// that, since only a parked path's direct children are watched.
+    pub async fn docroots_stale(&self) -> bool {
+        let state = self.state.lock().await;
+        let Some(snap) = &state.snapshot else { return false };
+        snap.resolution.sites.iter().any(|site| {
+            let SiteKind::Php { path, docroot, .. } = &site.kind else { return false };
+            let pinned = snap.sites_cfg.sites.get(&site.name).is_some_and(|e| e.docroot.is_some());
+            !pinned && sites::detect_docroot(Path::new(path), &|p: &Path| p.is_dir()) != Path::new(docroot)
+        })
+    }
+
+    /// `Ok(Err(..))` when nginx rejects the config; `Err` when the test could not run.
+    pub async fn test_nginx(&self) -> Result<Result<(), YardError>, YardError> {
+        let result = self.helper.test_nginx().await?;
+        Ok(if result.ok { Ok(()) } else { Err(nginx_rejected(&result.output)) })
+    }
+
     /// Serialized: a second call waits for the first to finish.
     pub async fn reconcile(&self) -> Result<ReconcileReport, YardError> {
         let mut state = self.state.lock().await;
-        self.run(&mut state).await
+        let result = self.run(&mut state).await;
+        state.last_error = result.as_ref().err().cloned();
+        result
     }
 
     async fn run(&self, state: &mut State) -> Result<ReconcileReport, YardError> {
@@ -100,13 +135,7 @@ impl Reconciler {
         // 1. Load config. A parse error keeps the last good state serving.
         let loaded = load_yard(&state.paths)
             .and_then(|y| Ok((y, load_sites(&state.paths)?, Registry::load(&state.paths)?)));
-        let (yard, sites_cfg, mut registry) = match loaded {
-            Ok(loaded) => loaded,
-            Err(e) => {
-                state.config_error = Some(e.clone());
-                return Err(e);
-            }
-        };
+        let (yard, sites_cfg, mut registry) = loaded?;
 
         // 2. Settle ports. A port one of our running units holds is free for that unit.
         let tld = yard.tld.clone().unwrap_or_else(|| registry.profile.tld().to_string());
@@ -321,7 +350,6 @@ impl Reconciler {
             self.bus.emit(Event::SiteRemoved { name: name.clone() });
         }
         state.snapshot = Some(Snapshot { yard, sites_cfg, registry, tld, resolution });
-        state.config_error = None;
         Ok(report)
     }
 

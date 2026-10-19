@@ -73,7 +73,11 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   read-only `status`.
   It takes no free-form paths or commands: the owning user, Yard's data
   directory and the Homebrew prefix are fixed when the helper is installed, and
-  the remaining arguments (TLD, port) are validated. nginx master runs as root
+  the remaining arguments (TLD, port) are validated. The data root must be
+  absolute, and it and every parent must be owned by the user or root and not
+  writable by group or others (sticky parents such as `/tmp` aside); the
+  install, `nginx.start` and `nginx.test_config` all check this, since another
+  user who could write the root would control the config root runs. nginx master runs as root
   (for 80/443); workers run as the user. It listens on
   `/var/run/dev.more.yard.helper.sock` and serves only the owning user's uid.
 - The helper is installed by `sudo yard helper install` (binary to
@@ -81,7 +85,7 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   the only path while there is no app (M1–M3). Yard.app registers the same
   helper through `SMAppService` from M4.
 - **`yard`** is a thin client. A few commands work offline without the daemon:
-  `doctor`, `start`, `version`, `ports check`.
+  `start`, `stop`, `version`, `doctor`, `ports check`, `helper install|uninstall`.
 - **Yard.app** holds no business logic; everything it can do, the CLI can do.
 
 ### 3.2 Repository layout
@@ -236,6 +240,10 @@ profile; Yard does not edit dotfiles.
 - Brew `nginx`, started and reloaded only through `yard-helper`.
 - Every config change runs `nginx -t` (via helper `nginx.test_config`) before
   reload; on failure the previous config set is restored and the error returned.
+- `yardd` watches `nginx/overrides/`. An edited override is checked with
+  `nginx -t` and reloaded; a rejected one leaves nginx serving the old config
+  and is reported as `NGINX_CONFIG_INVALID` by `status` and `doctor` until it
+  is fixed. `yard restart nginx` checks the config first and refuses a broken one.
 - Per-site server block: front-controller `try_files $uri $uri/ /index.php?$query_string`,
   static files served directly, websocket upgrade headers, `client_max_body_size 1G`,
   `fastcgi_read_timeout 3600` (step debugging), `include nginx/overrides/<site>.conf`.
@@ -248,7 +256,8 @@ profile; Yard does not edit dotfiles.
 - `yard-helper resolver.install` writes `/etc/resolver/<tld>` pointing at it.
   Only the Yard TLD is affected; system DNS is untouched.
 - The TLD is the active port profile's (`yard` for trial, `test` for default,
-  §7); an optional `tld` in `yard.toml` overrides it.
+  §7); an optional `tld` in `yard.toml` overrides it. It must match
+  `^[a-z][a-z0-9-]{0,62}$`, or the file is `CONFIG_INVALID` at its line.
 - `resolver.install` and `resolver.remove` only touch files carrying Yard's
   marker comment, so Herd's `/etc/resolver/test` is never overwritten or
   deleted.
@@ -271,6 +280,9 @@ profile; Yard does not edit dotfiles.
 - **Trial profile** (default until takeover): TLD `yard`, nginx on 8080/8443,
   so Herd and Yard run side by side. nginx is still started through the helper
   in both profiles, so there is one code path; only the listen ports differ.
+- `yard ports profile` refuses a switch whose TLD already has an
+  `/etc/resolver/<tld>` file without Yard's marker (`RESOLVER_FOREIGN`, naming
+  Herd for `test`), even when the ports are free because Herd is quit.
 - `yard migrate herd`: reads Herd's Valet config
   (`~/Library/Application Support/Herd/config/valet/`) for parked paths, links,
   isolated versions and secured sites; installs any missing PHP versions via
@@ -296,6 +308,10 @@ profile; Yard does not edit dotfiles.
 - **Reconcile loop:** on startup and on any state change, `yardd` reads the TOML
   files, renders all configs in memory, diffs against disk, writes changed
   files, and restarts or reloads only affected units. Reconcile is idempotent.
+  A failed reconcile keeps the last good state serving; its error is kept and
+  shown by `status` (`config_error`) and `doctor` until a reconcile succeeds.
+  A parked project whose docroot (e.g. `public/`) appears later is picked up by
+  the periodic scan.
 - On `yardd` shutdown, all child units are stopped; nginx is stopped via helper.
 
 ### 6.2 API
@@ -372,7 +388,9 @@ are named sets of pinned values; `yard ports profile <name>` switches them.
 
 **Checks**
 
-1. **Allocation:** the registry rejects two units on the same port.
+1. **Allocation:** the registry rejects two units on the same port; a
+   `ports.toml` with two non-`external` entries on one port is
+   `CONFIG_INVALID` at the later entry's line.
 2. **Pre-start:** a real bind probe on `127.0.0.1` and `::1`. On failure, the
    holder is identified via `lsof`, which reads libproc as the user (pid, process name, parent; labelled as
    Herd, brew services, Docker, or unknown when recognisable) and returned in

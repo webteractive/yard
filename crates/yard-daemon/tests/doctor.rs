@@ -262,3 +262,35 @@ fn exit_code_ignores_warnings() {
         DoctorReport { checks: vec![check("sites", CheckStatus::Warn), check("daemon", CheckStatus::Fail)] };
     assert_eq!(doctor::exit_code(&failed), 1);
 }
+
+#[tokio::test]
+async fn failed_reconcile_fails_config_and_units() {
+    let e = env().await;
+    let mut state = yard_daemon::state::State::new(e.fx.paths.clone(), e.brew()).unwrap();
+    state.last_error = Some(
+        yard_proto::YardError::new(
+            yard_proto::ErrorCode::NginxConfigInvalid,
+            "nginx rejected the new config",
+        )
+        .with_hint("fix the file named above"),
+    );
+    let brew = e.brew();
+
+    let report = doctor::run(DoctorInput {
+        paths: &e.fx.paths,
+        brew: &brew,
+        helper: &e.helper,
+        state: Some(&state),
+        units: vec![],
+        daemon_running: true,
+        resolver_dir: e.resolver.path(),
+    })
+    .await;
+
+    let config = only(&report, "config");
+    assert_eq!(config.status, CheckStatus::Fail);
+    assert!(config.message.contains("nginx rejected"), "{config:?}");
+    let units = only(&report, "units");
+    assert_eq!(units.status, CheckStatus::Fail, "yardd runs but serves nothing: {units:?}");
+    assert!(units.hint.is_some());
+}

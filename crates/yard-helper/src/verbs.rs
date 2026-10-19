@@ -1,7 +1,7 @@
 //! Dispatch for the fixed verb set. Anything else is `METHOD_NOT_FOUND`.
 
 use crate::nginx::Nginx;
-use crate::{HelperConfig, VERSION, resolver};
+use crate::{HelperConfig, VERSION, resolver, root_dir};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -32,6 +32,7 @@ impl Helper {
         match method {
             helper::NGINX_START => {
                 let _one = self.nginx_lock.lock().await;
+                root_dir::check(&self.cfg.root, self.cfg.uid)?;
                 to_value(self.nginx.start().await?)
             }
             helper::NGINX_STOP => {
@@ -42,7 +43,10 @@ impl Helper {
                 let _one = self.nginx_lock.lock().await;
                 to_value(self.nginx.reload()?)
             }
-            helper::NGINX_TEST_CONFIG => to_value(self.nginx.test_config().await?),
+            helper::NGINX_TEST_CONFIG => {
+                root_dir::check(&self.cfg.root, self.cfg.uid)?;
+                to_value(self.nginx.test_config().await?)
+            }
             helper::RESOLVER_INSTALL => {
                 let p: ResolverParams = params_of(params)?;
                 to_value(resolver::install(&self.cfg.resolver_dir, &p.tld, p.port)?)

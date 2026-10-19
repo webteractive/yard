@@ -194,7 +194,7 @@ async fn bad_toml_keeps_last_good_state() {
     let err = e.rec.reconcile().await.unwrap_err();
     assert_eq!(err.code, ErrorCode::ConfigInvalid);
     assert!(err.data.as_ref().is_some_and(|d| d["line"].is_number()), "{err:?}");
-    assert_eq!(e.rec.config_error().await.map(|e| e.code), Some(ErrorCode::ConfigInvalid));
+    assert_eq!(e.rec.last_error().await.map(|e| e.code), Some(ErrorCode::ConfigInvalid));
     assert!(e.rec.snapshot().await.is_some_and(|s| s.resolution.sites.len() == 1), "last good state kept");
     tokio::time::sleep(Duration::from_millis(100)).await;
     e.unit("nginx", running).await;
@@ -202,7 +202,7 @@ async fn bad_toml_keeps_last_good_state() {
 
     std::fs::write(e.fx.paths.sites_toml(), "").unwrap();
     e.rec.reconcile().await.unwrap();
-    assert!(e.rec.config_error().await.is_none());
+    assert!(e.rec.last_error().await.is_none());
     e.sup.shutdown().await;
 }
 
@@ -254,5 +254,24 @@ async fn emits_site_added_and_removed() {
         }
     }
     assert_eq!(sites, vec!["+blog", "-blog"]);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_reconcile_is_remembered_until_one_succeeds() {
+    let e = env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    let broken = e.fx.paths.nginx_override("blog");
+    std::fs::write(&broken, "yard-test-broken;\n").unwrap();
+
+    e.site("shop");
+    e.rec.reconcile().await.unwrap_err();
+    let last = e.rec.state().await.last_error.expect("the failure is kept");
+    assert_eq!(last.code, ErrorCode::NginxConfigInvalid);
+
+    std::fs::write(&broken, "").unwrap();
+    e.rec.reconcile().await.unwrap();
+    assert_eq!(e.rec.state().await.last_error, None);
     e.sup.shutdown().await;
 }

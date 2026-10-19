@@ -19,7 +19,15 @@ pub struct YardConfig {
 struct Raw {
     parked: Option<Vec<String>>,
     default_php: Option<PhpVersion>,
-    tld: Option<String>,
+    tld: Option<toml::Spanned<String>>,
+}
+
+/// `^[a-z][a-z0-9-]{0,62}$`: a DNS label, and a file name that cannot leave `/etc/resolver`.
+pub fn valid_tld(tld: &str) -> bool {
+    let mut bytes = tld.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+        && tld.len() <= 63
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 pub fn load_yard(paths: &Paths) -> Result<YardConfig, YardError> {
@@ -40,7 +48,17 @@ pub fn parse_yard(text: Option<&str>, file: &Path, home: &Path) -> Result<YardCo
         Some(list) => list.iter().map(|p| expand_tilde(p, home)).collect(),
         None => vec![home.join("Herd")],
     };
-    Ok(YardConfig { parked, default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld: raw.tld })
+    let tld = match raw.tld {
+        Some(t) if !valid_tld(t.get_ref()) => {
+            let message = format!(
+                "tld {:?} must be lowercase letters, digits and dashes, starting with a letter",
+                t.get_ref()
+            );
+            return Err(config_error(file, text.unwrap_or_default(), Some(t.span()), &message));
+        }
+        t => t.map(toml::Spanned::into_inner),
+    };
+    Ok(YardConfig { parked, default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld })
 }
 
 fn expand_tilde(p: &str, home: &Path) -> PathBuf {
@@ -84,6 +102,29 @@ mod tests {
         assert_eq!(data["file"], FILE);
         assert_eq!(data["line"], 2);
         assert!(data["column"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn tld_pattern() {
+        for ok in ["yard", "test", "a", "dev-1", &"a".repeat(63)] {
+            assert!(valid_tld(ok), "{ok}");
+        }
+        for bad in ["", "Yard", "1yard", "-yard", "ya.rd", "../etc", "ya/rd", &"a".repeat(64)] {
+            assert!(!valid_tld(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn invalid_tld_is_rejected_with_location() {
+        for bad in [".yard", "Yard", "ya;rd", ""] {
+            let text = format!("parked = []\ntld = {bad:?}\n");
+            let e = parse_yard(Some(&text), Path::new(FILE), Path::new("/h")).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ConfigInvalid, "{bad}");
+            assert!(e.message.contains("tld"), "{}", e.message);
+            assert_eq!(e.data.unwrap()["line"], 2, "{bad}");
+        }
+        let ok = parse_yard(Some("tld = \"dev-1\"\n"), Path::new(FILE), Path::new("/h")).unwrap();
+        assert_eq!(ok.tld.as_deref(), Some("dev-1"));
     }
 
     #[test]

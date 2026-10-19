@@ -17,7 +17,13 @@ triggers:
   (M3), and the read-only `status`. A new verb needs a spec change first (§3.1).
 - **No caller-supplied paths or commands, ever.** The owning uid and user, the data
   root and the brew prefix are fixed at install time as plist arguments. The only
-  caller arguments are a TLD (`^[a-z][a-z0-9-]{0,62}$`) and a port (1024–65535).
+  caller arguments are a TLD (`^[a-z][a-z0-9-]{0,62}$`, `yard_core::config::yard::valid_tld`)
+  and a port (1024–65535).
+- **The data root must be safe for root to read.** `root_dir::check` requires an
+  absolute root whose every directory, up through its canonical parents, is owned by
+  the owner or root and not group- or other-writable (sticky parents like `/tmp`
+  aside). `yard helper install` checks it, and the helper re-checks before
+  `nginx.start` and `nginx.test_config`.
 - Socket: `/var/run/dev.more.yard.helper.sock`, mode 0666, and every connection is
   checked with `getpeereid`. Only the owning uid (or root) is served. It is not in the
   data root, so root never creates files in a directory the user can rewrite.
@@ -32,9 +38,10 @@ triggers:
   pretending otherwise; do not remove the checks above either.
 - Install path (M1–M3): `sudo yard helper install` copies the binary to
   `/Library/PrivilegedHelperTools/dev.more.yard.helper` and writes
-  `/Library/LaunchDaemons/dev.more.yard.helper.plist`, both root:wheel. From M4 Yard.app
+  `/Library/LaunchDaemons/dev.more.yard.helper.plist`, both root:wheel.
+  `uninstall` stops nginx through the helper first: nginx outlives the helper's job. From M4 Yard.app
   registers the same helper with `SMAppService`.
 - Agents cannot type a sudo password. Ask the maintainer to run privileged commands with
-  `! sudo …`. Tests run the helper in-process as the current user, with a temp
+  sudo in a real terminal (the `!` prefix has no tty for the password). Tests run the helper in-process as the current user, with a temp
   `resolver_dir` and a fake nginx. `doctor` only reads the resolver file, from
   `DaemonOptions.resolver_dir` (`RESOLVER_DIR` in production).

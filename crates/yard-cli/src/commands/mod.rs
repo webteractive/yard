@@ -82,7 +82,7 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Ports { action: Some(action) } => ports::change(&ctx, action).await,
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
-        Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx),
+        Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,
     };
     match outcome {
         Ok(code) => code,

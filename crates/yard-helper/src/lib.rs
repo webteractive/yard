@@ -6,6 +6,7 @@
 mod nginx;
 mod peer;
 mod resolver;
+pub mod root_dir;
 mod verbs;
 
 use std::future::Future;

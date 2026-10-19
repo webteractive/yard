@@ -1,4 +1,6 @@
-//! FSEvents on the parked paths and the three TOML files; any change reconciles.
+//! FSEvents on the parked paths and the three TOML files; any change reconciles. An edit
+//! in `nginx/overrides/` is tested with `nginx -t` and, if it passes, reloaded. Every
+//! `rescan`, sites whose docroot appeared or vanished since are reconciled too.
 //!
 //! Only those paths count. Yard's own writes under `nginx/`, `php/` and `state/` must not
 //! trigger a reconcile, or every reconcile would schedule the next one.
@@ -14,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-pub fn spawn(ctx: Arc<Context>, debounce: Duration) -> JoinHandle<()> {
+pub fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> JoinHandle<()> {
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::unbounded_channel::<DebounceEventResult>();
         let mut debouncer = match new_debouncer(debounce, move |result| {
@@ -30,6 +32,10 @@ pub fn spawn(ctx: Arc<Context>, debounce: Duration) -> JoinHandle<()> {
         if let Err(e) = debouncer.watcher().watch(&root, RecursiveMode::NonRecursive) {
             tracing::warn!("cannot watch {}: {e}", root.display());
         }
+        let overrides = canonical(&ctx.paths.nginx_dir().join("overrides"));
+        if let Err(e) = debouncer.watcher().watch(&overrides, RecursiveMode::NonRecursive) {
+            tracing::warn!("cannot watch {}: {e}", overrides.display());
+        }
         let tomls: BTreeSet<PathBuf> =
             [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml()]
                 .iter()
@@ -38,7 +44,22 @@ pub fn spawn(ctx: Arc<Context>, debounce: Duration) -> JoinHandle<()> {
         let mut parked = BTreeSet::new();
         rewatch(&ctx, &mut debouncer, &mut parked).await;
 
-        while let Some(result) = rx.recv().await {
+        let mut tick = tokio::time::interval(rescan);
+        loop {
+            let result = tokio::select! {
+                result = rx.recv() => match result {
+                    Some(result) => result,
+                    None => return,
+                },
+                _ = tick.tick() => {
+                    if ctx.reconciler.docroots_stale().await
+                        && let Err(e) = ctx.reconciler.reconcile().await
+                    {
+                        tracing::warn!("reconcile after a docroot change: {}", describe(&e));
+                    }
+                    continue;
+                }
+            };
             let events = match result {
                 Ok(events) => events,
                 Err(e) => {
@@ -52,14 +73,17 @@ pub fn spawn(ctx: Arc<Context>, debounce: Duration) -> JoinHandle<()> {
                     || parked.contains(&path)
                     || path.parent().is_some_and(|p| parked.contains(p))
             });
-            if !relevant {
-                continue;
+            let overridden = events.iter().any(|e| canonical(&e.path).parent() == Some(overrides.as_path()));
+            if relevant {
+                match ctx.reconciler.reconcile().await {
+                    Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
+                    Err(e) => tracing::warn!("reconcile after a change: {}", describe(&e)),
+                }
+                rewatch(&ctx, &mut debouncer, &mut parked).await;
             }
-            match ctx.reconciler.reconcile().await {
-                Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
-                Err(e) => tracing::warn!("reconcile after a change: {}", describe(&e)),
+            if overridden && let Err(e) = ctx.reconciler.apply_overrides().await {
+                tracing::warn!("applying an override edit: {}", describe(&e));
             }
-            rewatch(&ctx, &mut debouncer, &mut parked).await;
         }
     })
 }
