@@ -60,6 +60,18 @@ impl Fixture {
     }
 }
 
+/// A test that panics never reaches its shutdown; stop the fake nginx it may have left.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if let Ok(pid) =
+            std::fs::read_to_string(self.paths.nginx_pid()).unwrap_or_default().trim().parse::<i32>()
+        {
+            // SAFETY: kill(2) on the pid the fake nginx wrote for this fixture.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+    }
+}
+
 fn place(dst: &Path, make: impl FnOnce(&Path) -> std::io::Result<()>) {
     std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
     make(dst).unwrap();

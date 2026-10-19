@@ -334,13 +334,15 @@ impl Reconciler {
             .registry
             .entries
             .iter()
-            .filter(|(unit, _)| {
-                let owner = if *unit == NGINX_HTTP || *unit == NGINX_HTTPS { "nginx" } else { unit.as_str() };
-                running.contains(owner)
-            })
+            .filter(|(unit, _)| running.contains(port_owner(unit)))
             .map(|(_, e)| e.port)
             .collect()
     }
+}
+
+/// The supervised unit behind a registry entry: nginx owns both nginx ports.
+pub fn port_owner(entry: &str) -> &str {
+    if entry == NGINX_HTTP || entry == NGINX_HTTPS { "nginx" } else { entry }
 }
 
 pub fn fpm_unit(v: PhpVersion) -> String {

@@ -1,14 +1,18 @@
 //! Yard's side effects: probing ports, spawning units, serving RPC.
 
+pub mod daemon;
 pub mod events;
 mod fds;
 pub mod helper_client;
 pub mod holder;
 pub mod logsink;
+pub mod portscan;
 pub mod probe;
 pub mod reconcile;
+pub mod rpc;
 pub mod state;
 pub mod supervisor;
+pub mod watch;
 
 /// Socket tests take this lock: macOS hands out ephemeral ports in sequence and lets a
 /// `SO_REUSEADDR` bind land on a port in TIME_WAIT, so parallel tests can share a port.

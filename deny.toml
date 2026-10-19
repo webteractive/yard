@@ -16,6 +16,10 @@ ignore = []
 [licenses]
 allow = [
     "Apache-2.0",
+    # notify (file watching) is a CC0 public-domain dedication.
+    "CC0-1.0",
+    # inotify, notify's Linux backend; checked because every target is.
+    "ISC",
     "MIT",
     "Unicode-3.0",
     "Unlicense",
