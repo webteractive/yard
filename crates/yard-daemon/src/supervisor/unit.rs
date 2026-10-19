@@ -4,7 +4,7 @@ use super::{Health, SupervisorConfig, Table, UnitKind, UnitSpec, lock};
 use crate::events::EventBus;
 use crate::helper_client::HelperClient;
 use crate::logsink::LogSink;
-use crate::{holder, probe};
+use crate::{describe, holder, probe};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -14,7 +14,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use yard_core::supervise::{Decision, RestartPolicy};
-use yard_proto::{Event, Holder, HolderKind, UnitState, YardError};
+use yard_proto::{ErrorCode, Event, Holder, HolderKind, UnitState, YardError};
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(200);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -27,6 +27,8 @@ pub enum Control {
 /// Why one run of the unit ended. The process is already gone when this is returned.
 enum Ended {
     Failure(String),
+    /// A failure retrying cannot fix (no helper installed): straight to `Failed`.
+    Fatal(String),
     Control(Control),
 }
 
@@ -58,6 +60,7 @@ impl Runner {
     pub async fn run(mut self) {
         let ack = loop {
             if let Some((port, proto)) = self.spec.port
+                && !self.holds_own_port().await
                 && !probe::is_free(port, proto)
             {
                 // Retrying cannot free a foreign port, so this skips the backoff.
@@ -74,6 +77,14 @@ impl Runner {
             match self.attempt().await {
                 Ended::Control(Control::Restart) => self.policy.reset(),
                 Ended::Control(Control::Stop(ack)) => break ack,
+                Ended::Fatal(reason) => {
+                    self.update(|u| u.last_error = Some(reason));
+                    self.enter_failed();
+                    match self.next_control().await {
+                        Control::Restart => self.policy.reset(),
+                        Control::Stop(ack) => break ack,
+                    }
+                }
                 Ended::Failure(reason) => {
                     self.update(|u| u.last_error = Some(reason));
                     match self.policy.on_failure(Instant::now()) {
@@ -108,7 +119,7 @@ impl Runner {
         self.set_state(UnitState::Starting);
         let mut process = match self.start().await {
             Ok(p) => p,
-            Err(reason) => return Ended::Failure(reason),
+            Err(ended) => return ended,
         };
         self.update(|u| u.pid = process.pid());
 
@@ -150,10 +161,18 @@ impl Runner {
         }
     }
 
-    async fn start(&self) -> Result<Process, String> {
+    /// nginx outlives yardd, so a running Yard nginx holding its own port is not a conflict.
+    async fn holds_own_port(&self) -> bool {
+        self.spec.kind == UnitKind::Nginx && self.helper.status().await.is_ok_and(|s| s.nginx_pid.is_some())
+    }
+
+    async fn start(&self) -> Result<Process, Ended> {
         match &self.spec.kind {
             UnitKind::Nginx => {
-                self.helper.start_nginx().await.map_err(|e| describe(&e))?;
+                self.helper.start_nginx().await.map_err(|e| match e.code {
+                    ErrorCode::HelperNotInstalled => Ended::Fatal(describe(&e)),
+                    _ => Ended::Failure(describe(&e)),
+                })?;
                 let pid = self.helper.status().await.ok().and_then(|s| s.nginx_pid);
                 Ok(Process::Nginx { pid })
             }
@@ -167,7 +186,9 @@ impl Runner {
                     .kill_on_drop(true);
                 // SAFETY: the hook makes only async-signal-safe calls.
                 unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
-                let mut child = cmd.spawn().map_err(|e| format!("cannot run {}: {e}", program.display()))?;
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|e| Ended::Failure(format!("cannot run {}: {e}", program.display())))?;
                 let mut readers = vec![];
                 if let Some(out) = child.stdout.take() {
                     readers.push(forward(out, self.sink.clone()));
@@ -309,17 +330,6 @@ pub(super) fn signal(pid: u32, sig: libc::c_int) -> Result<(), YardError> {
     } else {
         Err(YardError::internal(format!("cannot signal pid {pid}: {}", std::io::Error::last_os_error())))
     }
-}
-
-fn describe(e: &YardError) -> String {
-    match &e.hint {
-        Some(hint) => format!("{}: {} ({hint})", code_name(e), e.message),
-        None => format!("{}: {}", code_name(e), e.message),
-    }
-}
-
-fn code_name(e: &YardError) -> String {
-    serde_json::to_value(e.code).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
 fn port_in_use(port: u16, holder: Option<&Holder>) -> String {
