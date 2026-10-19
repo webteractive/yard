@@ -75,7 +75,9 @@ pub fn check(root: &Path, owner_uid: u32) -> Result<(), YardError> {
         check_dir(&next, pending.is_empty())?;
         current = next;
     }
-    Ok(())
+    // A trailing `..` (or a symlink to one) lands the root on a directory that was only
+    // checked as a parent, where a sticky shared directory passes.
+    check_dir(&current, true)
 }
 
 /// A path's names in order; `/` and `.` drop out and `..` is kept as `..`.
@@ -184,6 +186,19 @@ mod tests {
         assert!(check(&dir.path().join("abs"), me()).is_err(), "the target is the root here");
         assert!(check(&dir.path().join("rel"), me()).is_err());
         chmod(&shared, 0o755);
+    }
+
+    #[test]
+    fn dotdot_cannot_land_the_root_on_a_sticky_parent() {
+        // `/tmp/x/..` is `/tmp`: allowed above a root, never as the root itself.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::os::unix::fs::symlink("..", dir.path().join("sub/up")).unwrap();
+        chmod(dir.path(), 0o1777);
+        assert!(check(&dir.path().join("sub/.."), me()).is_err());
+        assert!(check(&dir.path().join("sub/up"), me()).is_err(), "nor through a symlink to ..");
+        check(&dir.path().join("sub"), me()).unwrap();
+        chmod(dir.path(), 0o700);
     }
 
     #[test]
