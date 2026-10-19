@@ -4,7 +4,7 @@
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
-use crate::{portscan, probe};
+use crate::{holder, portscan, probe};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -19,7 +19,7 @@ use yard_proto::methods::{
     RangeParams, UnitParams,
 };
 use yard_proto::{
-    DoctorReport, ErrorCode, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
+    DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
     VersionInfo, YardError,
 };
 
@@ -301,5 +301,64 @@ async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
     .await
     .map_err(YardError::internal)?;
     let is_free = |p: u16| free.iter().any(|(port, ok)| *port == p && *ok);
-    edit_registry(ctx, |r| r.set_profile(profile, &is_free)).await
+    match edit_registry(ctx, |r| r.set_profile(profile, &is_free)).await {
+        Err(e) if e.code == ErrorCode::PortInUse => {
+            tokio::task::spawn_blocking(move || Err(name_holders(e, &holder::find_holder)))
+                .await
+                .map_err(YardError::internal)?
+        }
+        result => result,
+    }
+}
+
+/// Adds who holds each refused port (`data.ports`) to the message and to `data.holders`,
+/// so a refused profile switch says "Herd" rather than only a port number.
+fn name_holders(e: YardError, find: &dyn Fn(u16) -> Option<Holder>) -> YardError {
+    let mut data = e.data.clone().unwrap_or_else(|| serde_json::json!({}));
+    let ports: Vec<u16> = data["ports"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|p| p.as_u64()?.try_into().ok()).collect())
+        .unwrap_or_default();
+    if ports.is_empty() {
+        return e;
+    }
+    let found: Vec<(u16, Option<Holder>)> = ports.into_iter().map(|p| (p, find(p))).collect();
+    let named: Vec<String> =
+        found.iter().map(|(p, h)| format!("port {p} is held by {}", holder::label(h.as_ref()))).collect();
+    data["holders"] = serde_json::json!(
+        found.iter().map(|(p, h)| serde_json::json!({ "port": p, "holder": h })).collect::<Vec<_>>()
+    );
+    YardError { message: format!("{}: {}", e.message, named.join("; ")), data: Some(data), ..e }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use yard_proto::{Holder, HolderKind};
+
+    #[test]
+    fn profile_refusal_names_each_holder() {
+        let refused =
+            YardError::new(ErrorCode::PortInUse, "cannot switch to the default profile: port 80, 443 in use")
+                .with_hint("free those ports first, or stay on the trial profile")
+                .with_data(json!({"ports": [80, 443]}));
+        let herd =
+            Holder { pid: 4534, name: "nginx-arm".into(), path: None, ppid: Some(1), kind: HolderKind::Herd };
+
+        let e = name_holders(refused, &|p| (p == 80).then(|| herd.clone()));
+
+        assert_eq!(e.code, ErrorCode::PortInUse);
+        assert!(e.message.contains("port 80 is held by nginx-arm (pid 4534, Herd)"), "{}", e.message);
+        assert!(
+            e.message.contains("port 443 is held by a process not visible to this user"),
+            "{}",
+            e.message
+        );
+        let data = e.data.unwrap();
+        assert_eq!(data["ports"], json!([80, 443]));
+        assert_eq!(data["holders"][0]["port"], 80);
+        assert_eq!(data["holders"][0]["holder"]["kind"], "herd");
+        assert!(data["holders"][1]["holder"].is_null());
+    }
 }

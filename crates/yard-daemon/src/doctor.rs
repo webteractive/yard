@@ -5,9 +5,9 @@
 
 use crate::daemon::VERSION;
 use crate::helper_client::HelperClient;
-use crate::portscan;
 use crate::reconcile::list_parked;
 use crate::state::State;
+use crate::{holder, portscan};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
@@ -267,12 +267,10 @@ fn ports(infos: &[PortInfo]) -> Vec<Check> {
         match (info.status, info.mode) {
             (PortStatus::InUse, PortMode::Pinned | PortMode::Preferred) => {
                 let mode = yard_core::ports::mode_str(info.mode);
-                let (holder, stop) = match &info.holder {
-                    Some(h) => (describe_holder(h), stop_command(h, port)),
-                    None => (
-                        "a process not visible to this user".to_string(),
-                        format!("sudo lsof -nP -iTCP:{port} -sTCP:LISTEN names it"),
-                    ),
+                let holder = holder::label(info.holder.as_ref());
+                let stop = match &info.holder {
+                    Some(h) => stop_command(h, port),
+                    None => format!("sudo lsof -nP -iTCP:{port} -sTCP:LISTEN names it"),
                 };
                 checks.push(fail(
                     "ports",
@@ -295,17 +293,6 @@ fn ports(infos: &[PortInfo]) -> Vec<Check> {
         checks.push(ok("ports", format!("{} registered ports are free or Yard's", infos.len())));
     }
     checks
-}
-
-fn describe_holder(h: &Holder) -> String {
-    let kind = match h.kind {
-        HolderKind::Herd => "Herd",
-        HolderKind::BrewServices => "brew services",
-        HolderKind::Docker => "Docker",
-        HolderKind::Yard => "another Yard",
-        HolderKind::Unknown => "unknown",
-    };
-    format!("{} (pid {}, {kind})", h.name, h.pid)
 }
 
 fn stop_command(h: &Holder, port: u16) -> String {

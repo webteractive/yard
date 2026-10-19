@@ -14,7 +14,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use yard_core::supervise::{Decision, RestartPolicy};
-use yard_proto::{ErrorCode, Event, Holder, HolderKind, UnitState, YardError};
+use yard_proto::{ErrorCode, Event, Holder, UnitState, YardError};
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(200);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -333,19 +333,5 @@ pub(super) fn signal(pid: u32, sig: libc::c_int) -> Result<(), YardError> {
 }
 
 fn port_in_use(port: u16, holder: Option<&Holder>) -> String {
-    let by = match holder {
-        Some(h) => format!("{} (pid {}, {})", h.name, h.pid, kind_label(h.kind)),
-        None => "a process not visible to this user".into(),
-    };
-    format!("PORT_IN_USE: port {port} is held by {by}")
-}
-
-fn kind_label(kind: HolderKind) -> &'static str {
-    match kind {
-        HolderKind::Herd => "Herd",
-        HolderKind::BrewServices => "brew services",
-        HolderKind::Docker => "Docker",
-        HolderKind::Yard => "Yard",
-        HolderKind::Unknown => "unknown",
-    }
+    format!("PORT_IN_USE: port {port} is held by {}", holder::label(holder))
 }

@@ -22,6 +22,8 @@ triggers:
   listeners). If that bind is refused, the port still counts as free when a reuse bind
   succeeds and nothing answers on connect: that is TIME_WAIT, which nginx can bind.
   Probe both `127.0.0.1` and `::1`, and UDP as well for dnsmasq.
+- Every `PORT_IN_USE` names the holder with `holder::label` (`nginx-arm (pid 4534, Herd)`);
+  a refused profile switch also lists them in `data.holders`.
 - `portscan::infos` is the one place a registered port gets a status and a holder;
   `ports.list`, `ports.check` and `doctor` all call it, so they always agree.
 - Holders come from `/usr/sbin/lsof` plus `proc_pidpath`, not the `libproc` crate (its

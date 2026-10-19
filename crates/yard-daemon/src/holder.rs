@@ -5,7 +5,7 @@
 
 use std::process::Command;
 use yard_core::ports::holder::classify;
-use yard_proto::Holder;
+use yard_proto::{Holder, HolderKind};
 
 const LSOF: &str = "/usr/sbin/lsof";
 
@@ -21,6 +21,19 @@ pub fn find_holder(port: u16) -> Option<Holder> {
     let path = pid_path(pid);
     let kind = classify(&name, path.as_deref(), ppid, None);
     Some(Holder { pid, name, path, ppid, kind })
+}
+
+/// How a conflict names the holder: `nginx-arm (pid 4534, Herd)`.
+pub fn label(holder: Option<&Holder>) -> String {
+    let Some(h) = holder else { return "a process not visible to this user".into() };
+    let kind = match h.kind {
+        HolderKind::Herd => "Herd",
+        HolderKind::BrewServices => "brew services",
+        HolderKind::Docker => "Docker",
+        HolderKind::Yard => "Yard",
+        HolderKind::Unknown => "unknown",
+    };
+    format!("{} (pid {}, {kind})", h.name, h.pid)
 }
 
 /// The first process in `lsof -F pcR` output: `p<pid>`, `R<ppid>`, `c<command>` lines.
@@ -56,7 +69,6 @@ fn pid_path(pid: u32) -> Option<String> {
 mod tests {
     use super::*;
     use std::net::TcpListener;
-    use yard_proto::HolderKind;
 
     #[test]
     fn bound_port_holder_is_us() {
@@ -74,6 +86,19 @@ mod tests {
         let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let p = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         assert_eq!(find_holder(p), None);
+    }
+
+    #[test]
+    fn label_names_holder_kind_and_pid() {
+        let herd = Holder {
+            pid: 4534,
+            name: "nginx-arm".into(),
+            path: Some("/Applications/Herd.app/Contents/Resources/bin/nginx-arm".into()),
+            ppid: Some(1),
+            kind: HolderKind::Herd,
+        };
+        assert_eq!(label(Some(&herd)), "nginx-arm (pid 4534, Herd)");
+        assert_eq!(label(None), "a process not visible to this user");
     }
 
     #[test]
