@@ -1,0 +1,175 @@
+//! `sudo yard helper install|uninstall`: the root LaunchDaemon `dev.more.yard.helper`.
+//!
+//! Everything the helper trusts (owner uid, data root, brew prefix) is fixed into its
+//! plist here, at install time, from `SUDO_UID`/`SUDO_USER`; callers never send it.
+
+use super::lifecycle::{launchctl, sibling, unloaded};
+use super::{Ctx, Outcome};
+use std::ffi::CString;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use yard_core::Paths;
+use yard_core::brew::Brew;
+use yard_core::paths::{HELPER_BINARY, HELPER_LABEL, HELPER_SOCKET, RESOLVER_DIR, RESOLVER_MARKER};
+use yard_core::render::launchd::helper_plist;
+use yard_daemon::helper_client::HelperClient;
+use yard_proto::{ErrorCode, YardError};
+
+const PLIST: &str = "/Library/LaunchDaemons/dev.more.yard.helper.plist";
+const READY_WAIT: Duration = Duration::from_secs(5);
+
+/// Whose helper this is: the user who ran sudo.
+struct Owner {
+    uid: u32,
+    user: String,
+    home: PathBuf,
+}
+
+pub async fn install(ctx: &Ctx) -> Outcome {
+    require_root("install")?;
+    let owner = owner()?;
+    let source = sibling("yard-helper")?;
+    // Under sudo, HOME may be root's; the data root is the owner's unless one was given.
+    let paths = if ctx.root_overridden {
+        ctx.paths.clone()
+    } else {
+        Paths::from_vars(None, Some(owner.home.clone()))?
+    };
+    let brew = Brew::detect(&|p: &Path| p.exists())?;
+
+    let binary = Path::new(HELPER_BINARY);
+    place(binary, &std::fs::read(&source).map_err(|e| io(&source, e))?, 0o755)?;
+    let plist = helper_plist(binary, owner.uid, &owner.user, paths.root(), &brew.prefix);
+    place(Path::new(PLIST), &plist, 0o644)?;
+
+    let service = format!("system/{HELPER_LABEL}");
+    // Not loaded yet is fine; a loaded one must go so the new binary and plist load.
+    if launchctl(&["bootout", &service]).is_ok() {
+        unloaded(&service).await;
+    }
+    launchctl(&["bootstrap", "system", PLIST])?;
+
+    let helper = HelperClient::new(HELPER_SOCKET);
+    let deadline = Instant::now() + READY_WAIT;
+    let status = loop {
+        match helper.status().await {
+            Ok(status) => break status,
+            Err(_) if Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(100)).await,
+            Err(e) => {
+                return Err(YardError::new(
+                    ErrorCode::HelperNotInstalled,
+                    format!("the helper did not start: {}", e.message),
+                )
+                .with_hint(format!("sudo tail -50 /var/log/{HELPER_LABEL}.log"))
+                .into());
+            }
+        }
+    };
+    ctx.emit(&status, || {
+        format!(
+            "Installed the helper {} for {} (data root {}).\nyard start runs yardd next.\n",
+            status.version,
+            owner.user,
+            paths.root().display()
+        )
+    });
+    Ok(0)
+}
+
+pub fn uninstall(ctx: &Ctx) -> Outcome {
+    require_root("uninstall")?;
+    let _ = launchctl(&["bootout", &format!("system/{HELPER_LABEL}")]);
+    for file in [PLIST, HELPER_BINARY] {
+        match std::fs::remove_file(file) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(YardError::internal(format!("cannot remove {file}: {e}")).into()),
+        }
+    }
+    let removed = remove_resolvers(Path::new(RESOLVER_DIR))?;
+    ctx.emit(&serde_json::json!({ "removed_resolvers": removed }), || {
+        let mut out = "Removed the helper.\n".to_string();
+        for file in &removed {
+            out.push_str(&format!("Removed {file}.\n"));
+        }
+        out
+    });
+    Ok(0)
+}
+
+fn require_root(verb: &str) -> Result<(), YardError> {
+    // SAFETY: geteuid cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return Ok(());
+    }
+    Err(YardError::new(
+        ErrorCode::InvalidArgument,
+        format!("yard helper {verb} changes system files: run with sudo"),
+    )
+    .with_hint(format!("sudo yard helper {verb}")))
+}
+
+fn owner() -> Result<Owner, YardError> {
+    let refuse = || {
+        YardError::new(ErrorCode::InvalidArgument, "SUDO_UID and SUDO_USER are not set")
+            .with_hint("run sudo yard helper install from your own account, not a root shell")
+    };
+    let uid: u32 = std::env::var("SUDO_UID").ok().and_then(|u| u.parse().ok()).ok_or_else(refuse)?;
+    let user = std::env::var("SUDO_USER").ok().filter(|u| !u.is_empty()).ok_or_else(refuse)?;
+    if uid == 0 {
+        return Err(refuse());
+    }
+    let home = home_of(&user).ok_or_else(|| {
+        YardError::internal(format!("no home directory for {user}")).with_hint("pass --root <path>")
+    })?;
+    Ok(Owner { uid, user, home })
+}
+
+fn home_of(user: &str) -> Option<PathBuf> {
+    let name = CString::new(user).ok()?;
+    // SAFETY: getpwnam returns null or a pointer into static storage that stays valid
+    // until the next getpw* call, and pw_dir is read before any other call.
+    unsafe {
+        let pw = libc::getpwnam(name.as_ptr());
+        if pw.is_null() || (*pw).pw_dir.is_null() {
+            return None;
+        }
+        let dir = std::ffi::CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
+        Some(PathBuf::from(dir))
+    }
+}
+
+/// Writes `bytes` beside `path`, sets root:wheel and `mode`, then renames it into place.
+fn place(path: &Path, bytes: &[u8], mode: u32) -> Result<(), YardError> {
+    let dir =
+        path.parent().ok_or_else(|| YardError::internal(format!("{} has no parent", path.display())))?;
+    std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
+    let tmp = dir.join(format!(".{}.yard-tmp", path.file_name().unwrap_or_default().to_string_lossy()));
+    let write = || -> std::io::Result<()> {
+        std::fs::write(&tmp, bytes)?;
+        std::os::unix::fs::chown(&tmp, Some(0), Some(0))?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, path)
+    };
+    write().map_err(|e| io(path, e))
+}
+
+/// The resolver files that carry Yard's marker; others' files are left alone.
+fn remove_resolvers(dir: &Path) -> Result<Vec<String>, YardError> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(vec![]) };
+    let mut removed = vec![];
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ours = std::fs::read_to_string(&path).is_ok_and(|t| t.lines().next() == Some(RESOLVER_MARKER));
+        if ours {
+            std::fs::remove_file(&path).map_err(|e| io(&path, e))?;
+            removed.push(path.display().to_string());
+        }
+    }
+    Ok(removed)
+}
+
+fn io(path: &Path, e: std::io::Error) -> YardError {
+    YardError::internal(format!("{}: {e}", path.display()))
+}

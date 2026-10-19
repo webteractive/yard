@@ -1,0 +1,108 @@
+//! A mock `yardd`: NDJSON on `<root>/yardd.sock` with canned results per method, and a
+//! record of every request, so `yard --root <root>` can run against it.
+#![allow(dead_code)]
+
+use assert_cmd::Command;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use tempfile::TempDir;
+use yard_proto::rpc::{Request, Response, encode_line};
+use yard_proto::{ErrorCode, PROTOCOL_VERSION, YardError};
+
+pub const MOCK_VERSION: &str = "9.9.9";
+
+type Answers = HashMap<String, Result<Value, YardError>>;
+
+pub struct MockDaemon {
+    pub root: TempDir,
+    requests: Arc<Mutex<Vec<Request>>>,
+}
+
+impl MockDaemon {
+    pub fn start(answers: &[(&str, Result<Value, YardError>)]) -> Self {
+        let root = short_root();
+        let listener = UnixListener::bind(root.path().join("yardd.sock")).unwrap();
+        let answers: Arc<Answers> =
+            Arc::new(answers.iter().map(|(m, a)| (m.to_string(), a.clone())).collect());
+        let requests = Arc::new(Mutex::new(vec![]));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let (answers, seen) = (answers.clone(), seen.clone());
+                std::thread::spawn(move || serve(stream, &answers, &seen));
+            }
+        });
+        Self { root, requests }
+    }
+
+    /// The params of every request for `method`, in order.
+    pub fn params(&self, method: &str) -> Vec<Value> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == method)
+            .map(|r| r.params.clone())
+            .collect()
+    }
+
+    pub fn yard(&self) -> Command {
+        yard_at(self.root.path())
+    }
+}
+
+fn serve(stream: UnixStream, answers: &Answers, seen: &Mutex<Vec<Request>>) {
+    let mut write = stream.try_clone().unwrap();
+    for line in BufReader::new(stream).lines() {
+        let Ok(line) = line else { return };
+        let request: Request = serde_json::from_str(&line).unwrap();
+        seen.lock().unwrap().push(request.clone());
+        let id = request.id.unwrap_or_default();
+        let response = match request.method.as_str() {
+            "hello" => Response::ok(
+                id,
+                json!({"protocol": PROTOCOL_VERSION, "daemon_version": MOCK_VERSION, "commit": "mock"}),
+            ),
+            method => match answers.get(method) {
+                Some(Ok(value)) => Response::ok(id, value.clone()),
+                Some(Err(e)) => Response::err(id, e.clone()),
+                None => Response::err(
+                    id,
+                    YardError::new(ErrorCode::MethodNotFound, format!("mock has no {method}")),
+                ),
+            },
+        };
+        if write.write_all(&encode_line(&response)).is_err() {
+            return;
+        }
+    }
+}
+
+/// A data root short enough for a unix socket path.
+pub fn short_root() -> TempDir {
+    tempfile::Builder::new().prefix("yard-test-").tempdir_in("/tmp").unwrap()
+}
+
+/// `yard --root <root>`, with no `YARD_ROOT` leaking in from the environment.
+pub fn yard_at(root: &Path) -> Command {
+    let mut cmd = Command::cargo_bin("yard").unwrap();
+    cmd.env_remove("YARD_ROOT").arg("--root").arg(root);
+    cmd
+}
+
+pub fn stdout(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+pub fn stderr(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// An OS-assigned port, released at once.
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}

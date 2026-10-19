@@ -1067,7 +1067,14 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
+ "insta",
+ "libc",
+ "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "yard-core",
+ "yard-daemon",
  "yard-proto",
 ]
 

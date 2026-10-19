@@ -225,8 +225,6 @@ async fn park(ctx: &Context, p: PathParams, add: bool) -> Result<(), YardError> 
     reconcile(ctx).await
 }
 
-/// Status for every registered port: `yard` when its unit runs, otherwise a probe.
-/// External entries are checked by connecting, since Yard does not run them.
 async fn doctor(ctx: &Context) -> DoctorReport {
     let state = ctx.reconciler.state().await;
     doctor::run(DoctorInput {
@@ -241,6 +239,7 @@ async fn doctor(ctx: &Context) -> DoctorReport {
     .await
 }
 
+/// Every registered port with its status; `portscan::infos` does the probing.
 async fn port_infos(ctx: &Context) -> Vec<PortInfo> {
     let registry = match ctx.reconciler.snapshot().await {
         Some(s) => s.registry,

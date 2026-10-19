@@ -16,7 +16,8 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   is the source of truth. Read it before changing behaviour, and update it in
   the same change when a decision moves.
 - M1 (core serving, CLI only) plan: `docs/superpowers/plans/2026-10-19-yard-m1-core-serving.md`,
-  awaiting review. No product code exists yet.
+  approved and being executed on `main`: the daemon, helper, doctor and CLI have landed;
+  the end-to-end check on this machine (Task 17) is next.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
@@ -73,6 +74,8 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - `cargo deny check` — after any `Cargo.lock` change (supply-chain gates; `deny.toml` from `~/AI/cooper`).
 - `cargo run -p yard-daemon --bin yardd -- --root /tmp/yard-dev` — a daemon on a scratch data
   root (logs to stderr). `yardd --version` prints the build; the socket is `<root>/yardd.sock`.
+- `cargo run -p yard-cli -- --root /tmp/yard-dev sites` — the CLI against that daemon.
+  `doctor` and `ports check` also work with no daemon running.
 - `scripts/e2e-m1.sh` — real-machine check in the trial profile. It needs the
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
 

@@ -331,7 +331,8 @@ the app shows them inline with an action button when the hint maps to a command.
 - Every command supports `--json` (machine-readable, stable shape from
   `yard-proto`); default output is human tables/text.
 - If `yardd` is not running, commands that need it print
-  `yardd is not running → yard start` and exit non-zero.
+  `yardd is not running → yard start` and exit 3 (with `--json`, the error code is
+  `DAEMON_NOT_RUNNING`). `doctor` and `ports check` run in-process instead.
 - `yard --version` and `yard version --json` report CLI, daemon, helper and
   protocol versions plus build commit.
 

@@ -23,6 +23,8 @@ pub enum ErrorCode {
     ProtocolMismatch,
     MethodNotFound,
     InvalidRequest,
+    /// Reported by the CLI when `yardd` does not answer on its socket.
+    DaemonNotRunning,
     Internal,
 }
 
@@ -78,6 +80,12 @@ mod tests {
             serde_json::to_value(&e).unwrap(),
             json!({"code":"PORT_IN_USE","message":"port 8080 is in use","hint":"yard ports set nginx-http <port>"})
         );
+    }
+
+    #[test]
+    fn daemon_not_running_has_a_stable_code() {
+        let v = serde_json::to_value(ErrorCode::DaemonNotRunning).unwrap();
+        assert_eq!(v, json!("DAEMON_NOT_RUNNING"));
     }
 
     #[test]
