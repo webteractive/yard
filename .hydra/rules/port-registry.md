@@ -1,0 +1,30 @@
+---
+paths:
+  - "crates/yard-core/src/ports/**"
+  - "crates/yard-daemon/src/probe.rs"
+  - "crates/yard-daemon/src/holder.rs"
+  - "crates/yard-daemon/src/portscan.rs"
+triggers:
+  - a unit needs a TCP or UDP port
+  - adding a service or proxy that listens on or targets a port
+---
+
+# Port registry
+
+- No unit binds a port the registry has not granted (`ports.toml`, spec §7). A new
+  listener means a new registry entry with a mode. A proxy target is an `external`
+  entry `proxy:<name>`.
+- Checks happen at three points: allocation (no two entries share a port), pre-start
+  (a bind probe, which on failure goes straight to `Failed` with the holder and does not
+  back off, since retrying cannot free a foreign port), and runtime (health probes plus
+  a 30 s scan of idle registered ports that emits `port.conflict`).
+- Probe without `SO_REUSEADDR` (use `socket2`; std sets it on unix and hides wildcard
+  listeners). Probe both `127.0.0.1` and `::1`, and UDP as well for dnsmasq.
+- A unit's own running port counts as free for that unit. A busy port whose unit is
+  `Running` has status `yard`, which matters because a root-owned nginx is invisible to
+  libproc as the user.
+- Holder classification (`ports::holder::classify`) is pure and tested: Herd, brew
+  services, Docker, Yard, or unknown. When the holder is not visible, say "unknown (not
+  visible to this user)", never guess.
+- `set_profile` checks every port of the new profile before changing anything, and
+  reports all conflicts at once.
