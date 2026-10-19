@@ -5,6 +5,7 @@ pub mod config;
 pub mod paths;
 pub mod php;
 pub mod ports;
+pub mod render;
 pub mod sites;
 
 pub use paths::Paths;

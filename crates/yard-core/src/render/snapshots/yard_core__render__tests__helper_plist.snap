@@ -1,0 +1,30 @@
+---
+source: crates/yard-core/src/render/mod.rs
+expression: "String::from_utf8(xml).unwrap()"
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.more.yard.helper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Library/PrivilegedHelperTools/dev.more.yard.helper</string>
+		<string>--uid</string>
+		<string>501</string>
+		<string>--user</string>
+		<string>me</string>
+		<string>--root</string>
+		<string>/Users/me/Library/Application Support/Yard</string>
+		<string>--brew-prefix</string>
+		<string>/opt/homebrew</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/var/log/dev.more.yard.helper.log</string>
+</dict>
+</plist>
