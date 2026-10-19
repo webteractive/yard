@@ -6,3 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+libc = "0.2.191"
+socket2 = "0.6.5"
+yard-core.workspace = true
+yard-proto.workspace = true

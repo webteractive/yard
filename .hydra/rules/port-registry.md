@@ -18,11 +18,17 @@ triggers:
   (a bind probe, which on failure goes straight to `Failed` with the holder and does not
   back off, since retrying cannot free a foreign port), and runtime (health probes plus
   a 30 s scan of idle registered ports that emits `port.conflict`).
-- Probe without `SO_REUSEADDR` (use `socket2`; std sets it on unix and hides wildcard
-  listeners). Probe both `127.0.0.1` and `::1`, and UDP as well for dnsmasq.
+- Probe without `SO_REUSEADDR` first (use `socket2`; std sets it on unix and hides wildcard
+  listeners). If that bind is refused, the port still counts as free when a reuse bind
+  succeeds and nothing answers on connect: that is TIME_WAIT, which nginx can bind.
+  Probe both `127.0.0.1` and `::1`, and UDP as well for dnsmasq.
+- Holders come from `/usr/sbin/lsof` plus `proc_pidpath`, not the `libproc` crate (its
+  bindgen build needs libclang and adds BSD-3/ISC licenses).
 - A unit's own running port counts as free for that unit. A busy port whose unit is
   `Running` has status `yard`, which matters because a root-owned nginx is invisible to
-  libproc as the user.
+  lsof as the user.
+- Socket tests take `crate::PORT_TESTS`: macOS hands out ephemeral ports in sequence,
+  so parallel tests otherwise land on each other's ports.
 - Holder classification (`ports::holder::classify`) is pure and tested: Herd, brew
   services, Docker, Yard, or unknown. When the holder is not visible, say "unknown (not
   visible to this user)", never guess.

@@ -373,7 +373,7 @@ are named sets of pinned values; `yard ports profile <name>` switches them.
 
 1. **Allocation:** the registry rejects two units on the same port.
 2. **Pre-start:** a real bind probe on `127.0.0.1` and `::1`. On failure, the
-   holder is identified via `libproc` (pid, process name, parent; labelled as
+   holder is identified via `lsof`, which reads libproc as the user (pid, process name, parent; labelled as
    Herd, brew services, Docker, or unknown when recognisable) and returned in
    `PORT_IN_USE.data`.
 3. **Runtime:** health probes detect a unit losing its port; a scan every 30 s

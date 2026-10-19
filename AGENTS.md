@@ -38,7 +38,7 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   with Rust (option C) is deferred and would sit behind the daemon API.
 - **Port registry** (spec §7, the maintainer asked for it explicitly): `ports.toml` with
   `pinned`/`preferred`/`auto`/`external` modes, checked at allocation, before
-  start (bind probe + holder via libproc) and at runtime. `trial` and `default`
+  start (bind probe + holder via lsof) and at runtime. `trial` and `default`
   profiles.
 - **Trial profile is the default until `yard takeover`** (M3): TLD `.yard`,
   nginx on 8080/8443, so Herd keeps working alongside.
