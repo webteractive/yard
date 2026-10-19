@@ -8,7 +8,38 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use yard_proto::{Event, PortMode, UnitState};
+use yard_core::ports::Registry;
+use yard_proto::{Event, PortInfo, PortMode, PortStatus, UnitState};
+
+/// Every registered port as `ports.list`, `ports check` and `doctor` show it. A port its
+/// running unit holds is `Yard`; any other holder is named. Blocks while it probes.
+pub fn infos(registry: &Registry, running: &BTreeSet<String>) -> Vec<PortInfo> {
+    registry
+        .entries
+        .iter()
+        .map(|(unit, e)| {
+            let owner = port_owner(unit);
+            let (status, holder) = if e.mode == PortMode::External {
+                let up = probe::is_listening(e.port);
+                (if up { PortStatus::ExternalListening } else { PortStatus::ExternalNotListening }, None)
+            } else if running.contains(owner) {
+                (PortStatus::Yard, None)
+            } else if probe::is_free(e.port, probe::proto_for(owner)) {
+                (PortStatus::Free, None)
+            } else {
+                (PortStatus::InUse, holder::find_holder(e.port))
+            };
+            PortInfo {
+                unit: unit.clone(),
+                port: e.port,
+                mode: e.mode,
+                preferred: e.preferred,
+                status,
+                holder,
+            }
+        })
+        .collect()
+}
 
 pub fn spawn(ctx: Arc<Context>, interval: Duration) -> JoinHandle<()> {
     tokio::spawn(async move {

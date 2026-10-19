@@ -7,31 +7,14 @@ use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use support::{FAKE, free_port};
+use support::{FAKE, fast, free_port};
 use tokio::sync::broadcast::Receiver;
-use yard_core::supervise::PolicyConfig;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
 use yard_daemon::logsink::LogSink;
 use yard_daemon::probe::Proto;
 use yard_daemon::supervisor::{Health, Supervisor, SupervisorConfig, UnitKind, UnitSpec};
 use yard_proto::{Event, UnitInfo, UnitState};
-
-fn fast() -> SupervisorConfig {
-    SupervisorConfig {
-        policy: PolicyConfig {
-            backoff_base: Duration::from_millis(20),
-            backoff_max: Duration::from_millis(200),
-            failure_window: Duration::from_secs(60),
-            max_failures: 5,
-        },
-        health_interval: Duration::from_millis(20),
-        start_grace: Duration::from_secs(2),
-        stop_timeout: Duration::from_millis(500),
-        log_max_bytes: 1024 * 1024,
-        log_keep: 2,
-    }
-}
 
 struct Harness {
     sup: Supervisor,

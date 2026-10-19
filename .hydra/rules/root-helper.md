@@ -36,4 +36,5 @@ triggers:
   registers the same helper with `SMAppService`.
 - Agents cannot type a sudo password. Ask the maintainer to run privileged commands with
   `! sudo …`. Tests run the helper in-process as the current user, with a temp
-  `resolver_dir` and a fake nginx.
+  `resolver_dir` and a fake nginx. `doctor` only reads the resolver file, from
+  `DaemonOptions.resolver_dir` (`RESOLVER_DIR` in production).

@@ -29,6 +29,8 @@ pub struct DaemonOptions {
     pub paths: Paths,
     pub brew_prefix: PathBuf,
     pub helper_socket: PathBuf,
+    /// Where `doctor` looks for the resolver file the helper writes.
+    pub resolver_dir: PathBuf,
     pub supervisor: SupervisorConfig,
     pub debounce: Duration,
     pub port_scan_interval: Duration,
@@ -41,6 +43,7 @@ impl DaemonOptions {
             paths,
             brew_prefix,
             helper_socket: PathBuf::from(yard_core::paths::HELPER_SOCKET),
+            resolver_dir: PathBuf::from(yard_core::paths::RESOLVER_DIR),
             supervisor: SupervisorConfig::default(),
             debounce: Duration::from_millis(500),
             port_scan_interval: Duration::from_secs(30),
@@ -55,6 +58,7 @@ pub struct Context {
     pub helper: HelperClient,
     pub bus: EventBus,
     pub reconciler: Arc<Reconciler>,
+    pub resolver_dir: PathBuf,
 }
 
 impl Context {
@@ -86,7 +90,14 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         helper.clone(),
         bus.clone(),
     )?);
-    let ctx = Arc::new(Context { paths: opts.paths.clone(), brew, helper, bus, reconciler });
+    let ctx = Arc::new(Context {
+        paths: opts.paths.clone(),
+        brew,
+        helper,
+        bus,
+        reconciler,
+        resolver_dir: opts.resolver_dir.clone(),
+    });
 
     claim(&socket).await?;
     let listener = UnixListener::bind(&socket)

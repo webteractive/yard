@@ -29,8 +29,11 @@ triggers:
   the helper signals only a pid whose executable is the canonical nginx binary.
 - Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
-- Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig`, never real 5 s
-  intervals. A test that passes on one run and fails on the next is a bug to fix, not
+- A test that reconciles, probes or runs doctor writes a `ports.toml` first
+  (`support::ports_toml(free_port(), …)`): with no file the registry seeds 8080, 8443
+  and 53535, which tests never bind.
+- Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
+  never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not
   to retry. Run timing suites several times before calling them done.
 - Rendering is pinned with `insta` snapshots. Review each new snapshot against the spec
   before accepting it.

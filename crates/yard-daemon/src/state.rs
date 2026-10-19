@@ -18,6 +18,7 @@ pub struct Snapshot {
     pub resolution: Resolution,
 }
 
+#[derive(Clone)]
 pub struct State {
     pub paths: Paths,
     pub brew: Brew,

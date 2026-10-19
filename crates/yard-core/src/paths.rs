@@ -9,6 +9,7 @@ pub const HELPER_LABEL: &str = "dev.more.yard.helper";
 pub const HELPER_SOCKET: &str = "/var/run/dev.more.yard.helper.sock";
 pub const HELPER_BINARY: &str = "/Library/PrivilegedHelperTools/dev.more.yard.helper";
 pub const RESOLVER_MARKER: &str = "# Managed by Yard";
+pub const RESOLVER_DIR: &str = "/etc/resolver";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {

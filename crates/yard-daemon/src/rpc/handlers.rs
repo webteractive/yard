@@ -2,9 +2,9 @@
 //! they never write generated files themselves.
 
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
-use crate::reconcile::port_owner;
+use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
-use crate::{holder, probe};
+use crate::{portscan, probe};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -19,13 +19,14 @@ use yard_proto::methods::{
     RangeParams, UnitParams,
 };
 use yard_proto::{
-    ErrorCode, PROTOCOL_VERSION, PortInfo, PortMode, PortStatus, Profile, SiteInfo, StatusInfo, UnitState,
+    DoctorReport, ErrorCode, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
     VersionInfo, YardError,
 };
 
 pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value, YardError> {
     match method {
         methods::STATUS => json(status(ctx).await),
+        methods::DOCTOR => json(Ok(doctor(ctx).await)),
         methods::SITES_LIST => json(Ok(snapshot(ctx).await?.resolution.sites)),
         methods::SITES_LINK => json(link(ctx, parse(params)?).await),
         methods::SITES_UNLINK => json(unlink(ctx, parse(params)?, "path").await),
@@ -226,6 +227,20 @@ async fn park(ctx: &Context, p: PathParams, add: bool) -> Result<(), YardError> 
 
 /// Status for every registered port: `yard` when its unit runs, otherwise a probe.
 /// External entries are checked by connecting, since Yard does not run them.
+async fn doctor(ctx: &Context) -> DoctorReport {
+    let state = ctx.reconciler.state().await;
+    doctor::run(DoctorInput {
+        paths: &ctx.paths,
+        brew: &ctx.brew,
+        helper: &ctx.helper,
+        state: Some(&state),
+        units: ctx.supervisor().list(),
+        daemon_running: true,
+        resolver_dir: &ctx.resolver_dir,
+    })
+    .await
+}
+
 async fn port_infos(ctx: &Context) -> Vec<PortInfo> {
     let registry = match ctx.reconciler.snapshot().await {
         Some(s) => s.registry,
@@ -241,27 +256,7 @@ async fn port_infos(ctx: &Context) -> Vec<PortInfo> {
         .filter(|u| u.state == UnitState::Running)
         .map(|u| u.name)
         .collect();
-    let entries: Vec<_> = registry.entries.into_iter().collect();
-    let infos = tokio::task::spawn_blocking(move || {
-        entries
-            .into_iter()
-            .map(|(unit, e)| {
-                let owner = port_owner(&unit).to_string();
-                let (status, holder) = if e.mode == PortMode::External {
-                    let up = probe::is_listening(e.port);
-                    (if up { PortStatus::ExternalListening } else { PortStatus::ExternalNotListening }, None)
-                } else if running.contains(&owner) {
-                    (PortStatus::Yard, None)
-                } else if probe::is_free(e.port, probe::proto_for(&owner)) {
-                    (PortStatus::Free, None)
-                } else {
-                    (PortStatus::InUse, holder::find_holder(e.port))
-                };
-                PortInfo { unit, port: e.port, mode: e.mode, preferred: e.preferred, status, holder }
-            })
-            .collect::<Vec<_>>()
-    });
-    infos.await.unwrap_or_default()
+    tokio::task::spawn_blocking(move || portscan::infos(&registry, &running)).await.unwrap_or_default()
 }
 
 async fn edit_registry(

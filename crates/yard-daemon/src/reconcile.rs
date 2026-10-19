@@ -83,6 +83,11 @@ impl Reconciler {
         self.state.lock().await.config_error.clone()
     }
 
+    /// A copy, so `doctor` does not hold up a reconcile while it waits on the helper.
+    pub async fn state(&self) -> State {
+        self.state.lock().await.clone()
+    }
+
     /// Serialized: a second call waits for the first to finish.
     pub async fn reconcile(&self) -> Result<ReconcileReport, YardError> {
         let mut state = self.state.lock().await;
@@ -360,7 +365,7 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
 }
 
 /// A parked path's children, following symlinks to tell directories from files.
-fn list_parked(dir: &Path) -> std::io::Result<Vec<DirEntry>> {
+pub(crate) fn list_parked(dir: &Path) -> std::io::Result<Vec<DirEntry>> {
     let mut out = vec![];
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;

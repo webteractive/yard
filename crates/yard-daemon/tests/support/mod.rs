@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
+use yard_core::supervise::PolicyConfig;
 use yard_core::{Paths, PhpVersion};
 use yard_daemon::helper_client::HelperClient;
+use yard_daemon::supervisor::SupervisorConfig;
 use yard_helper::HelperConfig;
 
 pub const FAKE: &str = env!("CARGO_BIN_EXE_yard-fake-unit");
@@ -29,6 +31,7 @@ impl Fixture {
         let fake = PathBuf::from(FAKE);
         // nginx is a copy, not a symlink: the helper only signals a pid whose executable is
         // the canonical nginx path, and a plain `yard-fake-unit hang` child must fail that.
+        place(&brew_dir.path().join("bin/brew"), |dst| std::fs::write(dst, ""));
         place(&brew.nginx_bin(), |dst| std::fs::copy(&fake, dst).map(drop));
         place(&brew.dnsmasq_bin(), |dst| symlink(&fake, dst));
         let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::DEFAULT));
@@ -75,6 +78,30 @@ impl Drop for Fixture {
 fn place(dst: &Path, make: impl FnOnce(&Path) -> std::io::Result<()>) {
     std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
     make(dst).unwrap();
+}
+
+/// Millisecond backoff and health checks, so supervised tests finish quickly.
+pub fn fast() -> SupervisorConfig {
+    SupervisorConfig {
+        policy: PolicyConfig {
+            backoff_base: Duration::from_millis(20),
+            backoff_max: Duration::from_millis(200),
+            failure_window: Duration::from_secs(60),
+            max_failures: 5,
+        },
+        health_interval: Duration::from_millis(20),
+        start_grace: Duration::from_secs(2),
+        stop_timeout: Duration::from_millis(500),
+        log_max_bytes: 1024 * 1024,
+        log_keep: 2,
+    }
+}
+
+/// A `ports.toml` pinning nginx and dnsmasq to the given ports.
+pub fn ports_toml(http: u16, https: u16, dns: u16) -> String {
+    format!(
+        "[ports]\nnginx-http = {{ port = {http}, mode = \"pinned\" }}\nnginx-https = {{ port = {https}, mode = \"pinned\" }}\ndnsmasq = {{ port = {dns}, mode = \"pinned\" }}\n"
+    )
 }
 
 /// An OS-assigned port, released at once. macOS allocates ephemeral ports in sequence,

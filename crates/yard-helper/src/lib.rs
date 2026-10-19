@@ -52,7 +52,7 @@ impl HelperConfig {
             root: root.ok_or("--root is required")?,
             brew_prefix: brew_prefix.ok_or("--brew-prefix is required")?,
             socket: PathBuf::from(yard_core::paths::HELPER_SOCKET),
-            resolver_dir: PathBuf::from("/etc/resolver"),
+            resolver_dir: PathBuf::from(yard_core::paths::RESOLVER_DIR),
         })
     }
 }

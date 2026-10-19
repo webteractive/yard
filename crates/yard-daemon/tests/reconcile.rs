@@ -5,14 +5,13 @@ mod support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use support::{Fixture, free_port, spawn_helper};
+use support::{Fixture, fast, free_port, spawn_helper};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
-use yard_core::supervise::PolicyConfig;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
 use yard_daemon::reconcile::Reconciler;
-use yard_daemon::supervisor::{Supervisor, SupervisorConfig};
+use yard_daemon::supervisor::Supervisor;
 use yard_proto::{ErrorCode, Event, UnitInfo, UnitState};
 
 const FPM: &str = "php-fpm-8.4";
@@ -24,22 +23,6 @@ struct Env {
     sup: Arc<Supervisor>,
     rec: Reconciler,
     bus: EventBus,
-}
-
-fn fast() -> SupervisorConfig {
-    SupervisorConfig {
-        policy: PolicyConfig {
-            backoff_base: Duration::from_millis(20),
-            backoff_max: Duration::from_millis(200),
-            failure_window: Duration::from_secs(60),
-            max_failures: 5,
-        },
-        health_interval: Duration::from_millis(20),
-        start_grace: Duration::from_secs(2),
-        stop_timeout: Duration::from_millis(500),
-        log_max_bytes: 1024 * 1024,
-        log_keep: 2,
-    }
 }
 
 async fn env() -> Env {

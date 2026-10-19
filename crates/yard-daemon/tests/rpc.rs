@@ -5,7 +5,7 @@ mod support;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use support::{Fixture, free_port, spawn_helper, wait_until};
+use support::{Fixture, fast, free_port, spawn_helper, wait_until};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::UnixStream;
@@ -13,11 +13,9 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use yard_core::Paths;
-use yard_core::supervise::PolicyConfig;
 use yard_daemon::daemon::{DaemonOptions, run};
-use yard_daemon::supervisor::SupervisorConfig;
 use yard_proto::rpc::{Request, encode_line};
-use yard_proto::{ErrorCode, PROTOCOL_VERSION, YardError};
+use yard_proto::{CheckStatus, DoctorReport, ErrorCode, PROTOCOL_VERSION, YardError};
 
 struct Daemon {
     fx: Fixture,
@@ -28,27 +26,12 @@ struct Daemon {
     task: Option<JoinHandle<Result<(), YardError>>>,
 }
 
-fn fast() -> SupervisorConfig {
-    SupervisorConfig {
-        policy: PolicyConfig {
-            backoff_base: Duration::from_millis(20),
-            backoff_max: Duration::from_millis(200),
-            failure_window: Duration::from_secs(60),
-            max_failures: 5,
-        },
-        health_interval: Duration::from_millis(20),
-        start_grace: Duration::from_secs(2),
-        stop_timeout: Duration::from_millis(500),
-        log_max_bytes: 1024 * 1024,
-        log_keep: 2,
-    }
-}
-
-fn options(paths: Paths, brew: &Path, helper_socket: PathBuf) -> DaemonOptions {
+fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Path) -> DaemonOptions {
     DaemonOptions {
         paths,
         brew_prefix: brew.to_path_buf(),
         helper_socket,
+        resolver_dir: resolver_dir.to_path_buf(),
         supervisor: fast(),
         debounce: Duration::from_millis(50),
         port_scan_interval: Duration::from_millis(100),
@@ -70,7 +53,7 @@ async fn prepared(extra_ports: &str) -> Daemon {
         free_port()
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
-    let opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf());
+    let opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf(), resolver.path());
     Daemon { fx, _resolver: resolver, parked, opts, stop: None, task: None }
 }
 
@@ -185,6 +168,17 @@ async fn hello_then_status() {
     assert_eq!(status["profile"], "trial");
     assert!(status["units"].as_array().unwrap().iter().any(|u| u["name"] == "nginx"), "{status}");
     assert_eq!(status["version"]["daemon"], env!("CARGO_PKG_VERSION"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn doctor_reports_the_running_daemon() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let report: DoctorReport = serde_json::from_value(c.call("doctor", Value::Null).await.unwrap()).unwrap();
+    let status = |id: &str| report.checks.iter().find(|c| c.id == id).map(|c| c.status);
+    assert_eq!(status("daemon"), Some(CheckStatus::Ok), "{report:#?}");
+    assert_eq!(status("resolver"), Some(CheckStatus::Ok), "reads the daemon's resolver dir: {report:#?}");
     d.shutdown().await.unwrap();
 }
 

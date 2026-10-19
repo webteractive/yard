@@ -4,6 +4,7 @@ paths:
   - "crates/yard-core/src/config/**"
   - "crates/yard-core/src/generated.rs"
   - "crates/yard-daemon/src/reconcile.rs"
+  - "crates/yard-daemon/src/doctor.rs"
 triggers:
   - adding a generated config file
   - writing to a user's toml or override file
@@ -24,7 +25,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     `config::edit::TomlFile` (`toml_edit`), so comments and key order survive.
 - **Write rule** (`generated::plan`): compare against the stored hash, not just the
   render. A hand-edited file whose render did not change is left alone and reported by
-  `yard doctor`. A hand-edited file whose render changed is copied to
+  `yard doctor`, which names the override from `render::overrides_for` (a test keeps it
+  in step with each file's header). A hand-edited file whose render changed is copied to
   `<file>.yard-backup` before it is written. A file with no stored hash is never deleted.
 - Every config change that touches `nginx/` runs `nginx -t` through the helper. On
   failure, roll back the whole write set and return `NGINX_CONFIG_INVALID` with
