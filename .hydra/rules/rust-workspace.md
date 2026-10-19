@@ -17,6 +17,10 @@ triggers:
   Side effects live in `yard-daemon`. The helper and CLI depend on core, never the reverse.
 - The CLI links `yard-daemon` only for the offline commands (`doctor`, `ports check`).
   Keep business logic out of `yard-cli`; it formats and dispatches.
+- Every child the daemon or helper spawns gets the `cloexec_inherited` `pre_exec` hook
+  (`yard-daemon` `fds.rs`, a copy in the helper's `nginx.rs`). macOS has no `SOCK_CLOEXEC`,
+  so without it a unit spawned while another thread opens a socket keeps that socket:
+  a port probe's socket held this way made ports look taken.
 - No `.unwrap()` / `.expect()` on daemon or helper runtime paths. Errors become a
   `YardError` with a hint. Tests may unwrap.
 - Tests use a temp `YARD_ROOT`, OS-assigned free ports and `yard-fake-unit` (via

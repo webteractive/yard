@@ -145,3 +145,19 @@ async fn client_without_helper_reports_not_installed() {
     assert_eq!(err.code, ErrorCode::HelperNotInstalled);
     assert_eq!(err.hint.as_deref(), Some("sudo yard helper install"));
 }
+
+#[tokio::test]
+async fn nginx_does_not_inherit_helper_sockets() {
+    let fx = Fixture::new();
+    fx.write_nginx_conf(free_port());
+    let resolver = tempfile::tempdir().unwrap();
+    let helper = spawn_helper(&fx, resolver.path()).await;
+    let (leaked, p) = support::inheritable_listener();
+
+    helper.start_nginx().await.unwrap();
+    drop(leaked);
+    let is_free = || yard_daemon::probe::is_free(p, yard_daemon::probe::Proto::Tcp);
+    let inherited = !wait_until(is_free, Duration::from_secs(2)).await;
+    helper.stop_nginx().await.unwrap();
+    assert!(!inherited, "nginx holds a socket it inherited from the helper");
+}

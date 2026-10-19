@@ -102,3 +102,14 @@ pub async fn wait_until(mut done: impl FnMut() -> bool, within: Duration) -> boo
     }
     done()
 }
+
+/// Opens a listener in the state macOS leaves every new socket in until FD_CLOEXEC is
+/// set: inheritable by a child spawned from another thread in that window.
+pub fn inheritable_listener() -> (std::net::TcpListener, u16) {
+    use std::os::fd::AsRawFd;
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // SAFETY: clearing FD_CLOEXEC on a descriptor this function owns.
+    assert_eq!(unsafe { libc::fcntl(l.as_raw_fd(), libc::F_SETFD, 0) }, 0);
+    let port = l.local_addr().unwrap().port();
+    (l, port)
+}
