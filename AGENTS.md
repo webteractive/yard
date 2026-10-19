@@ -15,9 +15,8 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - Design approved and committed: `docs/superpowers/specs/2026-10-19-yard-design.md`
   is the source of truth. Read it before changing behaviour, and update it in
   the same change when a decision moves.
-- M1 (core serving, CLI only) plan: `docs/superpowers/plans/2026-10-19-yard-m1-core-serving.md`,
-  approved and being executed on `main`: the daemon, helper, doctor and CLI have landed;
-  the end-to-end check on this machine (Task 17) is next.
+- M1 (core serving, CLI only) is done: `docs/superpowers/plans/2026-10-19-yard-m1-core-serving.md`,
+  verified by `scripts/e2e-m1.sh` on this machine on 2026-10-20. M2 needs its own plan.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
@@ -52,9 +51,10 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 - Toolchain: rustc/cargo 1.92.0 in `~/.cargo/bin`, Swift 6.3.3, Homebrew at `/opt/homebrew`.
 - Brew has the `shivammathur/php` and `shivammathur/extensions` taps, plus
-  `mysql-client` and `phpredis@7.4`. **No brew PHP is installed. `nginx` is not
-  installed. The `dnsmasq` keg is empty** (`Cellar/dnsmasq` exists with nothing
-  in it, so it needs `brew reinstall dnsmasq`).
+  `mysql-client` and `phpredis@7.4`. For M1 (2026-10-20) the maintainer approved
+  `brew install nginx`, `brew reinstall dnsmasq` (its keg had been empty) and
+  `brew install shivammathur/php/php@8.4`; no other brew PHP is installed. The
+  helper is installed and yardd's LaunchAgent runs on the real data root.
 - In the `shivammathur/php` tap, PHP 8.5 is the plain `php` formula (with alias
   `php@8.5`, keg `opt/php`); every other version is `php@<ver>`. The tap also
   carries 5.6 and pre-release 8.6/8.7, which Yard does not support.

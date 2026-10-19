@@ -455,7 +455,9 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 - **End-to-end** (local + macOS CI runner): trial profile, install PHP 8.3 and
   7.1, park a fixture Laravel app and a 7.1 app, `curl` both over
   `https://<site>.yard:8443` and assert `PHP_VERSION`; add and verify an
-  extension.
+  extension. M1 runs a first cut over HTTP until M3 (`scripts/e2e-m1.sh`: trial
+  profile on :8080, a parked PHP 8.4 app and a proxy, Herd's resolver unchanged,
+  and the default profile refused with Herd named).
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 

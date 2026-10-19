@@ -10,9 +10,10 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
 
 ## Status
 
-Milestone 1 (core serving, CLI only) is in progress: parked and linked PHP sites,
-proxies, the port registry, `yard doctor` and the commands below. HTTPS (M3), PHP
-installs and extensions (M2), Node and services, and Yard.app (M4) come later.
+Milestone 1 (core serving, CLI only) is done and verified end to end beside a running
+Herd: parked and linked PHP sites, proxies, the port registry, `yard doctor` and the
+commands below. HTTPS (M3), PHP installs and extensions (M2), Node and services, and
+Yard.app (M4) come later.
 
 Yard runs in the **trial profile** until `yard takeover` (M3): sites are
 `http://<site>.yard:8080`, and Herd keeps its `.test` domain, ports 80/443 and
@@ -22,12 +23,13 @@ Yard runs in the **trial profile** until `yard takeover` (M3): sites are
 
 - An Apple Silicon Mac with Homebrew at `/opt/homebrew`.
 - Rust 1.92 (`rust-toolchain.toml` pins it).
-- nginx, dnsmasq and PHP from Homebrew. Do not start them with `brew services`; Yard
-  runs them itself.
+- nginx, dnsmasq and PHP from Homebrew; Yard runs them itself.
 
 ```sh
 brew install nginx dnsmasq shivammathur/php/php@8.4
 ```
+
+Yard only uses the installed binaries; do not start them with `brew services`.
 
 A `dnsmasq` keg with no files in it needs `brew reinstall dnsmasq` instead. `yard doctor`
 says which of these is missing.
@@ -38,8 +40,12 @@ says which of these is missing.
 cargo build --release
 sudo ./target/release/yard helper install   # once, and after each upgrade
 ./target/release/yard start
-./target/release/yard doctor
+./target/release/yard doctor                # every check should say ok
 ```
+
+Run the helper install in a real terminal: sudo needs one to ask for the password.
+`scripts/e2e-m1.sh` then checks the whole path on your machine: it parks a PHP app and
+proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in

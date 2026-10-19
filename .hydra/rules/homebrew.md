@@ -29,5 +29,5 @@ triggers:
   for `ext disable` to work.
 - `decorate_workers_output` exists only in PHP ≥ 7.3. Version-gate any FPM or ini
   directive that is newer than 7.0.
-- A keg directory with no binary in it (dnsmasq on this machine as of 2026-10-19)
+- A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)
   gets the hint `brew reinstall <formula>`, not `brew install`.
