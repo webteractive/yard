@@ -1,5 +1,6 @@
 //! Pure Yard logic: parse, render, decide. No spawning, binding or sockets here.
 
+pub mod brew;
 pub mod config;
 pub mod paths;
 pub mod php;

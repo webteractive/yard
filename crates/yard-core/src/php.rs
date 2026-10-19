@@ -57,6 +57,22 @@ impl<'de> Deserialize<'de> for PhpVersion {
     }
 }
 
+/// The Homebrew formula for a version. In the tap 8.5 is the plain `php` formula, but
+/// its `php@8.5` alias installs it, so one form works for every version.
+pub fn formula(v: PhpVersion) -> String {
+    format!("shivammathur/php/php@{v}")
+}
+
+/// The IANA zone `/etc/localtime` links to, for php.ini's `date.timezone`; `UTC` otherwise.
+pub fn system_timezone(localtime_link: Option<&std::path::Path>) -> String {
+    localtime_link
+        .and_then(|p| p.to_str())
+        .and_then(|s| s.split_once("zoneinfo/"))
+        .map(|(_, zone)| zone.to_string())
+        .filter(|z| !z.is_empty())
+        .unwrap_or_else(|| "UTC".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +90,21 @@ mod tests {
         assert_eq!(SUPPORTED.len(), 11);
         assert_eq!(PhpVersion::DEFAULT.to_string(), "8.4");
         assert!("7.4".parse::<PhpVersion>().unwrap() < "8.0".parse().unwrap());
+    }
+
+    #[test]
+    fn formula_names() {
+        assert_eq!(formula("7.1".parse().unwrap()), "shivammathur/php/php@7.1");
+        assert_eq!(formula("8.5".parse().unwrap()), "shivammathur/php/php@8.5");
+    }
+
+    #[test]
+    fn timezone_from_localtime_link() {
+        let link = std::path::Path::new("/var/db/timezone/zoneinfo/Asia/Manila");
+        assert_eq!(system_timezone(Some(link)), "Asia/Manila");
+        assert_eq!(system_timezone(Some(std::path::Path::new("/usr/share/zoneinfo/UTC"))), "UTC");
+        assert_eq!(system_timezone(Some(std::path::Path::new("/weird"))), "UTC");
+        assert_eq!(system_timezone(None), "UTC");
     }
 
     #[test]
