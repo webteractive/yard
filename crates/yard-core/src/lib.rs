@@ -3,6 +3,7 @@
 pub mod config;
 pub mod paths;
 pub mod php;
+pub mod ports;
 
 pub use paths::Paths;
 pub use php::PhpVersion;
