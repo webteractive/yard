@@ -21,7 +21,9 @@ triggers:
   `YardError` with a hint. Tests may unwrap.
 - Tests use a temp `YARD_ROOT`, OS-assigned free ports and `yard-fake-unit` (via
   `argv[0]` it stands in for nginx, dnsmasq and php-fpm and reads the configs Yard
-  rendered). Keep unix socket paths under 104 bytes: put test sockets under a short
+  rendered). `tests/support` copies it to the nginx path rather than symlinking:
+  the helper signals only a pid whose executable is the canonical nginx binary.
+- Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig`, never real 5 s
   intervals. A test that passes on one run and fails on the next is a bug to fix, not
