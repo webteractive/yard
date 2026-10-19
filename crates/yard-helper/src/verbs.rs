@@ -32,7 +32,7 @@ impl Helper {
         match method {
             helper::NGINX_START => {
                 let _one = self.nginx_lock.lock().await;
-                root_dir::check(&self.cfg.root, self.cfg.uid)?;
+                self.safe_root()?;
                 to_value(self.nginx.start().await?)
             }
             helper::NGINX_STOP => {
@@ -41,10 +41,11 @@ impl Helper {
             }
             helper::NGINX_RELOAD => {
                 let _one = self.nginx_lock.lock().await;
+                self.safe_root()?;
                 to_value(self.nginx.reload()?)
             }
             helper::NGINX_TEST_CONFIG => {
-                root_dir::check(&self.cfg.root, self.cfg.uid)?;
+                self.safe_root()?;
                 to_value(self.nginx.test_config().await?)
             }
             helper::RESOLVER_INSTALL => {
@@ -60,6 +61,12 @@ impl Helper {
             }
             _ => Err(YardError::new(ErrorCode::MethodNotFound, format!("the helper has no verb {method:?}"))),
         }
+    }
+
+    /// Every verb that makes root nginx read the config checks the data root first.
+    /// `nginx.stop` does not, so nginx can still be stopped from an unsafe root.
+    fn safe_root(&self) -> Result<(), YardError> {
+        root_dir::check(&self.cfg.root, self.cfg.uid)
     }
 }
 

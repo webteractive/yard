@@ -74,10 +74,11 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   It takes no free-form paths or commands: the owning user, Yard's data
   directory and the Homebrew prefix are fixed when the helper is installed, and
   the remaining arguments (TLD, port) are validated. The data root must be
-  absolute, and it and every parent must be owned by the user or root and not
-  writable by group or others (sticky parents such as `/tmp` aside); the
-  install, `nginx.start` and `nginx.test_config` all check this, since another
-  user who could write the root would control the config root runs. nginx master runs as root
+  absolute, and every directory and symlink on its path, as written, must be
+  owned by the user or root, with no directory writable by group or others
+  (sticky parents such as `/tmp` aside); the install, `nginx.start`,
+  `nginx.reload` and `nginx.test_config` all check this, since another user who
+  could write the root would control the config root runs. nginx master runs as root
   (for 80/443); workers run as the user. It listens on
   `/var/run/dev.more.yard.helper.sock` and serves only the owning user's uid.
 - The helper is installed by `sudo yard helper install` (binary to

@@ -20,10 +20,14 @@ triggers:
   caller arguments are a TLD (`^[a-z][a-z0-9-]{0,62}$`, `yard_core::config::yard::valid_tld`)
   and a port (1024–65535).
 - **The data root must be safe for root to read.** `root_dir::check` requires an
-  absolute root whose every directory, up through its canonical parents, is owned by
-  the owner or root and not group- or other-writable (sticky parents like `/tmp`
-  aside). `yard helper install` checks it, and the helper re-checks before
-  `nginx.start` and `nginx.test_config`.
+  absolute root and resolves it one component at a time, as written (nginx gets that
+  path, not the canonical one): every directory it passes must be owned by the owner
+  or root and not group- or other-writable (sticky parents like `/tmp` aside), and
+  every symlink it follows must be owned by the owner or root, with its target walked
+  the same way. Checking only the canonical path misses a symlink sitting in someone
+  else's directory. `yard helper install` checks it, and the helper re-checks before
+  every verb that makes nginx read the config: `nginx.start`, `nginx.reload` and
+  `nginx.test_config`. `nginx.stop` is not gated, so nginx can always be stopped.
 - Socket: `/var/run/dev.more.yard.helper.sock`, mode 0666, and every connection is
   checked with `getpeereid`. Only the owning uid (or root) is served. It is not in the
   data root, so root never creates files in a directory the user can rewrite.
