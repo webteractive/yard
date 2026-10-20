@@ -108,14 +108,13 @@ pub async fn change(ctx: &Ctx, action: PortsAction) -> Outcome {
         }
         PortsAction::Profile { profile } => {
             let profile = match profile {
-                ProfileArg::Trial => Profile::Trial,
-                ProfileArg::Default => Profile::Default,
+                ProfileArg::Standard => Profile::Standard,
+                ProfileArg::Privileged => Profile::Privileged,
             };
             client.call::<_, ()>(methods::PORTS_PROFILE, ProfileParams { profile }).await?;
             format!(
-                "Switched to the {} profile: .{} on ports {} and {}.",
-                if profile == Profile::Trial { "trial" } else { "default" },
-                profile.tld(),
+                "Switched to the {} profile: nginx on ports {} and {}.",
+                profile.name(),
                 profile.http_port(),
                 profile.https_port()
             )

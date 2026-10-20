@@ -19,7 +19,7 @@ use yard_proto::{CheckStatus, DoctorReport, ErrorCode, PROTOCOL_VERSION, YardErr
 
 struct Daemon {
     fx: Fixture,
-    resolver: TempDir,
+    _resolver: TempDir,
     parked: TempDir,
     opts: DaemonOptions,
     stop: Option<oneshot::Sender<()>>,
@@ -54,7 +54,7 @@ async fn prepared(extra_ports: &str) -> Daemon {
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
     let opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf(), resolver.path());
-    Daemon { fx, resolver, parked, opts, stop: None, task: None }
+    Daemon { fx, _resolver: resolver, parked, opts, stop: None, task: None }
 }
 
 impl Daemon {
@@ -165,7 +165,7 @@ async fn hello_then_status() {
 
     let status = c.call("status", Value::Null).await.unwrap();
     assert_eq!(status["tld"], "yard");
-    assert_eq!(status["profile"], "trial");
+    assert_eq!(status["profile"], "standard");
     assert!(status["units"].as_array().unwrap().iter().any(|u| u["name"] == "nginx"), "{status}");
     assert_eq!(status["version"]["daemon"], env!("CARGO_PKG_VERSION"));
     d.shutdown().await.unwrap();
@@ -357,21 +357,6 @@ async fn docroot_created_after_the_project_is_picked_up() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(seen.as_deref().is_some_and(|d| d.ends_with("/public")), "{seen:?}");
-    d.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn profile_switch_refuses_a_foreign_resolver() {
-    let d = prepared("").await.start().await;
-    // Herd's file. The check comes before any probe of 80/443, which tests never bind.
-    std::fs::write(d.resolver.path().join("test"), "nameserver 127.0.0.1\n").unwrap();
-    let before = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
-    let mut c = d.client().await;
-
-    let e = c.call("ports.profile", json!({"profile": "default"})).await.unwrap_err();
-    assert_eq!(e.code, ErrorCode::ResolverForeign, "{e:?}");
-    assert!(e.message.contains("test"), "{}", e.message);
-    assert_eq!(std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap(), before);
     d.shutdown().await.unwrap();
 }
 

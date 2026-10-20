@@ -10,8 +10,17 @@ use yard_proto::{ErrorCode, YardError};
 pub struct YardConfig {
     pub parked: Vec<PathBuf>,
     pub default_php: PhpVersion,
-    /// Overrides the active port profile's TLD when set.
+    /// The TLD; `DEFAULT_TLD` when unset. `yard takeover` (M3) sets it to `test`.
     pub tld: Option<String>,
+}
+
+/// The TLD before `yard takeover`, whatever the port profile (spec §5.3).
+pub const DEFAULT_TLD: &str = "yard";
+
+impl YardConfig {
+    pub fn effective_tld(&self) -> &str {
+        self.tld.as_deref().unwrap_or(DEFAULT_TLD)
+    }
 }
 
 #[derive(Deserialize)]
@@ -102,6 +111,14 @@ mod tests {
         assert_eq!(data["file"], FILE);
         assert_eq!(data["line"], 2);
         assert!(data["column"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn tld_defaults_to_yard_whatever_the_profile() {
+        let c = parse_yard(Some("parked = []\n"), Path::new(FILE), Path::new("/h")).unwrap();
+        assert_eq!(c.effective_tld(), "yard");
+        let c = parse_yard(Some("tld = \"test\"\n"), Path::new(FILE), Path::new("/h")).unwrap();
+        assert_eq!(c.effective_tld(), "test");
     }
 
     #[test]

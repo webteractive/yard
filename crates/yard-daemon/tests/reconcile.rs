@@ -45,8 +45,15 @@ fn env_with(fx: Fixture, resolver: TempDir, helper: HelperClient) -> Env {
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
     let bus = EventBus::new();
     let sup = Arc::new(Supervisor::new(fast(), fx.paths.logs_dir(), helper.clone(), bus.clone()));
-    let rec = Reconciler::new(fx.paths.clone(), Brew::new(fx.brew.path()), sup.clone(), helper, bus.clone())
-        .unwrap();
+    let rec = Reconciler::new(
+        fx.paths.clone(),
+        Brew::new(fx.brew.path()),
+        sup.clone(),
+        helper,
+        bus.clone(),
+        resolver.path().to_path_buf(),
+    )
+    .unwrap();
     Env { fx, resolver, parked, sup, rec, bus }
 }
 
@@ -276,5 +283,32 @@ async fn failed_reconcile_is_remembered_until_one_succeeds() {
     std::fs::write(&broken, "").unwrap();
     e.rec.reconcile().await.unwrap();
     assert_eq!(e.rec.state().await.last_error, None);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn privileged_profile_keeps_the_tld() {
+    let e = env().await;
+    let ports = std::fs::read_to_string(e.fx.paths.ports_toml()).unwrap();
+    std::fs::write(e.fx.paths.ports_toml(), format!("profile = \"privileged\"\n{ports}")).unwrap();
+    e.rec.reconcile().await.unwrap();
+    assert_eq!(e.rec.snapshot().await.unwrap().tld, "yard");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn tld_with_a_foreign_resolver_is_refused_and_the_old_tld_serves() {
+    let e = env().await;
+    e.rec.reconcile().await.unwrap();
+    // Herd's file: no Yard marker.
+    std::fs::write(e.resolver.path().join("test"), "nameserver 127.0.0.1\n").unwrap();
+    let yard = std::fs::read_to_string(e.fx.paths.yard_toml()).unwrap();
+    std::fs::write(e.fx.paths.yard_toml(), format!("{yard}tld = \"test\"\n")).unwrap();
+
+    let err = e.rec.reconcile().await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::ResolverForeign, "{err:?}");
+    assert!(err.message.contains(".test"), "{}", err.message);
+    assert_eq!(e.rec.snapshot().await.unwrap().tld, "yard");
+    assert_eq!(e.rec.last_error().await.map(|e| e.code), Some(ErrorCode::ResolverForeign));
     e.sup.shutdown().await;
 }

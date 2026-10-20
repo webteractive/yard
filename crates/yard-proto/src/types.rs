@@ -3,34 +3,39 @@
 use crate::YardError;
 use serde::{Deserialize, Serialize};
 
-/// A named set of pinned values (spec §7). Trial runs beside Herd.
+/// A named set of pinned nginx ports (spec §7). `standard` needs no root for nginx;
+/// `privileged` takes 80/443 from the helper. Neither sets the TLD. M1 called them
+/// `trial` and `default`, and those names still parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Profile {
     #[default]
-    Trial,
-    Default,
+    #[serde(alias = "trial")]
+    Standard,
+    #[serde(alias = "default")]
+    Privileged,
 }
 
 impl Profile {
-    pub fn tld(self) -> &'static str {
+    /// The name `ports.toml`, the CLI and the API use.
+    pub fn name(self) -> &'static str {
         match self {
-            Profile::Trial => "yard",
-            Profile::Default => "test",
+            Profile::Standard => "standard",
+            Profile::Privileged => "privileged",
         }
     }
 
     pub fn http_port(self) -> u16 {
         match self {
-            Profile::Trial => 8080,
-            Profile::Default => 80,
+            Profile::Standard => 8080,
+            Profile::Privileged => 80,
         }
     }
 
     pub fn https_port(self) -> u16 {
         match self {
-            Profile::Trial => 8443,
-            Profile::Default => 443,
+            Profile::Standard => 8443,
+            Profile::Privileged => 443,
         }
     }
 }
@@ -179,15 +184,18 @@ mod tests {
 
     #[test]
     fn profile_values() {
-        assert_eq!(
-            (Profile::Trial.tld(), Profile::Trial.http_port(), Profile::Trial.https_port()),
-            ("yard", 8080, 8443)
-        );
-        assert_eq!(
-            (Profile::Default.tld(), Profile::Default.http_port(), Profile::Default.https_port()),
-            ("test", 80, 443)
-        );
-        assert_eq!(serde_json::to_value(Profile::Trial).unwrap(), json!("trial"));
+        assert_eq!((Profile::Standard.http_port(), Profile::Standard.https_port()), (8080, 8443));
+        assert_eq!((Profile::Privileged.http_port(), Profile::Privileged.https_port()), (80, 443));
+        assert_eq!(Profile::default(), Profile::Standard);
+    }
+
+    #[test]
+    fn profile_names_and_aliases() {
+        assert_eq!(serde_json::to_value(Profile::Standard).unwrap(), json!("standard"));
+        assert_eq!(serde_json::to_value(Profile::Privileged).unwrap(), json!("privileged"));
+        // M1 wrote these names into ports.toml.
+        assert_eq!(serde_json::from_value::<Profile>(json!("trial")).unwrap(), Profile::Standard);
+        assert_eq!(serde_json::from_value::<Profile>(json!("default")).unwrap(), Profile::Privileged);
     }
 
     #[test]

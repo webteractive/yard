@@ -85,7 +85,7 @@ fn version_json_has_stable_shape() {
 fn version_reports_daemon_when_running() {
     let status = json!({
         "version": {"cli": null, "daemon": MOCK_VERSION, "helper": "0.1.0", "protocol": "1.0", "commit": "mock", "build_date": "2026-10-19"},
-        "profile": "trial", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": null
+        "profile": "standard", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": null
     });
     let d = MockDaemon::start(&[("status", Ok(status))]);
     let out = d.yard().args(["version", "--json"]).output().unwrap();
@@ -118,7 +118,7 @@ fn ports_list_warns_when_ports_toml_is_invalid() {
     });
     let status = json!({
         "version": {"cli": null, "daemon": MOCK_VERSION, "helper": null, "protocol": "1.0", "commit": "mock", "build_date": "2026-10-19"},
-        "profile": "trial", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": bad
+        "profile": "standard", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": bad
     });
     let d = MockDaemon::start(&[("ports.list", Ok(infos)), ("status", Ok(status))]);
     let out = d.yard().arg("ports").output().unwrap();
@@ -266,4 +266,12 @@ fn every_command_has_help() {
         assert!(text.lines().next().is_some_and(|l| !l.trim().is_empty()), "{cmd}: {text}");
         assert!(text.contains("--json"), "{cmd}: {text}");
     }
+}
+
+#[test]
+fn profile_accepts_old_names() {
+    let d = MockDaemon::start(&[("ports.profile", Ok(json!(null)))]);
+    let out = d.yard().args(["ports", "profile", "trial"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("ports.profile"), vec![json!({"profile": "standard"})]);
 }

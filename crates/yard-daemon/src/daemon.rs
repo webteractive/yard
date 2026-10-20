@@ -89,6 +89,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         supervisor.clone(),
         helper.clone(),
         bus.clone(),
+        opts.resolver_dir.clone(),
     )?);
     let ctx = Arc::new(Context {
         paths: opts.paths.clone(),

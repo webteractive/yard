@@ -71,7 +71,7 @@ impl View {
             .flatten()
             .next();
         let tld = match (&yard, &registry) {
-            (Ok(y), Ok(r)) => Some(y.tld.clone().unwrap_or_else(|| r.profile.tld().to_string())),
+            (Ok(y), Ok(_)) => Some(y.effective_tld().to_string()),
             _ => None,
         };
         let sites = match (&yard, &sites_cfg, &registry, &tld) {

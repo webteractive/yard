@@ -104,14 +104,18 @@ pub enum PortsAction {
     Unpin { unit: String },
     /// Set the range automatic ports come from, e.g. 33000-33999.
     Range { range: String },
-    /// Switch the port profile: trial (8080/8443, .yard) or default (80/443, .test).
+    /// Switch the port profile: standard (nginx on 8080/8443) or privileged (80/443).
     Profile { profile: ProfileArg },
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum ProfileArg {
-    Trial,
-    Default,
+    /// nginx on 8080/8443; no root for nginx.
+    #[value(alias = "trial")]
+    Standard,
+    /// nginx on 80/443, through sockets the root helper opens.
+    #[value(alias = "default")]
+    Privileged,
 }
 
 #[derive(Debug, Subcommand)]

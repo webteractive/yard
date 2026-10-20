@@ -91,7 +91,15 @@ async fn all_ok_on_healthy_fixture() {
     let e = env().await;
     let bus = EventBus::new();
     let sup = Arc::new(Supervisor::new(fast(), e.fx.paths.logs_dir(), e.helper.clone(), bus.clone()));
-    let rec = Reconciler::new(e.fx.paths.clone(), e.brew(), sup.clone(), e.helper.clone(), bus).unwrap();
+    let rec = Reconciler::new(
+        e.fx.paths.clone(),
+        e.brew(),
+        sup.clone(),
+        e.helper.clone(),
+        bus,
+        e.resolver.path().to_path_buf(),
+    )
+    .unwrap();
     rec.reconcile().await.unwrap();
     let up = || {
         let units = sup.list();

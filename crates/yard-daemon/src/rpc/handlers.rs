@@ -9,10 +9,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use toml_edit::{Array, value};
+use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{TomlFile, load_yard};
-use yard_core::paths::RESOLVER_MARKER;
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
@@ -24,9 +24,6 @@ use yard_proto::{
     DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
     VersionInfo, YardError,
 };
-
-/// Herd's `.test` resolver is the foreign file this check usually meets.
-const HERD_APP: &str = "/Applications/Herd.app";
 
 pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value, YardError> {
     match method {
@@ -147,7 +144,13 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
             build_date: BUILD_DATE.into(),
         },
         profile,
-        tld: snapshot.as_ref().map_or_else(|| profile.tld().to_string(), |s| s.tld.clone()),
+        tld: snapshot.as_ref().map_or_else(
+            || {
+                load_yard(&ctx.paths)
+                    .map_or_else(|_| DEFAULT_TLD.to_string(), |y| y.effective_tld().to_string())
+            },
+            |s| s.tld.clone(),
+        ),
         parked: snapshot
             .as_ref()
             .map(|s| s.yard.parked.iter().map(|p| p.display().to_string()).collect())
@@ -305,19 +308,6 @@ async fn edit_ports(
 
 /// A profile switch may land on the ports nginx already holds; those count as free.
 async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
-    // Herd may be quit with its ports free, but its resolver still claims `.test`.
-    let tld = load_yard(&ctx.paths)?.tld.unwrap_or_else(|| profile.tld().to_string());
-    let file = ctx.resolver_dir.join(&tld);
-    if std::fs::read_to_string(&file).is_ok_and(|t| t.lines().next() != Some(RESOLVER_MARKER)) {
-        let owner = if tld == "test" && Path::new(HERD_APP).exists() { "Herd" } else { "another tool" };
-        return Err(YardError::new(
-            ErrorCode::ResolverForeign,
-            format!("{} belongs to {owner}, so .{tld} would not reach Yard", file.display()),
-        )
-        .with_hint(
-            "stay on the trial profile until yard takeover, or set `tld` in yard.toml to another name",
-        ));
-    }
     let nginx_running =
         ctx.supervisor().list().iter().any(|u| u.name == "nginx" && u.state == UnitState::Running);
     let current = Registry::load(&ctx.paths)?;

@@ -97,20 +97,13 @@ pub fn mode_str(mode: PortMode) -> &'static str {
     }
 }
 
-fn profile_str(profile: Profile) -> &'static str {
-    match profile {
-        Profile::Trial => "trial",
-        Profile::Default => "default",
-    }
-}
-
 impl Registry {
     pub fn load(paths: &Paths) -> Result<Registry, YardError> {
         let file = paths.ports_toml();
         Self::parse(read_optional(&file)?.as_deref(), &file)
     }
 
-    /// A missing file seeds the trial profile's nginx ports and dnsmasq.
+    /// A missing file seeds the standard profile's nginx ports and dnsmasq.
     pub fn parse(text: Option<&str>, file: &Path) -> Result<Registry, YardError> {
         let raw: Raw = match text {
             Some(text) => {
@@ -313,9 +306,9 @@ impl Registry {
             let list = blocked.iter().map(u16::to_string).collect::<Vec<_>>().join(", ");
             return Err(YardError::new(
                 ErrorCode::PortInUse,
-                format!("cannot switch to the {} profile: port {list} in use", profile_str(profile)),
+                format!("cannot switch to the {} profile: port {list} in use", profile.name()),
             )
-            .with_hint("free those ports first, or stay on the trial profile")
+            .with_hint("free those ports first, or stay on the standard profile")
             .with_data(serde_json::json!({ "ports": blocked })));
         }
         for (unit, port) in targets {
@@ -341,7 +334,7 @@ impl Registry {
             file.set(&["auto_fallback"], value(self.auto_fallback));
         }
         if current.profile != Some(self.profile) {
-            file.set(&["profile"], value(profile_str(self.profile)));
+            file.set(&["profile"], value(self.profile.name()));
         }
         let old = current.ports.unwrap_or_default();
         for unit in old.keys().filter(|u| !self.entries.contains_key(*u)) {
@@ -405,7 +398,7 @@ mod tests {
 
     const SPEC_EXAMPLE: &str = r#"range = "33000-33999"
 auto_fallback = false
-profile = "trial"   # or "default"
+profile = "standard"   # or "privileged"
 
 [ports]
 nginx-http   = { port = 8080,  mode = "pinned" }
@@ -442,14 +435,14 @@ mailpit-http = { port = 33001, mode = "auto" }
         );
         assert_eq!(r.entries["mailpit-http"].mode, PortMode::Auto);
         assert_eq!(r.entries["mysql-8-0"].preferred, Some(3306));
-        assert_eq!(r.profile, Profile::Trial);
+        assert_eq!(r.profile, Profile::Standard);
         assert!(r.validate().is_empty(), "{:?}", r.validate());
     }
 
     #[test]
-    fn seeds_trial_profile() {
+    fn seeds_standard_profile() {
         let r = Registry::parse(None, file()).unwrap();
-        assert_eq!(r.profile, Profile::Trial);
+        assert_eq!(r.profile, Profile::Standard);
         assert_eq!(r.range, "33000-33999".parse().unwrap());
         assert!(!r.auto_fallback);
         assert_eq!(
@@ -594,10 +587,10 @@ mailpit-http = { port = 33001, mode = "auto" }
     #[test]
     fn profile_switch_reports_holders() {
         let mut r = Registry::parse(None, file()).unwrap();
-        let e = r.set_profile(Profile::Default, &|p| p != 80 && p != 443).unwrap_err();
+        let e = r.set_profile(Profile::Privileged, &|p| p != 80 && p != 443).unwrap_err();
         assert_eq!(e.code, ErrorCode::PortInUse);
         assert_eq!(e.data.unwrap()["ports"], serde_json::json!([80, 443]));
-        assert_eq!(r.profile, Profile::Trial);
+        assert_eq!(r.profile, Profile::Standard);
         assert_eq!(r.entries["nginx-http"].port, 8080);
         assert_eq!(r.entries["nginx-https"].port, 8443);
     }
@@ -605,11 +598,33 @@ mailpit-http = { port = 33001, mode = "auto" }
     #[test]
     fn profile_switch_moves_pinned_ports() {
         let mut r = Registry::parse(None, file()).unwrap();
-        r.set_profile(Profile::Default, &all_free).unwrap();
+        r.set_profile(Profile::Privileged, &all_free).unwrap();
         assert_eq!(
             (r.profile, r.entries["nginx-http"].port, r.entries["nginx-https"].port),
-            (Profile::Default, 80, 443)
+            (Profile::Privileged, 80, 443)
         );
+    }
+
+    #[test]
+    fn old_profile_names_still_parse() {
+        let standard = Registry::parse(Some("profile = \"trial\"\n"), file()).unwrap();
+        assert_eq!(standard.profile, Profile::Standard);
+        let privileged = Registry::parse(Some("profile = \"default\"\n"), file()).unwrap();
+        assert_eq!(privileged.profile, Profile::Privileged);
+    }
+
+    #[test]
+    fn saving_writes_new_profile_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ports.toml");
+        std::fs::write(&path, "profile = \"trial\"\n").unwrap();
+        let mut r = Registry::parse(Some("profile = \"trial\"\n"), &path).unwrap();
+        r.set_profile(Profile::Privileged, &|_| true).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        r.save(&mut f);
+        f.save().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("profile = \"privileged\""), "{text}");
     }
 
     #[test]
@@ -624,7 +639,7 @@ mailpit-http = { port = 33001, mode = "auto" }
         r.save(&mut f);
         f.save().unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("# or \"default\""), "{text}");
+        assert!(text.contains("# or \"privileged\""), "{text}");
         let back = Registry::parse(Some(&text), &path).unwrap();
         assert_eq!(back, r);
     }

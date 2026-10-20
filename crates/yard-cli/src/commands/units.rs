@@ -4,12 +4,12 @@ use super::{Ctx, Outcome};
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use yard_proto::methods::{self, UnitParams};
-use yard_proto::{Profile, StatusInfo, UnitInfo, UnitState};
+use yard_proto::{StatusInfo, UnitInfo, UnitState};
 
 pub async fn status(ctx: &Ctx) -> Outcome {
     let info: StatusInfo = ctx.client().await?.call(methods::STATUS, Value::Null).await?;
     ctx.emit(&info, || {
-        let profile = if info.profile == Profile::Trial { "trial" } else { "default" };
+        let profile = info.profile.name();
         let parked = if info.parked.is_empty() { "none".to_string() } else { info.parked.join(", ") };
         let config = match &info.config_error {
             None => "ok".to_string(),

@@ -15,8 +15,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use yard_core::brew::Brew;
 use yard_core::config::edit::TomlFile;
+use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{load_sites, load_yard};
 use yard_core::generated::{self, Action};
+use yard_core::paths::RESOLVER_MARKER;
 use yard_core::php::system_timezone;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::render::RenderCtx;
@@ -52,6 +54,16 @@ pub struct Reconciler {
     helper: HelperClient,
     bus: EventBus,
     identity: Identity,
+    /// Where resolver files live, read to refuse a TLD another tool owns.
+    resolver_dir: PathBuf,
+}
+
+const HERD_APP: &str = "/Applications/Herd.app";
+
+/// `<resolver_dir>/<tld>` when it exists without Yard's marker, i.e. belongs to someone else.
+pub(crate) fn foreign_resolver(resolver_dir: &Path, tld: &str) -> Option<PathBuf> {
+    let file = resolver_dir.join(tld);
+    std::fs::read_to_string(&file).is_ok_and(|t| t.lines().next() != Some(RESOLVER_MARKER)).then_some(file)
 }
 
 impl Reconciler {
@@ -61,6 +73,7 @@ impl Reconciler {
         supervisor: Arc<Supervisor>,
         helper: HelperClient,
         bus: EventBus,
+        resolver_dir: PathBuf,
     ) -> Result<Self, YardError> {
         let localtime = std::fs::read_link("/etc/localtime").ok();
         let identity = Identity {
@@ -68,7 +81,14 @@ impl Reconciler {
             group: "staff".into(),
             timezone: system_timezone(localtime.as_deref()),
         };
-        Ok(Self { state: Mutex::new(State::new(paths, brew)?), supervisor, helper, bus, identity })
+        Ok(Self {
+            state: Mutex::new(State::new(paths, brew)?),
+            supervisor,
+            helper,
+            bus,
+            identity,
+            resolver_dir,
+        })
     }
 
     pub fn supervisor(&self) -> &Arc<Supervisor> {
@@ -136,9 +156,22 @@ impl Reconciler {
         let loaded = load_yard(&state.paths)
             .and_then(|y| Ok((y, load_sites(&state.paths)?, Registry::load(&state.paths)?)));
         let (yard, sites_cfg, mut registry) = loaded?;
+        let tld = yard.effective_tld().to_string();
+        // Moving to a TLD another tool's resolver claims would serve nothing (Herd's `.test`).
+        let old_tld = state.snapshot.as_ref().map(|s| s.tld.as_str());
+        if old_tld != Some(tld.as_str())
+            && let Some(file) = foreign_resolver(&self.resolver_dir, &tld)
+        {
+            let owner = if tld == "test" && Path::new(HERD_APP).exists() { "Herd" } else { "another tool" };
+            let back = old_tld.unwrap_or(DEFAULT_TLD);
+            return Err(YardError::new(
+                ErrorCode::ResolverForeign,
+                format!("{} belongs to {owner}, so .{tld} would not reach Yard", file.display()),
+            )
+            .with_hint(format!("set `tld` in yard.toml back to {back:?}, or remove it")));
+        }
 
         // 2. Settle ports. A port one of our running units holds is free for that unit.
-        let tld = yard.tld.clone().unwrap_or_else(|| registry.profile.tld().to_string());
         let before = registry.clone();
         let own = self.own_ports(state.snapshot.as_ref());
         let is_free = |p: u16| own.contains(&p) || probe::is_free(p, Proto::Tcp);
