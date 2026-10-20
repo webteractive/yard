@@ -18,6 +18,7 @@ pub mod reconcile;
 pub mod rpc;
 pub mod state;
 pub mod supervisor;
+pub mod tls;
 pub mod watch;
 
 /// Socket tests take this lock: macOS hands out ephemeral ports in sequence and lets a
