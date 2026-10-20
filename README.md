@@ -18,7 +18,9 @@ below. M1.1 moved nginx from root to the user. M2 is done too: sites are explici
 (`yard link`, no parking), PHP 7.0–8.5 install from brew and run side by side, a site
 can be isolated to its own version, extensions come from brew, pecl or a `.so`, and
 the `php`/`composer`/`pecl` shims follow the site's version and never reach Herd's
-PHP. HTTPS (M3), Yard.app (M4), and Node and services (M5) come later.
+PHP. M3 adds HTTPS: `yard secure` serves a site with a certificate from a local CA,
+and `yard trust` puts that CA in your login keychain. Yard.app (M4), and Node and
+services (M5) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080`. Herd keeps its `.test` domain,
@@ -60,6 +62,7 @@ exit, and removes the two files that nginx left owned by root (`logs/nginx-error
 `yard restart nginx` when yardd is already running.
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
 proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
+`scripts/e2e-m2.sh` checks multi-PHP and extensions, and `scripts/e2e-m3.sh` HTTPS.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in

@@ -24,7 +24,12 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   as the maintainer under yardd).
 - M2 (multi-PHP, extensions, shims, removing parking) is done:
   `docs/superpowers/plans/2026-10-20-yard-m2-multi-php.md`, verified on this machine on
-  2026-10-20 (`scripts/e2e-m1.sh` and `scripts/e2e-m2.sh` passing). M3 needs its own plan.
+  2026-10-20 (`scripts/e2e-m1.sh` and `scripts/e2e-m2.sh` passing).
+- M3 (HTTPS: a local CA, `yard secure`/`unsecure`, `yard trust`/`untrust`, renewal) is
+  done: `docs/superpowers/plans/2026-10-20-yard-m3-https.md`, verified on this machine on
+  2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). `yard trust`
+  itself is not yet run here: macOS asks the maintainer for a password. There is no `yard takeover`
+  (dropped 2026-10-20). M4 needs its own plan.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
@@ -105,6 +110,10 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - `scripts/e2e-m2.sh` — real-machine M2 check after `e2e-m1.sh`: brew-installs php@7.1
   and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Run PHP only as
   `"$HOME/Library/Application Support/Yard/bin/php"`; a bare `php` here is Herd's.
+- `scripts/e2e-m3.sh` — real-machine M3 check after `e2e-m1.sh`: secures a scratch site and
+  curls it over HTTPS with `--cacert`, so it needs no keychain trust; ask the maintainer first. Tests
+  never run the real `security` or touch a keychain: `DaemonOptions.security`, the
+  fixture's fake `security` and the CLI's `YARD_SECURITY` stand in for it.
 
 ## Verifying a change on this machine
 

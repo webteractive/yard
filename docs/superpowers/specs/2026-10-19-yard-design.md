@@ -645,7 +645,10 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   and the 80/443 profile refused with Herd named). `scripts/e2e-m2.sh` adds M2 over HTTP:
   PHP 7.1 beside 8.4, a site isolated to 7.1, redis and xdebug added and checked with
   `php -m` through the shim, every `php` and `php-fpm` brew's (never Herd's), and
-  `yard xdebug off`.
+  `yard xdebug off`. `scripts/e2e-m3.sh` adds HTTPS: a secured site answers on
+  `https://<site>.yard:8443` under `curl --cacert <ca.pem>`, its http URL answers
+  `301` to the https one, its key is mode 0600, and `yard unsecure` serves http again
+  and removes the certificate. It never runs `yard trust`, which macOS asks a password for.
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 
@@ -673,7 +676,8 @@ Each milestone is usable on its own and gets its own implementation plan.
    (sites are explicit links only, §5.1). Done 2026-10-20, verified by
    `scripts/e2e-m2.sh` on the maintainer's machine.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal (and re-issue on a
-   TLD change). No `takeover` (dropped 2026-10-20, §5.5).
+   TLD change). No `takeover` (dropped 2026-10-20, §5.5). Done 2026-10-21, verified by
+   `scripts/e2e-m3.sh` on the maintainer's machine; `yard trust` waits for the maintainer at the screen.
 4. **M4 Yard.app:** client, menu bar, main window, onboarding.
 5. **M5 Node and services:** fnm wrapper, MySQL, Postgres, Redis, Mailpit,
    MinIO, `yard env`.
