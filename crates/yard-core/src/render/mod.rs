@@ -93,6 +93,7 @@ mod tests {
             url: format!("http://{name}.yard:8080/"),
             source: SiteSource::Linked,
             kind: SiteKind::Php { path: path.into(), docroot: format!("{path}/public"), php: "8.4".into() },
+            secure: false,
         }
     }
 
@@ -103,6 +104,7 @@ mod tests {
             url: "http://api.yard:8080/".into(),
             source: SiteSource::Proxy,
             kind: SiteKind::Proxy { target: "http://127.0.0.1:3000".into() },
+            secure: false,
         }
     }
 

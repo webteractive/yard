@@ -62,6 +62,10 @@ pub struct SiteInfo {
     pub source: SiteSource,
     #[serde(flatten)]
     pub kind: SiteKind,
+    /// Served over HTTPS with a certificate from Yard's CA (`yard secure`); its `url` is
+    /// then `https://`.
+    #[serde(default)]
+    pub secure: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +214,18 @@ pub struct ExtInfo {
     pub enabled: bool,
 }
 
+/// `ca.info`: Yard's CA, made on first use, and whether the login keychain trusts it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaInfo {
+    /// The CA certificate, `<root>/ca/yard-ca.pem`.
+    pub cert: String,
+    /// Upper-case hex SHA-256 of the certificate's DER, as `security -Z` takes it.
+    pub sha256: String,
+    pub trusted: bool,
+    /// The day it expires, `YYYY-MM-DD`.
+    pub expires: String,
+}
+
 /// The answer to a method that runs as a job: its progress and result arrive as
 /// `job_progress` and `job_finished` events on the `jobs` topic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,6 +270,30 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(HolderKind::BrewServices).unwrap(), json!("brew_services"));
         assert_eq!(serde_json::to_value(CheckStatus::Warn).unwrap(), json!("warn"));
+    }
+
+    #[test]
+    fn site_info_secure_defaults_to_false() {
+        // What a 2.1 daemon sent: no `secure`.
+        let v = json!({"name":"blog","host":"blog.yard","url":"http://blog.yard:8080/","source":"linked",
+            "kind":"proxy","target":"http://127.0.0.1:3000"});
+        assert!(!serde_json::from_value::<SiteInfo>(v).unwrap().secure);
+    }
+
+    #[test]
+    fn ca_info_round_trips() {
+        let ca = CaInfo {
+            cert: "/r/ca/yard-ca.pem".into(),
+            sha256: "AB12".into(),
+            trusted: true,
+            expires: "2036-10-18".into(),
+        };
+        let v = serde_json::to_value(&ca).unwrap();
+        assert_eq!(
+            v,
+            json!({"cert":"/r/ca/yard-ca.pem","sha256":"AB12","trusted":true,"expires":"2036-10-18"})
+        );
+        assert_eq!(serde_json::from_value::<CaInfo>(v).unwrap(), ca);
     }
 
     #[test]

@@ -37,6 +37,8 @@ pub enum ErrorCode {
     ExtVerifyFailed,
     /// `yard.toml` manages no extension of that name for the version, and brew loads none.
     ExtNotFound,
+    /// `yard trust` ran `security`, but the login keychain still does not trust the CA.
+    CaNotTrusted,
     Internal,
 }
 
@@ -98,6 +100,7 @@ mod tests {
     fn daemon_not_running_has_a_stable_code() {
         let v = serde_json::to_value(ErrorCode::DaemonNotRunning).unwrap();
         assert_eq!(v, json!("DAEMON_NOT_RUNNING"));
+        assert_eq!(serde_json::to_value(ErrorCode::CaNotTrusted).unwrap(), json!("CA_NOT_TRUSTED"));
     }
 
     #[test]

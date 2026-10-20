@@ -13,6 +13,9 @@ pub const SITES_PROXY: &str = "sites.proxy";
 pub const SITES_UNPROXY: &str = "sites.unproxy";
 pub const SITES_DOCROOT: &str = "sites.docroot";
 pub const SITES_ISOLATE: &str = "sites.isolate";
+pub const SITES_SECURE: &str = "sites.secure";
+pub const SITES_UNSECURE: &str = "sites.unsecure";
+pub const CA_INFO: &str = "ca.info";
 pub const PORTS_LIST: &str = "ports.list";
 pub const PORTS_CHECK: &str = "ports.check";
 pub const PORTS_SET: &str = "ports.set";
@@ -73,6 +76,12 @@ pub struct DocrootParams {
     /// `None` clears the override and returns to detection.
     #[serde(default)]
     pub path: Option<String>,
+}
+
+/// `sites.secure` and `sites.unsecure`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteParams {
+    pub site: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +145,7 @@ mod tests {
         assert_eq!(SITES_LINK, "sites.link");
         assert_eq!(UNITS_RESTART, "units.restart");
         assert_eq!(PORTS_PROFILE, "ports.profile");
+        assert_eq!((SITES_SECURE, SITES_UNSECURE, CA_INFO), ("sites.secure", "sites.unsecure", "ca.info"));
     }
 
     #[test]

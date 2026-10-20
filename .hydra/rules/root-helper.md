@@ -13,7 +13,8 @@ triggers:
 # Root helper boundary
 
 - The helper accepts exactly these verbs: `resolver.install`, `resolver.remove`,
-  `ports.bind`, `ca.trust`, `ca.untrust` (M3), and the read-only `status`. A new verb
+  `ports.bind`, and the read-only `status`. Trusting Yard's CA is the user's own
+  `yard trust` in the login keychain (decided 2026-10-20), never a helper verb. A new verb
   needs a spec change first (§3.1). **Root never runs nginx** and never reads its
   config: nginx is a yardd unit, run as the user (M1.1).
 - **No caller-supplied paths or commands, ever.** The owning uid and user, the data
@@ -33,8 +34,7 @@ triggers:
   or root and not group- or other-writable (sticky parents like `/tmp` aside), and
   every symlink it follows must be owned by the owner or root, with its target walked
   the same way. Checking only the canonical path misses a symlink sitting in someone
-  else's directory. `yard helper install` checks it, and `ca.trust` (M3) will re-check
-  it before reading the CA from the root.
+  else's directory. `yard helper install` checks it.
 - Socket: `/var/run/dev.more.yard.helper.sock`, mode 0666, and every connection is
   checked with `getpeereid`. Only the owning uid (or root) is served. It is not in the
   data root, so root never creates files in a directory the user can rewrite.

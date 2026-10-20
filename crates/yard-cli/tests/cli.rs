@@ -27,6 +27,7 @@ fn sites() -> Vec<SiteInfo> {
                 docroot: "/Users/me/code/blog/public".into(),
                 php: "8.4".into(),
             },
+            secure: false,
         },
         SiteInfo {
             name: "api".into(),
@@ -34,6 +35,7 @@ fn sites() -> Vec<SiteInfo> {
             url: "http://api.yard:8080/".into(),
             source: SiteSource::Proxy,
             kind: SiteKind::Proxy { target: "http://127.0.0.1:3000".into() },
+            secure: false,
         },
     ]
 }
@@ -74,7 +76,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], "0.1.0");
-    assert_eq!(v["protocol"], "2.1");
+    assert_eq!(v["protocol"], "2.2");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());
@@ -371,6 +373,7 @@ fn php_site(name: &str, path: &str, php: &str) -> Value {
         url: format!("http://{name}.yard:8080/"),
         source: SiteSource::Linked,
         kind: SiteKind::Php { path: path.into(), docroot: path.into(), php: php.into() },
+        secure: false,
     })
     .unwrap()
 }

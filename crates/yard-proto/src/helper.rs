@@ -7,7 +7,7 @@ pub const RESOLVER_REMOVE: &str = "resolver.remove";
 pub const PORTS_BIND: &str = "ports.bind";
 pub const STATUS: &str = "status";
 
-/// Everything the helper accepts. `ca.trust` / `ca.untrust` join in M3.
+/// Everything the helper accepts. CA trust is the user's own (`yard trust`), not root's.
 pub const VERBS: [&str; 4] = [RESOLVER_INSTALL, RESOLVER_REMOVE, PORTS_BIND, STATUS];
 
 /// The only ports `ports.bind` opens: what the privileged profile serves on.

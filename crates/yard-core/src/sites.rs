@@ -94,6 +94,7 @@ pub fn resolve(
                         docroot: docroot.display().to_string(),
                         php: entry.php.unwrap_or(cfg.default_php).to_string(),
                     },
+                    secure: false,
                 });
             }
             (None, Some(target)) => match parse_proxy_target(target) {
@@ -103,6 +104,7 @@ pub fn resolve(
                     host,
                     source: SiteSource::Proxy,
                     kind: SiteKind::Proxy { target: target.clone() },
+                    secure: false,
                 }),
                 Err(e) => warnings.push(format!("sites.toml: {name}: {}", e.message)),
             },

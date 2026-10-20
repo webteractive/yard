@@ -61,7 +61,7 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
                                                 │
                                                 └─ narrow socket ─▶ yard-helper
                                                                     (LaunchDaemon, root)
-                                                                    /etc/resolver, CA trust,
+                                                                    /etc/resolver,
                                                                     80/443 sockets (opt-in)
 ```
 
@@ -74,8 +74,8 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   as the user (nginx config can `include` any file and `load_module`), and nothing
   nginx does needs root except binding 80/443 on loopback.
 - **`yard-helper`** runs as root and accepts only a fixed verb set:
-  `resolver.install`, `resolver.remove`, `ca.trust`, `ca.untrust`,
-  `ports.bind`, plus a read-only `status`.
+  `resolver.install`, `resolver.remove`, `ports.bind`, plus a read-only `status`.
+  Trusting Yard's CA is not root's job (§5.4).
   It takes no free-form paths or commands: the owning user, Yard's data
   directory and the Homebrew prefix are fixed when the helper is installed, and
   the remaining arguments (TLD, port) are validated. It listens on
@@ -87,12 +87,10 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   root opens two sockets and does nothing else. macOS lets any user bind a low
   port on the wildcard address but not on loopback, and listening on the wildcard
   would put every site on the network, so this is the one job root does for nginx.
-- The only verb that reads from the data root is `ca.trust` (M3), which reads
-  the CA certificate. The data root must be absolute, and every directory and
-  symlink on its path, as written, must be owned by the user or root, with no
-  directory writable by group or others (sticky parents such as `/tmp` aside);
-  the install and `ca.trust` check this, since another user who could write the
-  root could get their own certificate trusted.
+- No verb reads from the data root. The install checks that the data root is
+  absolute and that every directory and symlink on its path, as written, is owned by
+  the user or root, with no directory writable by group or others (sticky parents
+  such as `/tmp` aside).
 - The helper is installed by `sudo yard helper install` (binary to
   `/Library/PrivilegedHelperTools/`, plist to `/Library/LaunchDaemons/`), which is
   the only path while there is no app (M1–M3). Yard.app registers the same
@@ -384,16 +382,32 @@ profile; Yard does not edit dotfiles.
 
 ### 5.4 HTTPS
 
-- First run: generate a CA (`rcgen`, ECDSA P-256, 10-year validity) in `ca/`;
-  `ca.key` is mode 0600. `yard-helper ca.trust` adds it to the System keychain as
-  a trusted root (one admin prompt).
+- On first need (the first secured site, or `yard trust`) `yardd` generates a CA
+  (`rcgen`, ECDSA P-256, 10-year validity, `CN = Yard CA (<user>)`) in `ca/`;
+  `yard-ca.key` is mode 0600.
+- **Trust is the user's, in the login keychain** (decided 2026-10-20, the maintainer): macOS 11+
+  makes the user confirm a trust-settings change in a dialog, which a root
+  LaunchDaemon cannot show, so there are no `ca.trust`/`ca.untrust` helper verbs.
+  `yard trust` runs `/usr/bin/security add-trusted-cert -r trustRoot -k
+  ~/Library/Keychains/login.keychain-db <ca.pem>` as the user (macOS asks for the
+  password once); `yard untrust` runs `security delete-certificate -Z <SHA-256> -t`.
+  `ca.info` reports `trusted` from `security verify-cert -c <ca.pem> -l -L -q -p basic`.
+  Safari and Chrome use the login keychain; curl in scripts takes `--cacert`.
 - `yard secure [site]` issues a leaf cert (825-day validity, SAN = site host and
-  `*.<site host>`), switches the server block to 443 with an 80→443 redirect.
-  `yard unsecure [site]` reverses it.
+  `*.<site host>`) and serves the site on the https port, with its http port
+  answering `301` to the https URL (8080→8443 on `standard`, 80→443 on
+  `privileged`). `yard unsecure [site]` reverses it. The site defaults to the one
+  containing the current directory. `sites.toml` gets `secure` only where it differs
+  from `secure_by_default`.
 - `secure_by_default = true` in `yard.toml` secures every current and future site.
 - Certs within 30 days of expiry are renewed automatically by `yardd`.
-- `yard doctor` prints `NODE_EXTRA_CA_CERTS=<path>` for Node and can enable
-  Firefox's `security.enterprise_roots.enabled` policy.
+- Reconcile issues missing certs, re-issues ones a new CA did not sign or whose names
+  no longer match the host, and removes the files of sites no longer secured, before
+  it renders nginx. A cert that cannot be issued fails the reconcile, so the previous
+  config keeps serving.
+- `yard doctor` warns while a secured site's CA is untrusted (hint `yard trust`), and
+  prints `NODE_EXTRA_CA_CERTS=<path>` for Node and, when Firefox is installed, the
+  `security.enterprise_roots.enabled` setting to turn on. It edits neither.
 
 ### 5.5 Herd coexistence and migration
 
@@ -446,7 +460,7 @@ profile; Yard does not edit dotfiles.
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs`,
-  `node.list|install|use`, `units.restart`, `jobs.cancel`, `env.print`.
+  `ca.info`, `node.list|install|use`, `units.restart`, `jobs.cancel`, `env.print`.
 - Long operations (brew installs) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20
@@ -475,7 +489,7 @@ profile; Yard does not edit dotfiles.
 Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_NOT_FOUND`,
 `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
-`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`. The CLI prints message and hint;
+`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI
