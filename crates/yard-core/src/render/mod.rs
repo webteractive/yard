@@ -42,6 +42,13 @@ pub fn overrides_for(paths: &Paths, file: &Path) -> Option<PathBuf> {
         return Some(paths.yard_toml());
     }
     let dir = file.parent()?;
+    if dir.file_name()? == "conf.d" {
+        // Mirrored brew inis and extension inis come from yard.toml's extensions.
+        let v: PhpVersion = dir.parent()?.file_name()?.to_str()?.parse().ok()?;
+        let name = file.file_name()?.to_str()?;
+        let generated = name.starts_with("10-brew-") || name.starts_with("50-");
+        return (dir == paths.php_conf_d(v) && generated).then(|| paths.yard_toml());
+    }
     if dir == paths.nginx_sites_dir() {
         let name = file.file_stem()?.to_str()?;
         return Some(paths.nginx_override(name));
@@ -55,6 +62,7 @@ pub fn overrides_for(paths: &Paths, file: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::brew::Brew;
+    use crate::config::yard::{ExtEntry, ExtSource};
     use crate::{Paths, PhpVersion};
     use insta::assert_snapshot;
     use std::path::Path;
@@ -150,18 +158,6 @@ mod tests {
     }
 
     #[test]
-    fn fpm_env_scans_brew_then_yard() {
-        let (p, b) = ctx_parts();
-        assert_eq!(
-            php::php_fpm_env(&ctx(&p, &b), v("8.4")),
-            vec![(
-                "PHP_INI_SCAN_DIR".to_string(),
-                format!("/opt/homebrew/etc/php/8.4/conf.d:{ROOT}/php/8.4/conf.d")
-            )]
-        );
-    }
-
-    #[test]
     fn dnsmasq_conf_trial() {
         let (p, b) = ctx_parts();
         assert_snapshot!(dnsmasq::dnsmasq_conf(&ctx(&p, &b), 53535));
@@ -252,11 +248,23 @@ mod tests {
             (p.dnsmasq_conf(), dnsmasq::dnsmasq_conf(&c, 53535)),
             (p.php_ini(v("8.4")), php::php_ini(&c, v("8.4"))),
             (p.fpm_conf(v("8.4")), php::fpm_conf(&c, v("8.4"))),
+            (
+                p.php_conf_d(v("8.4")).join("50-redis.ini"),
+                php::ext_ini(&c, "redis", &ExtEntry { source: ExtSource::Brew, enabled: true, so: None })
+                    .unwrap(),
+            ),
+            (
+                p.php_conf_d(v("8.4")).join("10-brew-ext-opcache.ini"),
+                php::brew_inis(&c, &[("ext-opcache.ini".into(), "x\n".into())], &Default::default())
+                    .remove("10-brew-ext-opcache.ini")
+                    .unwrap(),
+            ),
         ] {
             let named = overrides_for(&p, &file).unwrap_or_else(|| panic!("{}", file.display()));
             let first = out.lines().next().unwrap();
             assert!(first.contains(&format!("edit {} instead", named.display())), "{first}");
         }
         assert_eq!(overrides_for(&p, &p.yard_toml()), None);
+        assert_eq!(overrides_for(&p, &p.php_overrides(v("8.4"))), None);
     }
 }

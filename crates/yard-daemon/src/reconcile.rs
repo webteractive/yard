@@ -25,7 +25,7 @@ use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry}
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
-use yard_core::render::php::{fpm_conf, php_fpm_env, php_ini};
+use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, php_fpm_env, php_ini};
 use yard_core::sites;
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
@@ -196,7 +196,14 @@ impl Reconciler {
             http_port: http,
             timezone: &self.timezone,
         };
+        // Pools run for the versions sites use; every installed version gets its inis, so
+        // the CLI shims load the same extensions and overrides.
         let versions = php_versions(&resolution.sites);
+        let exists = |p: &Path| p.exists();
+        let read_link = |p: &Path| std::fs::read_link(p).ok();
+        let mut inis: BTreeSet<PhpVersion> =
+            state.brew.installed_php(&exists, &read_link).into_iter().collect();
+        inis.extend(versions.iter().copied());
         let mut rendered = BTreeMap::new();
         rendered.insert(paths.nginx_conf(), nginx_main(&ctx));
         rendered.insert(paths.nginx_default_index(), default_index(&ctx, &resolution.sites));
@@ -204,16 +211,30 @@ impl Reconciler {
         for site in &resolution.sites {
             rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site));
         }
-        for v in &versions {
+        let no_exts = BTreeMap::new();
+        for v in &inis {
             rendered.insert(paths.php_ini(*v), php_ini(&ctx, *v));
             rendered.insert(paths.fpm_conf(*v), fpm_conf(&ctx, *v));
+            let exts = yard.extensions.get(v).unwrap_or(&no_exts);
+            let conf_d = paths.php_conf_d(*v);
+            for (name, text) in brew_inis(&ctx, &ini_files(&state.brew.php_conf_d(*v)), exts) {
+                rendered.insert(conf_d.join(name), text);
+            }
+            for (name, entry) in exts {
+                if let Some(text) = ext_ini(&ctx, name, entry) {
+                    rendered.insert(conf_d.join(format!("50-{name}.ini")), text);
+                }
+            }
         }
-        prepare_dirs(&paths, &resolution.sites, &versions).map_err(io_error)?;
+        prepare_dirs(&paths, &resolution.sites, &inis).map_err(io_error)?;
 
         // 5. Write.
         let mut hashes = state.hashes.clone();
         let mut managed = vec![paths.nginx_sites_dir()];
-        managed.extend(subdirs(&paths.root().join("php")));
+        for dir in subdirs(&paths.root().join("php")) {
+            managed.push(dir.join("conf.d"));
+            managed.push(dir);
+        }
         let read = |p: &Path| std::fs::read_to_string(p).ok();
         let plan = generated::plan(&rendered, &hashes, &managed, &read, &files_in);
         let applied = generated::apply(&plan, &rendered, &mut hashes).map_err(io_error)?;
@@ -292,8 +313,6 @@ impl Reconciler {
             restart.push("dnsmasq".to_string());
         }
         for v in &versions {
-            let exists = |p: &Path| p.exists();
-            let read_link = |p: &Path| std::fs::read_link(p).ok();
             let opt = match state.brew.php_opt(*v, &exists, &read_link) {
                 Ok(opt) => opt,
                 Err(e) => {
@@ -302,7 +321,11 @@ impl Reconciler {
                 }
             };
             let name = fpm_unit(*v);
-            if changed.contains(&paths.fpm_conf(*v)) || changed.contains(&paths.php_ini(*v)) {
+            let conf_d = paths.php_conf_d(*v);
+            if changed.contains(&paths.fpm_conf(*v))
+                || changed.contains(&paths.php_ini(*v))
+                || changed.iter().any(|p| p.starts_with(&conf_d))
+            {
                 restart.push(name.clone());
             }
             desired.push(UnitSpec {
@@ -428,6 +451,19 @@ fn files_in(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
     files.sort();
     files
+}
+
+/// The `.ini` files in brew's conf.d for one version, as `(name, text)`; a missing
+/// directory has none.
+fn ini_files(dir: &Path) -> Vec<(String, String)> {
+    files_in(dir)
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "ini"))
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?.to_string();
+            Some((name, std::fs::read_to_string(&p).ok()?))
+        })
+        .collect()
 }
 
 fn subdirs(dir: &Path) -> Vec<PathBuf> {

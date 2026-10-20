@@ -1,15 +1,55 @@
-//! `yard.toml`: default PHP and an optional TLD override.
+//! `yard.toml`: default PHP, an optional TLD override and each version's extensions.
 
 use super::{config_error, read_optional};
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use yard_proto::YardError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YardConfig {
     pub default_php: PhpVersion,
     pub tld: Option<String>,
+    /// `[php."<v>".extensions]`: the extensions Yard loads for each version (spec §4.3).
+    pub extensions: BTreeMap<PhpVersion, BTreeMap<String, ExtEntry>>,
+}
+
+/// Where an extension comes from. `bundled` is one PHP ships with (opcache), listed only
+/// to switch it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtSource {
+    Brew,
+    Pecl,
+    Path,
+    Bundled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtEntry {
+    pub source: ExtSource,
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
+    /// The absolute path of the `.so`; required for `source = "path"`.
+    pub so: Option<PathBuf>,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+/// An extension name, which is also part of its ini file's name.
+pub fn valid_ext_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPhp {
+    #[serde(default)]
+    extensions: BTreeMap<toml::Spanned<String>, toml::Spanned<ExtEntry>>,
 }
 
 pub const DEFAULT_TLD: &str = "yard";
@@ -28,6 +68,8 @@ struct Raw {
     parked: Option<toml::Value>,
     default_php: Option<PhpVersion>,
     tld: Option<toml::Spanned<String>>,
+    #[serde(default)]
+    php: BTreeMap<toml::Spanned<String>, RawPhp>,
 }
 
 pub fn valid_tld(tld: &str) -> bool {
@@ -46,7 +88,7 @@ pub fn load_yard(paths: &Paths) -> Result<(YardConfig, Vec<String>), YardError> 
 pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<String>), YardError> {
     let raw: Raw = match text {
         Some(text) => toml::from_str(text).map_err(|e| config_error(file, text, e.span(), e.message()))?,
-        None => Raw { parked: None, default_php: None, tld: None },
+        None => Raw { parked: None, default_php: None, tld: None, php: BTreeMap::new() },
     };
     let mut warnings = vec![];
     if raw.parked.is_some() {
@@ -65,7 +107,43 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
         }
         t => t.map(toml::Spanned::into_inner),
     };
-    Ok((YardConfig { default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld }, warnings))
+    let text = text.unwrap_or_default();
+    let mut extensions = BTreeMap::new();
+    for (key, section) in raw.php {
+        let v: PhpVersion = key
+            .get_ref()
+            .parse()
+            .map_err(|e: YardError| config_error(file, text, Some(key.span()), &e.message))?;
+        let mut exts = BTreeMap::new();
+        for (name, entry) in section.extensions {
+            if !valid_ext_name(name.get_ref()) {
+                let message =
+                    format!("extension name {:?} must be letters, digits and underscores", name.get_ref());
+                return Err(config_error(file, text, Some(name.span()), &message));
+            }
+            let span = entry.span();
+            let entry = entry.into_inner();
+            let message = match (&entry.source, &entry.so) {
+                (ExtSource::Path, None) => {
+                    Some("source = \"path\" needs so = \"<absolute path to the .so>\"")
+                }
+                (_, Some(so)) if !so.is_absolute() => Some("so must be an absolute path"),
+                (_, Some(so)) if so.to_string_lossy().contains(['"', '\n']) => {
+                    Some("so cannot contain a double quote or a newline")
+                }
+                _ => None,
+            };
+            if let Some(message) = message {
+                return Err(config_error(file, text, Some(span), &format!("{}: {message}", name.get_ref())));
+            }
+            exts.insert(name.into_inner(), entry);
+        }
+        extensions.insert(v, exts);
+    }
+    Ok((
+        YardConfig { default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld, extensions },
+        warnings,
+    ))
 }
 
 #[cfg(test)]
@@ -142,6 +220,34 @@ mod tests {
         let e = parse(Some("parkd = []\n")).unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
         assert!(e.message.contains("parkd"), "{}", e.message);
+    }
+
+    #[test]
+    fn extensions_parse_and_validate() {
+        let text = r#"
+[php."8.4".extensions]
+redis = { source = "brew" }
+opcache = { source = "bundled", enabled = false }
+custom = { source = "path", so = "/opt/ext/custom.so" }
+"#;
+        let c = parse(Some(text)).unwrap();
+        let exts = &c.extensions[&"8.4".parse::<PhpVersion>().unwrap()];
+        assert_eq!(exts["redis"], ExtEntry { source: ExtSource::Brew, enabled: true, so: None });
+        assert_eq!(exts["opcache"], ExtEntry { source: ExtSource::Bundled, enabled: false, so: None });
+        assert_eq!(exts["custom"].so.as_deref(), Some(Path::new("/opt/ext/custom.so")));
+        assert!(parse(Some("")).unwrap().extensions.is_empty());
+
+        for (bad, line) in [
+            ("[php.\"8.4\".extensions]\ncustom = { source = \"path\" }\n", 2),
+            ("[php.\"8.4\".extensions]\ncustom = { source = \"path\", so = \"ext/c.so\" }\n", 2),
+            ("[php.\"8.4\".extensions]\nredis = { source = \"apt\" }\n", 2),
+            ("[php.\"5.6\".extensions]\nredis = { source = \"brew\" }\n", 1),
+            ("[php.\"8.4\".extensions]\n\"../x\" = { source = \"brew\" }\n", 2),
+        ] {
+            let e = parse(Some(bad)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ConfigInvalid, "{bad}");
+            assert_eq!(e.data.unwrap()["line"], line, "{bad}: {}", e.message);
+        }
     }
 
     #[test]

@@ -23,10 +23,11 @@ triggers:
 - Fixed paths: `opt/nginx/bin/nginx`, `opt/dnsmasq/sbin/dnsmasq`,
   `opt/php@<v>/sbin/php-fpm`, `etc/php/<v>/conf.d`, `etc/nginx/{mime.types,fastcgi_params}`.
 - php-fpm runs as `php-fpm --nodaemonize -y <yard>/php/<v>/fpm.conf -c <yard>/php/<v>/php.ini`
-  with `PHP_INI_SCAN_DIR=<brew>/etc/php/<v>/conf.d:<yard>/php/<v>/conf.d`. Yard's
-  directory is scanned last so `99-overrides.ini` wins. Known M2 issue: extension
-  formulas write their own ini into brew's `conf.d`, so Yard must own extension inis
-  for `ext disable` to work.
+  with `PHP_INI_SCAN_DIR=<yard>/php/<v>/conf.d` only. Never put brew's `conf.d` on the
+  scan path: extension formulas write their own ini there, which would load an
+  extension behind `yard ext disable`. Reconcile mirrors brew's `conf.d` into Yard's as
+  `10-brew-<file>.ini` (`render::php::brew_inis`), skipping files that load an
+  extension `yard.toml` manages; reading brew's files is fine, writing them is not.
 - `decorate_workers_output` exists only in PHP ≥ 7.3. Version-gate any FPM or ini
   directive that is newer than 7.0.
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)

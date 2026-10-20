@@ -132,7 +132,7 @@ mod tests {
     }
 
     fn cfg() -> YardConfig {
-        YardConfig { default_php: crate::PhpVersion::DEFAULT, tld: None }
+        YardConfig { default_php: crate::PhpVersion::DEFAULT, tld: None, extensions: Default::default() }
     }
 
     fn sites(entries: &[(&str, SiteEntry)]) -> SitesConfig {

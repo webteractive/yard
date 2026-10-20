@@ -491,3 +491,24 @@ async fn isolating_starts_that_pool_and_points_nginx_at_it() {
     assert!(!e.sup.list().iter().any(|u| u.name == "php-fpm-7.1"), "{:?}", e.sup.list());
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn every_installed_version_gets_its_inis_but_no_pool() {
+    let e = env().await;
+    e.fx.add_php("7.1");
+    let brew_conf_d = e.fx.brew.path().join("etc/php/7.1/conf.d");
+    std::fs::write(brew_conf_d.join("ext-opcache.ini"), "zend_extension=\"opcache.so\"\n").unwrap();
+    e.site("app");
+    e.rec.reconcile().await.unwrap();
+    e.unit(FPM, running).await;
+
+    let p = &e.fx.paths;
+    let v71: yard_core::PhpVersion = "7.1".parse().unwrap();
+    assert!(p.php_ini(v71).is_file());
+    assert!(p.fpm_conf(v71).is_file());
+    let mirrored = p.php_conf_d(v71).join("10-brew-ext-opcache.ini");
+    let text = std::fs::read_to_string(&mirrored).unwrap();
+    assert!(text.ends_with("zend_extension=\"opcache.so\"\n"), "{text}");
+    assert!(!e.sup.list().iter().any(|u| u.name == "php-fpm-7.1"), "{:?}", e.sup.list());
+    e.sup.shutdown().await;
+}

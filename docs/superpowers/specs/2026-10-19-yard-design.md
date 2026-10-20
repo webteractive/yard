@@ -128,14 +128,14 @@ live. Side effects (spawning, binding, brew) live in `yard-daemon`.
 Root: `~/Library/Application Support/Yard/`
 
 ```
-yard.toml                     # global: default php, tld override, secure_by_default
+yard.toml                     # global: default php, tld override, secure_by_default, [php."<ver>".extensions]
 sites.toml                    # links, per-site php, secure flag, docroot overrides, proxies
 ports.toml                    # port registry and active profile (§7)
 state/hashes.json             # hash of every generated file as Yard last wrote it
 dnsmasq/dnsmasq.conf          # generated
 php/<ver>/php.ini             # generated
 php/<ver>/fpm.conf            # generated
-php/<ver>/conf.d/             # generated extension inis (50-<ext>.ini)
+php/<ver>/conf.d/             # generated: brew's conf.d mirrored (10-brew-<file>.ini) and extension inis (50-<ext>.ini)
 php/<ver>/conf.d/99-overrides.ini   # USER-OWNED, never written by Yard except via `php config set`
 nginx/nginx.conf              # generated
 nginx/sites/<site>.conf       # generated
@@ -177,10 +177,15 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   ```
   <brew prefix>/opt/php@<ver>/sbin/php-fpm --nodaemonize \
       -y php/<ver>/fpm.conf -c php/<ver>/php.ini
-  env PHP_INI_SCAN_DIR=<brew etc>/php/<ver>/conf.d:<yard>/php/<ver>/conf.d
+  env PHP_INI_SCAN_DIR=<yard>/php/<ver>/conf.d
   ```
-  Brew-installed extensions load automatically; Yard's `conf.d` is scanned last,
-  and `99-overrides.ini` sorts last within it, so user overrides always win.
+  PHP scans only Yard's `conf.d`, so Yard owns every ini PHP loads (decided
+  2026-10-20; an extension formula's own ini in brew's `conf.d` would otherwise load
+  it behind `ext disable`). Brew's `conf.d` is mirrored into it as
+  `10-brew-<file>.ini`, except files that load an extension `yard.toml` manages or a
+  bundled one it disables. `99-overrides.ini` sorts last, so user overrides always win.
+- `php.ini`, `fpm.conf` and the `conf.d` inis are rendered for every installed
+  version, pool or not, so the CLI shims (§4.5) read the same configuration.
 
 ### 4.2 FPM pools
 
@@ -202,6 +207,20 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 Yard then writes `conf.d/50-<name>.ini`, restarts the version's pool, and
 verifies with `php -m`. A failed verify rolls back the ini and reports the
 `php -m` error output.
+
+Extensions are recorded per version in `yard.toml`, which the generated inis name as
+the file to edit:
+
+```toml
+[php."8.4".extensions]
+redis = { source = "brew" }                       # brew | pecl | path | bundled
+custom = { source = "path", so = "/abs/custom.so" }
+opcache = { source = "bundled", enabled = false }
+```
+
+`enabled` defaults to true. `path` needs an absolute `so`. `bundled` is an extension
+PHP itself loads (opcache), listed only to disable it. `xdebug` and `opcache` load as
+`zend_extension`. A disabled or bundled entry writes no `50-` ini.
 
 Other commands: `yard ext list [--php]`, `yard ext enable|disable <name> [--php]`
 (toggles the ini without uninstalling), `yard ext remove <name> [--php]`,
