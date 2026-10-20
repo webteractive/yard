@@ -215,6 +215,16 @@ pub fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// [`write_atomic`] for a file the user owns: a symlink is written through, not replaced
+/// by a file, and the file keeps its mode.
+pub fn write_preserving(path: &Path, content: &str) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let target = std::fs::canonicalize(path)?;
+    let mode = std::fs::metadata(&target)?.permissions().mode();
+    write_atomic(&target, content)?;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))
+}
+
 fn read_optional(path: &Path) -> io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(Some(s)),
@@ -237,6 +247,20 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     const F: &str = "/r/nginx/sites/a.conf";
+
+    #[test]
+    fn write_preserving_follows_a_symlink_and_keeps_the_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (real, link) = (dir.path().join("dotfiles.ini"), dir.path().join("99-overrides.ini"));
+        std::fs::write(&real, "a = 1\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_preserving(&link, "a = 2\n").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "a = 2\n");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+    }
 
     fn rendered(pairs: &[(&str, &str)]) -> BTreeMap<PathBuf, String> {
         pairs.iter().map(|(p, c)| (PathBuf::from(p), c.to_string())).collect()

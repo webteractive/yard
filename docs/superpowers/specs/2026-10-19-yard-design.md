@@ -270,7 +270,8 @@ Generated defaults (dev-friendly): `memory_limit=512M`,
 `yard php config get|unset` edit `99-overrides.ini` only, line by line so the user's
 comments and other lines stay, and reload that version's pool gracefully (SIGUSR2).
 Unsetting a key that is not overridden succeeds and changes nothing, so scripts can
-run it twice.
+run it twice. A `99-overrides.ini` that is a symlink (into dotfiles, say) is written
+through, and the file keeps its mode.
 Keys are directive names (`[A-Za-z0-9_.]`); a value is one line without `"`, and is
 quoted when it holds spaces or `;`.
 

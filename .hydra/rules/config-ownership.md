@@ -23,7 +23,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`)
     are created empty once with `ensure_user_file` and never written again, except
     `99-overrides.ini` through `yard php config set|unset` (`rpc/php.rs`
-    `config_edit`, via `yard_core::ini`, which keeps every other line as written).
+    `config_edit`, via `yard_core::ini`, which keeps every other line as written,
+    and `generated::write_preserving`, which writes through a symlink and keeps the mode).
   - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`) are edited only through
     `config::edit::TomlFile` (`toml_edit`), so comments and key order survive.
 - **Write rule** (`generated::plan`): compare against the stored hash, not just the

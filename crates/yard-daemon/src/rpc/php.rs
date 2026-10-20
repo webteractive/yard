@@ -223,7 +223,7 @@ pub(super) async fn config_edit(ctx: &Context, p: PhpConfigParams, set: bool) ->
             (_, false) => return Ok(false),
         }
     };
-    generated::write_atomic(&file, &edited).map_err(io)?;
+    generated::write_preserving(&file, &edited).map_err(io)?;
     let unit = fpm_unit(v);
     if ctx.supervisor().list().iter().any(|u| u.name == unit && u.pid.is_some()) {
         ctx.supervisor().reload(&unit).await?;
