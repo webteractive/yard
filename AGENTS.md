@@ -49,6 +49,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - **8080/8443 is the default, with TLD `.yard` until `yard takeover`** (M3), so
   Herd keeps working alongside. 80/443 is opt-in, and even then root never runs
   nginx: the helper hands yardd the two sockets (spec §3.1).
+- **Sites are explicit** (decided 2026-10-20): a project is served only after
+  `yard link`; nothing is written into the project. Herd-style parking, which M1
+  shipped, is removed in M2, and `yard migrate herd` links each Herd site instead.
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
 - **v1 scope:** core serving, multi-PHP + isolate, HTTPS, Node + services.
