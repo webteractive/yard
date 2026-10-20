@@ -273,6 +273,7 @@ async fn doctor(ctx: &Context) -> DoctorReport {
         units: ctx.supervisor().list(),
         daemon_running: true,
         resolver_dir: &ctx.resolver_dir,
+        security: &ctx.security,
     })
     .await
 }

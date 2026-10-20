@@ -13,7 +13,6 @@ use crate::tls;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -161,16 +160,7 @@ impl Reconciler {
             state.paths.clone()
         };
         let cert = paths.ca_cert();
-        let trusted = tokio::process::Command::new(security)
-            .args(["verify-cert", "-c"])
-            .arg(&cert)
-            .args(["-l", "-L", "-q", "-p", "basic"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .is_ok_and(|s| s.success());
+        let trusted = tls::trusted(security, &cert).await;
         Ok(CaInfo {
             cert: cert.display().to_string(),
             sha256: tls::ca_sha256(&paths)?,

@@ -6,7 +6,7 @@
 use crate::daemon::VERSION;
 use crate::helper_client::HelperClient;
 use crate::state::State;
-use crate::{holder, portscan};
+use crate::{holder, portscan, tls};
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
 use yard_core::config::{load_sites, load_yard};
@@ -35,6 +35,8 @@ pub struct DoctorInput<'a> {
     pub daemon_running: bool,
     /// `/etc/resolver` outside tests.
     pub resolver_dir: &'a Path,
+    /// `/usr/bin/security` outside tests.
+    pub security: &'a Path,
 }
 
 /// What the config-dependent checks read: yardd's last good snapshot, or the files.
@@ -195,12 +197,38 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         None => warn("sites", "not checked while the configuration does not parse", view.config_hint()),
     });
 
+    let secured = view.sites.as_ref().is_some_and(|(_, sites)| sites.iter().any(|s| s.secure));
+    checks.push(ca(paths, secured, input.security).await);
+
     if let Some((_, sites)) = &view.sites {
         let installed = brew.installed_php(&exists, &read_link);
         checks.extend(sites.iter().filter_map(|site| php_constraint(site, &installed)));
     }
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
+}
+
+const FIREFOX: &str = "/Applications/Firefox.app";
+
+/// Whether browsers trust the CA secured sites use. Asks `security` only once a CA
+/// exists, so a machine with no secured site never runs it.
+async fn ca(paths: &Paths, secured: bool, security: &Path) -> Check {
+    let cert = paths.ca_cert();
+    if cert.exists() && tls::trusted(security, &cert).await {
+        let mut message = format!(
+            "the Yard CA is trusted in your login keychain; for Node: NODE_EXTRA_CA_CERTS={}",
+            cert.display()
+        );
+        if Path::new(FIREFOX).exists() {
+            message.push_str("; Firefox: set security.enterprise_roots.enabled to true in about:config");
+        }
+        return ok("ca", message);
+    }
+    if secured {
+        warn("ca", "browsers will warn on https sites: the Yard CA is not trusted", "yard trust")
+    } else {
+        ok("ca", "no site uses HTTPS")
+    }
 }
 
 /// The largest `composer.json` doctor reads.

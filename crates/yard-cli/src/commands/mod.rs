@@ -17,6 +17,7 @@ use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
 use clap::CommandFactory;
 use serde::Serialize;
+use std::path::PathBuf;
 use yard_core::Paths;
 use yard_proto::methods::{self, JobParams};
 use yard_proto::{ErrorCode, Event, JobStarted, Topic, YardError};
@@ -28,6 +29,8 @@ pub struct Ctx {
     pub json: bool,
     /// Set by `--root` or `YARD_ROOT`; launchd and the helper must then be told the root.
     pub root_overridden: bool,
+    /// macOS's `security`, or `YARD_SECURITY`, which tests point at a fake.
+    pub security: PathBuf,
 }
 
 impl Ctx {
@@ -59,7 +62,9 @@ pub async fn run(cli: Cli) -> i32 {
             return 1;
         }
     };
-    let ctx = Ctx { paths, json, root_overridden };
+    let security =
+        std::env::var_os("YARD_SECURITY").map_or_else(|| PathBuf::from("/usr/bin/security"), PathBuf::from);
+    let ctx = Ctx { paths, json, root_overridden, security };
     let command = match (cli.version, cli.command) {
         (true, _) | (false, Some(Command::Version)) => Command::Version,
         (false, Some(c)) => c,

@@ -15,9 +15,10 @@ use yard_daemon::helper_client::HelperClient;
 use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
+use yard_daemon::tls;
 use yard_proto::{Check, CheckStatus, DoctorReport, UnitInfo, UnitState};
 
-const IDS: [&str; 12] = [
+const IDS: [&str; 13] = [
     "brew",
     "formula.nginx",
     "formula.dnsmasq",
@@ -29,6 +30,7 @@ const IDS: [&str; 12] = [
     "ports",
     "generated",
     "sites",
+    "ca",
     "units",
 ];
 
@@ -64,8 +66,17 @@ impl Env {
             units: vec![],
             daemon_running: false,
             resolver_dir: self.resolver.path(),
+            security: &self.fx.security,
         })
         .await
+    }
+
+    /// `blog`, linked to a temp directory and secured, as `yard secure` leaves it.
+    fn secured_site(&self) -> TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!("[sites.blog]\npath = {:?}\nsecure = true\n", dir.path().display().to_string());
+        std::fs::write(self.fx.paths.sites_toml(), toml).unwrap();
+        dir
     }
 
     fn write_resolver(&self, text: &str) {
@@ -123,6 +134,7 @@ async fn all_ok_on_healthy_fixture() {
         units: sup.list(),
         daemon_running: true,
         resolver_dir: e.resolver.path(),
+        security: &e.fx.security,
     })
     .await;
     sup.shutdown().await;
@@ -230,6 +242,7 @@ async fn failed_unit_reports_last_lines() {
         units: vec![failed],
         daemon_running: true,
         resolver_dir: e.resolver.path(),
+        security: &e.fx.security,
     })
     .await;
 
@@ -297,6 +310,7 @@ async fn failed_reconcile_fails_config_and_units() {
         units: vec![],
         daemon_running: true,
         resolver_dir: e.resolver.path(),
+        security: &e.fx.security,
     })
     .await;
 
@@ -359,4 +373,48 @@ async fn a_composer_json_that_is_not_a_regular_file_is_skipped() {
         .await
         .expect("doctor does not block on a fifo");
     assert!(!report.checks.iter().any(|c| c.id.starts_with("php-constraint")), "{report:#?}");
+}
+
+#[tokio::test]
+async fn ca_check_ok_without_https() {
+    let e = env().await;
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "ca");
+    assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+    assert_eq!(c.message, "no site uses HTTPS");
+    assert!(!e.fx.security_dir().join("security.log").exists(), "security is not asked without a CA");
+}
+
+#[tokio::test]
+async fn ca_check_warns_when_untrusted() {
+    let e = env().await;
+    let _project = e.secured_site();
+    for made in [false, true] {
+        if made {
+            tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+        }
+        let report = e.offline(&e.helper).await;
+        let c = only(&report, "ca");
+        assert_eq!(c.status, CheckStatus::Warn, "CA made: {made}, {c:?}");
+        assert_eq!(c.message, "browsers will warn on https sites: the Yard CA is not trusted");
+        assert_eq!(c.hint.as_deref(), Some("yard trust"));
+    }
+}
+
+#[tokio::test]
+async fn ca_check_names_node_extra_ca_certs_when_trusted() {
+    let e = env().await;
+    let _project = e.secured_site();
+    tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    std::fs::write(e.fx.security_dir().join("fake-trusted"), "").unwrap();
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "ca");
+    assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+    let ca = e.fx.paths.ca_cert();
+    let expected = format!(
+        "the Yard CA is trusted in your login keychain; for Node: NODE_EXTRA_CA_CERTS={}",
+        ca.display()
+    );
+    assert!(c.message.starts_with(&expected), "{c:?}");
 }

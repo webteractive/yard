@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::process::Stdio;
 use time::{Duration, OffsetDateTime};
 use x509_parser::extensions::GeneralName;
 use x509_parser::pem::parse_x509_pem;
@@ -86,6 +87,21 @@ pub fn facts(paths: &Paths, site: &str) -> Option<CertFacts> {
         ca.parse_x509().is_ok_and(|ca| leaf.verify_signature(Some(ca.public_key())).is_ok())
     });
     Some(CertFacts { dns_names, not_after: leaf.validity().not_after.timestamp(), signed_by_ca })
+}
+
+/// Whether `security` (`/usr/bin/security` outside tests) trusts the CA at `ca` for TLS,
+/// as the login keychain's settings decide.
+pub async fn trusted(security: &Path, ca: &Path) -> bool {
+    tokio::process::Command::new(security)
+        .args(["verify-cert", "-c"])
+        .arg(ca)
+        .args(["-l", "-L", "-q", "-p", "basic"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|s| s.success())
 }
 
 /// Upper-case hex SHA-256 of the CA certificate's DER, as `security -Z` takes it.
