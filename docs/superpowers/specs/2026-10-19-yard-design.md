@@ -399,6 +399,8 @@ profile; Yard does not edit dotfiles.
   `privileged`). `yard unsecure [site]` reverses it. The site defaults to the one
   containing the current directory. `sites.toml` gets `secure` only where it differs
   from `secure_by_default`.
+- A host no secured site claims is refused on the https port (`ssl_reject_handshake`),
+  never served by another site's certificate and app.
 - `secure_by_default = true` in `yard.toml` secures every current and future site.
 - Certs within 30 days of expiry are renewed automatically by `yardd`.
 - Reconcile issues missing certs and re-issues ones a new CA did not sign or whose
