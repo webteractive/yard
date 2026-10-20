@@ -204,9 +204,19 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 3. `yard ext add <path/to/ext.so> --php <ver>` copies the binary into
    `php/<ver>/ext/` and loads it by absolute path.
 
-Yard then writes `conf.d/50-<name>.ini`, restarts the version's pool, and
-verifies with `php -m`. A failed verify rolls back the ini and reports the
-`php -m` error output.
+`brew info --formula` decides step 1; pecl runs with the keg's `bin` first on PATH
+(never Herd's `php`). A `.so` path's module name is its file name without `.so` or a
+leading `php_`; the CLI sends it absolute. A name already in `yard.toml` for that
+version is refused with `INVALID_ARGUMENT` (hint `yard ext enable <name>`).
+
+Yard then records the extension in `yard.toml`, reconciles (which writes
+`conf.d/50-<name>.ini` and restarts the version's pool) and verifies with
+`<keg>/bin/php -m` under `PHPRC=php/<ver>` and `PHP_INI_SCAN_DIR=php/<ver>/conf.d`.
+If the module is not listed, the job fails with `EXT_VERIFY_FAILED` and the
+`php -m` output in `data.output`. A copied `.so` is deleted and `yard.toml` put back
+byte for byte. Something brew or pecl installed stays installed but is recorded
+`enabled = false`, since with no entry brew's own ini would load it again; the hint is
+`yard ext remove <name> --php <ver>`.
 
 Extensions are recorded per version in `yard.toml`, which the generated inis name as
 the file to edit:

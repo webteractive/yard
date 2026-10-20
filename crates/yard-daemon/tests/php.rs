@@ -4,31 +4,8 @@ mod support;
 
 use serde_json::{Value, json};
 use std::time::Duration;
-use support::daemon::{Client, Daemon, prepared};
-use yard_proto::{ErrorCode, YardError};
-
-/// Calls a job method after subscribing to `jobs`, then waits for its `job_finished`.
-/// Returns the progress lines and the job's error.
-pub async fn run_job(c: &mut Client, method: &str, params: Value) -> (Vec<String>, Option<YardError>) {
-    c.call("subscribe", json!({"topics": ["jobs"]})).await.unwrap();
-    let started = c.call(method, params).await.unwrap();
-    let id = started["job_id"].as_str().expect("a job_id").to_string();
-    let mut lines = vec![];
-    loop {
-        let event = c.event(Duration::from_secs(10)).await.expect("the job finished");
-        if event["job_id"] != id.as_str() {
-            continue;
-        }
-        match event["type"].as_str() {
-            Some("job_progress") => lines.push(event["line"].as_str().unwrap_or_default().to_string()),
-            Some("job_finished") => {
-                let error = serde_json::from_value(event["error"].clone()).unwrap();
-                return (lines, error);
-            }
-            _ => {}
-        }
-    }
-}
+use support::daemon::{Daemon, prepared, run_job};
+use yard_proto::ErrorCode;
 
 fn versions(list: &Value) -> Vec<(String, bool)> {
     list.as_array()

@@ -2,6 +2,7 @@
 //! exit code; `run` turns errors into exit codes 1 and 3.
 
 mod doctor;
+mod ext;
 mod helper;
 mod lifecycle;
 mod php;
@@ -10,7 +11,7 @@ mod sites;
 mod units;
 mod version;
 
-use crate::cli::{Cli, Command, HelperAction, PhpAction, PortsAction};
+use crate::cli::{Cli, Command, ExtAction, HelperAction, PhpAction, PortsAction};
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
 use serde::Serialize;
@@ -90,6 +91,7 @@ pub async fn run(cli: Cli) -> i32 {
             php::set_default(&ctx, version).await
         }
         Command::Php { action: Some(PhpAction::Config { action }) } => php::config(&ctx, action).await,
+        Command::Ext { action: ExtAction::Add { name, php } } => ext::add(&ctx, name, php).await,
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
         Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,

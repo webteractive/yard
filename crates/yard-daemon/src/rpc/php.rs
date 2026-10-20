@@ -143,7 +143,7 @@ pub(super) async fn isolate(ctx: &Context, p: IsolateParams) -> Result<SiteInfo,
 }
 
 /// The version a `php.config.*` call means: the one given, else the default. Installed.
-fn config_version(ctx: &Context, php: Option<&str>) -> Result<PhpVersion, YardError> {
+pub(super) fn config_version(ctx: &Context, php: Option<&str>) -> Result<PhpVersion, YardError> {
     let v = match php {
         Some(v) => v.parse()?,
         None => load_yard(&ctx.paths)?.0.default_php,

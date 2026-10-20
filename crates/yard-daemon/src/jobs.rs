@@ -4,7 +4,6 @@
 //! global lock anyway.
 
 use crate::events::EventBus;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -87,6 +86,33 @@ impl JobCtx {
         args: &[&str],
         env: &[(String, String)],
     ) -> Result<(), YardError> {
+        let (shown, ended, lines) = self.exec(program, args, env, true).await?;
+        let Err(ended) = ended else { return Ok(()) };
+        let tail: Vec<&String> = lines.iter().skip(lines.len().saturating_sub(TAIL)).collect();
+        Err(YardError::new(ErrorCode::JobFailed, format!("{shown} exited with {ended}"))
+            .with_data(serde_json::json!({ "tail": tail })))
+    }
+
+    /// Runs `program` as `run` does, without streaming, and returns its stdout and stderr
+    /// lines (interleaved as they arrived) and whether it exited 0.
+    pub async fn capture(
+        &self,
+        program: &Path,
+        args: &[&str],
+        env: &[(String, String)],
+    ) -> Result<(bool, Vec<String>), YardError> {
+        let (_, success, lines) = self.exec(program, args, env, false).await?;
+        Ok((success.is_ok(), lines))
+    }
+
+    /// The command as shown, `Err(how it ended)` unless it exited 0, and its output lines.
+    async fn exec(
+        &self,
+        program: &Path,
+        args: &[&str],
+        env: &[(String, String)],
+        stream: bool,
+    ) -> Result<(String, Result<(), String>, Vec<String>), YardError> {
         if !program.is_absolute() {
             return Err(YardError::internal(format!("{} is not an absolute path", program.display())));
         }
@@ -112,24 +138,23 @@ impl JobCtx {
             child.stderr.take().map(|e| tokio::spawn(forward(e, tx.clone()))),
         ];
         drop(tx);
-        let mut tail = VecDeque::with_capacity(TAIL);
+        let mut lines = vec![];
         while let Some(line) = rx.recv().await {
-            if tail.len() == TAIL {
-                tail.pop_front();
+            if stream {
+                self.line(line.clone());
             }
-            tail.push_back(line.clone());
-            self.line(line);
+            lines.push(line);
         }
         for reader in readers.into_iter().flatten() {
             let _ = reader.await;
         }
         let status = child.wait().await.map_err(YardError::internal)?;
-        if status.success() {
-            return Ok(());
-        }
-        let ended = status.code().map_or_else(|| "a signal".to_string(), |c| c.to_string());
-        Err(YardError::new(ErrorCode::JobFailed, format!("{shown} exited with {ended}"))
-            .with_data(serde_json::json!({ "tail": tail })))
+        let ended = if status.success() {
+            Ok(())
+        } else {
+            Err(status.code().map_or_else(|| "a signal".to_string(), |c| c.to_string()))
+        };
+        Ok((shown, ended, lines))
     }
 }
 

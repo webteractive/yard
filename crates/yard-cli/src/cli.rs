@@ -92,6 +92,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<PhpAction>,
     },
+    /// Add PHP extensions from brew, pecl or a built .so.
+    Ext {
+        #[command(subcommand)]
+        action: ExtAction,
+    },
     /// Restart a unit: nginx, dnsmasq or php-fpm-<version>.
     Restart { unit: String },
     /// Install or remove the root helper; run with sudo.
@@ -131,6 +136,20 @@ pub enum PhpAction {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ExtAction {
+    /// Install an extension and load it: brew's shivammathur/extensions formula if there
+    /// is one, else pecl; or a path to a built .so, which Yard copies. Checked with
+    /// php -m, and rolled back if it does not load.
+    Add {
+        /// An extension name (redis, xdebug) or the path of a .so.
+        name: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
     },
 }
 

@@ -431,3 +431,43 @@ fn php_config_get_unset_key_says_so() {
     assert!(out.status.success());
     assert!(stdout(&out).contains("memory_limit is not overridden"), "{}", stdout(&out));
 }
+
+#[test]
+fn ext_add_streams_and_reports_verify_failure() {
+    let error = json!({
+        "code": "EXT_VERIFY_FAILED",
+        "message": "redis did not load in PHP 8.4",
+        "hint": "yard ext remove redis --php 8.4",
+        "data": {"output": "PHP Warning:  Unable to load dynamic library 'redis.so'"}
+    });
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("ext.add", Ok(json!({"job_id": "ext-add-1"})))],
+        &[("ext.add", job_events("ext-add-1", error))],
+    );
+    let out = d.yard().args(["ext", "add", "redis", "--php", "8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("==> Pouring php@7.1"), "{}", stdout(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("error: redis did not load in PHP 8.4\n  hint: yard ext remove redis --php 8.4"),
+        "{err}"
+    );
+    assert_eq!(d.params("ext.add"), [json!({"name": "redis", "php": "8.4"})]);
+}
+
+#[test]
+fn ext_add_sends_a_relative_so_as_an_absolute_path() {
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("ext.add", Ok(json!({"job_id": "ext-add-1"})))],
+        &[("ext.add", job_events("ext-add-1", json!(null)))],
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let out = d.yard().current_dir(dir.path()).args(["ext", "add", "build/custom.so"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Added custom to the default PHP."), "{}", stdout(&out));
+    let cwd = dir.path().canonicalize().unwrap();
+    let sent = d.params("ext.add")[0]["name"].as_str().unwrap().to_string();
+    assert_eq!(std::path::Path::new(&sent).canonicalize().ok(), None, "the file need not exist yet");
+    assert!(sent.ends_with("/build/custom.so") && sent.starts_with('/'), "{sent}");
+    assert!(sent.contains(cwd.file_name().unwrap().to_str().unwrap()), "{sent} under {}", cwd.display());
+}

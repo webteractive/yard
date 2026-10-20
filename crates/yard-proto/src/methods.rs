@@ -28,6 +28,7 @@ pub const PHP_DEFAULT: &str = "php.default";
 pub const PHP_CONFIG_GET: &str = "php.config.get";
 pub const PHP_CONFIG_SET: &str = "php.config.set";
 pub const PHP_CONFIG_UNSET: &str = "php.config.unset";
+pub const EXT_ADD: &str = "ext.add";
 pub const SUBSCRIBE: &str = "subscribe";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,4 +137,13 @@ mod tests {
         let p: DocrootParams = serde_json::from_value(json!({"site": "blog"})).unwrap();
         assert_eq!(p.path, None);
     }
+}
+
+/// `ext.add`: a name (brew formula or pecl package) or the path of a `.so`; the version
+/// defaults to the global default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtAddParams {
+    pub name: String,
+    #[serde(default)]
+    pub php: Option<String>,
 }

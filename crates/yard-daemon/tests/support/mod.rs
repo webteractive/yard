@@ -36,7 +36,9 @@ impl Fixture {
         place(&brew.nginx_bin(), |dst| symlink(&fake, dst));
         place(&brew.dnsmasq_bin(), |dst| symlink(&fake, dst));
         let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::DEFAULT));
-        place(&Brew::php_fpm(&php_opt), |dst| symlink(&fake, dst));
+        for bin in ["sbin/php-fpm", "bin/php", "bin/pecl"] {
+            place(&php_opt.join(bin), |dst| symlink(&fake, dst));
+        }
         for file in [brew.nginx_mime_types(), brew.nginx_fastcgi_params()] {
             place(&file, |dst| std::fs::write(dst, ""));
         }

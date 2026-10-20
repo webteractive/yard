@@ -3,6 +3,7 @@
 pub mod daemon;
 pub mod doctor;
 pub mod events;
+pub mod ext;
 mod fdpass;
 mod fds;
 pub mod helper_client;

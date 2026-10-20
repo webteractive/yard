@@ -1,4 +1,4 @@
-//! Test stand-in for nginx, dnsmasq, php-fpm and brew, chosen by `argv[0]`. Each reads the
+//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl and brew, chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
 use std::io::Write;
@@ -18,6 +18,8 @@ fn main() -> ExitCode {
         Some("dnsmasq") => dnsmasq(&args),
         Some("php-fpm") => php_fpm(&args),
         Some("brew") => brew(Path::new(&argv0), &args),
+        Some("php") => php(&args),
+        Some("pecl") => pecl(Path::new(&argv0), &args),
         _ => mode(&args),
     }
 }
@@ -193,6 +195,53 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(format!("fake brew {line}: {e}")),
     }
+}
+
+/// `php -m`: lists the module each `extension=`/`zend_extension=` line under
+/// `PHP_INI_SCAN_DIR` loads. A path containing `broken` fails to load, with PHP's warning.
+fn php(args: &[String]) -> ExitCode {
+    if args.first().map(String::as_str) != Some("-m") {
+        return fail(format!("fake php supports only -m, not {args:?}"));
+    }
+    let mut modules = vec!["Core".to_string()];
+    let scan = std::env::var("PHP_INI_SCAN_DIR").unwrap_or_default();
+    for dir in scan.split(':').filter(|d| !d.is_empty()) {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let mut inis: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        inis.sort();
+        for ini in inis.iter().filter(|p| p.extension().is_some_and(|e| e == "ini")) {
+            let text = std::fs::read_to_string(ini).unwrap_or_default();
+            for line in text.lines() {
+                let Some((key, value)) = line.trim().split_once('=') else { continue };
+                if !matches!(key.trim(), "extension" | "zend_extension") {
+                    continue;
+                }
+                let value = value.trim().trim_matches('"');
+                if value.contains("broken") {
+                    eprintln!("PHP Warning:  PHP Startup: Unable to load dynamic library '{value}'");
+                    continue;
+                }
+                let base = value.rsplit('/').next().unwrap_or(value);
+                modules.push(base.strip_suffix(".so").unwrap_or(base).to_string());
+            }
+        }
+    }
+    println!("[PHP Modules]\n{}\n\n[Zend Modules]\n", modules.join("\n"));
+    ExitCode::SUCCESS
+}
+
+/// `pecl install <name>` at `<prefix>/opt/php@<v>/bin/pecl`: succeeds unless `<name>` is
+/// in `<prefix>/fake-brew-fail`.
+fn pecl(argv0: &Path, args: &[String]) -> ExitCode {
+    let line = args.join(" ");
+    println!("==> fake pecl {line}");
+    let prefix = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
+    let failing = std::fs::read_to_string(prefix.join("fake-brew-fail")).unwrap_or_default();
+    if args.iter().any(|a| !failing.trim().is_empty() && a == failing.trim()) {
+        eprintln!("No releases available for package \"pecl.php.net/{}\"", failing.trim());
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
 }
 
 fn listen_tcp(port: Option<u16>) -> ExitCode {

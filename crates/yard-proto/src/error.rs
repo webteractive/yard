@@ -29,6 +29,8 @@ pub enum ErrorCode {
     DaemonNotRunning,
     /// A command a job ran (brew, pecl) exited non-zero; `data.tail` has its last lines.
     JobFailed,
+    /// An extension installed but `php -m` does not list it; `data.output` has its output.
+    ExtVerifyFailed,
     Internal,
 }
 
