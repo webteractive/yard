@@ -2,14 +2,15 @@
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use yard_core::Paths;
-use yard_proto::methods::{HELLO, HelloParams, HelloResult};
-use yard_proto::rpc::{Request, Response, encode_line};
-use yard_proto::{ErrorCode, PROTOCOL_VERSION, YardError};
+use yard_proto::methods::{HELLO, HelloParams, HelloResult, SUBSCRIBE, SubscribeParams};
+use yard_proto::rpc::{Notification, Request, Response, encode_line};
+use yard_proto::{ErrorCode, Event, PROTOCOL_VERSION, Topic, YardError};
 
 /// A mutation reconciles before it answers, and reconcile may wait on the helper.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -31,6 +32,8 @@ pub struct Client {
     lines: Lines<BufReader<OwnedReadHalf>>,
     write: OwnedWriteHalf,
     next_id: u64,
+    /// Events that arrived while a call waited for its answer.
+    events: VecDeque<Event>,
     pub hello: HelloResult,
 }
 
@@ -41,8 +44,13 @@ impl Client {
         let (read, write) = stream.into_split();
         let placeholder =
             HelloResult { protocol: String::new(), daemon_version: String::new(), commit: String::new() };
-        let mut client =
-            Client { lines: BufReader::new(read).lines(), write, next_id: 1, hello: placeholder };
+        let mut client = Client {
+            lines: BufReader::new(read).lines(),
+            write,
+            next_id: 1,
+            events: VecDeque::new(),
+            hello: placeholder,
+        };
         let params = HelloParams {
             protocol: PROTOCOL_VERSION.into(),
             client: format!("yard {}", env!("CARGO_PKG_VERSION")),
@@ -77,7 +85,11 @@ impl Client {
             let line = self.lines.next_line().await.map_err(lost)?.ok_or_else(|| {
                 YardError::internal("yardd closed the connection").with_hint("yard doctor checks why")
             })?;
-            // Notifications carry no id; this client never subscribes, but skip them anyway.
+            // An event can arrive before the answer that started it; keep it for next_event.
+            if let Ok(note) = serde_json::from_str::<Notification>(&line) {
+                self.events.push_back(note.params);
+                continue;
+            }
             let Ok(response) = serde_json::from_str::<Response>(&line) else { continue };
             if response.id != id {
                 continue;
@@ -90,6 +102,26 @@ impl Client {
                 )
                 .with_hint("upgrade yard and yardd together")
             });
+        }
+    }
+
+    pub async fn subscribe(&mut self, topics: &[Topic]) -> Result<(), YardError> {
+        self.call(SUBSCRIBE, SubscribeParams { topics: topics.to_vec() }).await
+    }
+
+    /// The next pushed event. No timeout: a brew install can take many minutes.
+    pub async fn next_event(&mut self) -> Result<Event, YardError> {
+        if let Some(event) = self.events.pop_front() {
+            return Ok(event);
+        }
+        let lost = |e: std::io::Error| YardError::internal(format!("lost the connection to yardd: {e}"));
+        loop {
+            let line = self.lines.next_line().await.map_err(lost)?.ok_or_else(|| {
+                YardError::internal("yardd closed the connection").with_hint("yard doctor checks why")
+            })?;
+            if let Ok(note) = serde_json::from_str::<Notification>(&line) {
+                return Ok(note.params);
+            }
         }
     }
 }

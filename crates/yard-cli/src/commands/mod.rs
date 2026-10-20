@@ -4,17 +4,18 @@
 mod doctor;
 mod helper;
 mod lifecycle;
+mod php;
 mod ports;
 mod sites;
 mod units;
 mod version;
 
-use crate::cli::{Cli, Command, HelperAction, PortsAction};
+use crate::cli::{Cli, Command, HelperAction, PhpAction, PortsAction};
 use crate::client::{CliError, Client};
-use crate::output::{print_error, print_json};
+use crate::output::{print_error, print_json, print_json_line};
 use serde::Serialize;
 use yard_core::Paths;
-use yard_proto::{ErrorCode, YardError};
+use yard_proto::{ErrorCode, Event, JobStarted, Topic, YardError};
 
 pub type Outcome = Result<i32, CliError>;
 
@@ -78,6 +79,14 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Ports { action: None } => ports::list(&ctx).await,
         Command::Ports { action: Some(PortsAction::Check) } => ports::check(&ctx).await,
         Command::Ports { action: Some(action) } => ports::change(&ctx, action).await,
+        Command::Php { action: None | Some(PhpAction::List) } => php::list(&ctx).await,
+        Command::Php { action: Some(PhpAction::Install { version }) } => php::install(&ctx, version).await,
+        Command::Php { action: Some(PhpAction::Uninstall { version }) } => {
+            php::uninstall(&ctx, version).await
+        }
+        Command::Php { action: Some(PhpAction::Default { version }) } => {
+            php::set_default(&ctx, version).await
+        }
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
         Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,
@@ -97,6 +106,47 @@ pub async fn run(cli: Cli) -> i32 {
                 eprintln!("yardd is not running → yard start");
             }
             3
+        }
+    }
+}
+
+/// Runs a job method: subscribes to `jobs` first so no line is missed, prints each line
+/// of the job's output (each event as NDJSON with `--json`), then `done` once it succeeds.
+/// A failed job is the command's error.
+pub async fn run_job<P: Serialize>(
+    ctx: &Ctx,
+    method: &str,
+    params: P,
+    done: impl FnOnce() -> String,
+) -> Outcome {
+    let mut client = ctx.client().await?;
+    client.subscribe(&[Topic::Jobs]).await?;
+    let started: JobStarted = client.call(method, params).await?;
+    loop {
+        let event = client.next_event().await?;
+        match &event {
+            Event::JobProgress { job_id, line } if *job_id == started.job_id => {
+                if ctx.json {
+                    print_json_line(&event);
+                } else {
+                    println!("{line}");
+                }
+            }
+            Event::JobFinished { job_id, error } if *job_id == started.job_id => {
+                if ctx.json {
+                    print_json_line(&event);
+                }
+                return match error {
+                    Some(e) => Err(e.clone().into()),
+                    None => {
+                        if !ctx.json {
+                            print!("{}", done());
+                        }
+                        Ok(0)
+                    }
+                };
+            }
+            _ => {}
         }
     }
 }

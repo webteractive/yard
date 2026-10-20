@@ -1,0 +1,10 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+VERSION  DEFAULT  SITES       POOL
+7.1               legacy      running
+8.4      yes      blog, shop  running
+8.5               -           -
+
+For agents and scripts: yard php list --json

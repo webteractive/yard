@@ -280,3 +280,86 @@ fn profile_accepts_old_names() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(d.params("ports.profile"), vec![json!({"profile": "standard"})]);
 }
+
+fn php_list() -> Value {
+    json!([
+        {"version": "7.1", "default": false, "installed": true, "sites": ["legacy"], "pool": "running"},
+        {"version": "8.4", "default": true, "installed": true, "sites": ["blog", "shop"], "pool": "running"},
+        {"version": "8.5", "default": false, "installed": true, "sites": [], "pool": null}
+    ])
+}
+
+#[test]
+fn php_list_table_snapshot() {
+    let d = MockDaemon::start(&[("php.list", Ok(php_list()))]);
+    let out = d.yard().args(["php", "list"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+    let bare = d.yard().arg("php").output().unwrap();
+    assert_eq!(stdout(&bare), stdout(&out), "yard php lists too");
+}
+
+fn job_events(id: &str, error: Value) -> Vec<Value> {
+    vec![
+        json!({"type": "job_progress", "job_id": id, "line": "==> Downloading php@7.1"}),
+        json!({"type": "job_progress", "job_id": "other-9", "line": "not this job"}),
+        json!({"type": "job_progress", "job_id": id, "line": "==> Pouring php@7.1"}),
+        json!({"type": "job_finished", "job_id": id, "error": error}),
+    ]
+}
+
+#[test]
+fn php_install_streams_progress() {
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("php.install", Ok(json!({"job_id": "php-install-1"})))],
+        &[("php.install", job_events("php-install-1", json!(null)))],
+    );
+    let out = d.yard().args(["php", "install", "7.1"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("==> Downloading php@7.1\n==> Pouring php@7.1\n"), "{text}");
+    assert!(!text.contains("not this job"), "{text}");
+    assert!(text.contains("Installed PHP 7.1."), "{text}");
+    assert_eq!(d.params("subscribe"), [json!({"topics": ["jobs"]})]);
+    assert_eq!(d.params("php.install"), [json!({"php": "7.1"})]);
+}
+
+#[test]
+fn php_install_failure_exits_1_with_the_hint() {
+    let error = json!({"code": "JOB_FAILED", "message": "brew install shivammathur/php/php@7.1 exited with 1", "hint": "brew doctor"});
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("php.install", Ok(json!({"job_id": "php-install-1"})))],
+        &[("php.install", job_events("php-install-1", error))],
+    );
+    let out = d.yard().args(["php", "install", "7.1"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("==> Pouring php@7.1"), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("error: brew install shivammathur/php/php@7.1 exited with 1"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("hint: brew doctor"), "{}", stderr(&out));
+}
+
+#[test]
+fn php_install_json_prints_each_event() {
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("php.install", Ok(json!({"job_id": "php-install-1"})))],
+        &[("php.install", job_events("php-install-1", json!(null)))],
+    );
+    let out = d.yard().args(["php", "install", "7.1", "--json"]).output().unwrap();
+    assert!(out.status.success());
+    let events: Vec<Value> = stdout(&out).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(events[2]["type"], "job_finished");
+}
+
+#[test]
+fn php_default_and_uninstall_send_the_version() {
+    let d = MockDaemon::start(&[("php.default", Ok(json!(null)))]);
+    let out = d.yard().args(["php", "default", "8.3"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("PHP 8.3 is now the default."), "{}", stdout(&out));
+    assert_eq!(d.params("php.default"), [json!({"php": "8.3"})]);
+}

@@ -164,9 +164,15 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 
 - Supported: 7.0, 7.1, 7.2, 7.3, 7.4, 8.0–8.5.
 - `yard php install <ver>` → `brew install shivammathur/php/php@<ver>`, streamed
-  as a job (§6.2), then registered in `yard.toml`.
-- `yard php uninstall <ver>` refuses while any site is isolated to that version.
-- `yard php default <ver>` sets the global default.
+  as a job (§6.2). Installed versions are read from brew's kegs, not registered in
+  `yard.toml` (decided 2026-10-20), so a version installed with brew directly counts too.
+- `yard php uninstall <ver>` → `brew uninstall`, as a job. It is refused with
+  `PHP_IN_USE`, before brew runs, while the version is the default or any site is
+  isolated to it.
+- `yard php default <ver>` sets the global default (`default_php` in `yard.toml`);
+  the version must be installed.
+- `yard php list` shows each installed version (and the default if it is not
+  installed), whether it is the default, the sites on it and its pool's state.
 - FPM is launched by `yardd`, never by brew:
   ```
   <brew prefix>/opt/php@<ver>/sbin/php-fpm --nodaemonize \
@@ -365,7 +371,7 @@ profile; Yard does not edit dotfiles.
 ### 6.3 Errors
 
 Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
-`PORT_IN_USE`, `PHP_NOT_INSTALLED`, `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
+`PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 

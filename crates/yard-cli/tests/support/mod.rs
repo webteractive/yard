@@ -16,6 +16,8 @@ use yard_proto::{ErrorCode, PROTOCOL_VERSION, YardError};
 pub const MOCK_VERSION: &str = "9.9.9";
 
 type Answers = HashMap<String, Result<Value, YardError>>;
+/// Event payloads pushed, in order, right after the answer to a method.
+type Events = HashMap<String, Vec<Value>>;
 
 pub struct MockDaemon {
     pub root: TempDir,
@@ -24,7 +26,16 @@ pub struct MockDaemon {
 
 impl MockDaemon {
     pub fn start(answers: &[(&str, Result<Value, YardError>)]) -> Self {
+        Self::start_with_events(answers, &[])
+    }
+
+    /// As `start`, and after answering a method in `events` it pushes those events.
+    pub fn start_with_events(
+        answers: &[(&str, Result<Value, YardError>)],
+        events: &[(&str, Vec<Value>)],
+    ) -> Self {
         let root = short_root();
+        let events: Arc<Events> = Arc::new(events.iter().map(|(m, e)| (m.to_string(), e.clone())).collect());
         let listener = UnixListener::bind(root.path().join("yardd.sock")).unwrap();
         let answers: Arc<Answers> =
             Arc::new(answers.iter().map(|(m, a)| (m.to_string(), a.clone())).collect());
@@ -32,8 +43,8 @@ impl MockDaemon {
         let seen = requests.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (answers, seen) = (answers.clone(), seen.clone());
-                std::thread::spawn(move || serve(stream, &answers, &seen));
+                let (answers, events, seen) = (answers.clone(), events.clone(), seen.clone());
+                std::thread::spawn(move || serve(stream, &answers, &events, &seen));
             }
         });
         Self { root, requests }
@@ -55,7 +66,7 @@ impl MockDaemon {
     }
 }
 
-fn serve(stream: UnixStream, answers: &Answers, seen: &Mutex<Vec<Request>>) {
+fn serve(stream: UnixStream, answers: &Answers, events: &Events, seen: &Mutex<Vec<Request>>) {
     let mut write = stream.try_clone().unwrap();
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
@@ -78,6 +89,12 @@ fn serve(stream: UnixStream, answers: &Answers, seen: &Mutex<Vec<Request>>) {
         };
         if write.write_all(&encode_line(&response)).is_err() {
             return;
+        }
+        for event in events.get(&request.method).into_iter().flatten() {
+            let note = json!({"jsonrpc": "2.0", "method": "event", "params": event});
+            if write.write_all(&encode_line(&note)).is_err() {
+                return;
+            }
         }
     }
 }

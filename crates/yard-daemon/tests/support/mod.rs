@@ -2,6 +2,8 @@
 //! php-fpm are `yard-fake-unit`, and an in-process helper.
 #![allow(dead_code)]
 
+pub mod daemon;
+
 use std::collections::BTreeSet;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};

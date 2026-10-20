@@ -73,6 +73,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<PortsAction>,
     },
+    /// List the PHP versions brew has installed, or install, remove or choose one.
+    Php {
+        #[command(subcommand)]
+        action: Option<PhpAction>,
+    },
     /// Restart a unit: nginx, dnsmasq or php-fpm-<version>.
     Restart { unit: String },
     /// Install or remove the root helper; run with sudo.
@@ -96,6 +101,18 @@ pub enum PortsAction {
     Range { range: String },
     /// Switch the port profile: standard (nginx on 8080/8443) or privileged (80/443).
     Profile { profile: ProfileArg },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PhpAction {
+    /// The installed versions, the default, the sites on each and its pool.
+    List,
+    /// Install a PHP version (7.0–8.5) with brew, showing brew's output.
+    Install { version: String },
+    /// Remove a PHP version with brew; refused while it is the default.
+    Uninstall { version: String },
+    /// Make an installed version the default for sites that are not isolated.
+    Default { version: String },
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

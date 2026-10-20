@@ -1,7 +1,6 @@
 //! Where Homebrew keeps what Yard runs. Yard reads these paths and never writes under them.
 
 use crate::PhpVersion;
-use crate::php::formula;
 use std::path::{Path, PathBuf};
 use yard_proto::{ErrorCode, YardError};
 
@@ -19,12 +18,17 @@ impl Brew {
 
     pub fn detect(exists: &dyn Fn(&Path) -> bool) -> Result<Brew, YardError> {
         let brew = Brew::new(DEFAULT_PREFIX);
-        if exists(&brew.prefix.join("bin/brew")) {
+        if exists(&brew.brew_bin()) {
             Ok(brew)
         } else {
             Err(YardError::new(ErrorCode::BrewMissing, "Homebrew is not installed at /opt/homebrew")
                 .with_hint("install Homebrew from https://brew.sh"))
         }
+    }
+
+    /// `brew` itself, run by absolute path like every other binary Yard starts.
+    pub fn brew_bin(&self) -> PathBuf {
+        self.prefix.join("bin/brew")
     }
 
     pub fn nginx_bin(&self) -> PathBuf {
@@ -70,7 +74,22 @@ impl Brew {
             return Ok(plain);
         }
         Err(YardError::new(ErrorCode::PhpNotInstalled, format!("PHP {v} is not installed"))
-            .with_hint(format!("brew install {}", formula(v))))
+            .with_hint(format!("yard php install {v}")))
+    }
+
+    /// Every supported version whose keg `php_opt` finds, oldest first. Read from brew
+    /// rather than recorded, so a version installed with brew directly counts too.
+    pub fn installed_php(
+        &self,
+        exists: &dyn Fn(&Path) -> bool,
+        read_link: &dyn Fn(&Path) -> Option<PathBuf>,
+    ) -> Vec<PhpVersion> {
+        crate::php::SUPPORTED.into_iter().filter(|v| self.php_opt(*v, exists, read_link).is_ok()).collect()
+    }
+
+    /// A binary in a version's keg: `php`, `pecl`, `phpize`, `php-config`.
+    pub fn php_bin(opt: &Path, name: &str) -> PathBuf {
+        opt.join("bin").join(name)
     }
 
     pub fn php_fpm(opt: &Path) -> PathBuf {
@@ -135,6 +154,21 @@ mod tests {
     }
 
     #[test]
+    fn installed_php_lists_resolvable_kegs() {
+        let ex = exists_in(&["/opt/homebrew/opt/php@7.1", "/opt/homebrew/opt/php"]);
+        let ln = links(&[("/opt/homebrew/opt/php", "../Cellar/php/8.5.1")]);
+        assert_eq!(brew().installed_php(&ex, &ln), vec![v("7.1"), v("8.5")]);
+        assert_eq!(Brew::php_bin(Path::new("/o/php@7.1"), "pecl"), Path::new("/o/php@7.1/bin/pecl"));
+    }
+
+    #[test]
+    fn missing_php_hint_is_yard_php_install() {
+        let e = brew().php_opt(v("7.3"), &exists_in(&[]), &links(&[])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::PhpNotInstalled);
+        assert_eq!(e.hint.as_deref(), Some("yard php install 7.3"));
+    }
+
+    #[test]
     fn versioned_keg_wins() {
         let ex = exists_in(&["/opt/homebrew/opt/php@8.4"]);
         let opt = brew().php_opt(v("8.4"), &ex, &links(&[])).unwrap();
@@ -155,7 +189,7 @@ mod tests {
         let ln = links(&[("/opt/homebrew/opt/php", "../Cellar/php/8.6.0")]);
         let e = brew().php_opt(v("8.5"), &ex, &ln).unwrap_err();
         assert_eq!(e.code, ErrorCode::PhpNotInstalled);
-        assert_eq!(e.hint.as_deref(), Some("brew install shivammathur/php/php@8.5"));
+        assert_eq!(e.hint.as_deref(), Some("yard php install 8.5"));
     }
 
     #[test]

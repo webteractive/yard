@@ -42,6 +42,14 @@ pub fn print_json<T: Serialize>(value: &T) {
     }
 }
 
+/// One compact JSON value per line, for streams such as a job's events (NDJSON).
+pub fn print_json_line<T: Serialize>(value: &T) {
+    match serde_json::to_string(value) {
+        Ok(text) => println!("{text}"),
+        Err(e) => eprintln!("error: cannot print JSON: {e}"),
+    }
+}
+
 pub fn print_error(json: bool, e: &YardError) {
     if json {
         print_json(&serde_json::json!({ "error": e }));

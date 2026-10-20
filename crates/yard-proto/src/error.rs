@@ -14,6 +14,8 @@ pub enum ErrorCode {
     BrewMissing,
     FormulaMissing,
     PhpNotInstalled,
+    /// A PHP version is the default or a site's, so it cannot be removed.
+    PhpInUse,
     NginxConfigInvalid,
     HelperNotInstalled,
     HelperRefused,

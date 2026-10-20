@@ -20,6 +20,10 @@ pub const PORTS_UNPIN: &str = "ports.unpin";
 pub const PORTS_RANGE: &str = "ports.range";
 pub const PORTS_PROFILE: &str = "ports.profile";
 pub const UNITS_RESTART: &str = "units.restart";
+pub const PHP_LIST: &str = "php.list";
+pub const PHP_INSTALL: &str = "php.install";
+pub const PHP_UNINSTALL: &str = "php.uninstall";
+pub const PHP_DEFAULT: &str = "php.default";
 pub const SUBSCRIBE: &str = "subscribe";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +83,12 @@ pub struct RangeParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileParams {
     pub profile: Profile,
+}
+
+/// `php.install`, `php.uninstall` and `php.default`: a version such as `"7.1"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhpParams {
+    pub php: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

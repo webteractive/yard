@@ -1,6 +1,7 @@
 //! One function per method. Mutations edit a TOML through `TomlFile`, then reconcile;
 //! they never write generated files themselves.
 
+use super::php;
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
@@ -68,6 +69,10 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
             let p: ProfileParams = parse(params)?;
             json(profile(ctx, p.profile).await)
         }
+        methods::PHP_LIST => json(php::list(ctx).await),
+        methods::PHP_INSTALL => json(php::install(ctx, parse(params)?)),
+        methods::PHP_UNINSTALL => json(php::uninstall(ctx, parse(params)?).await),
+        methods::PHP_DEFAULT => json(php::set_default(ctx, parse(params)?).await),
         methods::UNITS_RESTART => {
             let p: UnitParams = parse(params)?;
             json(restart(ctx, &p.unit).await)
@@ -76,17 +81,17 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
     }
 }
 
-fn parse<T: DeserializeOwned>(params: Value) -> Result<T, YardError> {
+pub(super) fn parse<T: DeserializeOwned>(params: Value) -> Result<T, YardError> {
     serde_json::from_value(params)
         .map_err(|e| YardError::new(ErrorCode::InvalidArgument, format!("bad parameters: {e}")))
 }
 
-fn json<T: Serialize>(result: Result<T, YardError>) -> Result<Value, YardError> {
+pub(super) fn json<T: Serialize>(result: Result<T, YardError>) -> Result<Value, YardError> {
     serde_json::to_value(result?).map_err(YardError::internal)
 }
 
 /// The last good state, or why there is none yet.
-async fn snapshot(ctx: &Context) -> Result<Snapshot, YardError> {
+pub(super) async fn snapshot(ctx: &Context) -> Result<Snapshot, YardError> {
     match ctx.reconciler.snapshot().await {
         Some(s) => Ok(s),
         None => Err(ctx
@@ -97,7 +102,7 @@ async fn snapshot(ctx: &Context) -> Result<Snapshot, YardError> {
     }
 }
 
-async fn reconcile(ctx: &Context) -> Result<(), YardError> {
+pub(super) async fn reconcile(ctx: &Context) -> Result<(), YardError> {
     let report = ctx.reconciler.reconcile().await?;
     report.warnings.iter().for_each(|w| tracing::warn!("{w}"));
     Ok(())

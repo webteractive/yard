@@ -74,6 +74,19 @@ pub enum UnitState {
     Failed { last_lines: Vec<String> },
 }
 
+impl UnitState {
+    /// The `state` tag on its own: `running`, `backoff`, …
+    pub fn name(&self) -> &'static str {
+        match self {
+            UnitState::Stopped => "stopped",
+            UnitState::Starting => "starting",
+            UnitState::Running => "running",
+            UnitState::Backoff { .. } => "backoff",
+            UnitState::Failed { .. } => "failed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitInfo {
     pub name: String,
@@ -173,6 +186,18 @@ pub struct StatusInfo {
     pub sites: usize,
     /// Why the last reconcile failed, until one succeeds; the last good state keeps serving.
     pub config_error: Option<YardError>,
+}
+
+/// One row of `php.list`: an installed version, or the default when it is not installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhpInfo {
+    pub version: String,
+    pub default: bool,
+    pub installed: bool,
+    /// Sites that run on this version.
+    pub sites: Vec<String>,
+    /// The state of its php-fpm pool (`running`, `stopped`, …); `None` when it has none.
+    pub pool: Option<String>,
 }
 
 /// The answer to a method that runs as a job: its progress and result arrive as
