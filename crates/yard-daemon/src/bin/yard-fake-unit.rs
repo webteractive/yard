@@ -112,7 +112,16 @@ fn dnsmasq(args: &[String]) -> ExitCode {
 }
 
 /// `-y <fpm.conf>`; listens on its `listen = "<path>"` unix socket.
+/// Like php-fpm's master, it survives SIGUSR2 (a graceful reload) and logs
+/// `fake php-fpm reloaded` to stderr for each one.
 fn php_fpm(args: &[String]) -> ExitCode {
+    extern "C" fn reloaded(_: libc::c_int) {
+        let line = b"fake php-fpm reloaded\n";
+        // SAFETY: write(2) is async-signal-safe; the buffer is static.
+        unsafe { libc::write(2, line.as_ptr().cast(), line.len()) };
+    }
+    // SAFETY: installing a handler that only calls write(2).
+    unsafe { libc::signal(libc::SIGUSR2, reloaded as libc::sighandler_t) };
     let Some(conf) = flag(args, "-y") else { return fail("php-fpm needs -y".into()) };
     let text = std::fs::read_to_string(conf).unwrap_or_default();
     let socket = text.lines().find_map(|l| {

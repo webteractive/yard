@@ -127,6 +127,37 @@ pub enum PhpAction {
     Uninstall { version: String },
     /// Make an installed version the default for sites that are not isolated.
     Default { version: String },
+    /// Read or change your php.ini overrides (php/<ver>/conf.d/99-overrides.ini).
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    /// Print an override's value.
+    Get {
+        key: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Set an override and reload that version's pool, e.g. memory_limit 1G.
+    Set {
+        key: String,
+        value: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Remove an override and reload that version's pool.
+    Unset {
+        key: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

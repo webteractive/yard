@@ -32,7 +32,8 @@ use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitSt
 
 const USER_OWNED_NGINX: &str =
     "# USER-OWNED — Yard never rewrites this file. nginx directives for this site go here.\n";
-const USER_OWNED_INI: &str = "; USER-OWNED — Yard never rewrites this file\n";
+pub(crate) const USER_OWNED_INI: &str =
+    "; USER-OWNED — Yard changes this file only for yard php config set and unset\n";
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReconcileReport {

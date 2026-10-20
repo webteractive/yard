@@ -403,3 +403,31 @@ fn isolate_outside_a_site_names_the_flag() {
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("hint: yard isolate 7.1 --site <name>"), "{}", stderr(&out));
 }
+
+#[test]
+fn php_config_set_get_unset() {
+    let d = MockDaemon::start(&[
+        ("php.config.set", Ok(json!(null))),
+        ("php.config.get", Ok(json!("1G"))),
+        ("php.config.unset", Ok(json!(null))),
+    ]);
+    let out = d.yard().args(["php", "config", "set", "memory_limit", "1G", "--php", "7.1"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("memory_limit = 1G for PHP 7.1"), "{}", stdout(&out));
+    assert_eq!(d.params("php.config.set"), [json!({"php": "7.1", "key": "memory_limit", "value": "1G"})]);
+
+    let out = d.yard().args(["php", "config", "get", "memory_limit"]).output().unwrap();
+    assert_eq!(stdout(&out), "1G\n");
+    assert_eq!(d.params("php.config.get"), [json!({"php": null, "key": "memory_limit", "value": null})]);
+
+    let out = d.yard().args(["php", "config", "unset", "memory_limit"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn php_config_get_unset_key_says_so() {
+    let d = MockDaemon::start(&[("php.config.get", Ok(json!(null)))]);
+    let out = d.yard().args(["php", "config", "get", "memory_limit"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(stdout(&out).contains("memory_limit is not overridden"), "{}", stdout(&out));
+}

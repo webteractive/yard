@@ -216,7 +216,10 @@ Generated defaults (dev-friendly): `memory_limit=512M`,
 `date.timezone` from the system.
 
 `yard php config set <key> <value> [--php <ver>]` and
-`yard php config get|unset` edit `99-overrides.ini` only.
+`yard php config get|unset` edit `99-overrides.ini` only, line by line so the user's
+comments and other lines stay, and reload that version's pool gracefully (SIGUSR2).
+Keys are directive names (`[A-Za-z0-9_.]`); a value is one line without `"`, and is
+quoted when it holds spaces or `;`.
 
 ### 4.5 Version resolution and isolation
 

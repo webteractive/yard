@@ -1,10 +1,11 @@
 //! `yard php`: list, install, uninstall and default.
 
 use super::{Ctx, Outcome, run_job};
+use crate::cli::ConfigAction;
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use yard_proto::PhpInfo;
-use yard_proto::methods::{self, PhpParams};
+use yard_proto::methods::{self, PhpConfigParams, PhpParams};
 
 pub async fn list(ctx: &Ctx) -> Outcome {
     let versions: Vec<PhpInfo> = ctx.client().await?.call(methods::PHP_LIST, Value::Null).await?;
@@ -42,5 +43,31 @@ pub async fn set_default(ctx: &Ctx, version: String) -> Outcome {
     let params = PhpParams { php: version.clone() };
     ctx.client().await?.call::<_, ()>(methods::PHP_DEFAULT, params).await?;
     ctx.emit(&(), || format!("PHP {version} is now the default.\n"));
+    Ok(0)
+}
+
+pub async fn config(ctx: &Ctx, action: ConfigAction) -> Outcome {
+    let mut client = ctx.client().await?;
+    match action {
+        ConfigAction::Get { key, php } => {
+            let params = PhpConfigParams { php, key: key.clone(), value: None };
+            let value: Option<String> = client.call(methods::PHP_CONFIG_GET, params).await?;
+            ctx.emit(&value, || match &value {
+                Some(v) => format!("{v}\n"),
+                None => format!("{key} is not overridden; php.ini's default applies.\n"),
+            });
+        }
+        ConfigAction::Set { key, value, php } => {
+            let shown = php.clone().map_or_else(|| "the default PHP".to_string(), |v| format!("PHP {v}"));
+            let params = PhpConfigParams { php, key: key.clone(), value: Some(value.clone()) };
+            client.call::<_, ()>(methods::PHP_CONFIG_SET, params).await?;
+            ctx.emit(&(), || format!("{key} = {value} for {shown}.\n"));
+        }
+        ConfigAction::Unset { key, php } => {
+            let params = PhpConfigParams { php, key: key.clone(), value: None };
+            client.call::<_, ()>(methods::PHP_CONFIG_UNSET, params).await?;
+            ctx.emit(&(), || format!("Removed the {key} override.\n"));
+        }
+    }
     Ok(0)
 }

@@ -74,6 +74,9 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::PHP_INSTALL => json(php::install(ctx, parse(params)?)),
         methods::PHP_UNINSTALL => json(php::uninstall(ctx, parse(params)?).await),
         methods::PHP_DEFAULT => json(php::set_default(ctx, parse(params)?).await),
+        methods::PHP_CONFIG_GET => json(php::config_get(ctx, parse(params)?)),
+        methods::PHP_CONFIG_SET => json(php::config_edit(ctx, parse(params)?, true).await),
+        methods::PHP_CONFIG_UNSET => json(php::config_edit(ctx, parse(params)?, false).await),
         methods::UNITS_RESTART => {
             let p: UnitParams = parse(params)?;
             json(restart(ctx, &p.unit).await)

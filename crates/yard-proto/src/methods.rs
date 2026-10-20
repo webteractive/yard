@@ -25,6 +25,9 @@ pub const PHP_LIST: &str = "php.list";
 pub const PHP_INSTALL: &str = "php.install";
 pub const PHP_UNINSTALL: &str = "php.uninstall";
 pub const PHP_DEFAULT: &str = "php.default";
+pub const PHP_CONFIG_GET: &str = "php.config.get";
+pub const PHP_CONFIG_SET: &str = "php.config.set";
+pub const PHP_CONFIG_UNSET: &str = "php.config.unset";
 pub const SUBSCRIBE: &str = "subscribe";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +101,17 @@ pub struct ProfileParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhpParams {
     pub php: String,
+}
+
+/// `php.config.get|set|unset` on `99-overrides.ini`. `php` defaults to the default
+/// version; `value` is for `set` only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhpConfigParams {
+    #[serde(default)]
+    pub php: Option<String>,
+    pub key: String,
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -4,14 +4,15 @@
 use super::handlers::{not_found, reconcile, site, snapshot};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
-use crate::reconcile::fpm_unit;
+use crate::reconcile::{USER_OWNED_INI, fpm_unit};
 use std::path::Path;
 use toml_edit::value;
 use yard_core::PhpVersion;
 use yard_core::brew::Brew;
 use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::php::formula;
-use yard_proto::methods::{IsolateParams, PhpParams};
+use yard_core::{generated, ini};
+use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpParams};
 use yard_proto::{ErrorCode, JobStarted, PhpInfo, SiteInfo, SiteKind, YardError};
 
 fn installed(brew: &Brew) -> Vec<PhpVersion> {
@@ -139,4 +140,61 @@ pub(super) async fn isolate(ctx: &Context, p: IsolateParams) -> Result<SiteInfo,
     file.save()?;
     reconcile(ctx).await?;
     site(ctx, &p.site).await
+}
+
+/// The version a `php.config.*` call means: the one given, else the default. Installed.
+fn config_version(ctx: &Context, php: Option<&str>) -> Result<PhpVersion, YardError> {
+    let v = match php {
+        Some(v) => v.parse()?,
+        None => load_yard(&ctx.paths)?.0.default_php,
+    };
+    if installed(&ctx.brew).contains(&v) { Ok(v) } else { Err(not_installed(v)) }
+}
+
+fn bad(message: String) -> YardError {
+    YardError::new(ErrorCode::InvalidArgument, message)
+}
+
+pub(super) fn config_get(ctx: &Context, p: PhpConfigParams) -> Result<Option<String>, YardError> {
+    let v = config_version(ctx, p.php.as_deref())?;
+    let text = std::fs::read_to_string(ctx.paths.php_overrides(v)).unwrap_or_default();
+    Ok(ini::get(&text, &p.key))
+}
+
+/// `set` (with `p.value`) or `unset` on `99-overrides.ini`, then a graceful reload of
+/// the version's pool if it runs. The only place Yard writes that file.
+pub(super) async fn config_edit(ctx: &Context, p: PhpConfigParams, set: bool) -> Result<(), YardError> {
+    if !ini::valid_key(&p.key) {
+        return Err(bad(format!("{:?} is not a php.ini directive name", p.key))
+            .with_hint("names are letters, digits, _ and ., e.g. memory_limit"));
+    }
+    let value = match (set, p.value.as_deref()) {
+        (true, Some(value)) if !ini::valid_value(value) => {
+            return Err(bad(format!("{value:?} cannot be a php.ini value: it holds a newline or a quote")));
+        }
+        (true, None) => return Err(bad("php.config.set needs a value".into())),
+        (_, value) => value.unwrap_or_default(),
+    };
+    let v = config_version(ctx, p.php.as_deref())?;
+    let file = ctx.paths.php_overrides(v);
+    let io = |e: std::io::Error| YardError::internal(format!("{}: {e}", file.display()));
+    generated::ensure_user_file(&file, USER_OWNED_INI).map_err(io)?;
+    let text = std::fs::read_to_string(&file).map_err(io)?;
+    let edited = if set {
+        ini::set(&text, &p.key, value)
+    } else {
+        match ini::unset(&text, &p.key) {
+            (edited, true) => edited,
+            (_, false) => {
+                return Err(bad(format!("{} is not set for PHP {v}", p.key))
+                    .with_hint(format!("yard php config get {} --php {v}", p.key)));
+            }
+        }
+    };
+    generated::write_atomic(&file, &edited).map_err(io)?;
+    let unit = fpm_unit(v);
+    if ctx.supervisor().list().iter().any(|u| u.name == unit && u.pid.is_some()) {
+        ctx.supervisor().reload(&unit).await?;
+    }
+    Ok(())
 }

@@ -89,6 +89,7 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Php { action: Some(PhpAction::Default { version }) } => {
             php::set_default(&ctx, version).await
         }
+        Command::Php { action: Some(PhpAction::Config { action }) } => php::config(&ctx, action).await,
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
         Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,

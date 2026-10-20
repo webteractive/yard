@@ -3,6 +3,7 @@
 pub mod brew;
 pub mod config;
 pub mod generated;
+pub mod ini;
 pub mod paths;
 pub mod php;
 pub mod ports;

@@ -190,3 +190,69 @@ async fn uninstall_refuses_an_isolated_version() {
     assert!(!brew_log(&d).contains("uninstall"));
     d.shutdown().await.unwrap();
 }
+
+fn fpm_pid(units: &Value, name: &str) -> Value {
+    units["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["name"] == name)
+        .map(|u| u["pid"].clone())
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn config_set_writes_overrides_and_reloads_the_pool() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let mut pid = Value::Null;
+    for _ in 0..50 {
+        pid = fpm_pid(&c.call("status", Value::Null).await.unwrap(), "php-fpm-8.4");
+        if pid.is_number() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(pid.is_number(), "the 8.4 pool runs");
+
+    c.call("php.config.set", json!({"key": "memory_limit", "value": "1G"})).await.unwrap();
+    let overrides = std::fs::read_to_string(d.fx.paths.php_overrides("8.4".parse().unwrap())).unwrap();
+    assert!(overrides.contains("memory_limit = 1G"), "{overrides}");
+    assert!(overrides.starts_with("; USER-OWNED"), "{overrides}");
+    assert_eq!(c.call("php.config.get", json!({"key": "memory_limit"})).await.unwrap(), "1G");
+
+    let log = d.fx.paths.log("php-fpm-8.4");
+    let reloaded = || std::fs::read_to_string(&log).unwrap_or_default().contains("fake php-fpm reloaded");
+    assert!(support::wait_until(reloaded, Duration::from_secs(5)).await, "the pool got SIGUSR2");
+    assert_eq!(
+        fpm_pid(&c.call("status", Value::Null).await.unwrap(), "php-fpm-8.4"),
+        pid,
+        "a reload, not a restart"
+    );
+
+    c.call("php.config.unset", json!({"key": "memory_limit"})).await.unwrap();
+    assert_eq!(c.call("php.config.get", json!({"key": "memory_limit"})).await.unwrap(), Value::Null);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn config_refuses_bad_keys_values_and_versions() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let bad = [
+        json!({"key": "a b", "value": "1"}),
+        json!({"key": "x", "value": "a\nb"}),
+        json!({"key": "x", "value": "1", "php": "5.6"}),
+    ];
+    for params in bad {
+        let err = c.call("php.config.set", params.clone()).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidArgument, "{params}");
+    }
+    let err = c.call("php.config.set", json!({"key": "x", "value": "1", "php": "7.3"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PhpNotInstalled);
+    let err = c.call("php.config.unset", json!({"key": "never_set"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    d.shutdown().await.unwrap();
+}
