@@ -203,6 +203,7 @@ impl Reconciler {
             brew: &state.brew,
             tld: &tld,
             http_port: http,
+            https_port: https,
             timezone: &self.timezone,
         };
         // Pools run for the versions sites use; every installed version gets its inis, so

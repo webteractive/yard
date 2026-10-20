@@ -16,6 +16,7 @@ pub struct RenderCtx<'a> {
     pub brew: &'a Brew,
     pub tld: &'a str,
     pub http_port: u16,
+    pub https_port: u16,
     pub timezone: &'a str,
 }
 
@@ -75,7 +76,7 @@ mod tests {
     }
 
     fn ctx<'a>(paths: &'a Paths, brew: &'a Brew) -> RenderCtx<'a> {
-        RenderCtx { paths, brew, tld: "yard", http_port: 8080, timezone: "Asia/Manila" }
+        RenderCtx { paths, brew, tld: "yard", http_port: 8080, https_port: 8443, timezone: "Asia/Manila" }
     }
 
     #[test]
@@ -128,6 +129,34 @@ mod tests {
     fn nginx_site_proxy() {
         let (p, b) = ctx_parts();
         assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &proxy_site()));
+    }
+
+    fn secure(mut site: SiteInfo) -> SiteInfo {
+        site.secure = true;
+        site.url = site.url.replace("http://", "https://").replace(":8080", ":8443");
+        site
+    }
+
+    #[test]
+    fn nginx_site_php_secure() {
+        let (p, b) = ctx_parts();
+        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &secure(php_site("blog", "/Users/me/Herd/blog"))));
+    }
+
+    #[test]
+    fn nginx_site_proxy_secure() {
+        let (p, b) = ctx_parts();
+        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &secure(proxy_site())));
+    }
+
+    #[test]
+    fn nginx_site_secure_on_443_redirects_without_a_port() {
+        let (p, b) = ctx_parts();
+        let c = RenderCtx { http_port: 80, https_port: 443, ..ctx(&p, &b) };
+        let conf = nginx::nginx_site(&c, &secure(proxy_site()));
+        assert!(conf.lines().any(|l| l.trim() == "return 301 https://$host$request_uri;"), "{conf}");
+        assert!(conf.lines().any(|l| l.trim() == "listen 127.0.0.1:443 ssl;"), "{conf}");
+        assert!(conf.lines().any(|l| l.trim() == "listen 127.0.0.1:80;"), "{conf}");
     }
 
     #[test]
@@ -202,6 +231,7 @@ mod tests {
         let outputs = [
             nginx::nginx_main(&c),
             nginx::nginx_site(&c, &php_site("my-app", "/Users/me/Herd/my app")),
+            nginx::nginx_site(&c, &secure(php_site("my-app", "/Users/me/Herd/my app"))),
             php::fpm_conf(&c, v("8.4")),
             php::php_ini(&c, v("8.4")),
         ];

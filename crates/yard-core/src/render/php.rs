@@ -168,7 +168,7 @@ mod tests {
     }
 
     fn ctx<'a>(paths: &'a Paths, brew: &'a Brew) -> RenderCtx<'a> {
-        RenderCtx { paths, brew, tld: "yard", http_port: 8080, timezone: "UTC" }
+        RenderCtx { paths, brew, tld: "yard", http_port: 8080, https_port: 8443, timezone: "UTC" }
     }
 
     fn v84() -> PhpVersion {

@@ -128,8 +128,9 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
             target = nginx_str(target),
         ),
     };
-    format!(
-        "{header}server {{
+    if !site.secure {
+        return format!(
+            "{header}server {{
     listen 127.0.0.1:{http};
     listen [::1]:{http};
     server_name {host} *.{host};
@@ -139,8 +140,38 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
     include {override_file};
 }}
 ",
+            header = header(&override_file),
+            override_file = q(&override_file),
+        );
+    }
+    // A secured site answers http with a redirect to the same path over https.
+    let https = ctx.https_port;
+    let port = if https == 443 { String::new() } else { format!(":{https}") };
+    format!(
+        "{header}server {{
+    listen 127.0.0.1:{http};
+    listen [::1]:{http};
+    server_name {host} *.{host};
+    return 301 https://$host{port}$request_uri;
+}}
+
+server {{
+    listen 127.0.0.1:{https} ssl;
+    listen [::1]:{https} ssl;
+    server_name {host} *.{host};
+    client_max_body_size 1G;
+    ssl_certificate {cert};
+    ssl_certificate_key {key};
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+{body}
+    include {override_file};
+}}
+",
         header = header(&override_file),
         override_file = q(&override_file),
+        cert = q(&ctx.paths.cert(&site.name)),
+        key = q(&ctx.paths.cert_key(&site.name)),
     )
 }
 
