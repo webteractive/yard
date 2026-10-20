@@ -1,7 +1,7 @@
 //! `yard start` and `yard stop`: yardd's LaunchAgent in the user's launchd domain.
 
 use super::{Ctx, Outcome};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use yard_core::paths::DAEMON_LABEL;
@@ -91,8 +91,14 @@ pub async fn unloaded(service: &str) {
 }
 
 /// A binary installed next to this `yard`, as `cargo build` and the release both lay out.
+/// A `yard` symlinked onto PATH looks beside the binary it points at.
 pub fn sibling(name: &str) -> Result<PathBuf, YardError> {
     let exe = std::env::current_exe().map_err(|e| YardError::internal(format!("cannot locate yard: {e}")))?;
+    sibling_of(&exe, name)
+}
+
+fn sibling_of(exe: &Path, name: &str) -> Result<PathBuf, YardError> {
+    let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
     let path = exe.with_file_name(name);
     if path.exists() {
         Ok(path)
@@ -129,4 +135,24 @@ pub fn launchctl(args: &[&str]) -> Result<(), YardError> {
 
 fn io(path: &std::path::Path, e: std::io::Error) -> YardError {
     YardError::internal(format!("cannot write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sibling_of;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_symlinked_yard_finds_its_siblings_beside_the_real_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (real, bin) = (dir.path().join("release"), dir.path().join("bin"));
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(real.join("yard"), "").unwrap();
+        std::fs::write(real.join("yardd"), "").unwrap();
+        symlink(real.join("yard"), bin.join("yard")).unwrap();
+
+        let found = sibling_of(&bin.join("yard"), "yardd").unwrap();
+        assert_eq!(found, std::fs::canonicalize(real.join("yardd")).unwrap());
+    }
 }

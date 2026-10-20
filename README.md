@@ -44,10 +44,14 @@ says which of these is missing.
 
 ```sh
 cargo build --release
+ln -sf "$PWD/target/release/yard" ~/.local/bin/yard   # any directory on PATH
 sudo ./target/release/yard helper install   # once, and after each upgrade
-./target/release/yard start
-./target/release/yard doctor                # every check should say ok
+yard start
+yard doctor                                 # every check should say ok
 ```
+
+The symlink keeps `yard` current across rebuilds; it still finds `yardd` and
+`yard-helper` beside the binary it points at.
 
 Run the helper install in a real terminal: sudo needs one to ask for the password.
 Upgrading from M1, re-run it: it stops the root nginx M1's helper started, waits for it to
