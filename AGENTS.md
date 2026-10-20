@@ -6,8 +6,9 @@ This file provides guidance to AI coding agents when working with code in this r
 
 Yard serves local PHP sites on macOS. A Rust daemon (`yardd`, a user
 LaunchAgent) supervises php-fpm pools, dnsmasq and services. A tiny root helper
-(`yard-helper`, a LaunchDaemon) runs nginx on 80/443 and manages
-`/etc/resolver` and CA trust through a fixed verb set. The `yard` CLI and,
+(`yard-helper`, a LaunchDaemon) manages `/etc/resolver` and CA trust through a
+fixed verb set. nginx runs as the user; root only opens 80/443 when the user opts
+in (decided 2026-10-20, built in M1.1; the M1 code still runs nginx through the helper). The `yard` CLI and,
 from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Status
@@ -38,10 +39,12 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   with Rust (option C) is deferred and would sit behind the daemon API.
 - **Port registry** (spec §7, the maintainer asked for it explicitly): `ports.toml` with
   `pinned`/`preferred`/`auto`/`external` modes, checked at allocation, before
-  start (bind probe + holder via lsof) and at runtime. `trial` and `default`
-  profiles.
-- **Trial profile is the default until `yard takeover`** (M3): TLD `.yard`,
-  nginx on 8080/8443, so Herd keeps working alongside.
+  start (bind probe + holder via lsof) and at runtime. `standard` (8080/8443)
+  and opt-in `privileged` (80/443) profiles; M1's code still calls them `trial`
+  and `default`.
+- **8080/8443 is the default, with TLD `.yard` until `yard takeover`** (M3), so
+  Herd keeps working alongside. 80/443 is opt-in, and even then root never runs
+  nginx: the helper hands yardd the two sockets (spec §3.1).
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
 - **v1 scope:** core serving, multi-PHP + isolate, HTTPS, Node + services.

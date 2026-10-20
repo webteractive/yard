@@ -1,7 +1,8 @@
 # Yard — design spec
 
 Date: 2026-10-19
-Status: approved
+Status: approved; revised 2026-10-20 — nginx runs as the user, and 80/443 are an
+opt-in (§3.1, §5.2, §5.5, §7, M1.1)
 
 Yard is a local PHP development environment for macOS that replaces Laravel Herd.
 The CLI and all logic are written in Rust; the desktop app (menu bar + window) is
@@ -23,7 +24,8 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
 ### Success criteria
 
 - `yard migrate herd` imports all Herd links, isolations and secured sites.
-- Every migrated site serves over `https://<site>.test` with its correct PHP version.
+- Every migrated site serves over `https://<site>.test` with its correct PHP version
+  (on 443 with the `privileged` profile, on 8443 without it).
 - A PHP 7.1 legacy site and a PHP 8.4 site run side by side.
 - `yard ext add redis --php 7.1` and `yard ext add xdebug --php 8.4` work.
 - MySQL, Redis and Mailpit run under Yard with no paid tier.
@@ -55,32 +57,43 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
 ```
  yard (CLI) ─┐
              ├─ JSON-RPC over unix socket ─▶ yardd (LaunchAgent, runs as user)
- Yard.app ───┘                                  │  supervises: php-fpm pools, dnsmasq,
+ Yard.app ───┘                                  │  supervises: nginx, php-fpm pools, dnsmasq,
                                                 │  services (mysql, redis, mailpit, …)
                                                 │
                                                 └─ narrow socket ─▶ yard-helper
                                                                     (LaunchDaemon, root)
-                                                                    nginx on 80/443,
-                                                                    /etc/resolver, CA trust
+                                                                    /etc/resolver, CA trust,
+                                                                    80/443 sockets (opt-in)
 ```
 
 - **`yardd`** owns all state and logic. Long-running, Tokio-based. Its
   LaunchAgent label is `dev.more.yard.daemon`; the helper's is
   `dev.more.yard.helper`.
+- **nginx runs as the user**, master and workers, supervised by `yardd` like every
+  other unit. Root never runs nginx and never reads its config. A root nginx
+  reading a user-owned config is a no-password path to root for anything running
+  as the user (nginx config can `include` any file and `load_module`), and nothing
+  nginx does needs root except binding 80/443 on loopback.
 - **`yard-helper`** runs as root and accepts only a fixed verb set:
-  `nginx.start`, `nginx.stop`, `nginx.reload`, `nginx.test_config`,
-  `resolver.install`, `resolver.remove`, `ca.trust`, `ca.untrust`, plus a
-  read-only `status`.
+  `resolver.install`, `resolver.remove`, `ca.trust`, `ca.untrust`,
+  `ports.bind`, plus a read-only `status`.
   It takes no free-form paths or commands: the owning user, Yard's data
   directory and the Homebrew prefix are fixed when the helper is installed, and
-  the remaining arguments (TLD, port) are validated. The data root must be
-  absolute, and every directory and symlink on its path, as written, must be
-  owned by the user or root, with no directory writable by group or others
-  (sticky parents such as `/tmp` aside); the install, `nginx.start`,
-  `nginx.reload` and `nginx.test_config` all check this, since another user who
-  could write the root would control the config root runs. nginx master runs as root
-  (for 80/443); workers run as the user. It listens on
+  the remaining arguments (TLD, port) are validated. It listens on
   `/var/run/dev.more.yard.helper.sock` and serves only the owning user's uid.
+- **`ports.bind`** exists only for the `privileged` profile (§7). It accepts port 80
+  or 443 and nothing else, binds that port on `127.0.0.1` and `::1`, and returns
+  the listening sockets to `yardd` as `SCM_RIGHTS` on the helper socket. `yardd`
+  passes them to the nginx it starts (nginx's `NGINX="fd;fd;…"` inheritance), so
+  root opens two sockets and does nothing else. macOS lets any user bind a low
+  port on the wildcard address but not on loopback, and listening on the wildcard
+  would put every site on the network, so this is the one job root does for nginx.
+- The only verb that reads from the data root is `ca.trust` (M3), which reads
+  the CA certificate. The data root must be absolute, and every directory and
+  symlink on its path, as written, must be owned by the user or root, with no
+  directory writable by group or others (sticky parents such as `/tmp` aside);
+  the install and `ca.trust` check this, since another user who could write the
+  root could get their own certificate trusted.
 - The helper is installed by `sudo yard helper install` (binary to
   `/Library/PrivilegedHelperTools/`, plist to `/Library/LaunchDaemons/`), which is
   the only path while there is no app (M1–M3). Yard.app registers the same
@@ -238,8 +251,9 @@ profile; Yard does not edit dotfiles.
 
 ### 5.2 nginx
 
-- Brew `nginx`, started and reloaded only through `yard-helper`.
-- Every config change runs `nginx -t` (via helper `nginx.test_config`) before
+- Brew `nginx`, run by `yardd` as the user in the foreground (`daemon off;`),
+  reloaded with `SIGHUP`. It stops when `yardd` stops.
+- Every config change runs `nginx -t` (as the user, from `yardd`) before
   reload; on failure the previous config set is restored and the error returned.
 - `yardd` watches `nginx/overrides/`. An edited override is checked with
   `nginx -t` and reloaded; a rejected one leaves nginx serving the old config
@@ -256,8 +270,8 @@ profile; Yard does not edit dotfiles.
   (port from the registry), answering `*.<tld>` → `127.0.0.1` and `::1`.
 - `yard-helper resolver.install` writes `/etc/resolver/<tld>` pointing at it.
   Only the Yard TLD is affected; system DNS is untouched.
-- The TLD is the active port profile's (`yard` for trial, `test` for default,
-  §7); an optional `tld` in `yard.toml` overrides it. It must match
+- The TLD is `yard` until `yard takeover` and `test` after it; a `tld` in
+  `yard.toml` sets it. It is independent of the port profile (§7). It must match
   `^[a-z][a-z0-9-]{0,62}$`, or the file is `CONFIG_INVALID` at its line.
 - `resolver.install` and `resolver.remove` only touch files carrying Yard's
   marker comment, so Herd's `/etc/resolver/test` is never overwritten or
@@ -278,21 +292,23 @@ profile; Yard does not edit dotfiles.
 
 ### 5.5 Herd coexistence and migration
 
-- **Trial profile** (default until takeover): TLD `yard`, nginx on 8080/8443,
-  so Herd and Yard run side by side. nginx is still started through the helper
-  in both profiles, so there is one code path; only the listen ports differ.
-- `yard ports profile` refuses a switch whose TLD already has an
-  `/etc/resolver/<tld>` file without Yard's marker (`RESOLVER_FOREIGN`, naming
-  Herd for `test`), even when the ports are free because Herd is quit.
+- **Before takeover:** TLD `yard` on the `standard` profile (8080/8443), so Herd
+  keeps `.test`, 80/443 and `/etc/resolver/test`, and both run side by side.
+- Yard never moves to a TLD whose `/etc/resolver/<tld>` lacks Yard's marker:
+  the change is refused with `RESOLVER_FOREIGN` (naming Herd for `test`) and the
+  previous TLD keeps serving, even when Herd is quit. Takeover is the only path
+  that moves `.test` to Yard; how it treats Herd's resolver file is M3's to
+  decide, and it asks first.
 - `yard migrate herd`: reads Herd's Valet config
   (`~/Library/Application Support/Herd/config/valet/`) for parked paths, links,
   isolated versions and secured sites; installs any missing PHP versions via
   brew; writes `sites.toml`. Herd's files are only read, never modified.
   `--dry-run` prints the plan.
-- `yard takeover`: runs `yard ports check` against the default profile, stops
-  Herd (quits Herd.app and its services), switches to the `default` port profile
-  and TLD `test`, re-issues certs, reloads. `yard takeover --undo` switches
-  back to the trial profile and tells the user to restart Herd.
+- `yard takeover`: stops Herd (quits Herd.app and its services), moves the TLD
+  to `test`, re-issues certs and reloads. It then offers the `privileged` profile
+  for URLs without a port, running `yard ports check` against it first.
+  `yard takeover --undo` moves back to TLD `yard` on the `standard` profile and
+  tells the user to restart Herd.
 
 ## 6. Daemon
 
@@ -313,7 +329,7 @@ profile; Yard does not edit dotfiles.
   shown by `status` (`config_error`) and `doctor` until a reconcile succeeds.
   A parked project whose docroot (e.g. `public/`) appears later is picked up by
   the periodic scan.
-- On `yardd` shutdown, all child units are stopped; nginx is stopped via helper.
+- On `yardd` shutdown, all child units are stopped, nginx included.
 
 ### 6.2 API
 
@@ -361,7 +377,7 @@ port the registry has not granted.
 ```toml
 range = "33000-33999"
 auto_fallback = false
-profile = "trial"   # or "default"
+profile = "standard"   # or "privileged"
 
 [ports]
 nginx-http   = { port = 8080,  mode = "pinned" }
@@ -384,8 +400,12 @@ mailpit-http = { port = 33001, mode = "auto" }
 - `external`: not bound by Yard (proxy targets). Tracked so Yard never allocates
   it and can warn when the target is not listening.
 
-**Profiles:** `default` (80/443, TLD `test`) and `trial` (8080/8443, TLD `yard`)
-are named sets of pinned values; `yard ports profile <name>` switches them.
+**Profiles:** `standard` (nginx on 8080/8443, the default) and `privileged`
+(nginx on 80/443, opt-in) are named sets of pinned values; `yard ports profile
+<name>` switches them. Only `privileged` uses root: `yardd` asks the helper's
+`ports.bind` for the two sockets each time it starts nginx (§3.1). Neither
+profile sets the TLD (§5.3). M1's `trial` and `default` are read as `standard`
+and `privileged`.
 
 **Checks**
 
@@ -457,8 +477,8 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   generated from `yard-proto` schema. `@Observable` stores update from event
   subscriptions — no polling.
 - **Onboarding:** check Homebrew → install CLI symlink and `yardd` LaunchAgent →
-  register helper via `SMAppService` → offer `yard migrate herd` → choose trial
-  or takeover.
+  register helper via `SMAppService` → offer `yard migrate herd` → offer
+  takeover, and with it 80/443.
 - The app bundle carries `yard`, `yardd`, `yard-helper` and the shim binary in
   `Contents/Helpers/`.
 
@@ -471,12 +491,12 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   crash, or hang) covering supervision/backoff, port conflicts and holder
   identification, reconcile diffs, job events. Never binds 80/443.
 - **yard-cli:** command output tests (human and `--json`) against a mock daemon.
-- **End-to-end** (local + macOS CI runner): trial profile, install PHP 8.3 and
+- **End-to-end** (local + macOS CI runner): `standard` profile, install PHP 8.3 and
   7.1, park a fixture Laravel app and a 7.1 app, `curl` both over
   `https://<site>.yard:8443` and assert `PHP_VERSION`; add and verify an
-  extension. M1 runs a first cut over HTTP until M3 (`scripts/e2e-m1.sh`: trial
+  extension. M1 runs a first cut over HTTP until M3 (`scripts/e2e-m1.sh`: `standard`
   profile on :8080, a parked PHP 8.4 app and a proxy, Herd's resolver unchanged,
-  and the default profile refused with Herd named).
+  and the 80/443 profile refused with Herd named).
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 
@@ -496,6 +516,9 @@ Each milestone is usable on its own and gets its own implementation plan.
 1. **M1 Core serving (CLI only):** workspace, `yardd`, helper, port registry,
    nginx, dnsmasq, parked/linked/proxied sites, single PHP version, trial profile,
    `doctor`.
+   **M1.1 nginx as the user (before M2):** nginx becomes a `yardd` unit run as the
+   user; the helper's nginx verbs go and `ports.bind` arrives with the
+   `privileged` profile; profiles stop setting the TLD.
 2. **M2 Multi-PHP:** install/uninstall, pools per version, isolate, shims,
    extensions, overrides, `php config`, `migrate herd`.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal, `takeover`.
