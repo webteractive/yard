@@ -7,10 +7,10 @@ use crate::jobs::JobCtx;
 use crate::reconcile::{USER_OWNED_INI, fpm_unit};
 use std::path::Path;
 use toml_edit::value;
-use yard_core::PhpVersion;
 use yard_core::brew::Brew;
 use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::php::formula;
+use yard_core::{Paths, PhpVersion};
 use yard_core::{generated, ini};
 use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpParams};
 use yard_proto::{ErrorCode, JobStarted, PhpInfo, SiteInfo, SiteKind, YardError};
@@ -67,14 +67,28 @@ pub(super) fn install(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardErr
     }))
 }
 
-/// Refused, before any brew runs, while the version is the default or a site's.
+/// Refused, before any brew runs, while the version is the default or a site's. The job
+/// checks again when it starts: it may wait behind another, and isolating a site or
+/// changing the default does not.
 pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardError> {
     let v: PhpVersion = p.php.parse()?;
     let versions = installed(&ctx.brew);
     if !versions.contains(&v) {
         return Err(not_installed(v).with_hint("yard php list shows the installed versions"));
     }
-    let (yard, _) = load_yard(&ctx.paths)?;
+    refuse_in_use(&ctx.paths, v, &versions)?;
+    let (paths, brew) = (ctx.paths.clone(), ctx.brew.clone());
+    let reconciler = ctx.reconciler.clone();
+    Ok(ctx.jobs.start("php-uninstall", move |job: JobCtx| async move {
+        refuse_in_use(&paths, v, &installed(&brew))?;
+        job.run(&brew.brew_bin(), &["uninstall", &formula(v)], &[]).await?;
+        reconciler.reconcile().await.map(|_| ())
+    }))
+}
+
+/// `PHP_IN_USE` while `v` is the default or a site is isolated to it.
+fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Result<(), YardError> {
+    let (yard, _) = load_yard(paths)?;
     if yard.default_php == v {
         let other = versions.iter().rev().find(|o| **o != v);
         let hint = match other {
@@ -85,7 +99,7 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
             YardError::new(ErrorCode::PhpInUse, format!("PHP {v} is the default version")).with_hint(hint)
         );
     }
-    let isolated: Vec<String> = load_sites(&ctx.paths)?
+    let isolated: Vec<String> = load_sites(paths)?
         .sites
         .into_iter()
         .filter(|(_, e)| e.php == Some(v))
@@ -96,12 +110,7 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
         return Err(YardError::new(ErrorCode::PhpInUse, message)
             .with_hint(format!("yard isolate <version> --site {first}")));
     }
-    let brew = ctx.brew.brew_bin();
-    let reconciler = ctx.reconciler.clone();
-    Ok(ctx.jobs.start("php-uninstall", move |job: JobCtx| async move {
-        job.run(&brew, &["uninstall", &formula(v)], &[]).await?;
-        reconciler.reconcile().await.map(|_| ())
-    }))
+    Ok(())
 }
 
 pub(super) async fn set_default(ctx: &Context, p: PhpParams) -> Result<(), YardError> {

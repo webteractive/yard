@@ -148,13 +148,20 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     let log = prefix.join("fake-brew.log");
     let logged = std::fs::read_to_string(&log).unwrap_or_default();
     let _ = std::fs::write(&log, format!("{logged}{line}\n"));
+    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
+    // `<prefix>/fake-brew-delay` holds milliseconds every install waits, so a job stays busy.
+    if arg(0) == "install"
+        && let Some(ms) =
+            std::fs::read_to_string(prefix.join("fake-brew-delay")).ok().and_then(|t| t.trim().parse().ok())
+    {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
     let failing = std::fs::read_to_string(prefix.join("fake-brew-fail")).unwrap_or_default();
     if args.iter().any(|a| !failing.trim().is_empty() && a == failing.trim()) {
         eprintln!("Error: fake failure for {}", failing.trim());
         return ExitCode::from(1);
     }
     let formulas = std::fs::read_to_string(prefix.join("fake-ext-formulas")).unwrap_or_default();
-    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
     let (verb, formula) = match arg(0) {
         "info" => (arg(0), arg(2)),
         verb => (verb, arg(1)),

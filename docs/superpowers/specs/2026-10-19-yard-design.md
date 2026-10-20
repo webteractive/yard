@@ -169,7 +169,7 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   `yard.toml` (decided 2026-10-20), so a version installed with brew directly counts too.
 - `yard php uninstall <ver>` → `brew uninstall`, as a job. It is refused with
   `PHP_IN_USE`, before brew runs, while the version is the default or any site is
-  isolated to it.
+  isolated to it; the job checks again when it starts, since it may wait behind another.
 - `yard php default <ver>` sets the global default (`default_php` in `yard.toml`);
   the version must be installed.
 - `yard php list` shows each installed version (and the default if it is not
@@ -205,6 +205,8 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 3. `yard ext add <path/to/ext.so> --php <ver>` copies the binary into
    `php/<ver>/ext/` and loads it by absolute path.
 
+`<name>-<version>` (`xdebug-2.9.8`) pins a pecl release, which legacy PHP often needs:
+it skips brew, runs `pecl install <name>-<version>`, and records the module as `<name>`.
 `brew info --formula` decides step 1; pecl runs with the keg's `bin` first on PATH
 (never Herd's `php`). A `.so` path's module name is its file name without `.so` or a
 leading `php_`; the CLI sends it absolute. A name already in `yard.toml` for that
@@ -219,8 +221,8 @@ byte for byte. Something brew or pecl installed stays installed but is recorded
 `enabled = false`, since with no entry brew's own ini would load it again; the hint is
 `yard ext remove <name> --php <ver>`.
 
-Extensions are recorded per version in `yard.toml`, which the generated inis name as
-the file to edit:
+Extensions are recorded per version in `yard.toml` (version keys written as Yard does,
+`"8.4"`; `"08.4"` is `CONFIG_INVALID`), which the generated inis name as the file to edit:
 
 ```toml
 [php."8.4".extensions]

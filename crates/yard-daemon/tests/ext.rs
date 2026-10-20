@@ -278,3 +278,19 @@ async fn an_ini_brew_left_behind_is_neither_mirrored_nor_listed() {
     assert_eq!(c.call("ext.list", json!({})).await.unwrap(), json!([]));
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_pinned_pecl_version_installs_that_release_under_the_module_name() {
+    let d = prepared("").await.start().await;
+    // A brew formula exists, but a pinned release is pecl's to give.
+    std::fs::write(d.fx.brew.path().join("fake-ext-formulas"), "xdebug\n").unwrap();
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "xdebug-2.9.8"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("fake pecl install xdebug-2.9.8")), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("fake brew")), "{lines:?}");
+    let toml = toml_text(&d);
+    assert!(toml.contains("xdebug = { source = \"pecl\" }"), "{toml}");
+    assert!(conf_d(&d).join("50-xdebug.ini").is_file());
+    d.shutdown().await.unwrap();
+}

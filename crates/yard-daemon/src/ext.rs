@@ -41,6 +41,9 @@ pub struct Add {
     pub opt: PathBuf,
     pub module: String,
     pub so: Option<PathBuf>,
+    /// `<module>-<version>`: a pinned pecl release, installed with pecl even when brew
+    /// has a formula.
+    pub release: Option<String>,
 }
 
 impl Add {
@@ -63,13 +66,19 @@ impl Add {
             None => {
                 let brew = self.brew.brew_bin();
                 let formula = format!("shivammathur/extensions/{module}@{v}");
-                let (found, _) = job.capture(&brew, &["info", "--formula", &formula], &[]).await?;
+                let found = match &self.release {
+                    Some(_) => false,
+                    None => job.capture(&brew, &["info", "--formula", &formula], &[]).await?.0,
+                };
                 if found {
                     job.run(&brew, &["install", &formula], &[]).await?;
                     entry.insert("source", "brew".into());
                 } else {
-                    job.line(format!("brew has no {formula}; trying pecl"));
-                    job.run(&Brew::php_bin(&self.opt, "pecl"), &["install", module], &keg_env).await?;
+                    let package = self.release.as_deref().unwrap_or(module);
+                    if self.release.is_none() {
+                        job.line(format!("brew has no {formula}; trying pecl"));
+                    }
+                    job.run(&Brew::php_bin(&self.opt, "pecl"), &["install", package], &keg_env).await?;
                     entry.insert("source", "pecl".into());
                 }
             }

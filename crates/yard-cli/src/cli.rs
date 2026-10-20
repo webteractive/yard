@@ -167,7 +167,8 @@ pub enum ExtAction {
     /// is one, else pecl; or a path to a built .so, which Yard copies. Checked with
     /// php -m, and rolled back if it does not load.
     Add {
-        /// An extension name (redis, xdebug) or the path of a .so.
+        /// An extension name (redis, xdebug), a pinned pecl release (xdebug-2.9.8, for
+        /// legacy PHP), or the path of a .so.
         name: String,
         /// The PHP version; defaults to the default version.
         #[arg(long)]

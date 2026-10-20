@@ -5,7 +5,7 @@ mod support;
 use serde_json::{Value, json};
 use std::time::Duration;
 use support::daemon::{Daemon, prepared, run_job};
-use yard_proto::ErrorCode;
+use yard_proto::{ErrorCode, YardError};
 
 fn versions(list: &Value) -> Vec<(String, bool)> {
     list.as_array()
@@ -231,5 +231,32 @@ async fn config_refuses_bad_keys_values_and_versions() {
     assert_eq!(err.code, ErrorCode::PhpNotInstalled);
     let err = c.call("php.config.unset", json!({"key": "never_set"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidArgument);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_queued_uninstall_rechecks_when_it_runs() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    d.project("blog");
+    let d = d.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-brew-delay"), "1500").unwrap();
+    let mut c = d.client().await;
+    c.call("subscribe", json!({"topics": ["jobs"]})).await.unwrap();
+    // A long install holds the worker, so the uninstall waits in the queue.
+    c.call("php.install", json!({"php": "7.4"})).await.unwrap();
+    let started = c.call("php.uninstall", json!({"php": "7.1"})).await.unwrap();
+    // Meanwhile a site moves onto 7.1.
+    c.call("sites.isolate", json!({"site": "blog", "php": "7.1"})).await.unwrap();
+    let id = started["job_id"].as_str().unwrap().to_string();
+    let error = loop {
+        let event = c.event(Duration::from_secs(20)).await.expect("the uninstall finished");
+        if event["type"] == "job_finished" && event["job_id"] == id.as_str() {
+            break serde_json::from_value::<Option<YardError>>(event["error"].clone()).unwrap();
+        }
+    };
+    assert_eq!(error.map(|e| e.code), Some(ErrorCode::PhpInUse));
+    assert!(d.fx.brew.path().join("opt/php@7.1").exists(), "7.1 stays: blog runs on it");
+    assert!(!brew_log(&d).contains("uninstall"));
     d.shutdown().await.unwrap();
 }

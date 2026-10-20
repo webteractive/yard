@@ -34,9 +34,21 @@ pub(super) fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardErro
         }
         None => (p.name.clone(), None),
     };
+    // `xdebug-2.9.8` pins a pecl release, which legacy PHP often needs: the module is
+    // `xdebug`, and pecl gets the whole name.
+    let (module, release) = match module.split_once('-') {
+        Some((m, version))
+            if so.is_none()
+                && version.starts_with(|c: char| c.is_ascii_digit())
+                && version.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') =>
+        {
+            (m.to_string(), Some(p.name.clone()))
+        }
+        _ => (module, None),
+    };
     if !valid_ext_name(&module) {
         return Err(bad(format!("{module:?} is not an extension name: use letters, digits and _"))
-            .with_hint("yard ext add <name> or yard ext add /path/to/<name>.so"));
+            .with_hint("yard ext add <name>, <name>-<pecl version> or /path/to/<name>.so"));
     }
     let (yard, _) = load_yard(&ctx.paths)?;
     if yard.extensions.get(&v).is_some_and(|exts| exts.contains_key(&module)) {
@@ -54,6 +66,7 @@ pub(super) fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardErro
         opt,
         module,
         so,
+        release,
     };
     Ok(ctx.jobs.start("ext-add", move |job| add.run(job)))
 }
@@ -106,8 +119,15 @@ pub(super) async fn toggle(ctx: &Context, p: ExtParams, on: bool) -> Result<(), 
             file.remove(&keys);
         }
         Some(_) => {
-            let item = &file.doc()["php"][version.as_str()]["extensions"][p.name.as_str()];
-            match item.as_inline_table().cloned() {
+            let inline = file
+                .doc()
+                .get("php")
+                .and_then(|t| t.get(version.as_str()))
+                .and_then(|t| t.get("extensions"))
+                .and_then(|t| t.get(p.name.as_str()))
+                .and_then(|item| item.as_inline_table())
+                .cloned();
+            match inline {
                 Some(mut table) => {
                     table.insert("enabled", on.into());
                     table.fmt();

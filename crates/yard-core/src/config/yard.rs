@@ -126,6 +126,10 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             .get_ref()
             .parse()
             .map_err(|e: YardError| config_error(file, text, Some(key.span()), &e.message))?;
+        if *key.get_ref() != v.to_string() {
+            let message = format!("write PHP {v} as \"{v}\", not {:?}", key.get_ref());
+            return Err(config_error(file, text, Some(key.span()), &message));
+        }
         let mut exts = BTreeMap::new();
         for (name, entry) in section.extensions {
             if !valid_ext_name(name.get_ref()) {
@@ -254,6 +258,8 @@ custom = { source = "path", so = "/opt/ext/custom.so" }
             ("[php.\"8.4\".extensions]\ncustom = { source = \"path\", so = \"ext/c.so\" }\n", 2),
             ("[php.\"8.4\".extensions]\nredis = { source = \"apt\" }\n", 2),
             ("[php.\"5.6\".extensions]\nredis = { source = \"brew\" }\n", 1),
+            // Two spellings of one version would be two tables that edits cannot find.
+            ("[php.\"08.4\".extensions]\nredis = { source = \"brew\" }\n", 1),
             ("[php.\"8.4\".extensions]\n\"../x\" = { source = \"brew\" }\n", 2),
         ] {
             let e = parse(Some(bad)).unwrap_err();
