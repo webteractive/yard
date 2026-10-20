@@ -138,6 +138,7 @@ php/<ver>/php.ini             # generated
 php/<ver>/fpm.conf            # generated
 php/<ver>/conf.d/             # generated: brew's conf.d mirrored (10-brew-<file>.ini) and extension inis (50-<ext>.ini)
 php/<ver>/conf.d/99-overrides.ini   # USER-OWNED, never written by Yard except via `php config set`
+php/<ver>/pecl.conf           # generated before each pecl run: a PEAR user config (§4.3)
 nginx/nginx.conf              # generated
 nginx/sites/<site>.conf       # generated
 nginx/overrides/<site>.conf   # USER-OWNED, included inside the site's server block
@@ -210,8 +211,16 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 
 `<name>-<version>` (`xdebug-2.9.8`) pins a pecl release, which legacy PHP often needs:
 it skips brew, runs `pecl install <name>-<version>`, and records the module as `<name>`.
-`brew info --formula` decides step 1; pecl runs with the keg's `bin` first on PATH
-(never Herd's `php`). A `.so` path's module name is its file name without `.so` or a
+`brew info --formula` decides step 1; pecl runs with the keg's `bin` then brew's `bin`
+first on PATH (never Herd's `php`; phpize needs brew's `autoconf`), with
+`CPPFLAGS=-I<prefix>/include` and `LDFLAGS=-L<prefix>/lib` (PHP's headers include brew's
+`pcre2.h`), and with `-c <root>/php/<ver>/pecl.conf`, a PEAR user config Yard writes
+before each run that sets only `php_ini = <root>/php/<ver>/pecl-php.ini`, a file that
+never exists. brew's `pear.conf` names brew's `php.ini`, and pecl adds `extension=` to
+it after an install; `-d`/`-D php_ini=` cannot stop that, because they store the value
+under pecl's channel while the install reads it for `pear.php.net`. pecl installs into its own
+`ext_dir` (`<prefix>/lib/php/pecl/<api>`), not PHP's `extension_dir`, so Yard asks
+`pecl config-get ext_dir` and records the absolute `so` on the entry. A `.so` path's module name is its file name without `.so` or a
 leading `php_`; the CLI sends it absolute. A name already in `yard.toml` for that
 version is refused with `INVALID_ARGUMENT` (hint `yard ext enable <name>`).
 
@@ -235,8 +244,8 @@ opcache = { source = "bundled", enabled = false }
 ```
 
 A `brew` extension loads the path its formula's ini in brew's `conf.d` names
-(shivammathur's formulas keep the `.so` in their own keg); `pecl` loads `<name>.so` from
-`extension_dir`. A brew ini whose absolute `.so` is gone (`brew uninstall` leaves the
+(shivammathur's formulas keep the `.so` in their own keg); `pecl` loads its recorded `so`
+(an entry without one loads `<name>.so` from `extension_dir`). A brew ini whose absolute `.so` is gone (`brew uninstall` leaves the
 ini behind) is neither mirrored nor listed. `enabled` defaults to true. `path` needs an absolute `so`. `bundled` is an extension
 PHP itself loads (opcache), listed only to disable it. `xdebug` and `opcache` load as
 `zend_extension`. A disabled or bundled entry writes no `50-` ini.
@@ -438,15 +447,21 @@ profile; Yard does not edit dotfiles.
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs`,
-  `node.list|install|use`, `units.restart`, `takeover`, `env.print`.
+  `node.list|install|use`, `units.restart`, `jobs.cancel`, `takeover`, `env.print`.
 - Long operations (brew installs, takeover) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20
   lines in `data.tail` when a command exits non-zero), on the `jobs` topic. Jobs run
   one at a time, in start order; a job queued behind another first reports
   `waiting for <job_id>`. Brew jobs run with `HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`,
-  and pecl with `-d php_ini=` so it never edits brew's `php.ini`. A client subscribes
-  to `jobs` before it calls. No job times out or can be cancelled yet (open question).
+  and pecl as §4.3 says. A client subscribes to `jobs` before it calls.
+- `jobs.cancel { job_id }` (decided 2026-10-20: cancel, no timeout, since a brew build
+  can rightly take half an hour). A queued job finishes `JOB_CANCELLED` without
+  running. A running job's command, started in its own process group, gets SIGTERM
+  and, after 10 s, SIGKILL; the job then cleans up as on a failure (`ext add` rolls
+  back) and finishes `JOB_CANCELLED`. An unknown or finished id is `JOB_NOT_FOUND`.
+  In the CLI, Ctrl-C during a job cancels it and waits; a second Ctrl-C stops waiting
+  and exits 130.
 - Subscriptions (`subscribe` with topic list: `units`, `sites`, `logs`, `ports`,
   `jobs`) push events tagged `unit_state_changed`, `site_added`, `site_removed`,
   `job_progress`, `job_finished`, `log_line`, `port_conflict`.
@@ -459,7 +474,8 @@ profile; Yard does not edit dotfiles.
 ### 6.3 Errors
 
 Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
-`PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
+`PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_NOT_FOUND`,
+`BREW_MISSING`, `NGINX_CONFIG_INVALID`,
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 

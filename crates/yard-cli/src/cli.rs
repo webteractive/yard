@@ -136,9 +136,10 @@ pub enum PortsAction {
 pub enum PhpAction {
     /// The installed versions, the default, the sites on each and its pool.
     List,
-    /// Install a PHP version (7.0–8.5) with brew, showing brew's output.
+    /// Install a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels.
     Install { version: String },
-    /// Remove a PHP version with brew; refused while it is the default.
+    /// Remove a PHP version with brew; refused while it is the default, a site is
+    /// isolated to it, or it has extensions you added.
     Uninstall { version: String },
     /// Make an installed version the default for sites that are not isolated.
     Default { version: String },
@@ -165,7 +166,7 @@ pub enum ExtAction {
     },
     /// Install an extension and load it: brew's shivammathur/extensions formula if there
     /// is one, else pecl; or a path to a built .so, which Yard copies. Checked with
-    /// php -m, and rolled back if it does not load.
+    /// php -m, and rolled back if it does not load or you press Ctrl-C.
     Add {
         /// An extension name (redis, xdebug), a pinned pecl release (xdebug-2.9.8, for
         /// legacy PHP), or the path of a .so.

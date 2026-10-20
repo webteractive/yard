@@ -10,9 +10,10 @@ use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use yard_core::shim::child_path;
 use yard_proto::{ErrorCode, Event, JobStarted, YardError};
 
@@ -20,13 +21,21 @@ use yard_proto::{ErrorCode, Event, JobStarted, YardError};
 const TAIL: usize = 20;
 
 type Work = Pin<Box<dyn Future<Output = ()> + Send>>;
+/// Jobs queued or running, oldest first, each with the switch that cancels it.
+type Pending = Arc<Mutex<Vec<(String, watch::Sender<bool>)>>>;
 
 pub struct Jobs {
     bus: EventBus,
     next: AtomicU64,
     queue: mpsc::UnboundedSender<Work>,
-    /// Jobs queued or running, oldest first.
-    pending: Arc<Mutex<Vec<String>>>,
+    pending: Pending,
+}
+
+/// How long a cancelled command gets to exit after SIGTERM before its group is killed.
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
+
+fn cancelled(job_id: &str) -> YardError {
+    YardError::new(ErrorCode::JobCancelled, format!("{job_id} was cancelled"))
 }
 
 impl Jobs {
@@ -48,11 +57,12 @@ impl Jobs {
         Fut: Future<Output = Result<(), YardError>> + Send + 'static,
     {
         let job_id = format!("{kind}-{}", self.next.fetch_add(1, Ordering::Relaxed));
-        let ctx = JobCtx { job_id: job_id.clone(), bus: self.bus.clone() };
+        let (cancel, cancelled_rx) = watch::channel(false);
+        let ctx = JobCtx { job_id: job_id.clone(), bus: self.bus.clone(), cancel: cancelled_rx };
         let ahead = {
             let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
-            let ahead = pending.last().cloned();
-            pending.push(job_id.clone());
+            let ahead = pending.last().map(|(id, _)| id.clone());
+            pending.push((job_id.clone(), cancel));
             ahead
         };
         if let Some(ahead) = ahead {
@@ -61,17 +71,32 @@ impl Jobs {
         let (bus, pending) = (self.bus.clone(), self.pending.clone());
         let id = job_id.clone();
         let job: Work = Box::pin(async move {
-            let error = work(ctx).await.err();
-            pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|j| *j != id);
+            // Cancelled while it waited: it never starts.
+            let error = if *ctx.cancel.borrow() { Some(cancelled(&id)) } else { work(ctx).await.err() };
+            pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != id);
             bus.emit(Event::JobFinished { job_id: id, error });
         });
         if self.queue.send(job).is_err() {
             // The worker is gone only when the runtime is shutting down.
-            self.pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|j| *j != job_id);
+            self.pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != job_id);
             let error = Some(YardError::internal("yardd is shutting down"));
             self.bus.emit(Event::JobFinished { job_id: job_id.clone(), error });
         }
         JobStarted { job_id }
+    }
+
+    /// Cancels a queued or running job. A queued one finishes `JOB_CANCELLED` without
+    /// running; a running one has its command's process group stopped, and finishes
+    /// `JOB_CANCELLED` once its work has cleaned up after itself.
+    pub fn cancel(&self, job_id: &str) -> Result<(), YardError> {
+        let pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        match pending.iter().find(|(id, _)| id == job_id) {
+            Some((_, cancel)) => {
+                cancel.send_replace(true);
+                Ok(())
+            }
+            None => Err(YardError::new(ErrorCode::JobNotFound, format!("no queued or running job {job_id}"))),
+        }
     }
 }
 
@@ -80,6 +105,7 @@ impl Jobs {
 pub struct JobCtx {
     job_id: String,
     bus: EventBus,
+    cancel: watch::Receiver<bool>,
 }
 
 impl JobCtx {
@@ -130,8 +156,13 @@ impl JobCtx {
         if !program.is_absolute() {
             return Err(YardError::internal(format!("{} is not an absolute path", program.display())));
         }
+        let mut cancel = self.cancel.clone();
+        if *cancel.borrow_and_update() {
+            return Err(cancelled(&self.job_id));
+        }
         let mut cmd = Command::new(program);
-        cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // Its own process group, so a cancel stops what it started too (brew's curl, make).
+        cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         cmd.env("PATH", child_path(None, &inherited));
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
@@ -153,11 +184,26 @@ impl JobCtx {
         ];
         drop(tx);
         let mut lines = vec![];
-        while let Some(line) = rx.recv().await {
-            if stream {
-                self.line(line.clone());
+        let was_cancelled = loop {
+            tokio::select! {
+                line = rx.recv() => match line {
+                    Some(line) => {
+                        if stream {
+                            self.line(line.clone());
+                        }
+                        lines.push(line);
+                    }
+                    None => break false,
+                },
+                () = requested(&mut cancel) => break true,
             }
-            lines.push(line);
+        };
+        if was_cancelled {
+            stop_group(&mut child).await;
+            for reader in readers.into_iter().flatten() {
+                reader.abort();
+            }
+            return Err(cancelled(&self.job_id));
         }
         for reader in readers.into_iter().flatten() {
             let _ = reader.await;
@@ -169,6 +215,28 @@ impl JobCtx {
             Err(status.code().map_or_else(|| "a signal".to_string(), |c| c.to_string()))
         };
         Ok((shown, ended, lines))
+    }
+}
+
+/// Resolves once a cancel is requested; never, if the job can no longer be cancelled.
+async fn requested(cancel: &mut watch::Receiver<bool>) {
+    while !*cancel.borrow_and_update() {
+        if cancel.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// SIGTERM to the child's process group, then SIGKILL if it outlives the grace period.
+async fn stop_group(child: &mut tokio::process::Child) {
+    let Some(pid) = child.id() else { return };
+    let group = pid as libc::pid_t;
+    // SAFETY: signalling a process group we created has no memory-safety preconditions.
+    unsafe { libc::killpg(group, libc::SIGTERM) };
+    if tokio::time::timeout(CANCEL_GRACE, child.wait()).await.is_err() {
+        // SAFETY: as above.
+        unsafe { libc::killpg(group, libc::SIGKILL) };
+        let _ = child.wait().await;
     }
 }
 

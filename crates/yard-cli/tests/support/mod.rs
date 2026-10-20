@@ -64,6 +64,13 @@ impl MockDaemon {
     pub fn yard(&self) -> Command {
         yard_at(self.root.path())
     }
+
+    /// As `yard`, as a plain process, for a test that signals it while it runs.
+    pub fn yard_process(&self) -> std::process::Command {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_yard"));
+        cmd.env_remove("YARD_ROOT").arg("--root").arg(self.root.path());
+        cmd
+    }
 }
 
 fn serve(stream: UnixStream, answers: &Answers, events: &Events, seen: &Mutex<Vec<Request>>) {

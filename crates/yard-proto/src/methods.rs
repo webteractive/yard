@@ -34,6 +34,7 @@ pub const EXT_ENABLE: &str = "ext.enable";
 pub const EXT_DISABLE: &str = "ext.disable";
 pub const EXT_REMOVE: &str = "ext.remove";
 pub const XDEBUG_SET: &str = "xdebug.set";
+pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,4 +175,10 @@ pub struct XdebugParams {
     pub on: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub php: Option<String>,
+}
+
+/// `jobs.cancel`: the id a job method answered with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobParams {
+    pub job_id: String,
 }

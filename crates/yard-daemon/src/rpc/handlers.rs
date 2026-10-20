@@ -18,8 +18,8 @@ use yard_core::config::{TomlFile, load_yard};
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
 use yard_proto::methods::{
-    self, DocrootParams, LinkParams, NameParams, PortSetParams, ProfileParams, ProxyParams, RangeParams,
-    UnitParams,
+    self, DocrootParams, JobParams, LinkParams, NameParams, PortSetParams, ProfileParams, ProxyParams,
+    RangeParams, UnitParams,
 };
 use yard_proto::{
     DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
@@ -83,6 +83,10 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::PHP_CONFIG_GET => json(php::config_get(ctx, parse(params)?)),
         methods::PHP_CONFIG_SET => json(php::config_edit(ctx, parse(params)?, true).await.map(|_| ())),
         methods::PHP_CONFIG_UNSET => json(php::config_edit(ctx, parse(params)?, false).await),
+        methods::JOBS_CANCEL => {
+            let p: JobParams = parse(params)?;
+            json(ctx.jobs.cancel(&p.job_id))
+        }
         methods::UNITS_RESTART => {
             let p: UnitParams = parse(params)?;
             json(restart(ctx, &p.unit).await)

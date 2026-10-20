@@ -234,7 +234,7 @@ fn php(args: &[String]) -> ExitCode {
                     continue;
                 }
                 let value = value.trim().trim_matches('"');
-                if value.contains("broken") {
+                if value.contains("broken") || (value.starts_with('/') && !Path::new(value).exists()) {
                     eprintln!("PHP Warning:  PHP Startup: Unable to load dynamic library '{value}'");
                     continue;
                 }
@@ -248,17 +248,41 @@ fn php(args: &[String]) -> ExitCode {
 }
 
 /// `pecl install <name>` at `<prefix>/opt/php@<v>/bin/pecl`: succeeds unless `<name>` is
-/// in `<prefix>/fake-brew-fail`.
+/// in `<prefix>/fake-brew-fail`, and puts `<name>.so` (a `-<version>` dropped) in its
+/// `ext_dir`, `<prefix>/lib/php/pecl/20240924`; `uninstall` deletes it, and
+/// `config-get ext_dir` prints that directory.
 fn pecl(argv0: &Path, args: &[String]) -> ExitCode {
     let line = args.join(" ");
     println!("==> fake pecl {line}");
+    println!("PATH={}", std::env::var("PATH").unwrap_or_default());
+    for flags in ["CPPFLAGS", "LDFLAGS"] {
+        println!("{flags}={}", std::env::var(flags).unwrap_or_default());
+    }
     let prefix = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
     let failing = std::fs::read_to_string(prefix.join("fake-brew-fail")).unwrap_or_default();
     if args.iter().any(|a| !failing.trim().is_empty() && a == failing.trim()) {
         eprintln!("No releases available for package \"pecl.php.net/{}\"", failing.trim());
         return ExitCode::from(1);
     }
-    ExitCode::SUCCESS
+    let ext_dir = prefix.join("lib/php/pecl/20240924");
+    let verb = args.iter().position(|a| matches!(a.as_str(), "install" | "uninstall" | "config-get"));
+    let (verb, operand) = match verb {
+        Some(i) => (args[i].as_str(), args.get(i + 1).map(String::as_str).unwrap_or_default()),
+        None => return ExitCode::SUCCESS,
+    };
+    let so = ext_dir.join(format!("{}.so", operand.split('-').next().unwrap_or(operand)));
+    let done = match verb {
+        "config-get" => {
+            println!("{}", ext_dir.display());
+            Ok(())
+        }
+        "install" => std::fs::create_dir_all(&ext_dir).and_then(|()| std::fs::write(&so, "")),
+        _ => std::fs::remove_file(&so),
+    };
+    match done {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(format!("fake pecl {line}: {e}")),
+    }
 }
 
 fn listen_tcp(port: Option<u16>) -> ExitCode {

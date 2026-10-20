@@ -11,8 +11,9 @@ use toml_edit::{InlineTable, value};
 use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
 use yard_core::config::yard::{ExtEntry, ExtSource};
+use yard_core::render::php::pecl_user_config;
 use yard_core::shim::child_path;
-use yard_core::{Paths, PhpVersion};
+use yard_core::{Paths, PhpVersion, generated};
 use yard_proto::{ErrorCode, YardError};
 
 /// The modules `php -m` lists under `[PHP Modules]` and `[Zend Modules]`, lowercased.
@@ -50,8 +51,15 @@ impl Add {
     /// The job body: install, record, reconcile, verify.
     pub async fn run(self, job: JobCtx) -> Result<(), YardError> {
         let (v, module) = (self.v, self.module.as_str());
-        let keg_path = keg_path(&self.opt);
+        let keg_path = keg_path(&self.brew, &self.opt);
+        // pecl builds against PHP's headers, which include brew's (pcre2.h).
+        let prefix = self.brew.prefix.display();
         let keg_env = [("PATH".to_string(), keg_path.clone())];
+        let build_env = [
+            ("PATH".to_string(), keg_path.clone()),
+            ("CPPFLAGS".to_string(), format!("-I{prefix}/include")),
+            ("LDFLAGS".to_string(), format!("-L{prefix}/lib")),
+        ];
 
         let mut entry = InlineTable::new();
         let mut copied = None;
@@ -78,15 +86,27 @@ impl Add {
                     if self.release.is_none() {
                         job.line(format!("brew has no {formula}; trying pecl"));
                     }
-                    // `php_ini=` keeps pecl from adding `extension=` to brew's php.ini:
-                    // Yard writes the ini that loads it.
-                    job.run(
-                        &Brew::php_bin(&self.opt, "pecl"),
-                        &["-d", "php_ini=", "install", package],
-                        &keg_env,
-                    )
-                    .await?;
+                    let pecl = Brew::php_bin(&self.opt, "pecl");
+                    let conf = pecl_conf(&self.paths, v)?;
+                    job.run(&pecl, &["-c", &conf, "install", package], &build_env).await?;
                     entry.insert("source", "pecl".into());
+                    // pecl installs into its own ext_dir, not PHP's extension_dir, so the
+                    // ini Yard writes loads it by absolute path.
+                    let (_, out) =
+                        job.capture(&pecl, &["-c", &conf, "config-get", "ext_dir"], &keg_env).await?;
+                    let so = out
+                        .iter()
+                        .rev()
+                        .find(|l| l.starts_with('/'))
+                        .map(|dir| Path::new(dir.trim()).join(format!("{module}.so")));
+                    match so {
+                        Some(so) if so.is_file() => {
+                            entry.insert("so", so.display().to_string().into());
+                        }
+                        _ => {
+                            job.line(format!("pecl did not say where it put {module}.so; loading it by name"))
+                        }
+                    }
                 }
             }
         }
@@ -107,11 +127,18 @@ impl Add {
             ("PHP_INI_SCAN_DIR".to_string(), self.paths.php_conf_d(v).display().to_string()),
             ("PATH".to_string(), keg_path),
         ];
-        let output = match &reconciled {
-            Ok(_) => job.capture(&Brew::php_bin(&self.opt, "php"), &["-m"], &env).await?.1.join("\n"),
-            Err(e) => e.message.clone(),
+        // A cancel during the check rolls back as a failed check does, then reports itself.
+        let (output, interrupted) = match &reconciled {
+            Ok(_) => match job.capture(&Brew::php_bin(&self.opt, "php"), &["-m"], &env).await {
+                Ok((_, lines)) => (lines.join("\n"), None),
+                Err(e) => (e.message.clone(), Some(e)),
+            },
+            Err(e) => (e.message.clone(), None),
         };
-        if reconciled.is_ok() && loaded_modules(&output).contains(&module.to_lowercase()) {
+        if interrupted.is_none()
+            && reconciled.is_ok()
+            && loaded_modules(&output).contains(&module.to_lowercase())
+        {
             job.line(format!("{module} is loaded in PHP {v}"));
             return Ok(());
         }
@@ -138,6 +165,9 @@ impl Add {
         }
         if let Err(e) = self.reconciler.reconcile().await {
             job.line(format!("reconcile after the rollback failed: {}", e.message));
+        }
+        if let Some(e) = interrupted {
+            return Err(e);
         }
         let error = YardError::new(ErrorCode::ExtVerifyFailed, format!("{module} did not load in PHP {v}"))
             .with_data(serde_json::json!({ "output": output }));
@@ -176,9 +206,13 @@ impl Remove {
                 job.run(&self.brew.brew_bin(), &["uninstall", &formula], &Brew::job_env()).await?;
             }
             ExtSource::Pecl => {
-                let env = [("PATH".to_string(), keg_path(&self.opt))];
-                job.run(&Brew::php_bin(&self.opt, "pecl"), &["-d", "php_ini=", "uninstall", module], &env)
-                    .await?;
+                let env = [("PATH".to_string(), keg_path(&self.brew, &self.opt))];
+                job.run(
+                    &Brew::php_bin(&self.opt, "pecl"),
+                    &["-c", &pecl_conf(&self.paths, v)?, "uninstall", module],
+                    &env,
+                )
+                .await?;
             }
             ExtSource::Path | ExtSource::Bundled => {
                 if let Some(so) = &self.entry.so {
@@ -200,9 +234,26 @@ impl Remove {
 
 /// PATH for a version's tools: pecl runs phpize and php-config through it, so the
 /// keg's `bin` comes first and Herd's directories are gone.
-fn keg_path(opt: &Path) -> String {
+fn keg_path(brew: &Brew, opt: &Path) -> String {
+    // Then brew's own bin: phpize runs autoconf, and launchd gives yardd no /opt/homebrew/bin.
+    let brew_bin = brew.prefix.join("bin");
     let inherited = std::env::var_os("PATH").unwrap_or_default();
-    child_path(Some(&opt.join("bin")), &inherited).to_string_lossy().into_owned()
+    let rest = std::env::split_paths(&inherited).filter(|p| *p != brew_bin);
+    let with_brew = std::env::join_paths(std::iter::once(brew_bin.clone()).chain(rest)).unwrap_or_default();
+    child_path(Some(&opt.join("bin")), &with_brew).to_string_lossy().into_owned()
+}
+
+/// Writes `php/<v>/pecl.conf`, the PEAR user config pecl runs with (`-c`), and returns
+/// its path. It points `php_ini` at `php/<v>/pecl-php.ini`, which is never created, so pecl
+/// only notes that it cannot enable the extension instead of editing brew's php.ini;
+/// Yard writes the ini that loads it (`render::php::pecl_user_config` says why `-d`/`-D`
+/// cannot do this).
+fn pecl_conf(paths: &Paths, v: PhpVersion) -> Result<String, YardError> {
+    let conf = paths.php_dir(v).join("pecl.conf");
+    let text = pecl_user_config(&paths.php_dir(v).join("pecl-php.ini"));
+    generated::write_atomic(&conf, &text)
+        .map_err(|e| YardError::internal(format!("cannot write {}: {e}", conf.display())))?;
+    Ok(conf.display().to_string())
 }
 
 /// Deletes the `yard.toml` an add created, once the rollback has emptied it.

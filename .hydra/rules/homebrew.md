@@ -39,6 +39,17 @@ triggers:
   PATH from `yard_core::shim::child_path` (keg `bin` first, `Herd` directories dropped):
   `JobCtx::run` does this, pecl gets the keg's PATH, and the shims add Yard's `bin/`
   second.
+- **pecl, as `yard ext add` runs it** (`yardd/src/ext.rs`): PATH is the keg's `bin`, then
+  brew's `bin` (launchd gives yardd no `/opt/homebrew/bin`, and phpize needs `autoconf`);
+  `CPPFLAGS=-I<prefix>/include` and `LDFLAGS=-L<prefix>/lib` (PHP's headers include
+  `pcre2.h`); and `-c <root>/php/<v>/pecl.conf`, a PEAR user config Yard writes that
+  sets only `php_ini` to `<root>/php/<v>/pecl-php.ini`, a file that never exists.
+  brew's `pear.conf` names brew's `php.ini` and pecl writes `extension=` into it after an
+  install. `-d`/`-D php_ini=` do **not** stop that (they store the value under the
+  `pecl.php.net` channel; `enableExtension` reads it for `pear.php.net`), and
+  `pecl config-get` shows the overridden value anyway, so it cannot verify a fix: check
+  `PEAR_Config::get('php_ini', null, 'pear.php.net')` or brew's file after a real install. pecl installs into `<prefix>/lib/php/pecl/<api>`, outside
+  PHP's `extension_dir`, so Yard records the absolute `so` from `pecl config-get ext_dir`.
 - `decorate_workers_output` exists only in PHP ≥ 7.3. Version-gate any FPM or ini
   directive that is newer than 7.0.
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)

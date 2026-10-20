@@ -29,6 +29,10 @@ pub enum ErrorCode {
     DaemonNotRunning,
     /// A command a job ran (brew, pecl) exited non-zero; `data.tail` has its last lines.
     JobFailed,
+    /// A job was cancelled (`jobs.cancel`, or Ctrl-C in the CLI) before it finished.
+    JobCancelled,
+    /// No queued or running job has that id: it never existed, or it has finished.
+    JobNotFound,
     /// An extension installed but `php -m` does not list it; `data.output` has its output.
     ExtVerifyFailed,
     /// `yard.toml` manages no extension of that name for the version, and brew loads none.

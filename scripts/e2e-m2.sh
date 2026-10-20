@@ -20,6 +20,8 @@ herd_resolver=/etc/resolver/test
 
 fail() { echo "FAIL $*" >&2; exit 1; }
 pass() { echo "ok   $*"; }
+# Runs a command quietly, but shows its output when it fails.
+quiet() { local out; out="$("$@" 2>&1)" || { printf '%s\n' "$out" >&2; fail "$*"; }; }
 sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 # The body of $1 once it matches the glob $2 (nginx reloads a moment after a command).
@@ -41,6 +43,12 @@ unit_pid() {
 
 # `php -m` through the shim, in project $1.
 modules() { (cd "$1" && "$shim" -m); }
+# has_module <dir> <module> <what>: fails showing all of php -m's output when it is missing.
+has_module() {
+  local m
+  m="$(modules "$1" 2>&1)"
+  grep -qx "$2" <<<"$m" || { printf '%s\n' "$m" >&2; fail "$2 is not loaded in $3"; }
+}
 
 # 1. Herd's resolver, before.
 before="$(sum "$herd_resolver")"
@@ -88,23 +96,23 @@ pass "http://hello-php71.yard:8080/ runs PHP $v71"
 
 # 5. Extensions load, seen through the shim in each project.
 [[ -x $shim ]] || fail "$shim is not linked; is yardd the release build next to yard-shim?"
-"$yard" ext add redis --php 7.1 >/dev/null
+# Registered before the add, so cleanup removes even an add that failed halfway.
 added+=("redis --php 7.1")
-"$yard" ext add xdebug --php 8.4 >/dev/null
+quiet "$yard" ext add redis --php 7.1
 added+=("xdebug --php 8.4")
-modules "$work/hello-php71" | grep -qx redis || fail "redis is not loaded in PHP 7.1"
+quiet "$yard" ext add xdebug --php 8.4
+has_module "$work/hello-php71" redis "PHP 7.1"
 pass "redis loads in PHP 7.1"
-m84="$(modules "$work/hello-php")"
-grep -qx Xdebug <<<"$m84" || fail "Xdebug is not loaded in PHP 8.4"
-grep -qx 'Zend OPcache' <<<"$m84" || fail "Zend OPcache is not loaded in PHP 8.4"
+has_module "$work/hello-php" Xdebug "PHP 8.4"
+has_module "$work/hello-php" 'Zend OPcache' "PHP 8.4"
 pass "Xdebug and Zend OPcache load in PHP 8.4"
 
 # A pinned release skips brew and builds with pecl, which must leave brew's php.ini alone.
 brew_ini=/opt/homebrew/etc/php/8.4/php.ini
 ini_before="$(shasum -a 256 "$brew_ini")"
-"$yard" ext add apcu-5.1.24 --php 8.4 >/dev/null
 added+=("apcu --php 8.4")
-modules "$work/hello-php" | grep -qx apcu || fail "apcu is not loaded in PHP 8.4"
+quiet "$yard" ext add apcu-5.1.24 --php 8.4
+has_module "$work/hello-php" apcu "PHP 8.4"
 [[ $(shasum -a 256 "$brew_ini") == "$ini_before" ]] || fail "pecl edited $brew_ini"
 pass "apcu builds with pecl and loads in PHP 8.4; brew's php.ini is unchanged"
 

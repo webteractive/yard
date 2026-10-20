@@ -4,6 +4,7 @@ mod support;
 
 use serde_json::json;
 use std::path::PathBuf;
+use std::time::Duration;
 use support::daemon::{Daemon, prepared, run_job};
 use yard_proto::ErrorCode;
 
@@ -47,10 +48,31 @@ async fn ext_add_falls_back_to_pecl() {
     let mut c = d.client().await;
     let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "mongodb"})).await;
     assert_eq!(error, None, "{lines:?}");
-    assert!(lines.iter().any(|l| l.contains("fake pecl -d php_ini= install mongodb")), "{lines:?}");
+    // pecl writes extension= into whatever php_ini names; brew's pear.conf names brew's
+    // php.ini, so Yard names a file in its own data root that never exists.
+    let php_dir = d.fx.paths.php_dir("8.4".parse().unwrap());
+    let (conf, scratch) = (php_dir.join("pecl.conf"), php_dir.join("pecl-php.ini"));
+    let install = format!("fake pecl -c {} install mongodb", conf.display());
+    assert!(lines.iter().any(|l| l.contains(&install)), "{lines:?}");
+    let text = std::fs::read_to_string(&conf).unwrap();
+    assert!(text.contains(&format!("\"{}\"", scratch.display())), "{text}");
+    assert!(!scratch.exists());
+    // phpize runs autoconf, which lives in brew's bin, not the keg's.
+    let brew = d.fx.brew.path().display().to_string();
+    let path = lines.iter().find_map(|l| l.strip_prefix("PATH=")).expect("the fake pecl printed PATH");
+    assert!(path.starts_with(&format!("{brew}/opt/php@8.4/bin:{brew}/bin:")), "{path}");
+    // PHP's headers include brew's (pcre2.h), which the compiler does not search by itself.
+    assert!(lines.contains(&format!("CPPFLAGS=-I{brew}/include")), "{lines:?}");
+    assert!(lines.contains(&format!("LDFLAGS=-L{brew}/lib")), "{lines:?}");
     let toml = String::from_utf8(yard_toml(&d).unwrap()).unwrap();
-    assert!(toml.contains("mongodb = { source = \"pecl\" }"), "{toml}");
-    assert!(conf_d(&d).join("50-mongodb.ini").is_file());
+    // pecl installs into its own ext_dir, which is not PHP's: Yard records where.
+    let so = d.fx.brew.path().join("lib/php/pecl/20240924/mongodb.so");
+    assert!(
+        toml.contains(&format!("mongodb = {{ source = \"pecl\", so = \"{}\" }}", so.display())),
+        "{toml}"
+    );
+    let ini = std::fs::read_to_string(conf_d(&d).join("50-mongodb.ini")).unwrap();
+    assert!(ini.contains(&format!("extension = \"{}\"", so.display())), "{ini}");
     d.shutdown().await.unwrap();
 }
 
@@ -147,12 +169,12 @@ async fn disable_removes_the_ini_and_enable_restores_it() {
     assert_eq!(error, None, "{lines:?}");
     c.call("ext.disable", json!({"name": "mongodb"})).await.unwrap();
     assert!(!conf_d(&d).join("50-mongodb.ini").exists());
-    assert!(toml_text(&d).contains("mongodb = { source = \"pecl\", enabled = false }"), "{}", toml_text(&d));
+    assert!(toml_text(&d).contains("mongodb.so\", enabled = false }"), "{}", toml_text(&d));
     let list = c.call("ext.list", json!({})).await.unwrap();
     assert_eq!(list, json!([{"name": "mongodb", "source": "pecl", "enabled": false}]));
     c.call("ext.enable", json!({"name": "mongodb", "php": "8.4"})).await.unwrap();
     assert!(conf_d(&d).join("50-mongodb.ini").is_file());
-    assert!(toml_text(&d).contains("mongodb = { source = \"pecl\", enabled = true }"), "{}", toml_text(&d));
+    assert!(toml_text(&d).contains("mongodb.so\", enabled = true }"), "{}", toml_text(&d));
     d.shutdown().await.unwrap();
 }
 
@@ -275,10 +297,22 @@ async fn a_module_brew_loads_from_a_keg_is_labelled_brew_and_matched_in_any_case
     std::fs::write(&so, "").unwrap();
     let ini = format!("[redis]\nextension=\"{}\"\n", so.display());
     std::fs::write(d.fx.brew.path().join("etc/php/8.4/conf.d/20-redis.ini"), ini).unwrap();
+    // PHP's own modules load by absolute path from its keg too, and stay bundled.
+    let intl = d.fx.brew.path().join("opt/php@8.4/lib/php/20240924/intl.so");
+    std::fs::create_dir_all(intl.parent().unwrap()).unwrap();
+    std::fs::write(&intl, "").unwrap();
+    let ini = format!("[intl]\nextension=\"{}\"\n", intl.display());
+    std::fs::write(d.fx.brew.path().join("etc/php/8.4/conf.d/ext-intl.ini"), ini).unwrap();
     let d = d.start().await;
     let mut c = d.client().await;
     let list = c.call("ext.list", json!({})).await.unwrap();
-    assert_eq!(list, json!([{"name": "redis", "source": "brew", "enabled": true}]));
+    assert_eq!(
+        list,
+        json!([
+            {"name": "intl", "source": "bundled", "enabled": true},
+            {"name": "redis", "source": "brew", "enabled": true}
+        ])
+    );
 
     c.call("ext.disable", json!({"name": "Redis"})).await.unwrap();
     assert!(!conf_d(&d).join("10-brew-20-redis.ini").exists());
@@ -309,10 +343,43 @@ async fn a_pinned_pecl_version_installs_that_release_under_the_module_name() {
     let mut c = d.client().await;
     let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "xdebug-2.9.8"})).await;
     assert_eq!(error, None, "{lines:?}");
-    assert!(lines.iter().any(|l| l.contains("fake pecl -d php_ini= install xdebug-2.9.8")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("install xdebug-2.9.8")), "{lines:?}");
     assert!(!lines.iter().any(|l| l.contains("fake brew")), "{lines:?}");
     let toml = toml_text(&d);
-    assert!(toml.contains("xdebug = { source = \"pecl\" }"), "{toml}");
+    assert!(toml.contains("xdebug = { source = \"pecl\", so = "), "{toml}");
     assert!(conf_d(&d).join("50-xdebug.ini").is_file());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cancelled_ext_add_leaves_yard_toml_alone() {
+    let d = prepared("").await.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-ext-formulas"), "redis\n").unwrap();
+    std::fs::write(d.fx.brew.path().join("fake-brew-delay"), "5000").unwrap();
+    let mut c = d.client().await;
+    c.call("subscribe", json!({"topics": ["jobs"]})).await.unwrap();
+    let started = c.call("ext.add", json!({"name": "redis"})).await.unwrap();
+    let id = started["job_id"].as_str().unwrap().to_string();
+    // Wait until brew is running, then cancel.
+    loop {
+        let event = c.event(Duration::from_secs(10)).await.expect("brew started");
+        if event["type"] == "job_progress"
+            && event["line"].as_str().unwrap_or("").contains("fake brew install")
+        {
+            break;
+        }
+    }
+    assert_eq!(c.call("jobs.cancel", json!({"job_id": id})).await.unwrap(), json!(null));
+    let error = loop {
+        let event = c.event(Duration::from_secs(15)).await.expect("the job finished");
+        if event["type"] == "job_finished" && event["job_id"] == id.as_str() {
+            break serde_json::from_value::<Option<yard_proto::YardError>>(event["error"].clone()).unwrap();
+        }
+    };
+    assert_eq!(error.map(|e| e.code), Some(ErrorCode::JobCancelled));
+    assert_eq!(yard_toml(&d), None, "nothing was recorded");
+    assert!(!d.fx.brew.path().join("opt/redis@8.4").exists(), "brew was stopped before it installed");
+    let e = c.call("jobs.cancel", json!({"job_id": id})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::JobNotFound);
     d.shutdown().await.unwrap();
 }

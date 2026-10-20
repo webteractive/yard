@@ -105,6 +105,17 @@ pub fn ini_loads(text: &str) -> impl Iterator<Item = (String, &str)> + '_ {
     })
 }
 
+/// A PEAR user config (pecl's `-c <file>`) that sets only `php_ini`. brew's `pear.conf`
+/// names brew's php.ini, and pecl adds `extension=` to it after an install. `-d`/`-D`
+/// cannot stop that: they store the value under pecl's channel, and the install reads
+/// it for `pear.php.net`, which only a config file's top-level key sets. The user layer
+/// is read before the system one, so this wins and leaves every other setting brew's.
+pub fn pecl_user_config(php_ini: &std::path::Path) -> String {
+    let path = php_ini.display().to_string();
+    // PHP's serialize: string lengths are in bytes.
+    format!("#PEAR_Config 0.9\na:1:{{s:7:\"php_ini\";s:{}:\"{path}\";}}", path.len())
+}
+
 /// `50-<name>.ini` for one extension; `None` when nothing should load it (disabled, or
 /// bundled, which PHP's own ini or brew's mirrored one loads). A `brew` extension loads
 /// the path its formula's ini in brew's conf.d (`brew_files`) names: shivammathur's
@@ -136,6 +147,15 @@ pub fn ext_ini(ctx: &RenderCtx, name: &str, e: &ExtEntry, brew_files: &[(String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pecl_user_config_sets_only_php_ini() {
+        let text = pecl_user_config(std::path::Path::new("/r/Application Support/php/8.4/pecl-php.ini"));
+        assert_eq!(
+            text,
+            "#PEAR_Config 0.9\na:1:{s:7:\"php_ini\";s:43:\"/r/Application Support/php/8.4/pecl-php.ini\";}"
+        );
+    }
     use crate::Paths;
     use crate::brew::Brew;
     use crate::config::yard::{ExtEntry, ExtSource};

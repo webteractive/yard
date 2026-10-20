@@ -1,6 +1,6 @@
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use support::Fixture;
 use tokio::sync::broadcast;
@@ -134,4 +134,72 @@ async fn jobs_run_one_at_a_time() {
     );
     // While it waits, the second says for which.
     assert_eq!(order[0], format!("{}: waiting for {}", second.job_id, first.job_id), "{order:?}");
+}
+
+fn alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[tokio::test]
+async fn cancel_stops_a_running_command_and_its_children() {
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    // A shell that starts a child, as brew starts curl and make.
+    let started = jobs.start("long", |job: JobCtx| async move {
+        job.run(Path::new("/bin/sh"), &["-c", "sleep 30 & echo child $!; wait"], &[]).await?;
+        job.line("after the command");
+        Ok(())
+    });
+    let mut child = None;
+    while child.is_none() {
+        if let Ok(Event::JobProgress { line, .. }) = rx.recv().await {
+            child = line.strip_prefix("child ").and_then(|p| p.parse::<i32>().ok());
+        }
+    }
+    jobs.cancel(&started.job_id).unwrap();
+    let (lines, error) = outcome(&mut rx, &started.job_id).await;
+    assert_eq!(error.map(|e| e.code), Some(ErrorCode::JobCancelled));
+    assert!(!lines.iter().any(|l| l == "after the command"), "{lines:?}");
+    let child = child.unwrap();
+    let gone = || !alive(child);
+    assert!(
+        support::wait_until(gone, Duration::from_secs(5)).await,
+        "the shell's child {child} was stopped too"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_queued_job_never_runs() {
+    let fx = Fixture::new();
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    let fake = fx.fake.clone();
+    let first =
+        jobs.start("a", move |job: JobCtx| async move { job.run(&fake, &["exit", "0", "300"], &[]).await });
+    let second = jobs.start("b", |job: JobCtx| async move {
+        job.line("b starts");
+        Ok(())
+    });
+    jobs.cancel(&second.job_id).unwrap();
+    // Jobs finish in queue order, so the first's result comes first.
+    assert_eq!(outcome(&mut rx, &first.job_id).await.1, None, "the first ran on");
+    let (lines, error) = outcome(&mut rx, &second.job_id).await;
+    assert_eq!(error.map(|e| e.code), Some(ErrorCode::JobCancelled));
+    assert!(!lines.iter().any(|l| l == "b starts"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn cancelling_an_unknown_or_finished_job_is_job_not_found() {
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    assert_eq!(jobs.cancel("nope-1").unwrap_err().code, ErrorCode::JobNotFound);
+    let done = jobs.start("quick", |_job: JobCtx| async move { Ok(()) });
+    assert_eq!(outcome(&mut rx, &done.job_id).await.1, None);
+    let e = jobs.cancel(&done.job_id).unwrap_err();
+    assert_eq!(e.code, ErrorCode::JobNotFound);
+    assert!(e.message.contains(&done.job_id), "{}", e.message);
 }

@@ -17,6 +17,7 @@ use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
 use serde::Serialize;
 use yard_core::Paths;
+use yard_proto::methods::{self, JobParams};
 use yard_proto::{ErrorCode, Event, JobStarted, Topic, YardError};
 
 pub type Outcome = Result<i32, CliError>;
@@ -126,7 +127,8 @@ pub async fn run(cli: Cli) -> i32 {
 
 /// Runs a job method: subscribes to `jobs` first so no line is missed, prints each line
 /// of the job's output (each event as NDJSON with `--json`), then `done` once it succeeds.
-/// A failed job is the command's error.
+/// A failed job is the command's error. Ctrl-C cancels the job and waits for it to clean
+/// up (`JOB_CANCELLED`); a second Ctrl-C stops waiting and exits 130.
 pub async fn run_job<P: Serialize>(
     ctx: &Ctx,
     method: &str,
@@ -136,8 +138,26 @@ pub async fn run_job<P: Serialize>(
     let mut client = ctx.client().await?;
     client.subscribe(&[Topic::Jobs]).await?;
     let started: JobStarted = client.call(method, params).await?;
+    let mut cancelling = false;
     loop {
-        let event = client.next_event().await?;
+        let event = tokio::select! {
+            event = client.next_event() => event?,
+            _ = tokio::signal::ctrl_c() => {
+                if cancelling {
+                    eprintln!("Stopped waiting; {} may still be finishing.", started.job_id);
+                    return Ok(130);
+                }
+                cancelling = true;
+                eprintln!("Cancelling {} (Ctrl-C again to stop waiting)…", started.job_id);
+                let params = JobParams { job_id: started.job_id.clone() };
+                match client.call::<_, ()>(methods::JOBS_CANCEL, params).await {
+                    // It finished meanwhile; its job_finished is on the way.
+                    Err(e) if e.code == ErrorCode::JobNotFound => {}
+                    other => other?,
+                }
+                continue;
+            }
+        };
         match &event {
             Event::JobProgress { job_id, line } if *job_id == started.job_id => {
                 if ctx.json {

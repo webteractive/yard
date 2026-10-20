@@ -82,16 +82,26 @@ fn managed(ctx: &Context, v: PhpVersion) -> Result<BTreeMap<String, ExtEntry>, Y
 }
 
 /// Modules brew's `conf.d` loads for `v` that `exts` does not manage, each with where it
-/// comes from: `brew` when it loads by absolute path from under brew's prefix (an
-/// extension formula's keg), else `bundled`.
+/// comes from: `brew` when it loads by absolute path from under brew's prefix but outside
+/// PHP's own keg (an extension formula's keg), else `bundled`.
 fn bundled(ctx: &Context, v: PhpVersion, exts: &BTreeMap<String, ExtEntry>) -> BTreeMap<String, ExtSource> {
+    let prefix = &ctx.brew.prefix;
+    let keg = ctx
+        .brew
+        .php_opt(v, &|p: &Path| p.exists(), &|p: &Path| std::fs::read_link(p).ok())
+        .ok()
+        .and_then(|opt| opt.file_name().map(|n| n.to_os_string()));
+    let own: Vec<PathBuf> =
+        keg.iter().flat_map(|k| [prefix.join("opt").join(k), prefix.join("Cellar").join(k)]).collect();
     let mut found = BTreeMap::new();
     for (_, text) in brew_conf_d(&ctx.brew.php_conf_d(v)) {
         for (module, value) in ini_loads(&text) {
             if exts.keys().any(|n| n.eq_ignore_ascii_case(&module)) {
                 continue;
             }
-            let in_keg = value.starts_with('/') && Path::new(value).starts_with(&ctx.brew.prefix);
+            let path = Path::new(value);
+            let in_keg =
+                path.is_absolute() && path.starts_with(prefix) && !own.iter().any(|o| path.starts_with(o));
             found.insert(module, if in_keg { ExtSource::Brew } else { ExtSource::Bundled });
         }
     }

@@ -74,7 +74,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], "0.1.0");
-    assert_eq!(v["protocol"], "2.0");
+    assert_eq!(v["protocol"], "2.1");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());
@@ -560,4 +560,76 @@ fn install_shims_warns_when_herd_php_comes_first() {
         )),
         "{err}"
     );
+}
+
+/// Starts `yard php install 7.1`, waits for its first output line, and sends SIGINT.
+fn interrupted_install(d: &MockDaemon, times: usize) -> std::process::Output {
+    use std::io::{BufRead, BufReader};
+    let mut child = d
+        .yard_process()
+        .args(["php", "install", "7.1"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    out.read_line(&mut first).unwrap();
+    assert!(first.contains("Downloading"), "{first}");
+    let pid = child.id() as libc::pid_t;
+    for _ in 0..times {
+        // SAFETY: signalling our own child process.
+        unsafe { libc::kill(pid, libc::SIGINT) };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn ctrl_c_cancels_the_job_and_waits_for_it() {
+    let cancelled = json!({"code": "JOB_CANCELLED", "message": "php-install-1 was cancelled"});
+    let d = MockDaemon::start_with_events(
+        &[
+            ("subscribe", Ok(json!(null))),
+            ("php.install", Ok(json!({"job_id": "php-install-1"}))),
+            ("jobs.cancel", Ok(json!(null))),
+        ],
+        &[
+            (
+                "php.install",
+                vec![
+                    json!({"type": "job_progress", "job_id": "php-install-1", "line": "==> Downloading php@7.1"}),
+                ],
+            ),
+            (
+                "jobs.cancel",
+                vec![json!({"type": "job_finished", "job_id": "php-install-1", "error": cancelled})],
+            ),
+        ],
+    );
+    let out = interrupted_install(&d, 1);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(d.params("jobs.cancel"), [json!({"job_id": "php-install-1"})]);
+    let err = stderr(&out);
+    assert!(err.contains("Cancelling php-install-1"), "{err}");
+    assert!(err.contains("error: php-install-1 was cancelled"), "{err}");
+}
+
+#[test]
+fn a_second_ctrl_c_stops_waiting() {
+    let d = MockDaemon::start_with_events(
+        &[
+            ("subscribe", Ok(json!(null))),
+            ("php.install", Ok(json!({"job_id": "php-install-1"}))),
+            ("jobs.cancel", Ok(json!(null))),
+        ],
+        &[(
+            "php.install",
+            vec![
+                json!({"type": "job_progress", "job_id": "php-install-1", "line": "==> Downloading php@7.1"}),
+            ],
+        )],
+    );
+    let out = interrupted_install(&d, 2);
+    assert_eq!(out.status.code(), Some(130), "{}", stderr(&out));
 }
