@@ -278,6 +278,7 @@ async fn override_edit_is_tested_and_applied() {
     let d = d.start().await;
     let mut c = d.client().await;
     let over = d.fx.paths.nginx_override("blog");
+    let pid = nginx_pid(&mut c).await;
 
     std::fs::write(&over, "yard-test-broken;\n").unwrap();
     assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
@@ -288,6 +289,37 @@ async fn override_edit_is_tested_and_applied() {
     assert!(!message.contains("back in place"), "{message}");
     std::fs::write(&over, "client_max_body_size 2G;\n").unwrap();
     assert_eq!(config_error_becomes(&mut c, Value::Null).await, Value::Null);
+    assert_eq!(nginx_pid(&mut c).await, pid, "the override was reloaded, not restarted");
+    d.shutdown().await.unwrap();
+}
+
+/// The nginx unit's pid from `status`, once it is running.
+async fn nginx_pid(c: &mut Client) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let units = c.call("status", Value::Null).await.unwrap()["units"].clone();
+        let nginx = units.as_array().unwrap().iter().find(|u| u["name"] == "nginx").cloned().unwrap();
+        if nginx["state"] == "running" {
+            return nginx["pid"].clone();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "nginx never ran: {nginx}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn restart_nginx_refuses_when_the_config_cannot_be_tested() {
+    let d = prepared("").await;
+    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let pid = nginx_pid(&mut c).await;
+    // A running nginx keeps its binary; a new one, or `nginx -t`, cannot start.
+    std::fs::remove_file(yard_core::brew::Brew::new(d.fx.brew.path()).nginx_bin()).unwrap();
+
+    let e = c.call("units.restart", json!({"unit": "nginx"})).await;
+    assert!(e.is_err(), "restart reported success: {e:?}");
+    assert_eq!(nginx_pid(&mut c).await, pid, "nginx was left alone");
     d.shutdown().await.unwrap();
 }
 

@@ -152,3 +152,10 @@ pub fn inheritable_listener() -> (std::net::TcpListener, u16) {
     let port = l.local_addr().unwrap().port();
     (l, port)
 }
+
+/// The parent of `pid`, from `ps`; 0 when it cannot be read.
+pub fn ppid(pid: u32) -> u32 {
+    let out =
+        std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+}

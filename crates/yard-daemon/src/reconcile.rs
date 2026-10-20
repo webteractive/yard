@@ -5,9 +5,10 @@
 use crate::describe;
 use crate::events::EventBus;
 use crate::helper_client::HelperClient;
+use crate::nginx::NginxCommand;
 use crate::probe::{self, Proto};
 use crate::state::{Snapshot, State};
-use crate::supervisor::{Health, Supervisor, UnitKind, UnitSpec};
+use crate::supervisor::{Health, Reload, Supervisor, UnitSpec};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -41,19 +42,14 @@ pub struct ReconcileReport {
     pub warnings: Vec<String>,
 }
 
-/// Who nginx workers run as, and the zone php.ini uses.
-struct Identity {
-    user: String,
-    group: String,
-    timezone: String,
-}
-
 pub struct Reconciler {
     state: Mutex<State>,
     supervisor: Arc<Supervisor>,
     helper: HelperClient,
     bus: EventBus,
-    identity: Identity,
+    nginx: NginxCommand,
+    /// The zone php.ini uses.
+    timezone: String,
     /// Where resolver files live, read to refuse a TLD another tool owns.
     resolver_dir: PathBuf,
 }
@@ -76,17 +72,13 @@ impl Reconciler {
         resolver_dir: PathBuf,
     ) -> Result<Self, YardError> {
         let localtime = std::fs::read_link("/etc/localtime").ok();
-        let identity = Identity {
-            user: std::env::var("USER").unwrap_or_else(|_| "nobody".into()),
-            group: "staff".into(),
-            timezone: system_timezone(localtime.as_deref()),
-        };
         Ok(Self {
+            nginx: NginxCommand::new(&paths, &brew),
             state: Mutex::new(State::new(paths, brew)?),
             supervisor,
             helper,
             bus,
-            identity,
+            timezone: system_timezone(localtime.as_deref()),
             resolver_dir,
         })
     }
@@ -116,10 +108,7 @@ impl Reconciler {
         if state.last_error.as_ref().is_some_and(|e| e.code == ErrorCode::NginxConfigInvalid) {
             state.last_error = None;
         }
-        match self.supervisor.reload("nginx").await {
-            Err(e) if !matches!(e.code, ErrorCode::HelperRefused | ErrorCode::HelperNotInstalled) => Err(e),
-            _ => Ok(()),
-        }
+        self.supervisor.reload("nginx").await
     }
 
     /// A served PHP site whose detected docroot changed since the last reconcile, e.g.
@@ -137,8 +126,7 @@ impl Reconciler {
 
     /// `Ok(Err(..))` when nginx rejects the config; `Err` when the test could not run.
     pub async fn test_nginx(&self) -> Result<Result<(), YardError>, YardError> {
-        let result = self.helper.test_nginx().await?;
-        Ok(if result.ok { Ok(()) } else { Err(nginx_rejected(&result.output, false)) })
+        Ok(self.nginx.test().await?.map_err(|output| nginx_rejected(&output, false)))
     }
 
     /// Serialized: a second call waits for the first to finish.
@@ -209,11 +197,9 @@ impl Reconciler {
         let ctx = RenderCtx {
             paths: &paths,
             brew: &state.brew,
-            user: &self.identity.user,
-            group: &self.identity.group,
             tld: &tld,
             http_port: http,
-            timezone: &self.identity.timezone,
+            timezone: &self.timezone,
         };
         let versions = php_versions(&resolution.sites);
         let mut rendered = BTreeMap::new();
@@ -256,16 +242,16 @@ impl Reconciler {
         }
         report.hand_edited = plan.hand_edited.clone();
 
-        // 6. Test nginx. Only a failed test rolls back; no helper means nothing can run it.
+        // 6. Test nginx. Only a failed test rolls back; an nginx that cannot run is a warning.
         let changed: BTreeSet<PathBuf> = applied.changed().map(Path::to_path_buf).collect();
         let nginx_changed = changed.iter().any(|p| p.starts_with(paths.nginx_dir()));
         if nginx_changed || state.snapshot.is_none() {
-            match self.helper.test_nginx().await {
-                Ok(result) if !result.ok => {
+            match self.nginx.test().await {
+                Ok(Err(output)) => {
                     generated::rollback(&applied, &mut hashes).map_err(io_error)?;
-                    return Err(nginx_rejected(&result.output, true));
+                    return Err(nginx_rejected(&output, true));
                 }
-                Ok(_) => {}
+                Ok(Ok(())) => {}
                 Err(e) => report.warnings.push(format!("nginx -t did not run: {}", describe(&e))),
             }
         }
@@ -279,22 +265,24 @@ impl Reconciler {
         let mut desired = vec![
             UnitSpec {
                 name: "dnsmasq".into(),
-                kind: UnitKind::Process {
-                    program: state.brew.dnsmasq_bin(),
-                    args: vec![
-                        "--keep-in-foreground".into(),
-                        OsString::from(format!("--conf-file={}", paths.dnsmasq_conf().display())),
-                    ],
-                    env: vec![],
-                },
+                program: state.brew.dnsmasq_bin(),
+                args: vec![
+                    "--keep-in-foreground".into(),
+                    OsString::from(format!("--conf-file={}", paths.dnsmasq_conf().display())),
+                ],
+                env: vec![],
                 health: Health::Tcp(dns),
                 port: Some((dns, Proto::TcpUdp)),
+                reload: Reload::Restart,
             },
             UnitSpec {
                 name: "nginx".into(),
-                kind: UnitKind::Nginx,
+                program: self.nginx.program().to_path_buf(),
+                args: self.nginx.args(),
+                env: vec![],
                 health: Health::Tcp(http),
                 port: Some((http, Proto::Tcp)),
+                reload: Reload::Signal(libc::SIGHUP),
             },
         ];
         let mut restart = vec![];
@@ -317,19 +305,18 @@ impl Reconciler {
             }
             desired.push(UnitSpec {
                 name,
-                kind: UnitKind::Process {
-                    program: Brew::php_fpm(&opt),
-                    args: vec![
-                        "--nodaemonize".into(),
-                        "-y".into(),
-                        paths.fpm_conf(*v).into(),
-                        "-c".into(),
-                        paths.php_ini(*v).into(),
-                    ],
-                    env: php_fpm_env(&ctx, *v),
-                },
+                program: Brew::php_fpm(&opt),
+                args: vec![
+                    "--nodaemonize".into(),
+                    "-y".into(),
+                    paths.fpm_conf(*v).into(),
+                    "-c".into(),
+                    paths.php_ini(*v).into(),
+                ],
+                env: php_fpm_env(&ctx, *v),
                 health: Health::Unix(paths.fpm_socket(*v)),
                 port: None,
+                reload: Reload::Signal(libc::SIGUSR2),
             });
         }
         self.supervisor.apply(desired).await;
@@ -338,13 +325,12 @@ impl Reconciler {
                 report.warnings.push(format!("restarting {name}: {}", describe(&e)));
             }
         }
-        // A new nginx unit may find an nginx from an earlier yardd still running on old configs.
-        if nginx_changed {
-            match self.supervisor.reload("nginx").await {
-                Ok(()) => {}
-                Err(e) if matches!(e.code, ErrorCode::HelperRefused | ErrorCode::HelperNotInstalled) => {}
-                Err(e) => report.warnings.push(format!("reloading nginx: {}", describe(&e))),
-            }
+        // A new nginx unit reads the new files as it starts; a running one reloads.
+        if nginx_changed
+            && existing.contains("nginx")
+            && let Err(e) = self.supervisor.reload("nginx").await
+        {
+            report.warnings.push(format!("reloading nginx: {}", describe(&e)));
         }
 
         // 8. Resolver: install the new TLD's file, then drop the old one.

@@ -241,10 +241,11 @@ async fn park(ctx: &Context, p: PathParams, add: bool) -> Result<(), YardError> 
 /// A restarted nginx loads every override, so a broken one is refused here instead of
 /// taking every site down. Without a helper the restart itself reports that.
 async fn restart(ctx: &Context, unit: &str) -> Result<(), YardError> {
+    // A config nginx rejects, or an nginx that cannot run, would turn a restart into an outage.
     if unit == "nginx"
-        && let Ok(rejected @ Err(_)) = ctx.reconciler.test_nginx().await
+        && let Ok(Err(e)) | Err(e) = ctx.reconciler.test_nginx().await
     {
-        return rejected;
+        return Err(e);
     }
     ctx.supervisor().restart(unit).await
 }

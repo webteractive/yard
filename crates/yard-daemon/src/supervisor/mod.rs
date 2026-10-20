@@ -4,7 +4,6 @@
 mod unit;
 
 use crate::events::EventBus;
-use crate::helper_client::HelperClient;
 use crate::logsink::LogSink;
 use crate::probe::Proto;
 use std::collections::BTreeMap;
@@ -24,25 +23,25 @@ pub enum Health {
     Unix(PathBuf),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UnitKind {
-    Process {
-        program: PathBuf,
-        args: Vec<OsString>,
-        env: Vec<(String, String)>,
-    },
-    /// Started, reloaded and stopped through the root helper.
-    Nginx,
+/// How a unit picks up a changed config without dropping what it serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reload {
+    /// nginx re-reads on SIGHUP, php-fpm on SIGUSR2.
+    Signal(i32),
+    Restart,
 }
 
 /// A changed spec means a restart, so equality is the whole diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitSpec {
     pub name: String,
-    pub kind: UnitKind,
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+    pub env: Vec<(String, String)>,
     pub health: Health,
     /// Checked with a bind probe before every start (spec §7, check 2).
     pub port: Option<(u16, Proto)>,
+    pub reload: Reload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,22 +78,14 @@ struct Handle {
 pub struct Supervisor {
     cfg: SupervisorConfig,
     logs_dir: PathBuf,
-    helper: HelperClient,
     bus: EventBus,
     table: Table,
     units: tokio::sync::Mutex<BTreeMap<String, Handle>>,
 }
 
 impl Supervisor {
-    pub fn new(cfg: SupervisorConfig, logs_dir: PathBuf, helper: HelperClient, bus: EventBus) -> Self {
-        Self {
-            cfg,
-            logs_dir,
-            helper,
-            bus,
-            table: Arc::default(),
-            units: tokio::sync::Mutex::new(BTreeMap::new()),
-        }
+    pub fn new(cfg: SupervisorConfig, logs_dir: PathBuf, bus: EventBus) -> Self {
+        Self { cfg, logs_dir, bus, table: Arc::default(), units: tokio::sync::Mutex::new(BTreeMap::new()) }
     }
 
     /// Starts new units, stops removed ones and restarts the ones whose spec changed.
@@ -129,22 +120,16 @@ impl Supervisor {
         handle.control.send(Control::Restart).map_err(|_| no_unit(name))
     }
 
-    /// nginx reloads through the helper and php-fpm on SIGUSR2; other units restart.
+    /// The unit's reload signal while it has a pid; a restart otherwise.
     pub async fn reload(&self, name: &str) -> Result<(), YardError> {
-        let kind = {
+        let reload = {
             let units = self.units.lock().await;
-            units.get(name).ok_or_else(|| no_unit(name))?.spec.kind.clone()
+            units.get(name).ok_or_else(|| no_unit(name))?.spec.reload
         };
-        match kind {
-            UnitKind::Nginx => self.helper.reload_nginx().await,
-            UnitKind::Process { .. } if name.starts_with("php-") => {
-                let pid = lock(&self.table).get(name).and_then(|u| u.pid);
-                match pid {
-                    Some(pid) => unit::signal(pid, libc::SIGUSR2),
-                    None => self.restart(name).await,
-                }
-            }
-            UnitKind::Process { .. } => self.restart(name).await,
+        let pid = lock(&self.table).get(name).and_then(|u| u.pid);
+        match (reload, pid) {
+            (Reload::Signal(sig), Some(pid)) => unit::signal(pid, sig),
+            _ => self.restart(name).await,
         }
     }
 
@@ -178,15 +163,7 @@ impl Supervisor {
             },
         );
         let (control, rx) = mpsc::unbounded_channel();
-        let runner = Runner::new(
-            spec.clone(),
-            self.cfg,
-            self.helper.clone(),
-            self.bus.clone(),
-            sink,
-            self.table.clone(),
-            rx,
-        );
+        let runner = Runner::new(spec.clone(), self.cfg, self.bus.clone(), sink, self.table.clone(), rx);
         Handle { spec, control, task: tokio::spawn(runner.run()) }
     }
 }

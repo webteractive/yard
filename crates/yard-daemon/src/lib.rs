@@ -7,6 +7,7 @@ mod fds;
 pub mod helper_client;
 pub mod holder;
 pub mod logsink;
+pub mod nginx;
 pub mod portscan;
 pub mod probe;
 pub mod reconcile;

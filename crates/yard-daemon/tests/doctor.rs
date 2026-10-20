@@ -90,7 +90,7 @@ fn check(id: &str, status: CheckStatus) -> Check {
 async fn all_ok_on_healthy_fixture() {
     let e = env().await;
     let bus = EventBus::new();
-    let sup = Arc::new(Supervisor::new(fast(), e.fx.paths.logs_dir(), e.helper.clone(), bus.clone()));
+    let sup = Arc::new(Supervisor::new(fast(), e.fx.paths.logs_dir(), bus.clone()));
     let rec = Reconciler::new(
         e.fx.paths.clone(),
         e.brew(),

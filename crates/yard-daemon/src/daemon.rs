@@ -81,8 +81,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let bus = EventBus::new();
     let helper = HelperClient::new(&opts.helper_socket);
     let brew = Brew::new(&opts.brew_prefix);
-    let supervisor =
-        Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), helper.clone(), bus.clone()));
+    let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone()));
     let reconciler = Arc::new(Reconciler::new(
         opts.paths.clone(),
         brew.clone(),
@@ -119,12 +118,6 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     watcher.abort();
     scan.abort();
     ctx.supervisor().shutdown().await;
-    match ctx.helper.stop_nginx().await {
-        Err(e) if e.code != ErrorCode::HelperNotInstalled => {
-            tracing::warn!("stopping nginx: {}", describe(&e))
-        }
-        _ => {}
-    }
     let _ = std::fs::remove_file(&socket);
     Ok(())
 }

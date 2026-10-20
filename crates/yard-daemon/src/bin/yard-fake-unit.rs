@@ -47,8 +47,9 @@ fn mode(args: &[String]) -> ExitCode {
     }
 }
 
-/// `-p <prefix> -c <conf> [-e <log>] [-t]`. Without `-t` it "daemonizes": starts a
-/// listener child, writes the child's pid to the conf's `pid` path and exits.
+/// `-p <prefix> -c <conf> [-e <log>] [-t]`. A conf with `daemon off;`, as Yard renders,
+/// runs in the foreground, listening itself. Otherwise it "daemonizes": starts a listener
+/// child, writes the child's pid to the conf's `pid` path and exits.
 fn nginx(args: &[String]) -> ExitCode {
     let (Some(prefix), Some(conf)) = (flag(args, "-p"), flag(args, "-c")) else {
         return fail("nginx needs -p and -c".into());
@@ -71,6 +72,9 @@ fn nginx(args: &[String]) -> ExitCode {
         let value = l.trim().strip_prefix("pid ")?.trim_end_matches(';').trim();
         Some(value.trim_matches('"').to_string())
     });
+    if text.lines().any(|l| l.trim() == "daemon off;") {
+        return listen_tcp(port);
+    }
     let (Some(port), Some(pid_file)) = (port, pid_file) else {
         return fail(format!("{conf} has no `listen 127.0.0.1:N` or no `pid`"));
     };

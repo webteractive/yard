@@ -44,7 +44,7 @@ fn env_with(fx: Fixture, resolver: TempDir, helper: HelperClient) -> Env {
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
     let bus = EventBus::new();
-    let sup = Arc::new(Supervisor::new(fast(), fx.paths.logs_dir(), helper.clone(), bus.clone()));
+    let sup = Arc::new(Supervisor::new(fast(), fx.paths.logs_dir(), bus.clone()));
     let rec = Reconciler::new(
         fx.paths.clone(),
         Brew::new(fx.brew.path()),
@@ -230,19 +230,28 @@ async fn serves_site_in_dir_with_space() {
 }
 
 #[tokio::test]
-async fn helper_missing_leaves_other_units_running() {
+async fn helper_missing_still_serves_nginx() {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
     let e = env_with(fx, resolver, HelperClient::new("/tmp/yard-test-missing/helper.sock"));
     e.site("blog");
 
+    // Only the resolver needs the helper now.
     let report = e.rec.reconcile().await.unwrap();
     assert!(report.warnings.iter().any(|w| w.contains("HELPER_NOT_INSTALLED")), "{report:?}");
-    e.unit("dnsmasq", running).await;
-    e.unit(FPM, running).await;
-    let nginx = e.unit("nginx", |u| matches!(u.state, UnitState::Failed { .. })).await;
-    assert!(nginx.last_error.is_some_and(|m| m.contains("HELPER_NOT_INSTALLED")));
-    assert_eq!(nginx.restarts, 0, "a missing helper is not retried");
+    for unit in ["dnsmasq", FPM, "nginx"] {
+        e.unit(unit, running).await;
+    }
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn nginx_is_a_child_of_yardd() {
+    let e = env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    let pid = e.unit("nginx", running).await.pid.expect("a running unit has a pid");
+    assert_eq!(support::ppid(pid), std::process::id(), "yardd runs nginx itself, not through the helper");
     e.sup.shutdown().await;
 }
 

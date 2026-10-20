@@ -1,10 +1,9 @@
 //! One unit's lifecycle: pre-start port check, start, health, backoff, failed.
 
-use super::{Health, SupervisorConfig, Table, UnitKind, UnitSpec, lock};
+use super::{Health, SupervisorConfig, Table, UnitSpec, lock};
 use crate::events::EventBus;
-use crate::helper_client::HelperClient;
 use crate::logsink::LogSink;
-use crate::{describe, holder, probe};
+use crate::{holder, probe};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -14,7 +13,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use yard_core::supervise::{Decision, RestartPolicy};
-use yard_proto::{ErrorCode, Event, Holder, UnitState, YardError};
+use yard_proto::{Event, Holder, UnitState, YardError};
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(200);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -27,15 +26,12 @@ pub enum Control {
 /// Why one run of the unit ended. The process is already gone when this is returned.
 enum Ended {
     Failure(String),
-    /// A failure retrying cannot fix (no helper installed): straight to `Failed`.
-    Fatal(String),
     Control(Control),
 }
 
 pub struct Runner {
     spec: UnitSpec,
     cfg: SupervisorConfig,
-    helper: HelperClient,
     bus: EventBus,
     sink: Arc<Mutex<LogSink>>,
     table: Table,
@@ -47,20 +43,18 @@ impl Runner {
     pub fn new(
         spec: UnitSpec,
         cfg: SupervisorConfig,
-        helper: HelperClient,
         bus: EventBus,
         sink: LogSink,
         table: Table,
         control: mpsc::UnboundedReceiver<Control>,
     ) -> Self {
         let policy = RestartPolicy::new(cfg.policy);
-        Self { spec, cfg, helper, bus, sink: Arc::new(Mutex::new(sink)), table, control, policy }
+        Self { spec, cfg, bus, sink: Arc::new(Mutex::new(sink)), table, control, policy }
     }
 
     pub async fn run(mut self) {
         let ack = loop {
             if let Some((port, proto)) = self.spec.port
-                && !self.holds_own_port().await
                 && !probe::is_free(port, proto)
             {
                 // Retrying cannot free a foreign port, so this skips the backoff.
@@ -77,14 +71,6 @@ impl Runner {
             match self.attempt().await {
                 Ended::Control(Control::Restart) => self.policy.reset(),
                 Ended::Control(Control::Stop(ack)) => break ack,
-                Ended::Fatal(reason) => {
-                    self.update(|u| u.last_error = Some(reason));
-                    self.enter_failed();
-                    match self.next_control().await {
-                        Control::Restart => self.policy.reset(),
-                        Control::Stop(ack) => break ack,
-                    }
-                }
                 Ended::Failure(reason) => {
                     self.update(|u| u.last_error = Some(reason));
                     match self.policy.on_failure(Instant::now()) {
@@ -127,14 +113,14 @@ impl Runner {
         let deadline = tokio::time::Instant::now() + self.cfg.start_grace;
         while !self.healthy().await {
             if tokio::time::Instant::now() >= deadline {
-                process.stop(&self.helper, self.cfg.stop_timeout).await;
+                process.stop(self.cfg.stop_timeout).await;
                 let grace = self.cfg.start_grace.as_secs_f32();
                 return Ended::Failure(format!("not healthy within {grace} s of starting"));
             }
             tokio::select! {
                 status = process.wait() => return Ended::Failure(status),
                 control = self.next_control() => {
-                    process.stop(&self.helper, self.cfg.stop_timeout).await;
+                    process.stop(self.cfg.stop_timeout).await;
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {}
@@ -147,13 +133,13 @@ impl Runner {
             tokio::select! {
                 status = process.wait() => return Ended::Failure(status),
                 control = self.next_control() => {
-                    process.stop(&self.helper, self.cfg.stop_timeout).await;
+                    process.stop(self.cfg.stop_timeout).await;
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {
                     misses = if self.healthy().await { 0 } else { misses + 1 };
                     if misses >= 2 {
-                        process.stop(&self.helper, self.cfg.stop_timeout).await;
+                        process.stop(self.cfg.stop_timeout).await;
                         return Ended::Failure("failed two health checks in a row".into());
                     }
                 }
@@ -161,44 +147,27 @@ impl Runner {
         }
     }
 
-    /// nginx outlives yardd, so a running Yard nginx holding its own port is not a conflict.
-    async fn holds_own_port(&self) -> bool {
-        self.spec.kind == UnitKind::Nginx && self.helper.status().await.is_ok_and(|s| s.nginx_pid.is_some())
-    }
-
     async fn start(&self) -> Result<Process, Ended> {
-        match &self.spec.kind {
-            UnitKind::Nginx => {
-                self.helper.start_nginx().await.map_err(|e| match e.code {
-                    ErrorCode::HelperNotInstalled => Ended::Fatal(describe(&e)),
-                    _ => Ended::Failure(describe(&e)),
-                })?;
-                let pid = self.helper.status().await.ok().and_then(|s| s.nginx_pid);
-                Ok(Process::Nginx { pid })
-            }
-            UnitKind::Process { program, args, env } => {
-                let mut cmd = Command::new(program);
-                cmd.args(args)
-                    .envs(env.iter().map(|(k, v)| (k, v)))
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true);
-                // SAFETY: the hook makes only async-signal-safe calls.
-                unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
-                let mut child = cmd
-                    .spawn()
-                    .map_err(|e| Ended::Failure(format!("cannot run {}: {e}", program.display())))?;
-                let mut readers = vec![];
-                if let Some(out) = child.stdout.take() {
-                    readers.push(forward(out, self.sink.clone()));
-                }
-                if let Some(err) = child.stderr.take() {
-                    readers.push(forward(err, self.sink.clone()));
-                }
-                Ok(Process::Child { child, readers })
-            }
+        let UnitSpec { program, args, env, .. } = &self.spec;
+        let mut cmd = Command::new(program);
+        cmd.args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        // SAFETY: the hook makes only async-signal-safe calls.
+        unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+        let mut child =
+            cmd.spawn().map_err(|e| Ended::Failure(format!("cannot run {}: {e}", program.display())))?;
+        let mut readers = vec![];
+        if let Some(out) = child.stdout.take() {
+            readers.push(forward(out, self.sink.clone()));
         }
+        if let Some(err) = child.stderr.take() {
+            readers.push(forward(err, self.sink.clone()));
+        }
+        Ok(Process { child, readers })
     }
 
     async fn healthy(&self) -> bool {
@@ -251,54 +220,36 @@ impl Runner {
     }
 }
 
-enum Process {
-    Child { child: Child, readers: Vec<JoinHandle<()>> },
-    Nginx { pid: Option<u32> },
+struct Process {
+    child: Child,
+    readers: Vec<JoinHandle<()>>,
 }
 
 impl Process {
     fn pid(&self) -> Option<u32> {
-        match self {
-            Process::Child { child, .. } => child.id(),
-            Process::Nginx { pid } => *pid,
-        }
+        self.child.id()
     }
 
-    /// Resolves when a child exits, after its output is in the log. nginx is daemonized,
-    /// so its exit shows only as failed health checks.
+    /// Resolves when the child exits, after its output is in the log.
     async fn wait(&mut self) -> String {
-        match self {
-            Process::Child { child, readers } => {
-                let status = child.wait().await;
-                drain(readers).await;
-                match status {
-                    Ok(status) => format!("exited unexpectedly ({status})"),
-                    Err(e) => format!("exited; wait failed: {e}"),
-                }
-            }
-            Process::Nginx { .. } => std::future::pending().await,
+        let status = self.child.wait().await;
+        drain(&mut self.readers).await;
+        match status {
+            Ok(status) => format!("exited unexpectedly ({status})"),
+            Err(e) => format!("exited; wait failed: {e}"),
         }
     }
 
-    /// SIGTERM, then SIGKILL after `timeout`. nginx stops through the helper.
-    async fn stop(&mut self, helper: &HelperClient, timeout: Duration) {
-        match self {
-            Process::Child { child, readers } => {
-                if let Some(pid) = child.id() {
-                    let _ = signal(pid, libc::SIGTERM);
-                }
-                if tokio::time::timeout(timeout, child.wait()).await.is_err() {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                }
-                drain(readers).await;
-            }
-            Process::Nginx { .. } => {
-                if let Err(e) = helper.stop_nginx().await {
-                    eprintln!("yardd: stopping nginx: {}", describe(&e));
-                }
-            }
+    /// SIGTERM, then SIGKILL after `timeout`.
+    async fn stop(&mut self, timeout: Duration) {
+        if let Some(pid) = self.child.id() {
+            let _ = signal(pid, libc::SIGTERM);
         }
+        if tokio::time::timeout(timeout, self.child.wait()).await.is_err() {
+            let _ = self.child.start_kill();
+            let _ = self.child.wait().await;
+        }
+        drain(&mut self.readers).await;
     }
 }
 

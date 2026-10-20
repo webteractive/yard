@@ -14,9 +14,6 @@ use std::path::{Path, PathBuf};
 pub struct RenderCtx<'a> {
     pub paths: &'a Paths,
     pub brew: &'a Brew,
-    /// nginx workers run as this user and group.
-    pub user: &'a str,
-    pub group: &'a str,
     pub tld: &'a str,
     pub http_port: u16,
     pub timezone: &'a str,
@@ -70,15 +67,15 @@ mod tests {
     }
 
     fn ctx<'a>(paths: &'a Paths, brew: &'a Brew) -> RenderCtx<'a> {
-        RenderCtx {
-            paths,
-            brew,
-            user: "me",
-            group: "staff",
-            tld: "yard",
-            http_port: 8080,
-            timezone: "Asia/Manila",
-        }
+        RenderCtx { paths, brew, tld: "yard", http_port: 8080, timezone: "Asia/Manila" }
+    }
+
+    #[test]
+    fn nginx_main_runs_in_the_foreground_as_the_user() {
+        let (paths, brew) = ctx_parts();
+        let conf = super::nginx::nginx_main(&ctx(&paths, &brew));
+        assert!(conf.lines().any(|l| l.trim() == "daemon off;"), "yardd supervises it: {conf}");
+        assert!(!conf.lines().any(|l| l.starts_with("user ")), "no root master to drop from: {conf}");
     }
 
     fn php_site(name: &str, path: &str) -> SiteInfo {

@@ -17,7 +17,7 @@ pub fn nginx_main(ctx: &RenderCtx) -> String {
     let temp = |name: &str| q(&run.join("nginx").join(name));
     let http = ctx.http_port;
     format!(
-        "{header}user {user} {group};
+        "{header}daemon off;
 worker_processes auto;
 pid {pid};
 error_log {error_log};
@@ -61,8 +61,6 @@ http {{
 }}
 ",
         header = header(&paths.nginx_dir().join("overrides")),
-        user = ctx.user,
-        group = ctx.group,
         pid = q(&paths.nginx_pid()),
         error_log = q(&paths.logs_dir().join("nginx-error.log")),
         mime = q(&ctx.brew.nginx_mime_types()),

@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 use support::{FAKE, fast, free_port};
 use tokio::sync::broadcast::Receiver;
 use yard_daemon::events::EventBus;
-use yard_daemon::helper_client::HelperClient;
 use yard_daemon::logsink::LogSink;
 use yard_daemon::probe::Proto;
-use yard_daemon::supervisor::{Health, Supervisor, SupervisorConfig, UnitKind, UnitSpec};
+use yard_daemon::supervisor::{Health, Reload, Supervisor, SupervisorConfig, UnitSpec};
 use yard_proto::{Event, UnitInfo, UnitState};
 
 struct Harness {
@@ -25,20 +24,18 @@ struct Harness {
 fn harness(cfg: SupervisorConfig) -> Harness {
     let logs = tempfile::tempdir().unwrap();
     let bus = EventBus::new();
-    let helper = HelperClient::new("/tmp/yard-test-no-helper/helper.sock");
-    Harness { sup: Supervisor::new(cfg, logs.path().to_path_buf(), helper, bus.clone()), bus, logs }
+    Harness { sup: Supervisor::new(cfg, logs.path().to_path_buf(), bus.clone()), bus, logs }
 }
 
 fn process(name: &str, program: &str, args: &[&str], health: Health) -> UnitSpec {
     UnitSpec {
         name: name.into(),
-        kind: UnitKind::Process {
-            program: PathBuf::from(program),
-            args: args.iter().map(OsString::from).collect(),
-            env: vec![],
-        },
+        program: PathBuf::from(program),
+        args: args.iter().map(OsString::from).collect(),
+        env: vec![],
         health,
         port: None,
+        reload: Reload::Restart,
     }
 }
 
@@ -280,5 +277,26 @@ async fn units_do_not_inherit_open_sockets() {
     let freed =
         support::wait_until(|| yard_daemon::probe::is_free(p, Proto::Tcp), Duration::from_secs(2)).await;
     assert!(freed, "the unit holds a socket it inherited");
+    h.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn reload_sends_the_units_signal() {
+    let h = harness(fast());
+    let port = free_port();
+    // The fake ignores SIGHUP, as nginx does when it reloads.
+    let hup = UnitSpec { reload: Reload::Signal(libc::SIGHUP), ..listener("hup", port) };
+    h.sup.apply(vec![hup]).await;
+    let before = wait_for(&h.sup, "hup", running).await.pid;
+    h.sup.reload("hup").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(wait_for(&h.sup, "hup", running).await.pid, before, "a signal, not a restart");
+
+    let other = free_port();
+    h.sup.apply(vec![listener("plain", other)]).await;
+    let first = wait_for(&h.sup, "plain", running).await.pid;
+    h.sup.reload("plain").await.unwrap();
+    let again = wait_for(&h.sup, "plain", |u| running(u) && u.pid != first).await;
+    assert_ne!(again.pid, first, "Reload::Restart restarts");
     h.sup.shutdown().await;
 }
