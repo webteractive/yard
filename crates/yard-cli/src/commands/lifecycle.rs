@@ -56,7 +56,7 @@ pub async fn start(ctx: &Ctx) -> Outcome {
     Ok(0)
 }
 
-pub fn stop(ctx: &Ctx) -> Outcome {
+pub async fn stop(ctx: &Ctx) -> Outcome {
     let service = format!("gui/{}/{DAEMON_LABEL}", uid());
     let out = Command::new("launchctl")
         .args(["bootout", &service])
@@ -69,6 +69,10 @@ pub fn stop(ctx: &Ctx) -> Outcome {
         return Err(YardError::internal(format!("launchctl bootout {service} failed: {}", stderr.trim()))
             .with_hint(format!("launchctl print {service}"))
             .into());
+    }
+    if was_running {
+        // Otherwise a `yard start` straight after finds the agent still loaded and only kicks it.
+        unloaded(&service).await;
     }
     ctx.emit(&serde_json::json!({ "stopped": was_running }), || {
         if was_running { "yardd stopped.\n".into() } else { "yardd was not running.\n".into() }
