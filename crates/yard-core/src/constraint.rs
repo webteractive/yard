@@ -23,11 +23,14 @@ pub fn satisfies(constraint: &str, v: PhpVersion) -> Option<bool> {
     constraint.contains(|c: char| !c.is_whitespace() && c != '|').then_some(any)
 }
 
-/// A version in a constraint: major, minor if given, and whether a patch was given.
+/// A version in a constraint: major, and minor and patch if given.
 struct Spec {
     major: u8,
     minor: Option<u8>,
+    /// A patch was written: `~7.1.0` stays within 7.1, `~7.1` does not.
     patch: bool,
+    /// The patch is above 0: `<7.1.3` admits 7.1, `<8.0.0` does not admit 8.0.
+    past_zero: bool,
 }
 
 fn spec(text: &str) -> Option<Spec> {
@@ -39,15 +42,12 @@ fn spec(text: &str) -> Option<Spec> {
         Some(p) if wild(p) => None,
         Some(p) => Some(p.parse().ok()?),
     };
-    let patch = match parts.next() {
-        None => false,
-        Some(p) if wild(p) => false,
-        Some(p) => {
-            p.parse::<u16>().ok()?;
-            true
-        }
+    let (patch, past_zero) = match parts.next() {
+        None => (false, false),
+        Some(p) if wild(p) => (false, false),
+        Some(p) => (true, p.parse::<u16>().ok()? > 0),
     };
-    parts.next().is_none().then_some(Spec { major, minor, patch })
+    parts.next().is_none().then_some(Spec { major, minor, patch, past_zero })
 }
 
 fn term_holds(term: &str, v: PhpVersion) -> Option<bool> {
@@ -62,7 +62,7 @@ fn term_holds(term: &str, v: PhpVersion) -> Option<bool> {
     let same = v.major == s.major && s.minor.is_none_or(|m| m == v.minor);
     Some(match op {
         "" | "=" | "==" => same,
-        "!=" => !same || s.patch,
+        "!=" => !same || s.past_zero,
         "^" => at >= low && v.major == s.major,
         "~" => match (s.minor, s.patch) {
             (Some(m), true) => at == (s.major, m),
@@ -87,7 +87,7 @@ fn term_holds(term: &str, v: PhpVersion) -> Option<bool> {
             }
         }
         "<" => {
-            if s.patch {
+            if s.past_zero {
                 at <= low
             } else {
                 at < low
@@ -120,6 +120,11 @@ mod tests {
             (">=7.1.3", "7.1", Some(true)),
             ("<7.1.3", "7.1", Some(true)),
             ("<7.1", "7.1", Some(false)),
+            ("<8.0.0", "8.0", Some(false)),
+            (">=7.2 <8.0.0", "8.0", Some(false)),
+            ("<=8.0.0", "8.0", Some(true)),
+            ("~7.1.0", "7.2", Some(false)),
+            (">8.0.0", "8.0", Some(true)),
             (">7.4", "8.0", Some(true)),
             ("!=7.2", "7.2", Some(false)),
             ("*", "8.5", Some(true)),

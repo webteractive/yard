@@ -65,8 +65,11 @@ pub async fn config(ctx: &Ctx, action: ConfigAction) -> Outcome {
         }
         ConfigAction::Unset { key, php } => {
             let params = PhpConfigParams { php, key: key.clone(), value: None };
-            client.call::<_, ()>(methods::PHP_CONFIG_UNSET, params).await?;
-            ctx.emit(&(), || format!("Removed the {key} override.\n"));
+            let removed: bool = client.call(methods::PHP_CONFIG_UNSET, params).await?;
+            ctx.emit(&removed, || match removed {
+                true => format!("Removed the {key} override.\n"),
+                false => format!("{key} was not overridden.\n"),
+            });
         }
     }
     Ok(0)

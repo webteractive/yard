@@ -113,6 +113,7 @@ async fn ext_add_refuses_a_managed_name_and_a_bad_one() {
     assert_eq!(e.hint.as_deref(), Some("yard ext enable redis --php 8.4"));
     let e = c.call("ext.add", json!({"name": "../x"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidArgument);
+    assert_eq!(e.hint.as_deref(), Some("yard ext add --help"));
     let e = c.call("ext.add", json!({"name": "redis", "php": "7.1"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::PhpNotInstalled);
     d.shutdown().await.unwrap();

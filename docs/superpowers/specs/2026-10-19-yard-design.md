@@ -168,8 +168,11 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   as a job (§6.2). Installed versions are read from brew's kegs, not registered in
   `yard.toml` (decided 2026-10-20), so a version installed with brew directly counts too.
 - `yard php uninstall <ver>` → `brew uninstall`, as a job. It is refused with
-  `PHP_IN_USE`, before brew runs, while the version is the default or any site is
-  isolated to it; the job checks again when it starts, since it may wait behind another.
+  `PHP_IN_USE`, before brew runs, while the version is the default, any site is
+  isolated to it, or `yard.toml` records a brew, pecl or path extension for it (hint
+  `yard ext remove <name> --php <ver>`); the job checks again when it starts, since it
+  may wait behind another. After brew removes it, the version's `[php."<ver>"]` table,
+  by then only bundled toggles, goes too.
 - `yard php default <ver>` sets the global default (`default_php` in `yard.toml`);
   the version must be installed.
 - `yard php list` shows each installed version (and the default if it is not
@@ -263,6 +266,8 @@ Generated defaults (dev-friendly): `memory_limit=512M`,
 `yard php config set <key> <value> [--php <ver>]` and
 `yard php config get|unset` edit `99-overrides.ini` only, line by line so the user's
 comments and other lines stay, and reload that version's pool gracefully (SIGUSR2).
+Unsetting a key that is not overridden succeeds and changes nothing, so scripts can
+run it twice.
 Keys are directive names (`[A-Za-z0-9_.]`); a value is one line without `"`, and is
 quoted when it holds spaces or `;`.
 

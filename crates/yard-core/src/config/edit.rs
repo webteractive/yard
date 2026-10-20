@@ -36,18 +36,9 @@ impl TomlFile {
         table.insert(last, value);
     }
 
+    /// Removes the key, and any table above it that is left empty, so no bare header stays.
     pub fn remove(&mut self, keys: &[&str]) -> bool {
-        let Some((last, parents)) = keys.split_last() else {
-            return false;
-        };
-        let mut table: &mut dyn TableLike = self.doc.as_table_mut();
-        for key in parents {
-            match table.get_mut(key).and_then(Item::as_table_like_mut) {
-                Some(t) => table = t,
-                None => return false,
-            }
-        }
-        table.remove(last).is_some()
+        remove_in(self.doc.as_table_mut(), keys)
     }
 
     /// Appends `value` to the string array at `keys` unless already present.
@@ -117,6 +108,23 @@ fn implicit_table() -> Item {
     Item::Table(t)
 }
 
+fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> bool {
+    let Some((first, rest)) = keys.split_first() else {
+        return false;
+    };
+    if rest.is_empty() {
+        return table.remove(first).is_some();
+    }
+    let Some(child) = table.get_mut(first).and_then(Item::as_table_like_mut) else {
+        return false;
+    };
+    let removed = remove_in(child, rest);
+    if removed && child.is_empty() {
+        table.remove(first);
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +176,21 @@ mod tests {
         assert!(f.remove(&["sites", "a"]));
         assert!(!f.remove(&["sites", "a"]));
         assert!(!f.remove(&["nope", "x"]));
+    }
+
+    #[test]
+    fn remove_drops_the_tables_it_empties() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yard.toml");
+        std::fs::write(
+            &path,
+            "default_php = \"8.4\"\n\n[php.\"8.4\".extensions]\nredis = { source = \"pecl\" }\n",
+        )
+        .unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["php", "8.4", "extensions", "redis"]));
+        f.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "default_php = \"8.4\"\n");
     }
 
     #[test]

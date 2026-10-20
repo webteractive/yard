@@ -163,7 +163,7 @@ async fn uninstall_refuses_an_isolated_version() {
     let err = c.call("php.uninstall", json!({"php": "7.1"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::PhpInUse);
     assert!(err.message.contains("blog"), "{}", err.message);
-    assert_eq!(err.hint.as_deref(), Some("yard isolate <version> --site blog"));
+    assert_eq!(err.hint.as_deref(), Some("yard unisolate --site blog"));
     assert!(!brew_log(&d).contains("uninstall"));
     d.shutdown().await.unwrap();
 }
@@ -229,8 +229,9 @@ async fn config_refuses_bad_keys_values_and_versions() {
     }
     let err = c.call("php.config.set", json!({"key": "x", "value": "1", "php": "7.3"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::PhpNotInstalled);
-    let err = c.call("php.config.unset", json!({"key": "never_set"})).await.unwrap_err();
-    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    // Unsetting what is not set is done already: scripts can run it twice.
+    let removed = c.call("php.config.unset", json!({"key": "never_set"})).await.unwrap();
+    assert_eq!(removed, json!(false));
     d.shutdown().await.unwrap();
 }
 
@@ -258,5 +259,45 @@ async fn a_queued_uninstall_rechecks_when_it_runs() {
     assert_eq!(error.map(|e| e.code), Some(ErrorCode::PhpInUse));
     assert!(d.fx.brew.path().join("opt/php@7.1").exists(), "7.1 stays: blog runs on it");
     assert!(!brew_log(&d).contains("uninstall"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_refuses_a_version_with_extensions_and_forgets_its_toggles() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "[php.\"7.1\".extensions]\nredis = { source = \"pecl\" }\nopcache = { source = \"bundled\", enabled = false }\n",
+    )
+    .unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let err = c.call("php.uninstall", json!({"php": "7.1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PhpInUse);
+    assert!(err.message.contains("redis"), "{}", err.message);
+    assert_eq!(err.hint.as_deref(), Some("yard ext remove redis --php 7.1"));
+    assert!(!brew_log(&d).contains("uninstall"));
+
+    // With only a bundled toggle left, the uninstall runs and the version's table goes.
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "[php.\"7.1\".extensions]\nopcache = { source = \"bundled\", enabled = false }\n",
+    )
+    .unwrap();
+    let (lines, error) = run_job(&mut c, "php.uninstall", json!({"php": "7.1"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    let toml = std::fs::read_to_string(d.fx.paths.yard_toml()).unwrap();
+    assert!(!toml.contains("7.1"), "{toml}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstalling_the_only_version_hints_an_install() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let err = c.call("php.uninstall", json!({"php": "8.4"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PhpInUse);
+    assert_eq!(err.hint.as_deref(), Some("yard php install 8.5"));
     d.shutdown().await.unwrap();
 }

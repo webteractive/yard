@@ -8,8 +8,9 @@ use crate::reconcile::{USER_OWNED_INI, fpm_unit};
 use std::path::Path;
 use toml_edit::value;
 use yard_core::brew::Brew;
+use yard_core::config::yard::ExtSource;
 use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::php::formula;
+use yard_core::php::{SUPPORTED, formula};
 use yard_core::{Paths, PhpVersion};
 use yard_core::{generated, ini};
 use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpParams};
@@ -82,18 +83,27 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
     Ok(ctx.jobs.start("php-uninstall", move |job: JobCtx| async move {
         refuse_in_use(&paths, v, &installed(&brew))?;
         job.run(&brew.brew_bin(), &["uninstall", &formula(v)], &[]).await?;
+        // Bundled toggles are all that can be left: they go with the version.
+        let mut file = TomlFile::load(&paths.yard_toml())?;
+        if file.remove(&["php", &v.to_string()]) {
+            file.save()?;
+        }
         reconciler.reconcile().await.map(|_| ())
     }))
 }
 
-/// `PHP_IN_USE` while `v` is the default or a site is isolated to it.
+/// `PHP_IN_USE` while `v` is the default, a site is isolated to it, or an extension Yard
+/// installed for it is recorded.
 fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Result<(), YardError> {
     let (yard, _) = load_yard(paths)?;
     if yard.default_php == v {
-        let other = versions.iter().rev().find(|o| **o != v);
-        let hint = match other {
+        let hint = match versions.iter().rev().find(|o| **o != v) {
             Some(o) => format!("yard php default {o}"),
-            None => format!("install another version first, then yard php default <it>; PHP {v} stays"),
+            None => {
+                let other =
+                    SUPPORTED.iter().rev().find(|o| **o != v).expect("Yard supports more than one PHP");
+                format!("yard php install {other}")
+            }
         };
         return Err(
             YardError::new(ErrorCode::PhpInUse, format!("PHP {v} is the default version")).with_hint(hint)
@@ -107,8 +117,23 @@ fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Resul
         .collect();
     if let Some(first) = isolated.first() {
         let message = format!("PHP {v} runs {}, isolated to it", isolated.join(", "));
+        return Err(
+            YardError::new(ErrorCode::PhpInUse, message).with_hint(format!("yard unisolate --site {first}"))
+        );
+    }
+    let added: Vec<&String> = yard
+        .extensions
+        .get(&v)
+        .into_iter()
+        .flatten()
+        .filter(|(_, e)| e.source != ExtSource::Bundled)
+        .map(|(name, _)| name)
+        .collect();
+    if let Some(first) = added.first() {
+        let names: Vec<&str> = added.iter().map(|n| n.as_str()).collect();
+        let message = format!("PHP {v} has extensions Yard added: {}", names.join(", "));
         return Err(YardError::new(ErrorCode::PhpInUse, message)
-            .with_hint(format!("yard isolate <version> --site {first}")));
+            .with_hint(format!("yard ext remove {first} --php {v}")));
     }
     Ok(())
 }
@@ -171,8 +196,9 @@ pub(super) fn config_get(ctx: &Context, p: PhpConfigParams) -> Result<Option<Str
 }
 
 /// `set` (with `p.value`) or `unset` on `99-overrides.ini`, then a graceful reload of
-/// the version's pool if it runs. The only place Yard writes that file.
-pub(super) async fn config_edit(ctx: &Context, p: PhpConfigParams, set: bool) -> Result<(), YardError> {
+/// the version's pool if it runs. The only place Yard writes that file. Whether it
+/// changed: unsetting a key that is not set is `false`, and touches nothing.
+pub(super) async fn config_edit(ctx: &Context, p: PhpConfigParams, set: bool) -> Result<bool, YardError> {
     if !ini::valid_key(&p.key) {
         return Err(bad(format!("{:?} is not a php.ini directive name", p.key))
             .with_hint("names are letters, digits, _ and ., e.g. memory_limit"));
@@ -194,10 +220,7 @@ pub(super) async fn config_edit(ctx: &Context, p: PhpConfigParams, set: bool) ->
     } else {
         match ini::unset(&text, &p.key) {
             (edited, true) => edited,
-            (_, false) => {
-                return Err(bad(format!("{} is not set for PHP {v}", p.key))
-                    .with_hint(format!("yard php config get {} --php {v}", p.key)));
-            }
+            (_, false) => return Ok(false),
         }
     };
     generated::write_atomic(&file, &edited).map_err(io)?;
@@ -205,5 +228,5 @@ pub(super) async fn config_edit(ctx: &Context, p: PhpConfigParams, set: bool) ->
     if ctx.supervisor().list().iter().any(|u| u.name == unit && u.pid.is_some()) {
         ctx.supervisor().reload(&unit).await?;
     }
-    Ok(())
+    Ok(true)
 }

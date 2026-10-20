@@ -48,7 +48,7 @@ pub(super) fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardErro
     };
     if !valid_ext_name(&module) {
         return Err(bad(format!("{module:?} is not an extension name: use letters, digits and _"))
-            .with_hint("yard ext add <name>, <name>-<pecl version> or /path/to/<name>.so"));
+            .with_hint("yard ext add --help"));
     }
     let (yard, _) = load_yard(&ctx.paths)?;
     if yard.extensions.get(&v).is_some_and(|exts| exts.contains_key(&module)) {

@@ -409,7 +409,7 @@ fn php_config_set_get_unset() {
     let d = MockDaemon::start(&[
         ("php.config.set", Ok(json!(null))),
         ("php.config.get", Ok(json!("1G"))),
-        ("php.config.unset", Ok(json!(null))),
+        ("php.config.unset", Ok(json!(false))),
     ]);
     let out = d.yard().args(["php", "config", "set", "memory_limit", "1G", "--php", "7.1"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
@@ -422,6 +422,7 @@ fn php_config_set_get_unset() {
 
     let out = d.yard().args(["php", "config", "unset", "memory_limit"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "memory_limit was not overridden.\n");
 }
 
 #[test]
