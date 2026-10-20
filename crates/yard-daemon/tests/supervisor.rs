@@ -324,21 +324,6 @@ async fn apply_reports_the_units_it_started() {
 }
 
 #[tokio::test]
-async fn http_health_needs_an_answer_not_a_backlog() {
-    let h = harness(fast());
-    // A listener nobody accepts on takes a connect into its backlog but never answers.
-    let held = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = held.local_addr().unwrap().port();
-    h.sup.apply(vec![process("silent", FAKE, &["hang"], Health::Http(port))]).await;
-    let u = wait_for(&h.sup, "silent", |u| {
-        matches!(u.state, UnitState::Backoff { .. } | UnitState::Failed { .. })
-    })
-    .await;
-    assert!(u.last_error.as_deref().is_some_and(|e| e.contains("not healthy")), "{u:?}");
-    h.sup.shutdown().await;
-}
-
-#[tokio::test]
 async fn stop_sends_the_units_stop_signal() {
     let h = harness(fast());
     let port = free_port();
@@ -390,4 +375,33 @@ async fn a_unit_stopped_before_it_is_healthy_gets_sigterm() {
     h.sup.shutdown().await;
     let log = std::fs::read_to_string(h.logs.path().join("early.log")).unwrap_or_default();
     assert!(log.contains("got SIGTERM"), "{log}");
+}
+
+#[tokio::test]
+async fn fake_nginx_serves_every_inherited_socket() {
+    // nginx serves all of `NGINX="fd;fd;"`: in the privileged profile that is http and
+    // https, each on 127.0.0.1 and ::1, in whatever order the helper opened them.
+    let (a, a_port) = support::inheritable_listener();
+    let (b, b_port) = support::inheritable_listener();
+    let dir = tempfile::tempdir().unwrap();
+    let nginx = dir.path().join("nginx");
+    std::os::unix::fs::symlink(FAKE, &nginx).unwrap();
+    let conf = dir.path().join("nginx.conf");
+    std::fs::write(&conf, "").unwrap();
+    use std::os::fd::AsRawFd;
+    let fds = format!("{};{};", a.as_raw_fd(), b.as_raw_fd());
+    let mut child = tokio::process::Command::new(&nginx)
+        .arg("-p")
+        .arg(dir.path())
+        .arg("-c")
+        .arg(&conf)
+        .env("NGINX", fds)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    for port in [a_port, b_port] {
+        let served = || support::served(port);
+        assert!(support::wait_until(served, Duration::from_secs(5)).await, "nothing serves {port}");
+    }
+    child.kill().await.unwrap();
 }

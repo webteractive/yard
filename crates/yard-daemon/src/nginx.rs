@@ -86,6 +86,7 @@ impl NginxCommand {
         cmd.args(self.args()).arg("-t").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
         // SAFETY: the hook makes only async-signal-safe calls.
         unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+        crate::fds::settle_before_fork();
         let mut child = cmd.spawn().map_err(|e| {
             YardError::new(ErrorCode::FormulaMissing, format!("cannot run {}: {e}", self.bin.display()))
                 .with_hint("brew install nginx")

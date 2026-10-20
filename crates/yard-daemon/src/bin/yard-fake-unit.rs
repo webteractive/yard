@@ -49,8 +49,8 @@ fn mode(args: &[String]) -> ExitCode {
 }
 
 /// `-p <prefix> -c <conf> [-e <log>] [-t]`. Runs in the foreground, as Yard's
-/// `daemon off;` asks. With `NGINX="fd;…"` it serves on the first inherited socket and
-/// logs the line real nginx logs; otherwise it listens on the conf's first
+/// `daemon off;` asks. With `NGINX="fd;…"` it serves on every inherited socket, as nginx
+/// does, and logs the line real nginx logs; otherwise it listens on the conf's first
 /// `listen 127.0.0.1:N`.
 fn nginx(args: &[String]) -> ExitCode {
     let (Some(prefix), Some(conf)) = (flag(args, "-p"), flag(args, "-c")) else {
@@ -75,11 +75,17 @@ fn nginx(args: &[String]) -> ExitCode {
     unsafe { libc::signal(libc::SIGQUIT, quit as libc::sighandler_t) };
     if let Ok(fds) = std::env::var("NGINX") {
         eprintln!("nginx: [notice] using inherited sockets from \"{fds}\"");
-        let Some(fd) = fds.split(';').next().and_then(|fd| fd.parse::<RawFd>().ok()) else {
+        let fds: Vec<RawFd> = fds.split(';').filter_map(|fd| fd.parse().ok()).collect();
+        let Some((&first, rest)) = fds.split_first() else {
             return fail(format!("NGINX={fds:?} names no descriptor"));
         };
-        // SAFETY: yardd handed this listening socket to nginx, which owns it from here.
-        return serve(unsafe { TcpListener::from_raw_fd(fd) }, true);
+        for &fd in rest {
+            // SAFETY: yardd handed these listening sockets to nginx, which owns them from here.
+            let listener = unsafe { TcpListener::from_raw_fd(fd) };
+            std::thread::spawn(move || serve(listener, true));
+        }
+        // SAFETY: as above.
+        return serve(unsafe { TcpListener::from_raw_fd(first) }, true);
     }
     let text = std::fs::read_to_string(conf).unwrap_or_default();
     let port = text.lines().find_map(|l| {
@@ -125,12 +131,29 @@ fn serve(listener: TcpListener, http: bool) -> ExitCode {
     // nginx reloads on SIGHUP; the fake must survive one.
     // SAFETY: setting a signal disposition to SIG_IGN has no preconditions.
     unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
-    for mut stream in listener.incoming().flatten() {
+    for stream in listener.incoming().flatten() {
         if http {
-            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
+            std::thread::spawn(move || answer(stream));
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Reads the request head before answering, as nginx does: closing with the request
+/// still unread makes macOS reset the connection, and the client loses the answer. A
+/// client that sends nothing gets its answer after a second.
+fn answer(mut stream: std::net::TcpStream) {
+    use std::io::Read;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let mut head = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => head.extend_from_slice(&buf[..n]),
+        }
+    }
+    let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
 }
 
 /// Like `listen-tcp`, and says which of SIGQUIT and SIGTERM stopped it.

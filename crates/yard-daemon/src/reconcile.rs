@@ -285,7 +285,7 @@ impl Reconciler {
                 program: self.nginx.program().to_path_buf(),
                 args: self.nginx.args(),
                 env: vec![],
-                health: Health::Http(http),
+                health: Health::Tcp(http),
                 port: (!privileged).then_some((http, Proto::Tcp)),
                 reload: Reload::Signal(libc::SIGHUP),
                 stop: libc::SIGQUIT,

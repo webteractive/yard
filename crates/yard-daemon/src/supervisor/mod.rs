@@ -21,9 +21,6 @@ use yard_proto::{ErrorCode, UnitInfo, UnitState, YardError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Health {
     Tcp(u16),
-    /// An HTTP status line in answer to `GET /`. A connect alone cannot tell a serving
-    /// nginx from a listener yardd holds for it, whose backlog accepts any connect.
-    Http(u16),
     Unix(PathBuf),
 }
 

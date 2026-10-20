@@ -30,3 +30,15 @@ pub fn cloexec_inherited() -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Call right before spawning. Forking runs libnotify's fork handler in the child, and if
+/// another thread was half-way through libnotify's one-time setup at that moment (FSEvents
+/// does it on the watcher's thread), the child aborts before it can exec. This finishes
+/// the setup first, or waits for the thread doing it, so the fork never lands mid-setup.
+pub fn settle_before_fork() {
+    unsafe extern "C" {
+        fn notify_is_valid_token(val: libc::c_int) -> bool;
+    }
+    // SAFETY: a read-only query of libnotify's state with no preconditions.
+    unsafe { notify_is_valid_token(0) };
+}

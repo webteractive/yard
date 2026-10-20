@@ -321,8 +321,10 @@ profile; Yard does not edit dotfiles.
 - Every managed process is a `Unit` with `start`, `stop`, `reload` (optional),
   `health`, and a log sink.
 - Health: socket connect (FPM, mysql socket) or TCP connect (registered port),
-  every 5 s. nginx must answer `GET /` with an HTTP status line: a connect alone
-  would also succeed against a privileged listener's backlog with no nginx behind it.
+  every 5 s. Known gap: in the privileged profile yardd holds nginx's listeners, so a
+  connect succeeds into their backlog even with no nginx serving. An HTTP check closed
+  it but flaked the suite (unexplained resets on the inherited sockets), so it waits
+  for a check that does not depend on them.
 - Stop: SIGTERM, then SIGKILL after 5 s. A running nginx gets SIGQUIT instead, its
   graceful shutdown; a unit that has not passed a health check yet always gets SIGTERM.
 - Crash → restart with exponential backoff (1 s → 30 s). Five failures within

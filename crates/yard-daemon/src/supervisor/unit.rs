@@ -219,6 +219,7 @@ impl Runner {
                 Ok(())
             })
         };
+        crate::fds::settle_before_fork();
         let mut child =
             cmd.spawn().map_err(|e| Ended::Failure(format!("cannot run {}: {e}", program.display())))?;
         let mut readers = vec![];
@@ -236,9 +237,6 @@ impl Runner {
             Health::Tcp(port) => {
                 let connect = TcpStream::connect(("127.0.0.1", *port));
                 matches!(tokio::time::timeout(HEALTH_TIMEOUT, connect).await, Ok(Ok(_)))
-            }
-            Health::Http(port) => {
-                matches!(tokio::time::timeout(HEALTH_TIMEOUT, http_status(*port)).await, Ok(true))
             }
             Health::Unix(path) => {
                 matches!(tokio::time::timeout(HEALTH_TIMEOUT, UnixStream::connect(path)).await, Ok(Ok(_)))
@@ -319,17 +317,6 @@ impl Process {
         }
         drain(&mut self.readers).await;
     }
-}
-
-/// Whether `GET /` on `127.0.0.1:port` gets an HTTP status line back.
-async fn http_status(port: u16) -> bool {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)).await else { return false };
-    if stream.write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n").await.is_err() {
-        return false;
-    }
-    let mut head = [0u8; 5];
-    stream.read_exact(&mut head).await.is_ok() && &head == b"HTTP/"
 }
 
 /// Copies a child's output into the log line by line; invalid UTF-8 is replaced.

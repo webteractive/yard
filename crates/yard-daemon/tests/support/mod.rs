@@ -2,6 +2,7 @@
 //! php-fpm are `yard-fake-unit`, and an in-process helper.
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -80,10 +81,19 @@ pub fn ports_toml(http: u16, https: u16, dns: u16) -> String {
     )
 }
 
-/// An OS-assigned port, released at once. macOS allocates ephemeral ports in sequence,
-/// so it is not handed out again soon.
+/// An OS-assigned port, released at once, and never handed to another test in this
+/// binary. macOS allocates ephemeral ports in sequence, but every health check and probe
+/// connection takes one too, so the sequence wraps within seconds and `:0` would give a
+/// second test a port the first has not bound yet.
 pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    static GIVEN: std::sync::Mutex<BTreeSet<u16>> = std::sync::Mutex::new(BTreeSet::new());
+    let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        if given.insert(port) {
+            return port;
+        }
+    }
 }
 
 /// The helper, in-process as the current user, its socket under a short `/tmp` dir. `privileged_ports` stands in for 80 and

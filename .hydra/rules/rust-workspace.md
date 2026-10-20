@@ -26,12 +26,11 @@ triggers:
   `YardError` with a hint. Tests may unwrap.
 - Tests use a temp `YARD_ROOT`, OS-assigned free ports and `yard-fake-unit` (via
   `argv[0]` it stands in for nginx, dnsmasq and php-fpm and reads the configs Yard
-  rendered). Its nginx runs in the foreground; with `NGINX` set it serves on the first
+  rendered). Its nginx runs in the foreground; with `NGINX` set it serves on every
   inherited socket and logs real nginx's `using inherited sockets from` line, which
   `support::inherited_starts` counts. A bare connect cannot prove inheritance, since
-  yardd's own copy of the listener accepts it into the backlog; that is also why the
-  nginx unit's health is `Health::Http` and the fake answers each connection with an
-  HTTP status line. Like nginx, the fake exits 0 on SIGQUIT: dying of the signal makes
+  yardd's own copy of the listener accepts it into the backlog. Like real nginx it
+  serves every inherited socket and reads a request before answering. Like nginx, the fake exits 0 on SIGQUIT: dying of the signal makes
   macOS write a crash report, and ReportCrash holds the process (and its sockets) while
   it does, which stalls stops and flakes tests. Its `signals <port>` mode logs which of
   SIGQUIT and SIGTERM stopped it.

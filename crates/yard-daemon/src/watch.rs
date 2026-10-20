@@ -7,43 +7,38 @@
 
 use crate::daemon::Context;
 use crate::describe;
-use notify_debouncer_mini::notify::RecursiveMode;
-use notify_debouncer_mini::{DebounceEventResult, new_debouncer};
+use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-pub fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let (tx, mut rx) = mpsc::unbounded_channel::<DebounceEventResult>();
-        let mut debouncer = match new_debouncer(debounce, move |result| {
-            let _ = tx.send(result);
-        }) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("cannot watch for changes: {e}; edits need `yard restart`");
-                return;
-            }
-        };
-        let root = canonical(ctx.paths.root());
-        if let Err(e) = debouncer.watcher().watch(&root, RecursiveMode::NonRecursive) {
-            tracing::warn!("cannot watch {}: {e}", root.display());
+/// Returns once every path is watched, so yardd serves no request before an edit can be
+/// seen: FSEvents reports nothing from before its stream started.
+pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> JoinHandle<()> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<DebounceEventResult>();
+    let debouncer: Watcher = match new_debouncer(debounce, move |result| {
+        let _ = tx.send(result);
+    }) {
+        Ok(d) => Arc::new(Mutex::new(d)),
+        Err(e) => {
+            tracing::error!("cannot watch for changes: {e}; edits need `yard restart`");
+            return tokio::spawn(async {});
         }
-        let overrides = canonical(&ctx.paths.nginx_dir().join("overrides"));
-        if let Err(e) = debouncer.watcher().watch(&overrides, RecursiveMode::NonRecursive) {
-            tracing::warn!("cannot watch {}: {e}", overrides.display());
-        }
-        let tomls: BTreeSet<PathBuf> =
-            [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml()]
-                .iter()
-                .map(|p| canonical(p))
-                .collect();
-        let mut parked = BTreeSet::new();
-        rewatch(&ctx, &mut debouncer, &mut parked).await;
+    };
+    let overrides = canonical(&ctx.paths.nginx_dir().join("overrides"));
+    let tomls: BTreeSet<PathBuf> = [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml()]
+        .iter()
+        .map(|p| canonical(p))
+        .collect();
+    let mut parked = parked_paths(&ctx).await.unwrap_or_default();
+    let first = [canonical(ctx.paths.root()), overrides.clone()].into_iter().chain(parked.iter().cloned());
+    change_watches(&debouncer, vec![], first.collect()).await;
 
+    tokio::spawn(async move {
         let mut tick = tokio::time::interval(rescan);
         loop {
             let result = tokio::select! {
@@ -79,7 +74,7 @@ pub fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> JoinHan
                     Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
                     Err(e) => tracing::warn!("reconcile after a change: {}", describe(&e)),
                 }
-                rewatch(&ctx, &mut debouncer, &mut parked).await;
+                rewatch(&ctx, &debouncer, &mut parked).await;
             }
             if overridden && let Err(e) = ctx.reconciler.apply_overrides().await {
                 tracing::warn!("applying an override edit: {}", describe(&e));
@@ -88,23 +83,47 @@ pub fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> JoinHan
     })
 }
 
+type Watcher = Arc<Mutex<Debouncer<RecommendedWatcher>>>;
+
+/// The parked paths of the current snapshot, canonical.
+async fn parked_paths(ctx: &Context) -> Option<BTreeSet<PathBuf>> {
+    let snapshot = ctx.reconciler.snapshot().await?;
+    Some(snapshot.yard.parked.iter().map(|p| canonical(p)).collect())
+}
+
 /// Watches the parked paths of the current snapshot, dropping ones no longer parked.
-async fn rewatch(
-    ctx: &Context,
-    debouncer: &mut notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>,
-    watched: &mut BTreeSet<PathBuf>,
-) {
-    let Some(snapshot) = ctx.reconciler.snapshot().await else { return };
-    let wanted: BTreeSet<PathBuf> = snapshot.yard.parked.iter().map(|p| canonical(p)).collect();
-    for gone in watched.difference(&wanted) {
-        let _ = debouncer.watcher().unwatch(gone);
-    }
-    for new in wanted.difference(watched) {
-        if let Err(e) = debouncer.watcher().watch(new, RecursiveMode::NonRecursive) {
-            tracing::warn!("cannot watch parked path {}: {e}", new.display());
-        }
-    }
+async fn rewatch(ctx: &Context, debouncer: &Watcher, watched: &mut BTreeSet<PathBuf>) {
+    let Some(wanted) = parked_paths(ctx).await else { return };
+    let gone = watched.difference(&wanted).cloned().collect();
+    let new = wanted.difference(watched).cloned().collect();
+    change_watches(debouncer, gone, new).await;
     *watched = wanted;
+}
+
+/// Applies watch changes as one batch: FSEvents restarts its stream for each change, and
+/// each restart waits on fseventsd, which can take seconds when the system is busy. The
+/// wait runs on the blocking pool, so yardd keeps answering requests meanwhile.
+async fn change_watches(debouncer: &Watcher, unwatch: Vec<PathBuf>, watch: Vec<PathBuf>) {
+    if unwatch.is_empty() && watch.is_empty() {
+        return;
+    }
+    let debouncer = debouncer.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let mut debouncer = debouncer.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut paths = debouncer.watcher().paths_mut();
+        for gone in &unwatch {
+            let _ = paths.remove(gone);
+        }
+        for new in &watch {
+            if let Err(e) = paths.add(new, RecursiveMode::NonRecursive) {
+                tracing::warn!("cannot watch {}: {e}", new.display());
+            }
+        }
+        if let Err(e) = paths.commit() {
+            tracing::warn!("cannot start watching: {e}");
+        }
+    })
+    .await;
 }
 
 /// FSEvents reports resolved paths (`/private/var/…`), so compare canonical forms. A
