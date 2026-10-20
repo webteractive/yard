@@ -6,13 +6,13 @@ use super::php::config_version;
 use crate::daemon::Context;
 use crate::ext::{Add, Remove};
 use crate::reconcile::brew_conf_d;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{InlineTable, value};
 use yard_core::PhpVersion;
 use yard_core::config::yard::{ExtEntry, ExtSource, valid_ext_name};
 use yard_core::config::{TomlFile, load_yard};
-use yard_core::render::php::ini_modules;
+use yard_core::render::php::ini_loads;
 use yard_proto::methods::{ExtAddParams, ExtListParams, ExtParams, XdebugParams};
 use yard_proto::{ErrorCode, ExtInfo, JobStarted, YardError};
 
@@ -81,13 +81,21 @@ fn managed(ctx: &Context, v: PhpVersion) -> Result<BTreeMap<String, ExtEntry>, Y
     Ok(load_yard(&ctx.paths)?.0.extensions.remove(&v).unwrap_or_default())
 }
 
-/// Modules brew's `conf.d` loads for `v` that `exts` does not manage.
-fn bundled(ctx: &Context, v: PhpVersion, exts: &BTreeMap<String, ExtEntry>) -> BTreeSet<String> {
-    brew_conf_d(&ctx.brew.php_conf_d(v))
-        .iter()
-        .flat_map(|(_, text)| ini_modules(text).collect::<Vec<_>>())
-        .filter(|m| !exts.keys().any(|n| n.eq_ignore_ascii_case(m)))
-        .collect()
+/// Modules brew's `conf.d` loads for `v` that `exts` does not manage, each with where it
+/// comes from: `brew` when it loads by absolute path from under brew's prefix (an
+/// extension formula's keg), else `bundled`.
+fn bundled(ctx: &Context, v: PhpVersion, exts: &BTreeMap<String, ExtEntry>) -> BTreeMap<String, ExtSource> {
+    let mut found = BTreeMap::new();
+    for (_, text) in brew_conf_d(&ctx.brew.php_conf_d(v)) {
+        for (module, value) in ini_loads(&text) {
+            if exts.keys().any(|n| n.eq_ignore_ascii_case(&module)) {
+                continue;
+            }
+            let in_keg = value.starts_with('/') && Path::new(value).starts_with(&ctx.brew.prefix);
+            found.insert(module, if in_keg { ExtSource::Brew } else { ExtSource::Bundled });
+        }
+    }
+    found
 }
 
 pub(super) fn list(ctx: &Context, p: ExtListParams) -> Result<Vec<ExtInfo>, YardError> {
@@ -97,9 +105,9 @@ pub(super) fn list(ctx: &Context, p: ExtListParams) -> Result<Vec<ExtInfo>, Yard
         .iter()
         .map(|(name, e)| ExtInfo { name: name.clone(), source: e.source.name().into(), enabled: e.enabled })
         .collect();
-    rows.extend(bundled(ctx, v, &exts).into_iter().map(|name| ExtInfo {
+    rows.extend(bundled(ctx, v, &exts).into_iter().map(|(name, source)| ExtInfo {
         name,
-        source: ExtSource::Bundled.name().into(),
+        source: source.name().into(),
         enabled: true,
     }));
     rows.sort_by(|a, b| a.name.cmp(&b.name));
@@ -111,10 +119,18 @@ pub(super) fn list(ctx: &Context, p: ExtListParams) -> Result<Vec<ExtInfo>, Yard
 pub(super) async fn toggle(ctx: &Context, p: ExtParams, on: bool) -> Result<(), YardError> {
     let v = config_version(ctx, p.php.as_deref())?;
     let exts = managed(ctx, v)?;
+    let others = bundled(ctx, v, &exts);
+    // Names match in any case: `yard ext disable OPcache` means opcache.
+    let name = exts
+        .keys()
+        .chain(others.keys())
+        .find(|n| n.eq_ignore_ascii_case(&p.name))
+        .cloned()
+        .unwrap_or(p.name);
     let version = v.to_string();
-    let keys = ["php", version.as_str(), "extensions", p.name.as_str()];
+    let keys = ["php", version.as_str(), "extensions", name.as_str()];
     let mut file = TomlFile::load(&ctx.paths.yard_toml())?;
-    match exts.get(&p.name) {
+    match exts.get(&name) {
         Some(e) if e.source == ExtSource::Bundled && on => {
             file.remove(&keys);
         }
@@ -124,7 +140,7 @@ pub(super) async fn toggle(ctx: &Context, p: ExtParams, on: bool) -> Result<(), 
                 .get("php")
                 .and_then(|t| t.get(version.as_str()))
                 .and_then(|t| t.get("extensions"))
-                .and_then(|t| t.get(p.name.as_str()))
+                .and_then(|t| t.get(name.as_str()))
                 .and_then(|item| item.as_inline_table())
                 .cloned();
             match inline {
@@ -136,16 +152,16 @@ pub(super) async fn toggle(ctx: &Context, p: ExtParams, on: bool) -> Result<(), 
                 None => file.set(&[keys.as_slice(), &["enabled"]].concat(), value(on)),
             }
         }
-        None if valid_ext_name(&p.name) && bundled(ctx, v, &exts).contains(&p.name) => {
+        None if valid_ext_name(&name) && others.contains_key(&name) => {
             if on {
                 return Ok(());
             }
             let mut table = InlineTable::new();
-            table.insert("source", "bundled".into());
+            table.insert("source", others[&name].name().into());
             table.insert("enabled", false.into());
             file.set(&keys, value(table));
         }
-        None => return Err(not_found(&p.name, v)),
+        None => return Err(not_found(&name, v)),
     }
     file.save()?;
     // Reconcile rewrites conf.d and restarts the version's pool if it runs.

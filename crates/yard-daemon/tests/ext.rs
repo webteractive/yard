@@ -268,6 +268,27 @@ async fn unknown_extension_is_ext_not_found() {
 }
 
 #[tokio::test]
+async fn a_module_brew_loads_from_a_keg_is_labelled_brew_and_matched_in_any_case() {
+    let d = prepared("").await;
+    let so = d.fx.brew.path().join("opt/phpredis@8.4/redis.so");
+    std::fs::create_dir_all(so.parent().unwrap()).unwrap();
+    std::fs::write(&so, "").unwrap();
+    let ini = format!("[redis]\nextension=\"{}\"\n", so.display());
+    std::fs::write(d.fx.brew.path().join("etc/php/8.4/conf.d/20-redis.ini"), ini).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let list = c.call("ext.list", json!({})).await.unwrap();
+    assert_eq!(list, json!([{"name": "redis", "source": "brew", "enabled": true}]));
+
+    c.call("ext.disable", json!({"name": "Redis"})).await.unwrap();
+    assert!(!conf_d(&d).join("10-brew-20-redis.ini").exists());
+    assert!(toml_text(&d).contains("redis = { source = \"brew\", enabled = false }"), "{}", toml_text(&d));
+    c.call("ext.enable", json!({"name": "REDIS"})).await.unwrap();
+    assert!(conf_d(&d).join("50-redis.ini").is_file());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn an_ini_brew_left_behind_is_neither_mirrored_nor_listed() {
     let d = prepared("").await;
     let gone = d.fx.brew.path().join("opt/phpredis@8.4/redis.so");

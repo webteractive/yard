@@ -92,7 +92,7 @@ pub fn is_stale(text: &str, exists: &dyn Fn(&std::path::Path) -> bool) -> bool {
 }
 
 /// Each `extension=`/`zend_extension=` line of an ini as (module, the value as written).
-fn ini_loads(text: &str) -> impl Iterator<Item = (String, &str)> + '_ {
+pub fn ini_loads(text: &str) -> impl Iterator<Item = (String, &str)> + '_ {
     text.lines().filter_map(|line| {
         let (key, value) = line.trim().split_once('=')?;
         if !matches!(key.trim(), "extension" | "zend_extension") {

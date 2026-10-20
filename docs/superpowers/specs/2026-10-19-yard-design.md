@@ -244,10 +244,13 @@ PHP itself loads (opcache), listed only to disable it. `xdebug` and `opcache` lo
 Other commands:
 
 - `yard ext list [--php]`: the managed extensions, plus each module brew's `conf.d`
-  loads that `yard.toml` does not manage, as `bundled`.
+  loads that `yard.toml` does not manage: as `brew` when its ini loads it by absolute
+  path from under brew's prefix (an extension formula installed by hand), else as
+  `bundled`.
 - `yard ext enable|disable <name> [--php]` toggles `enabled` without uninstalling, and
-  reconciles (which restarts the pool). Disabling an unmanaged bundled module writes
-  `{ source = "bundled", enabled = false }`; enabling it drops that entry.
+  reconciles (which restarts the pool). Names match in any case. Disabling an unmanaged
+  module writes `{ source = "bundled", enabled = false }` (or `"brew"`, as listed);
+  enabling a bundled one drops that entry.
 - `yard ext remove <name> [--php]` is a job: `brew uninstall` for `brew`,
   `pecl uninstall` for `pecl`, deleting the copy for `path`; then the entry goes. A
   bundled module is refused (hint `yard ext disable <name>`).
