@@ -273,7 +273,10 @@ For the CLI shims (current working directory), the version is the first match of
 3. The global default.
 
 `composer.json` `require.php` is advisory only: `yard doctor` warns when the
-resolved version does not satisfy it.
+resolved version does not satisfy it (check `php-constraint:<site>`). Constraints are
+judged at major.minor (`^`, `~`, comparisons, `*`, `x.y.*`, and/or); one Yard cannot
+read gives no check. The hint isolates the site to the highest installed version that
+fits, else installs the lowest supported one that does.
 
 Isolating a site regenerates its nginx config to `fastcgi_pass` the target
 version's socket, ensures that pool is running, and reloads nginx. The version is

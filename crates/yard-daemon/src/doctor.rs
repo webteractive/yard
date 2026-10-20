@@ -10,14 +10,16 @@ use crate::{holder, portscan};
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
 use yard_core::config::{load_sites, load_yard};
+use yard_core::constraint::satisfies;
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
+use yard_core::php::SUPPORTED;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, Registry};
 use yard_core::render::overrides_for;
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
-    Check, CheckStatus, DoctorReport, Holder, HolderKind, PortInfo, PortMode, PortStatus, UnitInfo,
-    UnitState, YardError,
+    Check, CheckStatus, DoctorReport, Holder, HolderKind, PortInfo, PortMode, PortStatus, SiteInfo, SiteKind,
+    UnitInfo, UnitState, YardError,
 };
 
 /// How many of a failed unit's last log lines the `units` check quotes.
@@ -42,8 +44,8 @@ struct View {
     default_php: PhpVersion,
     tld: Option<String>,
     registry: Option<Registry>,
-    /// The resolution warnings, and the site count.
-    sites: Option<(Vec<String>, usize)>,
+    /// The resolution warnings, and the sites.
+    sites: Option<(Vec<String>, Vec<SiteInfo>)>,
     hashes: Result<Hashes, YardError>,
 }
 
@@ -55,7 +57,7 @@ impl View {
             default_php: snap.yard.default_php,
             tld: Some(snap.tld.clone()),
             registry: Some(snap.registry.clone()),
-            sites: Some((snap.resolution.warnings.clone(), snap.resolution.sites.len())),
+            sites: Some((snap.resolution.warnings.clone(), snap.resolution.sites.clone())),
             hashes: Ok(state.hashes.clone()),
         })
     }
@@ -81,7 +83,7 @@ impl View {
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
                 let resolution = sites::resolve(y, s, tld, http, &|p: &Path| p.is_dir());
                 warnings.extend(resolution.warnings);
-                Some((warnings, resolution.sites.len()))
+                Some((warnings, resolution.sites))
             }
             _ => None,
         };
@@ -188,12 +190,39 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             warnings.join("; "),
             "rename or unlink what the warnings name; yard sites shows what is served",
         ),
-        Some((_, count)) => ok("sites", format!("{count} sites resolve")),
+        Some((_, sites)) => ok("sites", format!("{} sites resolve", sites.len())),
         None => warn("sites", "not checked while the configuration does not parse", view.config_hint()),
     });
 
+    if let Some((_, sites)) = &view.sites {
+        let installed = brew.installed_php(&exists, &read_link);
+        checks.extend(sites.iter().filter_map(|site| php_constraint(site, &installed)));
+    }
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
+}
+
+/// A warning when a site's `composer.json` `require.php` rules out the version it runs
+/// (spec §4.5: advisory only). Nothing for a constraint Yard cannot read.
+fn php_constraint(site: &SiteInfo, installed: &[PhpVersion]) -> Option<Check> {
+    let SiteKind::Php { path, php, .. } = &site.kind else { return None };
+    let text = std::fs::read_to_string(Path::new(path).join("composer.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let wanted = json.get("require")?.get("php")?.as_str()?;
+    let runs: PhpVersion = php.parse().ok()?;
+    if satisfies(wanted, runs)? {
+        return None;
+    }
+    let fits = |v: &&PhpVersion| satisfies(wanted, **v) == Some(true);
+    let hint = match installed.iter().filter(fits).max() {
+        Some(v) => format!("yard isolate {v} --site {}", site.name),
+        None => match SUPPORTED.iter().find(fits) {
+            Some(v) => format!("yard php install {v}"),
+            None => format!("no PHP Yard supports (7.0–8.5) satisfies {wanted}; change composer.json"),
+        },
+    };
+    let id = format!("php-constraint:{}", site.name);
+    Some(warn(&id, format!("{} wants php {wanted} (composer.json) but runs {runs}", site.name), hint))
 }
 
 /// 1 when any check failed; warnings alone still exit 0.

@@ -307,3 +307,43 @@ async fn failed_reconcile_fails_config_and_units() {
     assert_eq!(units.status, CheckStatus::Fail, "yardd runs but serves nothing: {units:?}");
     assert!(units.hint.is_some());
 }
+
+impl Env {
+    /// A linked site `blog` whose composer.json requires `php`.
+    fn blog(&self, php: &str) -> TempDir {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join("public")).unwrap();
+        let composer = serde_json::json!({"require": {"php": php}});
+        std::fs::write(project.path().join("composer.json"), composer.to_string()).unwrap();
+        let sites = format!("[sites.blog]\npath = {:?}\n", project.path().display().to_string());
+        std::fs::write(self.fx.paths.sites_toml(), sites).unwrap();
+        project
+    }
+}
+
+#[tokio::test]
+async fn composer_php_mismatch_warns_with_the_isolate_command() {
+    let e = env().await;
+    let _project = e.blog("^7.1");
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "php-constraint:blog");
+    assert_eq!(c.status, CheckStatus::Warn);
+    assert_eq!(c.message, "blog wants php ^7.1 (composer.json) but runs 8.4");
+    assert_eq!(c.hint.as_deref(), Some("yard php install 7.1"), "none installed: the lowest that fits");
+
+    e.fx.add_php("7.1");
+    e.fx.add_php("7.4");
+    let report = e.offline(&e.helper).await;
+    assert_eq!(only(&report, "php-constraint:blog").hint.as_deref(), Some("yard isolate 7.4 --site blog"));
+}
+
+#[tokio::test]
+async fn unparsable_constraint_gives_no_check() {
+    let e = env().await;
+    for php in ["dev-main", "^8.0"] {
+        let _project = e.blog(php);
+        let report = e.offline(&e.helper).await;
+        assert!(!report.checks.iter().any(|c| c.id.starts_with("php-constraint")), "{php}: {report:#?}");
+    }
+}

@@ -2,6 +2,7 @@
 
 pub mod brew;
 pub mod config;
+pub mod constraint;
 pub mod generated;
 pub mod ini;
 pub mod paths;

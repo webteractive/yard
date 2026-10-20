@@ -1,0 +1,6 @@
+{
+    "name": "yard/hello-php71",
+    "require": {
+        "php": "^7.1"
+    }
+}
