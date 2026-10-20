@@ -87,7 +87,9 @@ pub fn free_port() -> u16 {
 }
 
 /// Runs `serve` in-process as the current user, its socket under a short `/tmp` dir.
-pub async fn spawn_helper(fx: &Fixture, resolver_dir: &Path) -> HelperClient {
+/// The helper, in-process as the current user. `privileged_ports` stands in for 80 and
+/// 443, which a test cannot bind.
+pub async fn spawn_helper(fx: &Fixture, resolver_dir: &Path, privileged_ports: &[u16]) -> HelperClient {
     let dir = tempfile::Builder::new().prefix("yard-test-").tempdir_in("/tmp").unwrap();
     let socket = dir.path().join("helper.sock");
     let cfg = HelperConfig {
@@ -98,6 +100,7 @@ pub async fn spawn_helper(fx: &Fixture, resolver_dir: &Path) -> HelperClient {
         brew_prefix: fx.brew.path().to_path_buf(),
         socket: socket.clone(),
         resolver_dir: resolver_dir.to_path_buf(),
+        privileged_ports: privileged_ports.to_vec(),
     };
     tokio::spawn(async move {
         let _dir = dir;

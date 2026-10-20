@@ -4,10 +4,14 @@ use serde::{Deserialize, Serialize};
 
 pub const RESOLVER_INSTALL: &str = "resolver.install";
 pub const RESOLVER_REMOVE: &str = "resolver.remove";
+pub const PORTS_BIND: &str = "ports.bind";
 pub const STATUS: &str = "status";
 
 /// Everything the helper accepts. `ca.trust` / `ca.untrust` join in M3.
-pub const VERBS: [&str; 3] = [RESOLVER_INSTALL, RESOLVER_REMOVE, STATUS];
+pub const VERBS: [&str; 4] = [RESOLVER_INSTALL, RESOLVER_REMOVE, PORTS_BIND, STATUS];
+
+/// The only ports `ports.bind` opens: what the privileged profile serves on.
+pub const PRIVILEGED_PORTS: [u16; 2] = [80, 443];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolverParams {
@@ -21,6 +25,18 @@ pub struct TldParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BindParams {
+    pub port: u16,
+}
+
+/// One address per socket handed over with the answer, in the same order:
+/// `["127.0.0.1:80", "[::1]:80"]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BindResult {
+    pub addresses: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HelperStatus {
     pub version: String,
 }
@@ -31,6 +47,6 @@ mod tests {
 
     #[test]
     fn verbs_are_the_fixed_set() {
-        assert_eq!(VERBS, ["resolver.install", "resolver.remove", "status"]);
+        assert_eq!(VERBS, ["resolver.install", "resolver.remove", "ports.bind", "status"]);
     }
 }

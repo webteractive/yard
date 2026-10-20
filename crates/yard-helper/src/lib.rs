@@ -3,17 +3,22 @@
 //! No caller sends a path or a command. The owning user, the data root and the brew
 //! prefix are fixed at install time; a caller passes at most a TLD and a port.
 
+pub mod fdpass;
 mod peer;
+mod ports;
 mod resolver;
 pub mod root_dir;
 mod verbs;
 
 use std::future::Future;
 use std::io;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::Interest;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use yard_proto::rpc::{Request, Response, encode_line};
 use yard_proto::{ErrorCode, YardError};
@@ -28,11 +33,14 @@ pub struct HelperConfig {
     pub brew_prefix: PathBuf,
     pub socket: PathBuf,
     pub resolver_dir: PathBuf,
+    /// What `ports.bind` may open. Fixed to 80 and 443 outside tests.
+    pub privileged_ports: Vec<u16>,
 }
 
 impl HelperConfig {
     /// Parses the plist's `--uid N --user NAME --root PATH --brew-prefix PATH`.
-    /// The socket and resolver directory are fixed and never come from arguments.
+    /// The socket, resolver directory and privileged ports are fixed and never come from
+    /// arguments.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let (mut uid, mut user, mut root, mut brew_prefix) = (None, None, None, None);
         let mut args = args.into_iter();
@@ -53,6 +61,7 @@ impl HelperConfig {
             brew_prefix: brew_prefix.ok_or("--brew-prefix is required")?,
             socket: PathBuf::from(yard_core::paths::HELPER_SOCKET),
             resolver_dir: PathBuf::from(yard_core::paths::RESOLVER_DIR),
+            privileged_ports: yard_proto::helper::PRIVILEGED_PORTS.to_vec(),
         })
     }
 }
@@ -92,21 +101,42 @@ async fn connection(helper: Arc<verbs::Helper>, stream: UnixStream) {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let response = match serde_json::from_str::<Request>(&line) {
+        let (response, fds) = match serde_json::from_str::<Request>(&line) {
             Ok(Request { id: None, .. }) => continue,
             Ok(Request { id: Some(id), method, params, .. }) => match helper.handle(&method, params).await {
-                Ok(result) => Response::ok(id, result),
-                Err(e) => Response::err(id, e),
+                Ok(reply) => (Response::ok(id, reply.result), reply.fds),
+                Err(e) => (Response::err(id, e), vec![]),
             },
-            Err(e) => Response::err(
-                0,
-                YardError::new(ErrorCode::InvalidRequest, format!("not a JSON-RPC request: {e}")),
+            Err(e) => (
+                Response::err(
+                    0,
+                    YardError::new(ErrorCode::InvalidRequest, format!("not a JSON-RPC request: {e}")),
+                ),
+                vec![],
             ),
         };
-        if write.write_all(&encode_line(&response)).await.is_err() {
+        if send(&mut write, &encode_line(&response), &fds).await.is_err() {
             return;
         }
     }
+}
+
+/// Writes one answer line; any descriptors ride on its first byte. The helper's copies
+/// close when `fds` drops, after the kernel has duplicated them into the message.
+async fn send(write: &mut OwnedWriteHalf, line: &[u8], fds: &[OwnedFd]) -> io::Result<()> {
+    if fds.is_empty() {
+        return write.write_all(line).await;
+    }
+    let raw: Vec<_> = fds.iter().map(AsRawFd::as_raw_fd).collect();
+    let stream: &UnixStream = write.as_ref();
+    let sent = loop {
+        stream.writable().await?;
+        match stream.try_io(Interest::WRITABLE, || fdpass::send_with_fds(stream.as_raw_fd(), line, &raw)) {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+            result => break result?,
+        }
+    };
+    write.write_all(&line[sent..]).await
 }
 
 #[cfg(test)]

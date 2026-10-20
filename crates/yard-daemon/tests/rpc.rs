@@ -42,7 +42,7 @@ fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Pat
 async fn prepared(extra_ports: &str) -> Daemon {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
+    let helper = spawn_helper(&fx, resolver.path(), &[]).await;
     let parked = tempfile::tempdir().unwrap();
     std::fs::write(fx.paths.yard_toml(), format!("parked = [{:?}]\n", parked.path().display().to_string()))
         .unwrap();

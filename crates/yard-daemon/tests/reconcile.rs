@@ -28,7 +28,7 @@ struct Env {
 async fn env() -> Env {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
+    let helper = spawn_helper(&fx, resolver.path(), &[]).await;
     env_with(fx, resolver, helper)
 }
 

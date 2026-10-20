@@ -41,7 +41,7 @@ struct Env {
 async fn env() -> Env {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
+    let helper = spawn_helper(&fx, resolver.path(), &[]).await;
     let dns = free_port();
     std::fs::write(fx.paths.ports_toml(), ports_toml(free_port(), free_port(), dns)).unwrap();
     Env { fx, resolver, helper, dns }
