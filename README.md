@@ -87,6 +87,7 @@ error, 3 `yardd` is not running.
 | `yard ext add <name\|path.so> [--php <ver>]` | yes | Installs a PHP extension from brew's `shivammathur/extensions`, else pecl, or copies a built `.so`, then checks it loads with `php -m`. |
 | `yard ext list` / `enable <name>` / `disable <name>` / `remove <name>` `[--php <ver>]` | yes | Lists extensions, turns one on or off without uninstalling it (PHP's bundled ones too), or uninstalls one. |
 | `yard xdebug on\|off [--php <ver>]` | yes | Turns an added Xdebug on or off. |
+| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize` and `php-config` first; they follow the site's isolated version, then `.yard-php`, then the default. Warns when Herd's `php` would still win. |
 | `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 

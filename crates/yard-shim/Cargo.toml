@@ -1,0 +1,17 @@
+[package]
+name = "yard-shim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "yard-shim"
+path = "src/main.rs"
+
+[dependencies]
+yard-core.workspace = true
+yard-proto.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

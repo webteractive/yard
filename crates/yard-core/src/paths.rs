@@ -85,6 +85,11 @@ impl Paths {
         self.nginx_default_dir().join("index.html")
     }
 
+    /// The shims: `php`, `composer`, … linked to `yard-shim`.
+    pub fn bin_dir(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
     pub fn php_dir(&self, v: PhpVersion) -> PathBuf {
         self.root.join(format!("php/{v}"))
     }

@@ -512,3 +512,38 @@ async fn every_installed_version_gets_its_inis_but_no_pool() {
     assert!(!e.sup.list().iter().any(|u| u.name == "php-fpm-7.1"), "{:?}", e.sup.list());
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn reconcile_links_the_shims() {
+    let fx = Fixture::new();
+    let resolver = tempfile::tempdir().unwrap();
+    let helper = spawn_helper(&fx, resolver.path(), &[]).await;
+    let mut e = env_with(fx, resolver, helper);
+    let shim = e.projects.path().join("yard-shim");
+    std::fs::write(&shim, "").unwrap();
+    e.rec = e.rec.with_shim(Some(shim.clone()));
+    let bin = e.fx.paths.bin_dir();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("composer"), "#!/bin/sh\n").unwrap();
+    std::os::unix::fs::symlink("/old/build/yard-shim", bin.join("pecl")).unwrap();
+
+    let report = e.rec.reconcile().await.unwrap();
+    for name in ["php", "pecl", "phpize", "php-config"] {
+        assert_eq!(std::fs::read_link(bin.join(name)).unwrap(), shim, "{name}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(bin.join("composer")).unwrap(),
+        "#!/bin/sh\n",
+        "not Yard's: left alone"
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("composer") && w.contains("not Yard's")),
+        "{:?}",
+        report.warnings
+    );
+
+    std::fs::remove_file(&shim).unwrap();
+    let report = e.rec.reconcile().await.unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("yard-shim")), "{:?}", report.warnings);
+    e.sup.shutdown().await;
+}

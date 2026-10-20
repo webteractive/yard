@@ -26,6 +26,7 @@ use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, php_fpm_env, php_ini};
+use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
@@ -53,6 +54,8 @@ pub struct Reconciler {
     timezone: String,
     /// Where resolver files live, read to refuse a TLD another tool owns.
     resolver_dir: PathBuf,
+    /// The `yard-shim` binary `bin/<shim>` links to; `None` leaves `bin/` alone.
+    shim: Option<PathBuf>,
 }
 
 const HERD_APP: &str = "/Applications/Herd.app";
@@ -81,7 +84,13 @@ impl Reconciler {
             bus,
             timezone: system_timezone(localtime.as_deref()),
             resolver_dir,
+            shim: None,
         })
+    }
+
+    pub fn with_shim(mut self, shim: Option<PathBuf>) -> Self {
+        self.shim = shim;
+        self
     }
 
     pub fn supervisor(&self) -> &Arc<Supervisor> {
@@ -257,6 +266,9 @@ impl Reconciler {
             report.warnings.push(format!("kept your edit of {}; Yard will not update it", path.display()));
         }
         report.hand_edited = plan.hand_edited.clone();
+        if let Some(shim) = &self.shim {
+            report.warnings.extend(link_shims(&paths.bin_dir(), shim));
+        }
 
         // 6. Test nginx. Only a failed test rolls back; an nginx that cannot run is a warning.
         let changed: BTreeSet<PathBuf> = applied.changed().map(Path::to_path_buf).collect();
@@ -451,6 +463,39 @@ fn files_in(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
     files.sort();
     files
+}
+
+/// Keeps each `bin/<shim>` a symlink to `shim`. A link to another `yard-shim` (an older
+/// build) is Yard's and is moved; anything else there is the user's and stays.
+fn link_shims(bin: &Path, shim: &Path) -> Vec<String> {
+    if !shim.is_file() {
+        return vec![format!(
+            "{} is missing, so the php shims in {} are not linked",
+            shim.display(),
+            bin.display()
+        )];
+    }
+    if let Err(e) = std::fs::create_dir_all(bin) {
+        return vec![format!("cannot create {}: {e}", bin.display())];
+    }
+    let mut warnings = vec![];
+    for name in SHIMS {
+        let link = bin.join(name);
+        let ours = match std::fs::read_link(&link) {
+            Ok(target) if target == shim => continue,
+            Ok(target) => target.file_name().is_some_and(|n| n == "yard-shim"),
+            Err(_) => link.symlink_metadata().is_err(),
+        };
+        if !ours {
+            warnings.push(format!("{} is not Yard's shim; left it alone", link.display()));
+            continue;
+        }
+        let _ = std::fs::remove_file(&link);
+        if let Err(e) = std::os::unix::fs::symlink(shim, &link) {
+            warnings.push(format!("cannot link {}: {e}", link.display()));
+        }
+    }
+    warnings
 }
 
 /// The `.ini` files in brew's conf.d for one version, as `(name, text)`; a missing

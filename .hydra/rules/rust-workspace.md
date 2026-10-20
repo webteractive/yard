@@ -12,6 +12,9 @@ triggers:
 
 # Rust workspace boundaries and tests
 
+- Crates: `yard-proto` (wire types), `yard-core` (pure logic), `yard-daemon` (side
+  effects, `yardd`), `yard-helper` (root), `yard-cli` (`yard`), `yard-shim` (the PHP
+  shims; depends on core and proto only, and reads the TOMLs without a daemon).
 - `yard-core` is pure: parse, render, decide. No spawning, binding, sockets or clock
   reads. Inject `exists` / `is_free` / `read_link` closures and `Instant`s instead.
   Side effects live in `yard-daemon`. The helper and CLI depend on core, never the reverse.

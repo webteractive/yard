@@ -34,6 +34,7 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         supervisor: fast(),
         debounce: Duration::from_millis(50),
         port_scan_interval: Duration::from_millis(100),
+        shim: None,
     }
 }
 

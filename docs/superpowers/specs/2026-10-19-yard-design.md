@@ -116,6 +116,7 @@ yard/
     yard-daemon/             # yardd binary: supervisor, registry, RPC server
     yard-helper/             # root helper binary
     yard-cli/                # yard binary
+    yard-shim/               # php/composer/pecl/phpize/php-config shims (one multicall binary)
   app/                       # Swift package/Xcode project for Yard.app
   docs/
 ```
@@ -285,6 +286,25 @@ Rust binaries (one multicall binary, dispatch on `argv[0]`) that resolve the
 version and `exec` the brew binary. `composer` runs the composer phar under the
 resolved PHP. `yard install-shims` prints the PATH line for the user's shell
 profile; Yard does not edit dotfiles.
+
+- The shim reads `yard.toml` and `sites.toml` itself, with no daemon. The containing
+  site is the linked site whose `path` is the longest ancestor of the cwd; one that is
+  not isolated falls through to `.yard-php`. A bad `.yard-php` is `INVALID_ARGUMENT`
+  naming the file.
+- It runs `<keg>/bin/<name>` (`composer`: `<keg>/bin/php <brew>/bin/composer`, and
+  `FORMULA_MISSING`, hint `brew install composer`, without it). When the version's
+  `php.ini` is rendered it sets `PHPRC=php/<ver>` and `PHP_INI_SCAN_DIR=php/<ver>/conf.d`,
+  so the CLI loads the same extensions and overrides as FPM. PATH is the keg's `bin`,
+  then Yard's `bin/`, then the caller's PATH without any `Herd` directory: nothing a
+  shim starts can reach Herd's `php` or `composer` (decided 2026-10-20).
+- Errors print `yard: <message>` and `  hint: <hint>` and exit 1. `YARD_SHIM_DEBUG=1`
+  prints the chosen version and why. `YARD_BREW_PREFIX` overrides `/opt/homebrew`
+  (tests).
+- Reconcile keeps each `bin/<shim>` a symlink to the `yard-shim` installed next to
+  `yardd`. A link to another `yard-shim` is moved; any other file there is left alone
+  and reported.
+- `yard install-shims` (offline) prints `export PATH="<root>/bin:$PATH"` and warns
+  when the first `php` on the current PATH is not Yard's, naming Herd's.
 
 ## 5. Serving, DNS, HTTPS
 

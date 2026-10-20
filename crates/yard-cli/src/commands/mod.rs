@@ -7,6 +7,7 @@ mod helper;
 mod lifecycle;
 mod php;
 mod ports;
+mod shims;
 mod sites;
 mod units;
 mod version;
@@ -99,6 +100,7 @@ pub async fn run(cli: Cli) -> i32 {
         }
         Command::Ext { action: ExtAction::Remove { name, php } } => ext::remove(&ctx, name, php).await,
         Command::Xdebug { state, php } => ext::xdebug(&ctx, matches!(state, OnOff::On), php).await,
+        Command::InstallShims => shims::install(&ctx),
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
         Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,

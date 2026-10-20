@@ -55,6 +55,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `yard link`; nothing is written into the project. Herd-style parking, which M1
   shipped, was removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
   each project moves from Herd by `yard link` run in it.
+- **Never Herd's PHP** (maintainer, 2026-10-20): every PHP command Yard runs or a shim
+  `exec`s is an absolute brew keg path, and its PATH comes from `shim::child_path`
+  (the keg's `bin` first, every `Herd` directory removed).
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
 - **v1 scope:** core serving, multi-PHP + isolate, HTTPS, Node + services.
@@ -117,6 +120,8 @@ change to serving, the helper or reconcile is only observable there, through `ya
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
 - `crates/yard-cli` — the `yard` binary.
+- `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` shims, one binary
+  dispatching on `argv[0]`; it reads the TOMLs itself and needs no daemon.
 - `app/` — Yard.app (M4).
 
 ## Conventions

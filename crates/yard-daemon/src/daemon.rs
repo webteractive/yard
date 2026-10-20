@@ -36,6 +36,8 @@ pub struct DaemonOptions {
     pub supervisor: SupervisorConfig,
     pub debounce: Duration,
     pub port_scan_interval: Duration,
+    /// The `yard-shim` binary `bin/` links to; `None` leaves `bin/` alone.
+    pub shim: Option<PathBuf>,
 }
 
 impl DaemonOptions {
@@ -49,6 +51,8 @@ impl DaemonOptions {
             supervisor: SupervisorConfig::default(),
             debounce: Duration::from_millis(500),
             port_scan_interval: Duration::from_secs(30),
+            // Installed next to yardd.
+            shim: std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("yard-shim"))),
         }
     }
 }
@@ -86,14 +90,17 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let brew = Brew::new(&opts.brew_prefix);
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
-    let reconciler = Arc::new(Reconciler::new(
-        opts.paths.clone(),
-        brew.clone(),
-        supervisor.clone(),
-        helper.clone(),
-        bus.clone(),
-        opts.resolver_dir.clone(),
-    )?);
+    let reconciler = Arc::new(
+        Reconciler::new(
+            opts.paths.clone(),
+            brew.clone(),
+            supervisor.clone(),
+            helper.clone(),
+            bus.clone(),
+            opts.resolver_dir.clone(),
+        )?
+        .with_shim(opts.shim.clone()),
+    );
     let jobs = Jobs::new(bus.clone());
     let ctx = Arc::new(Context {
         paths: opts.paths.clone(),

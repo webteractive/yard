@@ -507,3 +507,56 @@ fn ext_toggles_and_xdebug_send_their_params() {
     assert_eq!(d.params("ext.enable"), [json!({"name": "redis", "php": "8.3"})]);
     assert_eq!(d.params("xdebug.set"), [json!({"on": false})]);
 }
+
+fn php_on(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("php"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(dir.join("php"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn install_shims_prints_the_path_line() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    php_on(&bin);
+    let out = yard_at(root.path())
+        .arg("install-shims")
+        .env("PATH", format!("{}:/usr/bin", bin.display()))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with(&format!("export PATH=\"{}:$PATH\"\n", bin.display())), "{text}");
+    assert!(text.contains("shell profile"), "{text}");
+    assert!(!stderr(&out).contains("warning"), "{}", stderr(&out));
+
+    let out =
+        yard_at(root.path()).args(["install-shims", "--json"]).env("PATH", "/nonexistent").output().unwrap();
+    let v: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v["bin"], bin.display().to_string());
+    assert_eq!(v["line"], format!("export PATH=\"{}:$PATH\"", bin.display()));
+    assert_eq!(v["first_php"], Value::Null);
+}
+
+#[test]
+fn install_shims_warns_when_herd_php_comes_first() {
+    let root = tempfile::tempdir().unwrap();
+    let herd = tempfile::tempdir().unwrap();
+    let herd_bin = herd.path().join("Library/Application Support/Herd/bin");
+    php_on(&herd_bin);
+    let out = yard_at(root.path())
+        .arg("install-shims")
+        .env("PATH", format!("{}:{}/bin", herd_bin.display(), root.path().display()))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!(
+            "warning: php on your PATH is {} (Herd's) — Yard's bin must come before it",
+            herd_bin.join("php").display()
+        )),
+        "{err}"
+    );
+}

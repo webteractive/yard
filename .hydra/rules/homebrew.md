@@ -28,6 +28,11 @@ triggers:
   extension behind `yard ext disable`. Reconcile mirrors brew's `conf.d` into Yard's as
   `10-brew-<file>.ini` (`render::php::brew_inis`), skipping files that load an
   extension `yard.toml` manages; reading brew's files is fine, writing them is not.
+- **Never Herd's PHP.** Herd puts its `php` and `composer` first on PATH. Run PHP tools
+  by absolute keg path (`Brew::php_bin`, never a bare `php`), and give every child the
+  PATH from `yard_core::shim::child_path` (keg `bin` first, `Herd` directories dropped):
+  `JobCtx::run` does this, pecl gets the keg's PATH, and the shims add Yard's `bin/`
+  second.
 - `decorate_workers_output` exists only in PHP ≥ 7.3. Version-gate any FPM or ini
   directive that is newer than 7.0.
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)

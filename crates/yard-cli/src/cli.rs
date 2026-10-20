@@ -104,6 +104,9 @@ pub enum Command {
         #[arg(long)]
         php: Option<String>,
     },
+    /// Print the PATH line that puts Yard's php, composer and pecl shims first, for your
+    /// shell profile; warns when another php (Herd's) would still win. Edits nothing.
+    InstallShims,
     /// Restart a unit: nginx, dnsmasq or php-fpm-<version>.
     Restart { unit: String },
     /// Install or remove the root helper; run with sudo.
