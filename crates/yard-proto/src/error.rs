@@ -31,6 +31,8 @@ pub enum ErrorCode {
     JobFailed,
     /// An extension installed but `php -m` does not list it; `data.output` has its output.
     ExtVerifyFailed,
+    /// `yard.toml` manages no extension of that name for the version, and brew loads none.
+    ExtNotFound,
     Internal,
 }
 

@@ -471,3 +471,39 @@ fn ext_add_sends_a_relative_so_as_an_absolute_path() {
     assert!(sent.ends_with("/build/custom.so") && sent.starts_with('/'), "{sent}");
     assert!(sent.contains(cwd.file_name().unwrap().to_str().unwrap()), "{sent} under {}", cwd.display());
 }
+
+#[test]
+fn ext_list_table_snapshot() {
+    let d = MockDaemon::start(&[(
+        "ext.list",
+        Ok(json!([
+            {"name": "opcache", "source": "bundled", "enabled": true},
+            {"name": "redis", "source": "brew", "enabled": true},
+            {"name": "xdebug", "source": "pecl", "enabled": false}
+        ])),
+    )]);
+    let out = d.yard().args(["ext", "list", "--php", "8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+    assert_eq!(d.params("ext.list"), [json!({"php": "8.4"})]);
+}
+
+#[test]
+fn ext_toggles_and_xdebug_send_their_params() {
+    let d = MockDaemon::start(&[
+        ("ext.enable", Ok(json!(null))),
+        ("ext.disable", Ok(json!(null))),
+        ("xdebug.set", Ok(json!(null))),
+    ]);
+    let out = d.yard().args(["ext", "disable", "redis"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Disabled redis for the default PHP."), "{}", stdout(&out));
+    let out = d.yard().args(["ext", "enable", "redis", "--php", "8.3"]).output().unwrap();
+    assert!(stdout(&out).contains("Enabled redis for PHP 8.3."), "{}", stdout(&out));
+    let out = d.yard().args(["xdebug", "off"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Xdebug is off for the default PHP."), "{}", stdout(&out));
+    assert_eq!(d.params("ext.disable"), [json!({"name": "redis"})]);
+    assert_eq!(d.params("ext.enable"), [json!({"name": "redis", "php": "8.3"})]);
+    assert_eq!(d.params("xdebug.set"), [json!({"on": false})]);
+}

@@ -26,6 +26,18 @@ pub enum ExtSource {
     Bundled,
 }
 
+impl ExtSource {
+    /// The name `yard.toml` and the API use.
+    pub fn name(self) -> &'static str {
+        match self {
+            ExtSource::Brew => "brew",
+            ExtSource::Pecl => "pecl",
+            ExtSource::Path => "path",
+            ExtSource::Bundled => "bundled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtEntry {

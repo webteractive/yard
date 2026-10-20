@@ -1,5 +1,6 @@
 //! PHP extensions (spec §4.3): installing one from brew, pecl or a `.so`, recording it in
-//! `yard.toml`, and proving it loads with `php -m`, rolling back when it does not.
+//! `yard.toml`, and proving it loads with `php -m`, rolling back when it does not; and
+//! removing one.
 
 use crate::jobs::JobCtx;
 use crate::reconcile::Reconciler;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use toml_edit::{InlineTable, value};
 use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
+use yard_core::config::yard::{ExtEntry, ExtSource};
 use yard_core::shim::child_path;
 use yard_core::{Paths, PhpVersion, generated};
 use yard_proto::{ErrorCode, YardError};
@@ -45,9 +47,7 @@ impl Add {
     /// The job body: install, record, reconcile, verify.
     pub async fn run(self, job: JobCtx) -> Result<(), YardError> {
         let (v, module) = (self.v, self.module.as_str());
-        // pecl runs phpize and php-config through PATH: the keg's, never Herd's.
-        let inherited = std::env::var_os("PATH").unwrap_or_default();
-        let keg_path = child_path(Some(&self.opt.join("bin")), &inherited).to_string_lossy().into_owned();
+        let keg_path = keg_path(&self.opt);
         let keg_env = [("PATH".to_string(), keg_path.clone())];
 
         let mut entry = InlineTable::new();
@@ -131,6 +131,55 @@ impl Add {
         })?;
         Ok(dst)
     }
+}
+
+/// One `ext.remove` of an extension `yard.toml` manages (not `bundled`): uninstall or
+/// delete it, then forget it.
+pub struct Remove {
+    pub paths: Paths,
+    pub brew: Brew,
+    pub reconciler: Arc<Reconciler>,
+    pub v: PhpVersion,
+    pub opt: PathBuf,
+    pub module: String,
+    pub entry: ExtEntry,
+}
+
+impl Remove {
+    pub async fn run(self, job: JobCtx) -> Result<(), YardError> {
+        let (v, module) = (self.v, self.module.as_str());
+        match self.entry.source {
+            ExtSource::Brew => {
+                let formula = format!("shivammathur/extensions/{module}@{v}");
+                job.run(&self.brew.brew_bin(), &["uninstall", &formula], &[]).await?;
+            }
+            ExtSource::Pecl => {
+                let env = [("PATH".to_string(), keg_path(&self.opt))];
+                job.run(&Brew::php_bin(&self.opt, "pecl"), &["uninstall", module], &env).await?;
+            }
+            ExtSource::Path | ExtSource::Bundled => {
+                if let Some(so) = &self.entry.so {
+                    match std::fs::remove_file(so) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            return Err(YardError::internal(format!("cannot delete {}: {e}", so.display())));
+                        }
+                        _ => job.line(format!("deleted {}", so.display())),
+                    }
+                }
+            }
+        }
+        let mut file = TomlFile::load(&self.paths.yard_toml())?;
+        file.remove(&["php", &v.to_string(), "extensions", module]);
+        file.save()?;
+        self.reconciler.reconcile().await.map(|_| ())
+    }
+}
+
+/// PATH for a version's tools: pecl runs phpize and php-config through it, so the
+/// keg's `bin` comes first and Herd's directories are gone.
+fn keg_path(opt: &Path) -> String {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    child_path(Some(&opt.join("bin")), &inherited).to_string_lossy().into_owned()
 }
 
 /// Puts `yard.toml` back as it was: its old text, or no file.

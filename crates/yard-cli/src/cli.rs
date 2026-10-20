@@ -92,10 +92,17 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<PhpAction>,
     },
-    /// Add PHP extensions from brew, pecl or a built .so.
+    /// PHP extensions: list, add, enable, disable and remove them.
     Ext {
         #[command(subcommand)]
         action: ExtAction,
+    },
+    /// Turn Xdebug on or off for a PHP version (add it first with yard ext add xdebug).
+    Xdebug {
+        state: OnOff,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
     },
     /// Restart a unit: nginx, dnsmasq or php-fpm-<version>.
     Restart { unit: String },
@@ -139,13 +146,46 @@ pub enum PhpAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum OnOff {
+    On,
+    Off,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ExtAction {
+    /// The extensions Yard manages for a version, and the ones brew's PHP loads itself.
+    List {
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
     /// Install an extension and load it: brew's shivammathur/extensions formula if there
     /// is one, else pecl; or a path to a built .so, which Yard copies. Checked with
     /// php -m, and rolled back if it does not load.
     Add {
         /// An extension name (redis, xdebug) or the path of a .so.
+        name: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Load an extension again, without reinstalling it.
+    Enable {
+        name: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Stop loading an extension, without uninstalling it; works for ones PHP bundles.
+    Disable {
+        name: String,
+        /// The PHP version; defaults to the default version.
+        #[arg(long)]
+        php: Option<String>,
+    },
+    /// Uninstall an extension (brew or pecl) or delete its copied .so, and forget it.
+    Remove {
         name: String,
         /// The PHP version; defaults to the default version.
         #[arg(long)]

@@ -71,6 +71,11 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
             json(profile(ctx, p.profile).await)
         }
         methods::EXT_ADD => json(ext::add(ctx, parse(params)?)),
+        methods::EXT_LIST => json(ext::list(ctx, parse(params)?)),
+        methods::EXT_ENABLE => json(ext::toggle(ctx, parse(params)?, true).await),
+        methods::EXT_DISABLE => json(ext::toggle(ctx, parse(params)?, false).await),
+        methods::EXT_REMOVE => json(ext::remove(ctx, parse(params)?)),
+        methods::XDEBUG_SET => json(ext::xdebug(ctx, parse(params)?).await),
         methods::PHP_LIST => json(php::list(ctx).await),
         methods::PHP_INSTALL => json(php::install(ctx, parse(params)?)),
         methods::PHP_UNINSTALL => json(php::uninstall(ctx, parse(params)?).await),

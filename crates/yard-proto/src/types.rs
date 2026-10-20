@@ -200,6 +200,16 @@ pub struct PhpInfo {
     pub pool: Option<String>,
 }
 
+/// One row of `ext.list`: an extension `yard.toml` manages, or a module brew's `conf.d`
+/// loads (`bundled`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtInfo {
+    pub name: String,
+    /// `brew`, `pecl`, `path` or `bundled`.
+    pub source: String,
+    pub enabled: bool,
+}
+
 /// The answer to a method that runs as a job: its progress and result arrive as
 /// `job_progress` and `job_finished` events on the `jobs` topic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

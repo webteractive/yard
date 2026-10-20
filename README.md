@@ -85,6 +85,8 @@ error, 3 `yardd` is not running.
 | `yard ports check` | optional | Reads `ports.toml` as it is now and probes every port in it; exits 1 on a conflict or a file that does not parse. |
 | `yard ports set <unit> <port>`, `pin`, `unpin`, `range <a-b>`, `profile <standard\|privileged>` | yes | Changes the port registry. `privileged` puts nginx on 80/443. |
 | `yard ext add <name\|path.so> [--php <ver>]` | yes | Installs a PHP extension from brew's `shivammathur/extensions`, else pecl, or copies a built `.so`, then checks it loads with `php -m`. |
+| `yard ext list` / `enable <name>` / `disable <name>` / `remove <name>` `[--php <ver>]` | yes | Lists extensions, turns one on or off without uninstalling it (PHP's bundled ones too), or uninstalls one. |
+| `yard xdebug on\|off [--php <ver>]` | yes | Turns an added Xdebug on or off. |
 | `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 

@@ -232,9 +232,19 @@ opcache = { source = "bundled", enabled = false }
 PHP itself loads (opcache), listed only to disable it. `xdebug` and `opcache` load as
 `zend_extension`. A disabled or bundled entry writes no `50-` ini.
 
-Other commands: `yard ext list [--php]`, `yard ext enable|disable <name> [--php]`
-(toggles the ini without uninstalling), `yard ext remove <name> [--php]`,
-`yard xdebug on|off [--php]`.
+Other commands:
+
+- `yard ext list [--php]`: the managed extensions, plus each module brew's `conf.d`
+  loads that `yard.toml` does not manage, as `bundled`.
+- `yard ext enable|disable <name> [--php]` toggles `enabled` without uninstalling, and
+  reconciles (which restarts the pool). Disabling an unmanaged bundled module writes
+  `{ source = "bundled", enabled = false }`; enabling it drops that entry.
+- `yard ext remove <name> [--php]` is a job: `brew uninstall` for `brew`,
+  `pecl uninstall` for `pecl`, deleting the copy for `path`; then the entry goes. A
+  bundled module is refused (hint `yard ext disable <name>`).
+- `yard xdebug on|off [--php]` is `ext enable|disable xdebug`.
+- A name with no entry and no bundled module is `EXT_NOT_FOUND`, hint
+  `yard ext add <name> --php <ver>`.
 
 ### 4.4 php.ini
 
@@ -407,7 +417,7 @@ profile; Yard does not edit dotfiles.
 
 Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
-`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`. The CLI prints message and hint;
+`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI

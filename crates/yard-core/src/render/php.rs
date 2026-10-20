@@ -69,7 +69,7 @@ pub fn brew_inis(
     files
         .iter()
         .filter(|(_, text)| {
-            !loaded_modules(text).any(|m| {
+            !ini_modules(text).any(|m| {
                 exts.iter().any(|(n, e)| {
                     n.eq_ignore_ascii_case(&m) && (e.source != ExtSource::Bundled || !e.enabled)
                 })
@@ -81,7 +81,7 @@ pub fn brew_inis(
 
 /// The modules an ini's `extension=` and `zend_extension=` lines load: each value's
 /// basename, without `.so` and a leading `php_`.
-fn loaded_modules(text: &str) -> impl Iterator<Item = String> + '_ {
+pub fn ini_modules(text: &str) -> impl Iterator<Item = String> + '_ {
     text.lines().filter_map(|line| {
         let (key, value) = line.trim().split_once('=')?;
         if !matches!(key.trim(), "extension" | "zend_extension") {

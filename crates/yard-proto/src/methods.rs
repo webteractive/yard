@@ -29,6 +29,11 @@ pub const PHP_CONFIG_GET: &str = "php.config.get";
 pub const PHP_CONFIG_SET: &str = "php.config.set";
 pub const PHP_CONFIG_UNSET: &str = "php.config.unset";
 pub const EXT_ADD: &str = "ext.add";
+pub const EXT_LIST: &str = "ext.list";
+pub const EXT_ENABLE: &str = "ext.enable";
+pub const EXT_DISABLE: &str = "ext.disable";
+pub const EXT_REMOVE: &str = "ext.remove";
+pub const XDEBUG_SET: &str = "xdebug.set";
 pub const SUBSCRIBE: &str = "subscribe";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,6 +149,29 @@ mod tests {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtAddParams {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub php: Option<String>,
+}
+
+/// `ext.list`; the version defaults to the global default.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExtListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub php: Option<String>,
+}
+
+/// `ext.enable`, `ext.disable` and `ext.remove`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub php: Option<String>,
+}
+
+/// `xdebug.set`: `ext.enable` or `ext.disable` of xdebug.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XdebugParams {
+    pub on: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub php: Option<String>,
 }

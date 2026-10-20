@@ -455,7 +455,7 @@ fn files_in(dir: &Path) -> Vec<PathBuf> {
 
 /// The `.ini` files in brew's conf.d for one version, as `(name, text)`; a missing
 /// directory has none.
-fn ini_files(dir: &Path) -> Vec<(String, String)> {
+pub(crate) fn ini_files(dir: &Path) -> Vec<(String, String)> {
     files_in(dir)
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "ini"))

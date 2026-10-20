@@ -11,7 +11,7 @@ mod sites;
 mod units;
 mod version;
 
-use crate::cli::{Cli, Command, ExtAction, HelperAction, PhpAction, PortsAction};
+use crate::cli::{Cli, Command, ExtAction, HelperAction, OnOff, PhpAction, PortsAction};
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
 use serde::Serialize;
@@ -91,7 +91,14 @@ pub async fn run(cli: Cli) -> i32 {
             php::set_default(&ctx, version).await
         }
         Command::Php { action: Some(PhpAction::Config { action }) } => php::config(&ctx, action).await,
+        Command::Ext { action: ExtAction::List { php } } => ext::list(&ctx, php).await,
         Command::Ext { action: ExtAction::Add { name, php } } => ext::add(&ctx, name, php).await,
+        Command::Ext { action: ExtAction::Enable { name, php } } => ext::toggle(&ctx, name, php, true).await,
+        Command::Ext { action: ExtAction::Disable { name, php } } => {
+            ext::toggle(&ctx, name, php, false).await
+        }
+        Command::Ext { action: ExtAction::Remove { name, php } } => ext::remove(&ctx, name, php).await,
+        Command::Xdebug { state, php } => ext::xdebug(&ctx, matches!(state, OnOff::On), php).await,
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
         Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,

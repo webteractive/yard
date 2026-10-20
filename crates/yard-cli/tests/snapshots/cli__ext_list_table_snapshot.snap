@@ -1,0 +1,10 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+NAME     SOURCE   ENABLED
+opcache  bundled  yes
+redis    brew     yes
+xdebug   pecl     no
+
+For agents and scripts: yard ext list --json

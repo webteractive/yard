@@ -128,3 +128,135 @@ async fn brew_ext_that_does_not_load_stays_installed_but_disabled() {
     assert!(!conf_d(&d).join("10-brew-20-broken.ini").exists(), "brew's ini must not load it either");
     d.shutdown().await.unwrap();
 }
+
+fn toml_text(d: &Daemon) -> String {
+    String::from_utf8(yard_toml(d).unwrap_or_default()).unwrap()
+}
+
+#[tokio::test]
+async fn disable_removes_the_ini_and_enable_restores_it() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "mongodb"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    c.call("ext.disable", json!({"name": "mongodb"})).await.unwrap();
+    assert!(!conf_d(&d).join("50-mongodb.ini").exists());
+    assert!(toml_text(&d).contains("mongodb = { source = \"pecl\", enabled = false }"), "{}", toml_text(&d));
+    let list = c.call("ext.list", json!({})).await.unwrap();
+    assert_eq!(list, json!([{"name": "mongodb", "source": "pecl", "enabled": false}]));
+    c.call("ext.enable", json!({"name": "mongodb", "php": "8.4"})).await.unwrap();
+    assert!(conf_d(&d).join("50-mongodb.ini").is_file());
+    assert!(toml_text(&d).contains("mongodb = { source = \"pecl\", enabled = true }"), "{}", toml_text(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn disabling_a_bundled_module_drops_its_mirror() {
+    let d = prepared("").await;
+    let brew_ini = d.fx.brew.path().join("etc/php/8.4/conf.d/ext-opcache.ini");
+    std::fs::write(&brew_ini, "[opcache]\nzend_extension=\"opcache.so\"\n").unwrap();
+    let d = d.start().await;
+    let mirror = conf_d(&d).join("10-brew-ext-opcache.ini");
+    assert!(mirror.is_file());
+    let mut c = d.client().await;
+    let list = c.call("ext.list", json!({"php": "8.4"})).await.unwrap();
+    assert_eq!(list, json!([{"name": "opcache", "source": "bundled", "enabled": true}]));
+
+    c.call("ext.disable", json!({"name": "opcache"})).await.unwrap();
+    assert!(!mirror.exists());
+    assert!(
+        toml_text(&d).contains("opcache = { source = \"bundled\", enabled = false }"),
+        "{}",
+        toml_text(&d)
+    );
+    c.call("ext.enable", json!({"name": "opcache"})).await.unwrap();
+    assert!(mirror.is_file());
+    assert!(!toml_text(&d).contains("opcache"), "{}", toml_text(&d));
+    assert!(brew_ini.is_file(), "brew's file is never touched");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_uninstalls_through_brew_and_forgets() {
+    let d = prepared("").await.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-ext-formulas"), "redis\n").unwrap();
+    let mut c = d.client().await;
+    let (_, error) = run_job(&mut c, "ext.add", json!({"name": "redis"})).await;
+    assert_eq!(error, None);
+    let (lines, error) = run_job(&mut c, "ext.remove", json!({"name": "redis", "php": "8.4"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("fake brew uninstall shivammathur/extensions/redis@8.4")),
+        "{lines:?}"
+    );
+    assert!(!toml_text(&d).contains("redis"), "{}", toml_text(&d));
+    assert!(!conf_d(&d).join("50-redis.ini").exists());
+    assert!(!conf_d(&d).join("10-brew-20-redis.ini").exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_deletes_a_copied_so() {
+    let d = prepared("").await.start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = d.client().await;
+    let (_, error) = run_job(&mut c, "ext.add", json!({"name": so(&dir, "custom.so")})).await;
+    assert_eq!(error, None);
+    let (_, error) = run_job(&mut c, "ext.remove", json!({"name": "custom"})).await;
+    assert_eq!(error, None);
+    assert!(!d.fx.paths.php_dir("8.4".parse().unwrap()).join("ext/custom.so").exists());
+    assert!(!toml_text(&d).contains("custom"), "{}", toml_text(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_refuses_bundled() {
+    let d = prepared("").await.start().await;
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "[php.\"8.4\".extensions]\nopcache = { source = \"bundled\", enabled = false }\n",
+    )
+    .unwrap();
+    let mut c = d.client().await;
+    let e = c.call("ext.remove", json!({"name": "opcache"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    assert_eq!(e.hint.as_deref(), Some("yard ext disable opcache --php 8.4"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn xdebug_on_without_xdebug_is_ext_not_found() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let e = c.call("xdebug.set", json!({"on": true})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ExtNotFound);
+    assert_eq!(e.hint.as_deref(), Some("yard ext add xdebug --php 8.4"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn xdebug_off_and_on_toggle_it() {
+    let d = prepared("").await.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-ext-formulas"), "xdebug\n").unwrap();
+    let mut c = d.client().await;
+    let (_, error) = run_job(&mut c, "ext.add", json!({"name": "xdebug"})).await;
+    assert_eq!(error, None);
+    c.call("xdebug.set", json!({"on": false})).await.unwrap();
+    assert!(!conf_d(&d).join("50-xdebug.ini").exists());
+    c.call("xdebug.set", json!({"on": true, "php": "8.4"})).await.unwrap();
+    let ini = std::fs::read_to_string(conf_d(&d).join("50-xdebug.ini")).unwrap();
+    assert!(ini.contains("zend_extension"), "{ini}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unknown_extension_is_ext_not_found() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    for method in ["ext.enable", "ext.disable", "ext.remove"] {
+        let e = c.call(method, json!({"name": "nosuch"})).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::ExtNotFound, "{method}");
+        assert_eq!(e.hint.as_deref(), Some("yard ext add nosuch --php 8.4"), "{method}");
+    }
+    d.shutdown().await.unwrap();
+}
