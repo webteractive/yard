@@ -309,6 +309,11 @@ async fn edit_ports(
 
 /// A profile switch may land on the ports nginx already holds; those count as free.
 async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
+    let privileged = profile == Profile::Privileged;
+    // Only the helper can open 80/443: without one the switch would leave nothing serving.
+    if privileged {
+        ctx.helper.status().await?;
+    }
     let nginx_running =
         ctx.supervisor().list().iter().any(|u| u.name == "nginx" && u.state == UnitState::Running);
     let current = Registry::load(&ctx.paths)?;
@@ -326,6 +331,11 @@ async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
     .await
     .map_err(YardError::internal)?;
     let is_free = |p: u16| free.iter().any(|(port, ok)| *port == p && *ok);
+    // Take the sockets before saving, so an old helper or a lost race refuses the switch.
+    let ports = [profile.http_port(), profile.https_port()];
+    if privileged && ports.iter().all(|p| is_free(*p)) {
+        ctx.supervisor().sockets().get(&ports).await?;
+    }
     match edit_registry(ctx, |r| r.set_profile(profile, &is_free)).await {
         Err(e) if e.code == ErrorCode::PortInUse => {
             tokio::task::spawn_blocking(move || Err(name_holders(e, &holder::find_holder)))

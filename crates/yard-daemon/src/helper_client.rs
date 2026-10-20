@@ -61,7 +61,15 @@ impl HelperClient {
             }
             let response: Response = serde_json::from_str(&line)
                 .map_err(|e| YardError::internal(format!("unreadable helper answer: {e}")))?;
-            let result: BindResult = serde_json::from_value(response.into_result()?)
+            let answer = response.into_result().map_err(|e| match e.code {
+                ErrorCode::MethodNotFound => YardError::new(
+                    ErrorCode::HelperRefused,
+                    "the installed helper predates ports.bind, so it cannot open 80 and 443",
+                )
+                .with_hint(INSTALL_HINT),
+                _ => e,
+            })?;
+            let result: BindResult = serde_json::from_value(answer)
                 .map_err(|e| YardError::internal(format!("unexpected helper answer to ports.bind: {e}")))?;
             if fds.len() != result.addresses.len() {
                 return Err(YardError::internal(format!(

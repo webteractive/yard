@@ -27,7 +27,12 @@ triggers:
   probe is a connect: free when nothing answers on either address. In the privileged
   profile the nginx unit has no probe port; the helper's `ports.bind` is the pre-start
   check, and its `PORT_IN_USE` takes the same no-backoff path to `Failed` with the
-  holder and a `port.conflict` event. A missing helper fails nginx without retrying.
+  holder and a `port.conflict` event. A missing or M1-era helper fails nginx without
+  retrying, and `ports.profile privileged` refuses up front unless the helper answers
+  and hands over both sockets. A unit entering `Failed` releases its privileged ports.
+- Before the first nginx start, `NginxCommand::stop_orphan` stops the master in
+  `run/nginx.pid` if it is brew's nginx and launchd is its parent (a yardd that was
+  killed left it running); it would otherwise hold the port the new nginx needs.
 - Every `PORT_IN_USE` names the holder with `holder::label` (`nginx-arm (pid 4534, Herd)`);
   a refused profile switch also lists them in `data.holders`.
 - `portscan::infos` is the one place a registered port gets a status and a holder;

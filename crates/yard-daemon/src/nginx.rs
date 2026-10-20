@@ -18,7 +18,11 @@ pub struct NginxCommand {
     prefix: PathBuf,
     conf: PathBuf,
     error_log: PathBuf,
+    pid_file: PathBuf,
 }
+
+/// How long an orphan gets to finish its requests after SIGQUIT.
+const ORPHAN_GRACE: Duration = Duration::from_secs(5);
 
 impl NginxCommand {
     pub fn new(paths: &Paths, brew: &Brew) -> Self {
@@ -27,6 +31,7 @@ impl NginxCommand {
             prefix: paths.nginx_dir(),
             conf: paths.nginx_conf(),
             error_log: paths.logs_dir().join("nginx-error.log"),
+            pid_file: paths.nginx_pid(),
         }
     }
 
@@ -44,6 +49,34 @@ impl NginxCommand {
             "-e".into(),
             self.error_log.clone().into(),
         ]
+    }
+
+    /// Stops an nginx an earlier yardd left running when it was killed: the master in
+    /// `run/nginx.pid`, if it is still alive, runs brew's nginx binary, and has been
+    /// handed to launchd (parent 1). It would otherwise hold the port the new nginx needs.
+    /// SIGQUIT lets it finish its requests; SIGTERM follows after `ORPHAN_GRACE`.
+    /// Returns the pid it stopped.
+    pub async fn stop_orphan(&self) -> Option<u32> {
+        let pid: u32 = std::fs::read_to_string(&self.pid_file).ok()?.trim().parse().ok()?;
+        let binary = std::fs::canonicalize(&self.bin).ok()?;
+        let ours = crate::holder::pid_path(pid).is_some_and(|p| Path::new(&p) == binary);
+        if !ours || crate::holder::parent_of(pid) != Some(1) {
+            return None;
+        }
+        let raw = i32::try_from(pid).ok()?;
+        // SAFETY: kill(2) on a pid just checked to be an orphaned brew nginx.
+        unsafe { libc::kill(raw, libc::SIGQUIT) };
+        let deadline = tokio::time::Instant::now() + ORPHAN_GRACE;
+        // SAFETY: signal 0 only checks that the pid exists.
+        while unsafe { libc::kill(raw, 0) } == 0 {
+            if tokio::time::Instant::now() >= deadline {
+                // SAFETY: as above.
+                unsafe { libc::kill(raw, libc::SIGTERM) };
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Some(pid)
     }
 
     /// `nginx -t`: `Ok(Err(..))` when nginx rejects the config, `Err` when it cannot run.

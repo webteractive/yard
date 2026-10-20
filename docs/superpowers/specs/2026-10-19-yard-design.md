@@ -409,7 +409,10 @@ mailpit-http = { port = 33001, mode = "auto" }
 <name>` switches them. Only `privileged` uses root: `yardd` asks the helper's
 `ports.bind` for the two sockets when it first needs them, holds them while the
 profile stays `privileged` (every nginx start inherits them; `nginx -t` binds
-nothing, so it needs none), and closes them when it switches back or stops (§3.1). Neither
+nothing, so it needs none), and closes them when it switches back, when it stops,
+and while nginx is `failed`, so a connection is refused rather than left waiting and
+something else may take the port (§3.1). The switch itself is refused unless the
+helper is installed and hands the sockets over. Neither
 profile sets the TLD (§5.3). M1's `trial` and `default` are read as `standard`
 and `privileged`.
 
@@ -418,7 +421,12 @@ and `privileged`.
 1. **Allocation:** the registry rejects two units on the same port; a
    `ports.toml` with two non-`external` entries on one port is
    `CONFIG_INVALID` at the later entry's line.
-2. **Pre-start:** a real bind probe on `127.0.0.1` and `::1`. On failure, the
+2. **Pre-start:** a real bind probe on `127.0.0.1` and `::1`; for 80 and 443,
+   which a user may not bind on loopback, a connect (free when nothing answers),
+   and in the `privileged` profile the helper's `ports.bind` is the check. Before
+   the first nginx start, `yardd` stops an nginx an earlier, killed `yardd` left
+   running (the master in `run/nginx.pid`, if it is brew's nginx and launchd is
+   its parent). On failure, the
    holder is identified via `lsof`, which reads libproc as the user (pid, process name, parent; labelled as
    Herd, brew services, Docker, or unknown when recognisable) and returned in
    `PORT_IN_USE.data`.

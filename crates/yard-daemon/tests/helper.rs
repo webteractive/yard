@@ -141,3 +141,27 @@ async fn ports_bind_reports_a_held_port() {
     assert_eq!(err.code, ErrorCode::PortInUse, "{err:?}");
     assert_eq!(err.data.as_ref().and_then(|d| d["port"].as_u64()), Some(u64::from(port)));
 }
+
+/// M1's helper answers every new verb with METHOD_NOT_FOUND; the fix is a reinstall.
+#[tokio::test]
+async fn an_m1_helper_without_ports_bind_says_reinstall() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let dir = tempfile::Builder::new().prefix("yard-test-").tempdir_in("/tmp").unwrap();
+    let socket = dir.path().join("helper.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let _request = BufReader::new(read).lines().next_line().await;
+        let old =
+            yard_proto::YardError::new(ErrorCode::MethodNotFound, "the helper has no verb \"ports.bind\"");
+        write
+            .write_all(&yard_proto::rpc::encode_line(&yard_proto::rpc::Response::err(1, old)))
+            .await
+            .unwrap();
+    });
+
+    let err = HelperClient::new(&socket).bind_port(80).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::HelperRefused, "{err:?}");
+    assert_eq!(err.hint.as_deref(), Some("sudo yard helper install"));
+}

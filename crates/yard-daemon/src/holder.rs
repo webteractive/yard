@@ -54,7 +54,7 @@ fn parse_lsof(out: &str) -> Option<(u32, Option<u32>, String)> {
     Some((pid?, ppid, name))
 }
 
-fn pid_path(pid: u32) -> Option<String> {
+pub(crate) fn pid_path(pid: u32) -> Option<String> {
     let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     // SAFETY: the buffer is writable for the length passed, and proc_pidpath writes at most that.
     let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
@@ -63,6 +63,17 @@ fn pid_path(pid: u32) -> Option<String> {
     }
     buf.truncate(n as usize);
     String::from_utf8(buf).ok()
+}
+
+/// The parent of `pid`, from the kernel's process table.
+pub(crate) fn parent_of(pid: u32) -> Option<u32> {
+    // SAFETY: zeroed is a valid proc_bsdinfo, which proc_pidinfo fills.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    // SAFETY: the buffer is writable for `size` bytes.
+    let n =
+        unsafe { libc::proc_pidinfo(pid as i32, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (n == size).then_some(info.pbi_ppid)
 }
 
 #[cfg(test)]

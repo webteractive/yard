@@ -325,6 +325,11 @@ impl Reconciler {
                 inherit: vec![],
             });
         }
+        if !existing.contains("nginx")
+            && let Some(pid) = self.nginx.stop_orphan().await
+        {
+            report.warnings.push(format!("stopped nginx (pid {pid}), which an earlier yardd left running"));
+        }
         self.supervisor.apply(desired).await;
         self.supervisor.sockets().release_except(&inherit);
         for name in restart.iter().filter(|n| existing.contains(*n)) {

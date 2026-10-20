@@ -334,6 +334,22 @@ async fn restart_nginx_refuses_when_the_config_cannot_be_tested() {
 }
 
 #[tokio::test]
+async fn profile_privileged_refuses_without_a_helper() {
+    let mut d = prepared("").await;
+    d.opts.helper_socket = "/tmp/yard-test-missing/helper.sock".into();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let before = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+
+    // Only the helper can open 80/443, so switching without one would serve nothing.
+    let e = c.call("ports.profile", json!({"profile": "privileged"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::HelperNotInstalled, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some("sudo yard helper install"));
+    assert_eq!(std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap(), before, "nothing changed");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn privileged_sockets_are_rebound_after_a_yardd_restart() {
     let (http, https) = (free_port(), free_port());
     let d = prepared_with("", &[http, https]).await;

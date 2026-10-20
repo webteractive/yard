@@ -1,6 +1,7 @@
 //! The privileged profile's sockets (spec §3.1). The helper binds 80 and 443 on loopback
 //! and yardd holds what it hands over for as long as the profile is privileged, so nginx,
-//! running as the user, inherits them on every start and restart.
+//! running as the user, inherits them on every start and restart. A failed nginx gives
+//! them back until it starts again.
 
 use crate::helper_client::HelperClient;
 use crate::supervisor::lock;
@@ -37,6 +38,11 @@ impl PrivilegedSockets {
                 .push(fd.try_clone().map_err(|e| YardError::internal(format!("cannot copy a socket: {e}")))?);
         }
         Ok(copies)
+    }
+
+    /// Closes yardd's sockets for `ports`.
+    pub fn release(&self, ports: &[u16]) {
+        lock(&self.held).retain(|port, _| !ports.contains(port));
     }
 
     /// Closes yardd's sockets for every port but `keep`: a port nginx no longer serves

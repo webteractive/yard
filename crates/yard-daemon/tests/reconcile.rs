@@ -382,3 +382,56 @@ async fn switching_to_standard_releases_the_privileged_sockets() {
     assert!(std::net::TcpListener::bind(("127.0.0.1", http)).is_ok(), "yardd let go of {http}");
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn failed_nginx_releases_the_privileged_sockets() {
+    let (e, http) = privileged_env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    let pid = e.unit("nginx", running).await.pid.unwrap();
+
+    // nginx can no longer start: it backs off, then fails for good.
+    std::fs::remove_file(Brew::new(e.fx.brew.path()).nginx_bin()).unwrap();
+    // SAFETY: kill(2) on the fake nginx this test's supervisor started.
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    e.unit("nginx", |u| matches!(u.state, UnitState::Failed { .. })).await;
+    assert!(std::net::TcpListener::bind(("127.0.0.1", http)).is_ok(), "a failed nginx holds no port");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn orphaned_nginx_is_stopped_before_nginx_starts() {
+    let e = env().await;
+    let http = free_port();
+    std::fs::write(e.fx.paths.ports_toml(), support::ports_toml(http, free_port(), free_port())).unwrap();
+    e.site("blog");
+    // An nginx a killed yardd left behind: reparented to launchd, on the port, in the pid file.
+    let conf = e.fx.root.path().join("orphan.conf");
+    std::fs::write(
+        &conf,
+        format!("daemon off;\nhttp {{\n    server {{\n        listen 127.0.0.1:{http};\n    }}\n}}\n"),
+    )
+    .unwrap();
+    let nginx = Brew::new(e.fx.brew.path()).nginx_bin();
+    let out = std::process::Command::new("/bin/sh")
+        .args(["-c", "\"$0\" -p \"$1\" -c \"$2\" >/dev/null 2>&1 & echo $!"])
+        .arg(&nginx)
+        .arg(e.fx.paths.nginx_dir())
+        .arg(&conf)
+        .output()
+        .unwrap();
+    let orphan: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    std::fs::write(e.fx.paths.nginx_pid(), format!("{orphan}\n")).unwrap();
+    assert!(support::wait_until(|| support::served(http), Duration::from_secs(5)).await, "the orphan serves");
+
+    e.rec.reconcile().await.unwrap();
+    e.unit("nginx", running).await;
+    // SAFETY: signal 0 only checks that the pid exists.
+    let alive = unsafe { libc::kill(orphan, 0) } == 0;
+    if alive {
+        // SAFETY: kill(2) on the orphan this test started.
+        unsafe { libc::kill(orphan, libc::SIGKILL) };
+    }
+    assert!(!alive, "yardd stopped the orphan before starting its own nginx");
+    e.sup.shutdown().await;
+}

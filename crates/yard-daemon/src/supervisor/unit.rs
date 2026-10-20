@@ -178,7 +178,7 @@ impl Runner {
             return Ok(vec![]);
         }
         self.sockets.get(&self.spec.inherit).await.map_err(|e| match e.code {
-            ErrorCode::HelperNotInstalled => Ended::Fatal(describe(&e)),
+            ErrorCode::HelperNotInstalled | ErrorCode::HelperRefused => Ended::Fatal(describe(&e)),
             ErrorCode::PortInUse => {
                 let port =
                     e.data.as_ref().and_then(|d| d["port"].as_u64()).and_then(|p| u16::try_from(p).ok());
@@ -246,7 +246,11 @@ impl Runner {
         }
     }
 
+    /// A failed unit stays down until `yard restart`, so it gives back any privileged
+    /// ports: a connection to 80 is refused rather than left waiting in yardd's backlog,
+    /// and something else may take the port. The next start asks the helper again.
     fn enter_failed(&mut self) {
+        self.sockets.release(&self.spec.inherit);
         let last_lines = lock(&self.sink).tail();
         self.set_state(UnitState::Failed { last_lines });
     }
