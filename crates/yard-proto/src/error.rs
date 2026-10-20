@@ -39,6 +39,9 @@ pub enum ErrorCode {
     ExtNotFound,
     /// `yard trust` ran `security`, but the login keychain still does not trust the CA.
     CaNotTrusted,
+    /// `yard untrust` ran `security`, but the CA is still trusted, for instance by trust
+    /// settings outside the login keychain.
+    CaStillTrusted,
     Internal,
 }
 
@@ -101,6 +104,7 @@ mod tests {
         let v = serde_json::to_value(ErrorCode::DaemonNotRunning).unwrap();
         assert_eq!(v, json!("DAEMON_NOT_RUNNING"));
         assert_eq!(serde_json::to_value(ErrorCode::CaNotTrusted).unwrap(), json!("CA_NOT_TRUSTED"));
+        assert_eq!(serde_json::to_value(ErrorCode::CaStillTrusted).unwrap(), json!("CA_STILL_TRUSTED"));
     }
 
     #[test]

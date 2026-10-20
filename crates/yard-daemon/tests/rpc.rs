@@ -471,3 +471,21 @@ async fn ca_info_reports_trust_from_security() {
     assert!(log.contains(&format!("verify-cert -c {} -l -L -q -p basic", ca.display())), "{log}");
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn unsecure_reads_secure_by_default_from_yard_toml_not_the_last_good_state() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    // A ports.toml that does not parse keeps the last good state, from before the
+    // secure_by_default that follows.
+    std::fs::write(d.fx.paths.ports_toml(), "[ports\n").unwrap();
+    std::fs::write(d.fx.paths.yard_toml(), "secure_by_default = true\n").unwrap();
+
+    let err = c.call("sites.unsecure", json!({"site": "blog"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid, "{err:?}");
+    let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(toml.contains("secure = false"), "unsecure opts out of the default it will meet: {toml}");
+    d.shutdown().await.unwrap();
+}

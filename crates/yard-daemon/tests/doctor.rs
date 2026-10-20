@@ -433,3 +433,21 @@ async fn ca_check_warns_when_security_does_not_answer() {
     assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
     assert!(c.message.contains("security did not answer"), "{c:?}");
 }
+
+#[tokio::test]
+async fn security_does_not_inherit_a_listener() {
+    let e = env().await;
+    tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    std::fs::write(e.fx.security_dir().join("fake-hang"), "").unwrap();
+    let (listener, port) = support::inheritable_listener();
+
+    let (security, ca) = (e.fx.security.clone(), e.fx.paths.ca_cert());
+    let check = tokio::spawn(async move { tls::trusted(&security, &ca).await });
+    let log = e.fx.security_dir().join("security.log");
+    let started = || std::fs::read_to_string(&log).is_ok_and(|l| l.contains("verify-cert"));
+    assert!(wait_until(started, Duration::from_secs(5)).await, "security ran");
+    drop(listener);
+    let free = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+    check.abort();
+    assert!(free, "security kept the listener on {port}");
+}

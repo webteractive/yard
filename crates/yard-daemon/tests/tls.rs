@@ -2,6 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use time::{Duration, OffsetDateTime};
 use x509_parser::pem::parse_x509_pem;
 use yard_core::Paths;
+use yard_core::tls::{CA_DAYS, LEAF_DAYS};
 use yard_daemon::tls;
 
 fn now() -> OffsetDateTime {
@@ -45,6 +46,55 @@ fn a_corrupt_ca_is_made_again() {
     tls::ensure_ca(&paths, "me", now()).unwrap();
     std::fs::write(paths.ca_cert(), "not a certificate").unwrap();
     assert!(tls::ensure_ca(&paths, "me", now()).unwrap());
+}
+
+#[test]
+fn a_replaced_ca_is_kept_as_bak() {
+    let (_dir, paths) = root();
+    tls::ensure_ca(&paths, "me", now()).unwrap();
+    let key = std::fs::read(paths.ca_key()).unwrap();
+    std::fs::write(paths.ca_cert(), "not a certificate").unwrap();
+    assert!(tls::ensure_ca(&paths, "me", now()).unwrap());
+    let bak =
+        |p: std::path::PathBuf| p.with_extension(format!("{}.bak", p.extension().unwrap().to_str().unwrap()));
+    assert_eq!(std::fs::read(bak(paths.ca_cert())).unwrap(), b"not a certificate");
+    assert_eq!(std::fs::read(bak(paths.ca_key())).unwrap(), key);
+    assert_eq!(mode(&bak(paths.ca_key())), 0o600);
+}
+
+#[test]
+fn an_unreadable_ca_is_an_error_not_a_new_ca() {
+    let (_dir, paths) = root();
+    tls::ensure_ca(&paths, "me", now()).unwrap();
+    let pem = std::fs::read(paths.ca_cert()).unwrap();
+    std::fs::set_permissions(paths.ca_cert(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let result = tls::ensure_ca(&paths, "me", now());
+    std::fs::set_permissions(paths.ca_cert(), std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(std::fs::read(paths.ca_cert()).unwrap(), pem, "the CA is left alone");
+}
+
+#[test]
+fn a_ca_near_expiry_is_made_again() {
+    let (_dir, paths) = root();
+    let lasting = now() - Duration::days(CA_DAYS - LEAF_DAYS - 2);
+    tls::ensure_ca(&paths, "me", lasting).unwrap();
+    assert!(!tls::ensure_ca(&paths, "me", now()).unwrap(), "more than a leaf's life left");
+
+    std::fs::remove_dir_all(paths.ca_dir()).unwrap();
+    let ending = now() - Duration::days(CA_DAYS - LEAF_DAYS + 2);
+    tls::ensure_ca(&paths, "me", ending).unwrap();
+    assert!(tls::ensure_ca(&paths, "me", now()).unwrap(), "a leaf would outlive it");
+}
+
+#[test]
+fn a_leaf_never_outlives_its_ca() {
+    let (_dir, paths) = root();
+    let made = now() - Duration::days(CA_DAYS - 100);
+    tls::ensure_ca(&paths, "me", made).unwrap();
+    tls::issue(&paths, "blog", "blog.yard", now(), LEAF_DAYS).unwrap();
+    let ca_end = (made + Duration::days(CA_DAYS)).unix_timestamp();
+    assert!(tls::facts(&paths, "blog").unwrap().not_after <= ca_end);
 }
 
 #[test]

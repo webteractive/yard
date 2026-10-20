@@ -305,9 +305,16 @@ fn listen_tcp(port: Option<u16>) -> ExitCode {
 /// Accepts and closes connections until killed. As nginx (`http`), answers each with a
 /// status line first, which is what the supervisor's HTTP health check looks for.
 fn serve(listener: TcpListener, http: bool) -> ExitCode {
-    // nginx reloads on SIGHUP; the fake must survive one.
-    // SAFETY: setting a signal disposition to SIG_IGN has no preconditions.
-    unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+    // nginx reloads on SIGHUP; the fake survives one and, as nginx, logs
+    // `fake nginx reloaded` to stderr.
+    extern "C" fn reloaded(_: libc::c_int) {
+        let line = b"fake nginx reloaded\n";
+        // SAFETY: write(2) is async-signal-safe; the buffer is static.
+        unsafe { libc::write(2, line.as_ptr().cast(), line.len()) };
+    }
+    let on_hup = if http { reloaded as libc::sighandler_t } else { libc::SIG_IGN };
+    // SAFETY: installing SIG_IGN, or a handler that only calls write(2).
+    unsafe { libc::signal(libc::SIGHUP, on_hup) };
     for stream in listener.incoming().flatten() {
         if http {
             std::thread::spawn(move || answer(stream));

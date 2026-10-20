@@ -384,13 +384,18 @@ profile; Yard does not edit dotfiles.
 
 - On first need (the first secured site, or `yard trust`) `yardd` generates a CA
   (`rcgen`, ECDSA P-256, 10-year validity, `CN = Yard CA (<user>)`) in `ca/`;
-  `yard-ca.key` is mode 0600.
+  `yard-ca.key` is mode 0600. It makes a new one when the files are missing, do not
+  parse or do not match, and once less than a leaf's 825 days remain; the old pair is
+  kept as `yard-ca.pem.bak` and `yard-ca.key.bak`. A CA file it cannot read is an error,
+  never a reason to replace the CA. No leaf outlives the CA that signed it.
 - **Trust is the user's, in the login keychain** (decided 2026-10-20, the maintainer): macOS 11+
   makes the user confirm a trust-settings change in a dialog, which a root
   LaunchDaemon cannot show, so there are no `ca.trust`/`ca.untrust` helper verbs.
   `yard trust` runs `/usr/bin/security add-trusted-cert -r trustRoot -k
   ~/Library/Keychains/login.keychain-db <ca.pem>` as the user (macOS asks for the
-  password once); `yard untrust` runs `security delete-certificate -Z <SHA-256> -t`.
+  password once); `yard untrust` runs `security delete-certificate -Z <SHA-256> -t`,
+  and fails with `CA_STILL_TRUSTED` (hint `sudo security remove-trusted-cert -d <ca.pem>`)
+  when trust set outside the login keychain remains. With no CA, `untrust` makes none.
   `ca.info` reports `trusted` from `security verify-cert -c <ca.pem> -l -L -q -p basic`.
   Safari and Chrome use the login keychain; curl in scripts takes `--cacert`.
 - `yard secure [site]` issues a leaf cert (825-day validity, SAN = site host and
@@ -494,7 +499,7 @@ profile; Yard does not edit dotfiles.
 Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_NOT_FOUND`,
 `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
-`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`. The CLI prints message and hint;
+`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI

@@ -142,12 +142,19 @@ impl Reconciler {
     pub async fn certs_due(&self) -> bool {
         let state = self.state.lock().await;
         let Some(snap) = &state.snapshot else { return false };
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        snap.resolution
-            .sites
-            .iter()
-            .filter(|s| s.secure)
-            .any(|s| needs_issue(tls::facts(&state.paths, &s.name).as_ref(), &s.host, now))
+        let mut secure = snap.resolution.sites.iter().filter(|s| s.secure).peekable();
+        if secure.peek().is_none() {
+            return false;
+        }
+        let now = OffsetDateTime::now_utc();
+        if tls::ca_due(&state.paths, now) {
+            return true;
+        }
+        let ca = std::fs::read(state.paths.ca_cert()).ok();
+        let now = now.unix_timestamp();
+        secure.any(|s| {
+            needs_issue(tls::facts_against(&state.paths, &s.name, ca.as_deref()).as_ref(), &s.host, now)
+        })
     }
 
     /// Yard's CA, made now if it is missing, and whether `security` says the login
@@ -233,7 +240,9 @@ impl Reconciler {
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.
         let paths = state.paths.clone();
-        let issued = issue_certs(&paths, &resolution.sites, &mut report)?;
+        if issue_certs(&paths, &resolution.sites, &mut report)? {
+            state.nginx_reload_pending = true;
+        }
 
         // 5. Render, and create the user-owned files the rendered ones include.
         let ctx = RenderCtx {
@@ -313,7 +322,8 @@ impl Reconciler {
         // 7. Test nginx. Only a failed test rolls back; an nginx that cannot run is a warning.
         // A new certificate is loaded only by a reload.
         let changed: BTreeSet<PathBuf> = applied.changed().map(Path::to_path_buf).collect();
-        let nginx_changed = issued || changed.iter().any(|p| p.starts_with(paths.nginx_dir()));
+        let nginx_changed =
+            state.nginx_reload_pending || changed.iter().any(|p| p.starts_with(paths.nginx_dir()));
         if nginx_changed || state.snapshot.is_none() {
             match self.nginx.test().await {
                 Ok(Err(output)) => {
@@ -415,12 +425,13 @@ impl Reconciler {
                 report.warnings.push(format!("restarting {name}: {}", describe(&e)));
             }
         }
-        if nginx_changed
-            && existing.contains("nginx")
-            && !started.contains("nginx")
-            && let Err(e) = self.supervisor.reload("nginx").await
-        {
-            report.warnings.push(format!("reloading nginx: {}", describe(&e)));
+        if nginx_changed && existing.contains("nginx") && !started.contains("nginx") {
+            match self.supervisor.reload("nginx").await {
+                Ok(()) => state.nginx_reload_pending = false,
+                Err(e) => report.warnings.push(format!("reloading nginx: {}", describe(&e))),
+            }
+        } else if started.contains("nginx") {
+            state.nginx_reload_pending = false;
         }
 
         // 9. Resolver: install the new TLD's file, then drop the old one.
@@ -511,9 +522,11 @@ fn issue_certs(paths: &Paths, sites: &[SiteInfo], report: &mut ReconcileReport) 
     }
     let now = OffsetDateTime::now_utc();
     tls::ensure_ca(paths, &ca_user(), now)?;
+    let ca = std::fs::read(paths.ca_cert()).ok();
     let mut issued = false;
     for site in secure {
-        if needs_issue(tls::facts(paths, &site.name).as_ref(), &site.host, now.unix_timestamp()) {
+        let facts = tls::facts_against(paths, &site.name, ca.as_deref());
+        if needs_issue(facts.as_ref(), &site.host, now.unix_timestamp()) {
             tls::issue(paths, &site.name, &site.host, now, LEAF_DAYS)?;
             report.written.push(paths.cert(&site.name));
             issued = true;
@@ -527,13 +540,18 @@ fn ca_user() -> String {
     std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "user".into())
 }
 
-/// Removes every `certs/<name>.{pem,key}` whose site is not secure.
+/// Removes every `certs/<name>.{pem,key}` whose site is not secure, and any `.yard-tmp`
+/// file an interrupted write left there.
 fn prune_certs(paths: &Paths, sites: &[SiteInfo]) -> Vec<PathBuf> {
     let secure: BTreeSet<&str> = sites.iter().filter(|s| s.secure).map(|s| s.name.as_str()).collect();
+    let stale = |f: &Path| match f.extension().and_then(|e| e.to_str()) {
+        Some("yard-tmp") => true,
+        Some("pem" | "key") => f.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !secure.contains(s)),
+        _ => false,
+    };
     files_in(&paths.certs_dir())
         .into_iter()
-        .filter(|f| f.extension().is_some_and(|e| e == "pem" || e == "key"))
-        .filter(|f| f.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !secure.contains(s)))
+        .filter(|f| stale(f))
         .filter(|f| std::fs::remove_file(f).is_ok())
         .collect()
 }

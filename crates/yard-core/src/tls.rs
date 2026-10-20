@@ -8,7 +8,15 @@ pub const LEAF_DAYS: i64 = 825;
 /// A certificate this close to expiry is issued again.
 pub const RENEW_BEFORE_DAYS: i64 = 30;
 
+/// A CA with less than this left is made again, since a leaf issued now would outlive it.
+pub const CA_RENEW_BEFORE_DAYS: i64 = LEAF_DAYS;
+
 const DAY: i64 = 86_400;
+
+/// Whether a CA that expires at `not_after` must be made again at `now` (unix seconds).
+pub fn ca_needs_renewal(not_after: i64, now: i64) -> bool {
+    not_after - now < CA_RENEW_BEFORE_DAYS * DAY
+}
 
 /// What reconcile reads from a site's certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +46,13 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_800_000_000;
+
+    #[test]
+    fn a_ca_is_replaced_once_a_new_leaf_would_outlive_it() {
+        assert!(!ca_needs_renewal(NOW + (LEAF_DAYS + 1) * DAY, NOW));
+        assert!(ca_needs_renewal(NOW + (LEAF_DAYS - 1) * DAY, NOW));
+        assert!(ca_needs_renewal(NOW - DAY, NOW), "an expired CA");
+    }
 
     fn facts(names: &[&str], days_left: i64, signed: bool) -> CertFacts {
         CertFacts {

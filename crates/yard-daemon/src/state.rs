@@ -29,11 +29,22 @@ pub struct State {
     /// The resolver file the helper last wrote, as `(tld, port)`.
     pub applied_resolver: Option<(String, u16)>,
     pub hashes: Hashes,
+    /// A certificate was issued that the running nginx has not loaded yet, kept across
+    /// a reconcile that failed before it could reload.
+    pub nginx_reload_pending: bool,
 }
 
 impl State {
     pub fn new(paths: Paths, brew: Brew) -> Result<Self, YardError> {
         let hashes = Hashes::load(&paths.hashes())?;
-        Ok(Self { paths, brew, snapshot: None, last_error: None, applied_resolver: None, hashes })
+        Ok(Self {
+            paths,
+            brew,
+            snapshot: None,
+            last_error: None,
+            applied_resolver: None,
+            hashes,
+            nginx_reload_pending: false,
+        })
     }
 }

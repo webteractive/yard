@@ -75,7 +75,9 @@ profile) and answers its http URL with a `301` there. `secure_by_default = true`
 `yard.toml` secures every site; `yard unsecure <site>` still opts one out. yardd makes a
 local CA on first use (`ca/yard-ca.pem`, key mode 0600) and issues each secured site a
 certificate for `<site>.yard` and `*.<site>.yard`, renewing it 30 days before it
-expires and reissuing it when the TLD or the CA changes.
+expires and reissuing it when the TLD or the CA changes. The CA itself is remade about
+825 days before its 10 years run out (the old one is kept as `ca/yard-ca.pem.bak`), and
+then needs `yard trust` again.
 
 Run `yard trust` once so Safari and Chrome accept those certificates: it runs
 `security add-trusted-cert` against your login keychain, as you, and macOS asks for your

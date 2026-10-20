@@ -78,7 +78,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], "0.1.0");
-    assert_eq!(v["protocol"], "2.2");
+    assert_eq!(v["protocol"], "2.3");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());
@@ -779,9 +779,16 @@ fn trust_that_does_not_take_is_ca_not_trusted() {
     }
 }
 
+/// A CA file in the mock's data root, as yardd leaves one once it has made it.
+fn with_ca(d: &MockDaemon) {
+    std::fs::create_dir_all(d.root.path().join("ca")).unwrap();
+    std::fs::write(d.root.path().join("ca/yard-ca.pem"), "").unwrap();
+}
+
 #[test]
 fn untrust_deletes_by_sha256() {
     let d = MockDaemon::start_sequenced(&[("ca.info", vec![Ok(ca_info(true)), Ok(ca_info(false))])]);
+    with_ca(&d);
     let security = recording_security(0);
     let home = tempfile::tempdir().unwrap();
     let out = yard_with_security(&d, &security, home.path(), &["untrust"]);
@@ -799,4 +806,40 @@ fn untrust_deletes_by_sha256() {
     let out = yard_with_security(&d, &security, home.path(), &["untrust", "--json"]);
     let info: CaInfo = serde_json::from_slice(&out.stdout).unwrap();
     assert!(!info.trusted);
+}
+
+#[test]
+fn untrust_that_does_not_take_is_ca_still_trusted() {
+    let home = tempfile::tempdir().unwrap();
+    for (code, message) in [
+        (0, "the CA is still trusted: its trust is set outside your login keychain"),
+        (44, "security exited with 44, and the CA is still trusted"),
+    ] {
+        let d = MockDaemon::start(&[("ca.info", Ok(ca_info(true)))]);
+        with_ca(&d);
+        let security = recording_security(code);
+        let out = yard_with_security(&d, &security, home.path(), &["untrust"]);
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains(&format!("error: {message}")), "{err}");
+        assert!(err.contains("hint: sudo security remove-trusted-cert -d /r/ca/yard-ca.pem"), "{err}");
+
+        let out = yard_with_security(&d, &security, home.path(), &["untrust", "--json"]);
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["error"]["code"], "CA_STILL_TRUSTED", "{v}");
+    }
+}
+
+#[test]
+fn untrust_without_a_ca_makes_none() {
+    let d = MockDaemon::start(&[("ca.info", Ok(ca_info(false)))]);
+    let security = recording_security(0);
+    let home = tempfile::tempdir().unwrap();
+    let out = yard_with_security(&d, &security, home.path(), &["untrust"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "There is no Yard CA, so there is nothing to untrust.\n");
+    let out = yard_with_security(&d, &security, home.path(), &["untrust", "--json"]);
+    assert_eq!(stdout(&out), "null\n");
+    assert!(d.params("ca.info").is_empty(), "ca.info would make a CA");
+    assert_eq!(security_log(&security), None);
 }

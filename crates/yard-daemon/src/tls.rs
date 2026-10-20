@@ -15,13 +15,18 @@ use time::{Duration, OffsetDateTime};
 use x509_parser::extensions::GeneralName;
 use x509_parser::pem::parse_x509_pem;
 use yard_core::Paths;
-use yard_core::tls::{CA_DAYS, CertFacts};
+use yard_core::tls::{CA_DAYS, CertFacts, ca_needs_renewal};
 use yard_proto::YardError;
 
-/// Makes the CA when `ca/yard-ca.pem` or its key is missing or does not parse.
+/// Makes the CA when `ca/yard-ca.pem` or its key is missing, does not parse, or does not
+/// match, or when the CA would expire before a leaf issued now. A CA it replaces is kept
+/// as `yard-ca.pem.bak` and `yard-ca.key.bak`, so one still trusted in the keychain can be
+/// found. A file that cannot be read is an error, never a reason to replace the CA.
 /// `Ok(true)` when it made one.
 pub fn ensure_ca(paths: &Paths, user: &str, now: OffsetDateTime) -> Result<bool, YardError> {
-    if read_ca(paths).is_ok() {
+    if let Some(ca) = load_ca(paths)?
+        && !ca_needs_renewal(ca.not_after, now.unix_timestamp())
+    {
         return Ok(false);
     }
     let mut params = CertificateParams::default();
@@ -34,16 +39,31 @@ pub fn ensure_ca(paths: &Paths, user: &str, now: OffsetDateTime) -> Result<bool,
     let key = KeyPair::generate().map_err(|e| failed("generate the CA key", e))?;
     let cert = params.self_signed(&key).map_err(|e| failed("make the CA", e))?;
     private_dir(&paths.ca_dir())?;
+    for old in [paths.ca_cert(), paths.ca_key()] {
+        if old.exists() {
+            std::fs::rename(&old, bak(&old)).map_err(|e| io(&old, e))?;
+        }
+    }
     write_private(&paths.ca_key(), &key.serialize_pem())?;
     write_file(&paths.ca_cert(), &cert.pem())?;
     Ok(true)
 }
 
+/// Whether `ensure_ca` would make a new CA at `now`: it is missing or unusable, or a leaf
+/// issued now would outlive it. A CA that cannot be read is not due; reconcile reports it.
+pub fn ca_due(paths: &Paths, now: OffsetDateTime) -> bool {
+    match load_ca(paths) {
+        Ok(Some(ca)) => ca_needs_renewal(ca.not_after, now.unix_timestamp()),
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
 /// Issues `site`'s certificate for `host` and `*.host`, valid `days` from `now`, with a
 /// fresh P-256 key, signed by the stored CA.
 pub fn issue(paths: &Paths, site: &str, host: &str, now: OffsetDateTime, days: i64) -> Result<(), YardError> {
-    let (ca_pem, ca_key) = read_ca(paths)?;
-    let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).map_err(|e| failed("read the CA", e))?;
+    let ca = load_ca(paths)?.ok_or_else(|| YardError::internal("there is no usable CA to sign with"))?;
+    let issuer = Issuer::from_ca_cert_pem(&ca.pem, ca.key).map_err(|e| failed("read the CA", e))?;
     let mut params = CertificateParams::new(vec![host.to_string(), format!("*.{host}")])
         .map_err(|e| failed(&format!("name a certificate for {host}"), e))?;
     params.distinguished_name = name(host);
@@ -52,7 +72,10 @@ pub fn issue(paths: &Paths, site: &str, host: &str, now: OffsetDateTime, days: i
     params.use_authority_key_identifier_extension = true;
     // A day back, so a clock slightly behind still accepts it.
     params.not_before = now - Duration::days(1);
-    params.not_after = now + Duration::days(days);
+    // Never past the CA, which would fail every client the day the CA expires.
+    let ca_end =
+        OffsetDateTime::from_unix_timestamp(ca.not_after).map_err(|e| failed("read the CA's expiry", e))?;
+    params.not_after = (now + Duration::days(days)).min(ca_end);
     let key = KeyPair::generate().map_err(|e| failed("generate a site key", e))?;
     let cert =
         params.signed_by(&key, &issuer).map_err(|e| failed(&format!("sign {host}'s certificate"), e))?;
@@ -64,8 +87,12 @@ pub fn issue(paths: &Paths, site: &str, host: &str, now: OffsetDateTime, days: i
 /// What reconcile needs to know about `site`'s certificate; `None` when it or its key is
 /// missing or does not parse, or the key is not the certificate's: nginx refuses all three.
 pub fn facts(paths: &Paths, site: &str) -> Option<CertFacts> {
+    facts_against(paths, site, std::fs::read(paths.ca_cert()).ok().as_deref())
+}
+
+/// As `facts`, against `ca_pem` read once by the caller, e.g. for every secured site.
+pub fn facts_against(paths: &Paths, site: &str, ca_pem: Option<&[u8]>) -> Option<CertFacts> {
     let leaf_pem = std::fs::read(paths.cert(site)).ok()?;
-    let ca_pem = std::fs::read(paths.ca_cert()).ok();
     let (_, leaf) = parse_x509_pem(&leaf_pem).ok()?;
     let leaf = leaf.parse_x509().ok()?;
     let key = KeyPair::from_pem(&std::fs::read_to_string(paths.cert_key(site)).ok()?).ok()?;
@@ -87,7 +114,7 @@ pub fn facts(paths: &Paths, site: &str) -> Option<CertFacts> {
                 .collect()
         })
         .unwrap_or_default();
-    let signed_by_ca = ca_pem.as_deref().and_then(|p| parse_x509_pem(p).ok()).is_some_and(|(_, ca)| {
+    let signed_by_ca = ca_pem.and_then(|p| parse_x509_pem(p).ok()).is_some_and(|(_, ca)| {
         ca.parse_x509().is_ok_and(|ca| leaf.verify_signature(Some(ca.public_key())).is_ok())
     });
     Some(CertFacts { dns_names, not_after: leaf.validity().not_after.timestamp(), signed_by_ca })
@@ -101,15 +128,18 @@ pub const SECURITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// as the login keychain's settings decide. `None` when `security` could not run or did
 /// not answer within [`SECURITY_TIMEOUT`].
 pub async fn trusted(security: &Path, ca: &Path) -> Option<bool> {
-    let status = tokio::process::Command::new(security)
-        .args(["verify-cert", "-c"])
+    let mut cmd = tokio::process::Command::new(security);
+    cmd.args(["verify-cert", "-c"])
         .arg(ca)
         .args(["-l", "-L", "-q", "-p", "basic"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status();
+        .kill_on_drop(true);
+    // SAFETY: the hook makes only async-signal-safe calls.
+    unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+    crate::fds::settle_before_fork();
+    let status = cmd.status();
     match tokio::time::timeout(SECURITY_TIMEOUT, status).await {
         Ok(Ok(status)) => Some(status.success()),
         Ok(Err(_)) | Err(_) => None,
@@ -137,14 +167,44 @@ fn ca_der(paths: &Paths) -> Result<Vec<u8>, YardError> {
     Ok(parsed.contents)
 }
 
-/// The CA certificate's PEM and its key, both parsed.
-fn read_ca(paths: &Paths) -> Result<(String, KeyPair), YardError> {
-    let pem = std::fs::read_to_string(paths.ca_cert()).map_err(|e| io(&paths.ca_cert(), e))?;
-    let (_, parsed) = parse_x509_pem(pem.as_bytes()).map_err(|e| failed("read the CA", e))?;
-    parsed.parse_x509().map_err(|e| failed("read the CA", e))?;
-    let key_pem = std::fs::read_to_string(paths.ca_key()).map_err(|e| io(&paths.ca_key(), e))?;
-    let key = KeyPair::from_pem(&key_pem).map_err(|e| failed("read the CA key", e))?;
-    Ok((pem, key))
+struct Ca {
+    pem: String,
+    key: KeyPair,
+    /// Unix seconds.
+    not_after: i64,
+}
+
+/// The stored CA; `None` when its certificate or key is missing, does not parse, or the
+/// key is not the certificate's. A file that exists but cannot be read is an error.
+fn load_ca(paths: &Paths) -> Result<Option<Ca>, YardError> {
+    let (Some(pem), Some(key_pem)) = (read_if_present(&paths.ca_cert())?, read_if_present(&paths.ca_key())?)
+    else {
+        return Ok(None);
+    };
+    let Ok((_, parsed)) = parse_x509_pem(pem.as_bytes()) else { return Ok(None) };
+    let Ok(cert) = parsed.parse_x509() else { return Ok(None) };
+    let Ok(key) = KeyPair::from_pem(&key_pem) else { return Ok(None) };
+    if key.subject_public_key_info() != cert.public_key().raw {
+        return Ok(None);
+    }
+    let not_after = cert.validity().not_after.timestamp();
+    Ok(Some(Ca { pem, key, not_after }))
+}
+
+fn read_if_present(path: &Path) -> Result<Option<String>, YardError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        // Not UTF-8 is a corrupt PEM, which is replaced like any other.
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok(Some(String::new())),
+        Err(e) => Err(io(path, e)),
+    }
+}
+
+fn bak(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".bak");
+    name.into()
 }
 
 fn name(common_name: &str) -> DistinguishedName {

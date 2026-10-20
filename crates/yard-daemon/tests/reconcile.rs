@@ -9,6 +9,7 @@ use support::{Fixture, fast, free_port, spawn_helper};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
+use yard_core::tls::{CA_DAYS, LEAF_DAYS};
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
 use yard_daemon::privileged::PrivilegedSockets;
@@ -694,5 +695,70 @@ async fn a_deleted_or_mismatched_key_is_reissued() {
     assert!(e.rec.certs_due().await, "a mismatched key is due");
     e.rec.reconcile().await.unwrap();
     assert!(!e.rec.certs_due().await);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_ca_near_expiry_is_replaced_and_its_leaves_reissued() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+    // A CA made long ago, with less left than a leaf's life, and a leaf from it.
+    std::fs::remove_dir_all(e.fx.paths.ca_dir()).unwrap();
+    let made = time::OffsetDateTime::now_utc() - time::Duration::days(CA_DAYS - LEAF_DAYS + 2);
+    tls::ensure_ca(&e.fx.paths, "me", made).unwrap();
+    tls::issue(&e.fx.paths, "blog", "blog.yard", time::OffsetDateTime::now_utc(), LEAF_DAYS).unwrap();
+    let old_ca = tls::ca_sha256(&e.fx.paths).unwrap();
+
+    assert!(e.rec.certs_due().await, "the CA is due");
+    e.rec.reconcile().await.unwrap();
+    assert_ne!(tls::ca_sha256(&e.fx.paths).unwrap(), old_ca);
+    assert!(tls::facts(&e.fx.paths, "blog").unwrap().signed_by_ca);
+    assert!(!e.rec.certs_due().await);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_renewal_reloads_nginx_even_after_a_failed_test() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+    e.unit("nginx", running).await;
+    let log = e.fx.paths.log("nginx");
+    let reloads = || std::fs::read_to_string(&log).unwrap_or_default().matches("fake nginx reloaded").count();
+
+    // Renewal is due, but an override breaks nginx -t, so this reconcile rolls back.
+    tls::issue(&e.fx.paths, "blog", "blog.yard", time::OffsetDateTime::now_utc(), 20).unwrap();
+    std::fs::write(e.fx.paths.nginx_override("blog"), "yard-test-broken\n").unwrap();
+    let err = e.rec.reconcile().await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::NginxConfigInvalid);
+    assert_eq!(reloads(), 0);
+
+    std::fs::write(e.fx.paths.nginx_override("blog"), "").unwrap();
+    e.rec.reconcile().await.unwrap();
+    assert!(
+        support::wait_until(|| reloads() == 1, Duration::from_secs(5)).await,
+        "nginx reloads the renewed certificate"
+    );
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn leftover_temp_files_in_certs_are_removed() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+    for stray in ["blog.key.yard-tmp", "gone.pem.yard-tmp"] {
+        std::fs::write(e.fx.paths.certs_dir().join(stray), "").unwrap();
+    }
+    e.rec.reconcile().await.unwrap();
+    let left: Vec<String> = listing(&e.fx.paths.certs_dir())
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["blog.key", "blog.pem"]);
     e.sup.shutdown().await;
 }

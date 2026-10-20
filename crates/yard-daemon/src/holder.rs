@@ -3,6 +3,7 @@
 //! Asks `lsof`, which reads the same libproc tables as the user: another user's process
 //! (a root nginx master, say) is invisible and comes back as `None`.
 
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 use yard_core::ports::holder::classify;
 use yard_proto::{Holder, HolderKind};
@@ -10,12 +11,15 @@ use yard_proto::{Holder, HolderKind};
 const LSOF: &str = "/usr/sbin/lsof";
 
 pub fn find_holder(port: u16) -> Option<Holder> {
-    let out = Command::new(LSOF)
-        .args(["-nP", "-w", "+c", "0", "-FpcR", "-sTCP:LISTEN"])
+    let mut cmd = Command::new(LSOF);
+    cmd.args(["-nP", "-w", "+c", "0", "-FpcR", "-sTCP:LISTEN"])
         .arg(format!("-iTCP:{port}"))
-        .arg(format!("-iUDP:{port}"))
-        .output()
-        .ok()?;
+        .arg(format!("-iUDP:{port}"));
+    // lsof must not keep a socket it inherited, which would hold that port while it runs.
+    // SAFETY: the hook makes only async-signal-safe calls.
+    unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+    crate::fds::settle_before_fork();
+    let out = cmd.output().ok()?;
     // lsof exits 1 when any one selector matched nothing, so read stdout regardless.
     let (pid, ppid, name) = parse_lsof(&String::from_utf8_lossy(&out.stdout))?;
     let path = pid_path(pid);

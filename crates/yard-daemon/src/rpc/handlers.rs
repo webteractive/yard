@@ -235,10 +235,11 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
 }
 
 /// `sites.toml` keeps `secure` only where it differs from `secure_by_default`, so
-/// securing then unsecuring a site leaves the file as it was.
+/// securing then unsecuring a site leaves the file as it was. The default is read from
+/// `yard.toml` as it is now: the last good state can predate an edit to it.
 async fn secure(ctx: &Context, p: SiteParams, on: bool) -> Result<SiteInfo, YardError> {
     site(ctx, &p.site).await?;
-    let default = snapshot(ctx).await?.yard.secure_by_default;
+    let default = load_yard(&ctx.paths)?.0.secure_by_default;
     TomlFile::edit(&ctx.paths.sites_toml(), |file| {
         if on == default {
             file.remove(&["sites", &p.site, "secure"]);
