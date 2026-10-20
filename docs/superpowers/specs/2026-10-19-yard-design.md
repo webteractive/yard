@@ -403,7 +403,9 @@ mailpit-http = { port = 33001, mode = "auto" }
 **Profiles:** `standard` (nginx on 8080/8443, the default) and `privileged`
 (nginx on 80/443, opt-in) are named sets of pinned values; `yard ports profile
 <name>` switches them. Only `privileged` uses root: `yardd` asks the helper's
-`ports.bind` for the two sockets each time it starts nginx (§3.1). Neither
+`ports.bind` for the two sockets when it first needs them, holds them while the
+profile stays `privileged` (every nginx start and `nginx -t` inherits them), and
+closes them when it switches back (§3.1). Neither
 profile sets the TLD (§5.3). M1's `trial` and `default` are read as `standard`
 and `privileged`.
 
