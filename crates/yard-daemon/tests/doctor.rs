@@ -347,3 +347,16 @@ async fn unparsable_constraint_gives_no_check() {
         assert!(!report.checks.iter().any(|c| c.id.starts_with("php-constraint")), "{php}: {report:#?}");
     }
 }
+
+#[tokio::test]
+async fn a_composer_json_that_is_not_a_regular_file_is_skipped() {
+    let e = env().await;
+    let project = e.blog("^7.1");
+    let composer = project.path().join("composer.json");
+    std::fs::remove_file(&composer).unwrap();
+    assert!(std::process::Command::new("/usr/bin/mkfifo").arg(&composer).status().unwrap().success());
+    let report = tokio::time::timeout(Duration::from_secs(5), e.offline(&e.helper))
+        .await
+        .expect("doctor does not block on a fifo");
+    assert!(!report.checks.iter().any(|c| c.id.starts_with("php-constraint")), "{report:#?}");
+}

@@ -202,11 +202,26 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     DoctorReport { checks }
 }
 
+/// The largest `composer.json` doctor reads.
+const COMPOSER_JSON_MAX: u64 = 1 << 20;
+
+/// A project's `composer.json` if it is a regular file of sane size. A FIFO or device
+/// there would otherwise block doctor, and yardd's runtime with it.
+fn read_composer_json(file: &Path) -> Option<String> {
+    use std::io::Read;
+    if !std::fs::metadata(file).ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    std::fs::File::open(file).ok()?.take(COMPOSER_JSON_MAX + 1).read_to_string(&mut text).ok()?;
+    (text.len() as u64 <= COMPOSER_JSON_MAX).then_some(text)
+}
+
 /// A warning when a site's `composer.json` `require.php` rules out the version it runs
 /// (spec §4.5: advisory only). Nothing for a constraint Yard cannot read.
 fn php_constraint(site: &SiteInfo, installed: &[PhpVersion]) -> Option<Check> {
     let SiteKind::Php { path, php, .. } = &site.kind else { return None };
-    let text = std::fs::read_to_string(Path::new(path).join("composer.json")).ok()?;
+    let text = read_composer_json(&Path::new(path).join("composer.json"))?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     let wanted = json.get("require")?.get("php")?.as_str()?;
     let runs: PhpVersion = php.parse().ok()?;
