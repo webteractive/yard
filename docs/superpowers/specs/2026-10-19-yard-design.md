@@ -375,8 +375,8 @@ profile; Yard does not edit dotfiles.
   (port from the registry), answering `*.<tld>` → `127.0.0.1` and `::1`.
 - `yard-helper resolver.install` writes `/etc/resolver/<tld>` pointing at it.
   Only the Yard TLD is affected; system DNS is untouched.
-- The TLD is `yard` until `yard takeover` and `test` after it; a `tld` in
-  `yard.toml` sets it. It is independent of the port profile (§7). It must match
+- The TLD is `yard`; a `tld` in `yard.toml` sets it (for example `test` once Herd
+  is gone). It is independent of the port profile (§7). It must match
   `^[a-z][a-z0-9-]{0,62}$`, or the file is `CONFIG_INVALID` at its line.
 - `resolver.install` and `resolver.remove` only touch files carrying Yard's
   marker comment, so Herd's `/etc/resolver/test` is never overwritten or
@@ -397,20 +397,19 @@ profile; Yard does not edit dotfiles.
 
 ### 5.5 Herd coexistence and migration
 
-- **Before takeover:** TLD `yard` on the `standard` profile (8080/8443), so Herd
-  keeps `.test`, 80/443 and `/etc/resolver/test`, and both run side by side.
+- **No takeover** (decided 2026-10-20, the maintainer): there is no `yard takeover`. Yard
+  never stops, quits or reconfigures Herd. Both run side by side: Herd keeps `.test`,
+  80/443 and `/etc/resolver/test`; Yard serves TLD `yard` on the `standard` profile
+  (8080/8443).
 - Yard never moves to a TLD whose `/etc/resolver/<tld>` lacks Yard's marker:
   the change is refused with `RESOLVER_FOREIGN` (naming Herd for `test`) and the
-  previous TLD keeps serving, even when Herd is quit. Takeover is the only path
-  that moves `.test` to Yard; how it treats Herd's resolver file is M3's to
-  decide, and it asks first.
+  previous TLD keeps serving, even when Herd is quit. Yard never edits or deletes a
+  resolver file it did not write, so moving to `.test` is the user's own steps:
+  uninstall Herd, remove its `/etc/resolver/test`, then set `tld = "test"`. URLs
+  without a port are `yard ports profile privileged`, once nothing else holds 80/443.
+- A TLD change re-issues every secured site's certificate for its new host (§5.4).
 - No `yard migrate herd` (dropped 2026-10-20): Yard does not import Herd's
   config. Each project moves by running `yard link` in it.
-- `yard takeover`: stops Herd (quits Herd.app and its services), moves the TLD
-  to `test`, re-issues certs and reloads. It then offers the `privileged` profile
-  for URLs without a port, running `yard ports check` against it first.
-  `yard takeover --undo` moves back to TLD `yard` on the `standard` profile and
-  tells the user to restart Herd.
 
 ## 6. Daemon
 
@@ -447,8 +446,8 @@ profile; Yard does not edit dotfiles.
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs`,
-  `node.list|install|use`, `units.restart`, `jobs.cancel`, `takeover`, `env.print`.
-- Long operations (brew installs, takeover) return `{ job_id }` immediately;
+  `node.list|install|use`, `units.restart`, `jobs.cancel`, `env.print`.
+- Long operations (brew installs) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20
   lines in `data.tail` when a command exits non-zero), on the `jobs` topic. Jobs run
@@ -552,7 +551,7 @@ and `privileged`.
 
 **Commands:** `yard ports` (table: unit, port, mode, status, holder),
 `yard ports check` (dry-run probe of all registered ports, also part of
-`doctor` and run before `takeover`), `yard ports set <unit> <port>`,
+`doctor` and run before `yard ports profile`), `yard ports set <unit> <port>`,
 `yard ports pin|unpin <unit>`, `yard ports range <a-b>`,
 `yard ports profile <name>`.
 
@@ -608,7 +607,7 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   subscriptions — no polling.
 - **Onboarding:** check Homebrew → install CLI symlink and `yardd` LaunchAgent →
   register helper via `SMAppService` → offer
-  takeover, and with it 80/443.
+  the `privileged` profile (80/443) when nothing else holds those ports.
 - The app bundle carries `yard`, `yardd`, `yard-helper` and the shim binary in
   `Contents/Helpers/`.
 
@@ -656,7 +655,8 @@ Each milestone is usable on its own and gets its own implementation plan.
    extensions, overrides, `php config`, and removing parking
    (sites are explicit links only, §5.1). Done 2026-10-20, verified by
    `scripts/e2e-m2.sh` on the maintainer's machine.
-3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal, `takeover`.
+3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal (and re-issue on a
+   TLD change). No `takeover` (dropped 2026-10-20, §5.5).
 4. **M4 Yard.app:** client, menu bar, main window, onboarding.
 5. **M5 Node and services:** fnm wrapper, MySQL, Postgres, Redis, Mailpit,
    MinIO, `yard env`.

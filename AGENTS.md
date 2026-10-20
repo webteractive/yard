@@ -49,8 +49,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   start (bind probe + holder via lsof) and at runtime. `standard` (8080/8443)
   and opt-in `privileged` (80/443) profiles; M1's names `trial` and `default`
   are still read as aliases.
-- **8080/8443 is the default, with TLD `.yard` until `yard takeover`** (M3), so
-  Herd keeps working alongside. 80/443 is opt-in, and even then root never runs
+- **8080/8443 is the default, with TLD `.yard`**, so Herd keeps working alongside.
+  There is no `yard takeover` (dropped 2026-10-20): Yard never stops or reconfigures
+  Herd, and moving to `.test` is the user's own steps once Herd is gone (spec §5.5). 80/443 is opt-in, and even then root never runs
   nginx: the helper hands yardd the two sockets (spec §3.1).
 - **Sites are explicit** (decided 2026-10-20): a project is served only after
   `yard link`; nothing is written into the project. Herd-style parking, which M1
@@ -142,7 +143,7 @@ change to serving, the helper or reconcile is only observable there, through `ya
   a lowercase subject with no type prefix, prose paragraphs, no trailers.
 - **Docs move with the code**: the spec, the active plan, README, `--help`
   text, this file and the hydra rules.
-- **Herd must keep working** until `yard takeover`. Yard only reads Herd's files.
+- **Herd must keep working.** Yard only reads Herd's files.
 - Area-specific conventions are lazy-loaded hydra rules in `.hydra/rules/` (index below).
 
 <!-- hydra:rules:start -->

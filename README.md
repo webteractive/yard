@@ -21,7 +21,7 @@ the `php`/`composer`/`pecl` shims follow the site's version and never reach Herd
 PHP. HTTPS (M3), Yard.app (M4), and Node and services (M5) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
-`http://<site>.yard:8080` until `yard takeover` (M3). Herd keeps its `.test` domain,
+`http://<site>.yard:8080`. Herd keeps its `.test` domain,
 ports 80/443 and `/etc/resolver/test` untouched. `yard ports profile privileged` moves
 nginx to 80/443 through the helper, once nothing else holds them.
 
