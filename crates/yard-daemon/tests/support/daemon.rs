@@ -84,12 +84,15 @@ impl Daemon {
         let socket = self.fx.paths.daemon_socket();
         let up = || std::os::unix::net::UnixStream::connect(&socket).is_ok();
         assert!(wait_until(up, Duration::from_secs(5)).await, "the daemon listens on its socket");
-        // yardd binds before its first reconcile and answers only after it, which takes
-        // seconds when many test daemons start at once on a busy machine. Wait for that
-        // here, so the per-call timeout measures the call alone.
+        // yardd binds before its first reconcile and answers only once it watches its
+        // files. Wait for that here, so the per-call timeout measures the call alone.
         let mut c = Client::connect(&socket).await;
         let hello = json!({"protocol": PROTOCOL_VERSION, "client": "test"});
-        c.call_within("hello", hello, STARTUP).await.unwrap();
+        let answered = tokio::time::timeout(STARTUP, c.call_within("hello", hello, STARTUP * 2)).await;
+        let Ok(answer) = answered else {
+            panic!("the daemon did not answer hello within {STARTUP:?}{}", crowded_exe_dir());
+        };
+        answer.unwrap();
         self
     }
 
@@ -213,4 +216,24 @@ pub async fn run_job(c: &mut Client, method: &str, params: Value) -> (Vec<String
             _ => {}
         }
     }
+}
+
+/// Starting an FSEvents stream makes fseventsd list the directory of the executable, one
+/// stream at a time across the machine. On macOS `target/debug/deps` keeps every build's
+/// object files (`split-debuginfo = "unpacked"`), and once it holds a few hundred thousand
+/// each daemon takes seconds to start and the last of a test file's daemons times out.
+fn crowded_exe_dir() -> String {
+    const CROWDED: usize = 50_000;
+    let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) else {
+        return String::new();
+    };
+    let files = std::fs::read_dir(&dir).map(|entries| entries.count()).unwrap_or(0);
+    if files < CROWDED {
+        return String::new();
+    }
+    format!(
+        "\n  {} holds {files} files, which makes every FSEvents watch start slowly;\n  \
+         `cargo clean --profile dev` empties it",
+        dir.display()
+    )
 }

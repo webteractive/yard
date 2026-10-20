@@ -45,9 +45,16 @@ triggers:
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
   never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not
   to retry. Run timing suites several times before calling them done.
-- yardd binds its socket before its first reconcile and answers only after it.
-  `support::daemon::Daemon::start` therefore waits for an answered `hello` (60 s), so a
-  slow start under load (many test daemons, Herd busy) never eats a call's 10 s budget.
+- yardd binds its socket before its first reconcile and answers only once its FSEvents
+  watch has started. `support::daemon::Daemon::start` therefore waits for an answered
+  `hello` (60 s), so a slow start never eats a call's 10 s budget.
+- Starting an FSEvents stream makes fseventsd list the directory of the executable, one
+  stream at a time across the machine. On macOS `target/debug/deps` keeps every build's
+  object files (`split-debuginfo = "unpacked"`), and at about 300,000 files each test
+  daemon took 6 s to start, so the last daemons in a test file timed out (2026-10-20).
+  `Daemon::start` names that in its timeout. The fix is `cargo clean --profile dev`, never a
+  longer timeout: `target/release/yardd` is what the LaunchAgent runs, so leave it alone.
+  `split-debuginfo = "packed"` stops the growth but doubles a test relink, so it is not set.
 - Rendering is pinned with `insta` snapshots. Review each new snapshot against the spec
   before accepting it.
 - New crates follow the global rust-dependencies rule: vet them, then run `cargo deny check`.
