@@ -364,10 +364,12 @@ mod tests {
 
     #[test]
     fn profile_refusal_names_each_holder() {
-        let refused =
-            YardError::new(ErrorCode::PortInUse, "cannot switch to the default profile: port 80, 443 in use")
-                .with_hint("free those ports first, or stay on the trial profile")
-                .with_data(json!({"ports": [80, 443]}));
+        let refused = YardError::new(
+            ErrorCode::PortInUse,
+            "cannot switch to the privileged profile: port 80, 443 in use",
+        )
+        .with_hint("free those ports first, or stay on the standard profile")
+        .with_data(json!({"ports": [80, 443]}));
         let herd =
             Holder { pid: 4534, name: "nginx-arm".into(), path: None, ppid: Some(1), kind: HolderKind::Herd };
 

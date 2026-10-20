@@ -25,6 +25,8 @@ triggers:
   `--version`, `-V` and `yard version [--json]` all report CLI, daemon, helper and
   protocol versions plus the commit and build date. The commit is injected by
   `crates/yard-cli/build.rs`, never typed in.
+- Profiles are `yard ports profile <standard|privileged>`; M1's `trial` and `default`
+  stay accepted as aliases (`ProfileArg`), and output always uses the new names.
 - Offline commands (no daemon needed): `start`, `stop`, `version`, `doctor`,
   `ports check`, `helper install|uninstall`. Everything else talks to `yardd`.
 - Yard never edits dotfiles. Shell setup is printed for the user to paste

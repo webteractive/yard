@@ -97,7 +97,11 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
 - The helper is installed by `sudo yard helper install` (binary to
   `/Library/PrivilegedHelperTools/`, plist to `/Library/LaunchDaemons/`), which is
   the only path while there is no app (M1–M3). Yard.app registers the same
-  helper through `SMAppService` from M4.
+  helper through `SMAppService` from M4. Upgrading from M1, whose helper ran
+  nginx as root, the install first asks the old helper to stop that nginx and
+  then removes the two files it left owned by root (`logs/nginx-error.log`,
+  `run/nginx.pid`); it removes rather than chowns them, so a hard link planted
+  there cannot hand a root file to the user.
 - **`yard`** is a thin client. A few commands work offline without the daemon:
   `start`, `stop`, `version`, `doctor`, `ports check`, `helper install|uninstall`.
 - **Yard.app** holds no business logic; everything it can do, the CLI can do.
@@ -404,8 +408,8 @@ mailpit-http = { port = 33001, mode = "auto" }
 (nginx on 80/443, opt-in) are named sets of pinned values; `yard ports profile
 <name>` switches them. Only `privileged` uses root: `yardd` asks the helper's
 `ports.bind` for the two sockets when it first needs them, holds them while the
-profile stays `privileged` (every nginx start and `nginx -t` inherits them), and
-closes them when it switches back (§3.1). Neither
+profile stays `privileged` (every nginx start inherits them; `nginx -t` binds
+nothing, so it needs none), and closes them when it switches back or stops (§3.1). Neither
 profile sets the TLD (§5.3). M1's `trial` and `default` are read as `standard`
 and `privileged`.
 
@@ -516,9 +520,9 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 Each milestone is usable on its own and gets its own implementation plan.
 
 1. **M1 Core serving (CLI only):** workspace, `yardd`, helper, port registry,
-   nginx, dnsmasq, parked/linked/proxied sites, single PHP version, trial profile,
-   `doctor`.
-   **M1.1 nginx as the user (before M2):** nginx becomes a `yardd` unit run as the
+   nginx, dnsmasq, parked/linked/proxied sites, single PHP version, the
+   standard profile, `doctor`.
+   **M1.1 nginx as the user (before M2, done 2026-10-20):** nginx becomes a `yardd` unit run as the
    user; the helper's nginx verbs go and `ports.bind` arrives with the
    `privileged` profile; profiles stop setting the TLD.
 2. **M2 Multi-PHP:** install/uninstall, pools per version, isolate, shims,

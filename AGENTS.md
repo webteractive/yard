@@ -7,8 +7,8 @@ This file provides guidance to AI coding agents when working with code in this r
 Yard serves local PHP sites on macOS. A Rust daemon (`yardd`, a user
 LaunchAgent) supervises php-fpm pools, dnsmasq and services. A tiny root helper
 (`yard-helper`, a LaunchDaemon) manages `/etc/resolver` and CA trust through a
-fixed verb set. nginx runs as the user; root only opens 80/443 when the user opts
-in (decided 2026-10-20, built in M1.1; the M1 code still runs nginx through the helper). The `yard` CLI and,
+fixed verb set. nginx runs as the user, as a yardd unit; root only opens 80/443
+(`ports.bind`) when the user opts in to the privileged profile. The `yard` CLI and,
 from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Status
@@ -17,7 +17,11 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   is the source of truth. Read it before changing behaviour, and update it in
   the same change when a decision moves.
 - M1 (core serving, CLI only) is done: `docs/superpowers/plans/2026-10-19-yard-m1-core-serving.md`,
-  verified by `scripts/e2e-m1.sh` on this machine on 2026-10-20. M2 needs its own plan.
+  verified by `scripts/e2e-m1.sh` on this machine on 2026-10-20.
+- M1.1 (nginx as the user, the privileged profile) is done:
+  `docs/superpowers/plans/2026-10-20-yard-m1.1-nginx-as-user.md`, verified on this
+  machine on 2026-10-20 (helper reinstalled, `scripts/e2e-m1.sh` passing, nginx running
+  as the maintainer under yardd). M2 needs its own plan.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
@@ -40,8 +44,8 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - **Port registry** (spec §7, the maintainer asked for it explicitly): `ports.toml` with
   `pinned`/`preferred`/`auto`/`external` modes, checked at allocation, before
   start (bind probe + holder via lsof) and at runtime. `standard` (8080/8443)
-  and opt-in `privileged` (80/443) profiles; M1's code still calls them `trial`
-  and `default`.
+  and opt-in `privileged` (80/443) profiles; M1's names `trial` and `default`
+  are still read as aliases.
 - **8080/8443 is the default, with TLD `.yard` until `yard takeover`** (M3), so
   Herd keeps working alongside. 80/443 is opt-in, and even then root never runs
   nginx: the helper hands yardd the two sockets (spec §3.1).
@@ -79,7 +83,7 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   root (logs to stderr). `yardd --version` prints the build; the socket is `<root>/yardd.sock`.
 - `cargo run -p yard-cli -- --root /tmp/yard-dev sites` — the CLI against that daemon.
   `doctor` and `ports check` also work with no daemon running.
-- `scripts/e2e-m1.sh` — real-machine check in the trial profile. It needs the
+- `scripts/e2e-m1.sh` — real-machine check in the standard profile. It needs the
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
 
 ## Verifying a change on this machine

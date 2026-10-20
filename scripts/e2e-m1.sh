@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M1 end-to-end check on a real Mac, in the trial profile, beside a running Herd.
+# M1 end-to-end check on a real Mac, in the standard profile, beside a running Herd.
 #
 # Needs nginx, dnsmasq and php@8.4 from brew, `sudo yard helper install` and
 # `yard start`. It uses the real data root, parks a temp directory, proxies to a
@@ -69,16 +69,22 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "http://$herd_site.test/" || true
 [[ $code != 000 ]] || fail "Herd did not answer http://$herd_site.test/"
 pass "Herd still answers http://$herd_site.test/ (HTTP $code)"
 
-# 5. Switching to the default profile is refused while Herd holds 80/443, naming Herd.
+# 5. nginx runs as the user, not root (M1.1).
+nginx_pid="$("$yard" status --json | python3 -c 'import json, sys; print(next(u["pid"] for u in json.load(sys.stdin)["units"] if u["name"] == "nginx"))')"
+nginx_user="$(ps -o user= -p "$nginx_pid" | tr -d ' ')"
+[[ $nginx_user == "$USER" ]] || fail "nginx (pid $nginx_pid) runs as '$nginx_user', expected $USER"
+pass "nginx (pid $nginx_pid) runs as $USER"
+
+# 6. Switching to the privileged profile is refused while Herd answers on 80/443, naming Herd.
 set +e
-refusal="$("$yard" ports profile default 2>&1 >/dev/null)"
+refusal="$("$yard" ports profile privileged 2>&1 >/dev/null)"
 status=$?
 set -e
-[[ $status == 1 ]] || fail "yard ports profile default exited $status, expected 1"
+[[ $status == 1 ]] || fail "yard ports profile privileged exited $status, expected 1"
 [[ $refusal == *Herd* ]] || fail "the refusal does not name Herd: $refusal"
-pass "yard ports profile default is refused: $refusal"
+pass "yard ports profile privileged is refused: $refusal"
 
-# 6. Doctor has no failing check.
+# 7. Doctor has no failing check.
 report="$work/doctor.json"
 "$yard" doctor --json >"$report" || true
 python3 - "$report" <<'PY' || fail "yard doctor reports failures"
@@ -90,7 +96,7 @@ sys.exit(1 if failed else 0)
 PY
 pass "yard doctor has no failing check"
 
-# 7. Clean up, then Herd's resolver, after.
+# 8. Clean up, then Herd's resolver, after.
 trap - EXIT
 cleanup
 after="$(sum "$herd_resolver")"

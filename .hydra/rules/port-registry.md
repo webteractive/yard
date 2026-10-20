@@ -23,6 +23,11 @@ triggers:
   listeners). If that bind is refused, the port still counts as free when a reuse bind
   succeeds and nothing answers on connect: that is TIME_WAIT, which nginx can bind.
   Probe both `127.0.0.1` and `::1`, and UDP as well for dnsmasq.
+- A user cannot bind loopback below 1024 (`PermissionDenied`), so for 80 and 443 the
+  probe is a connect: free when nothing answers on either address. In the privileged
+  profile the nginx unit has no probe port; the helper's `ports.bind` is the pre-start
+  check, and its `PORT_IN_USE` takes the same no-backoff path to `Failed` with the
+  holder and a `port.conflict` event. A missing helper fails nginx without retrying.
 - Every `PORT_IN_USE` names the holder with `holder::label` (`nginx-arm (pid 4534, Herd)`);
   a refused profile switch also lists them in `data.holders`.
 - `portscan::infos` is the one place a registered port gets a status and a holder;
@@ -30,9 +35,9 @@ triggers:
 - Holders come from `/usr/sbin/lsof` plus `proc_pidpath`, not the `libproc` crate (its
   bindgen build needs libclang and adds BSD-3/ISC licenses).
 - A unit's own running port counts as free for that unit. A busy port whose unit is
-  `Running` has status `yard`: lsof does see nginx (its workers run as the user and
-  hold the listening sockets), but only as a plain `nginx` process, so whether it is
-  Yard's comes from the unit, not the holder.
+  `Running` has status `yard`: lsof does see nginx (it runs as the user and holds the
+  listening sockets), but only as a plain `nginx` process, so whether it is Yard's
+  comes from the unit, not the holder.
 - Socket tests take `crate::PORT_TESTS`: macOS hands out ephemeral ports in sequence,
   so parallel tests otherwise land on each other's ports.
 - Holder classification (`ports::holder::classify`) is pure and tested: Herd, brew

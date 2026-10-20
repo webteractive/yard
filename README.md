@@ -1,10 +1,12 @@
 # Yard
 
 Yard serves local PHP sites on macOS, as a replacement for Laravel Herd. A Rust daemon
-(`yardd`, a user LaunchAgent) supervises nginx, dnsmasq and a php-fpm pool per PHP
-version, all from Homebrew. A small root helper (`yard-helper`, a LaunchDaemon) does the
-few things that need root through a fixed set of verbs. The `yard` CLI talks to the
-daemon over a unix socket.
+(`yardd`, a user LaunchAgent) runs nginx, dnsmasq and a php-fpm pool per PHP version,
+all from Homebrew and all as you. A small root helper (`yard-helper`, a LaunchDaemon)
+does the few things that need root through a fixed set of verbs: it writes
+`/etc/resolver/<tld>`, and in the privileged profile it opens ports 80 and 443 on
+loopback and hands the sockets to yardd. Root never runs nginx. The `yard` CLI talks to
+the daemon over a unix socket.
 
 The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/superpowers/specs/2026-10-19-yard-design.md).
 
@@ -12,12 +14,13 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
 
 Milestone 1 (core serving, CLI only) is done and verified end to end beside a running
 Herd: parked and linked PHP sites, proxies, the port registry, `yard doctor` and the
-commands below. HTTPS (M3), PHP installs and extensions (M2), Node and services, and
-Yard.app (M4) come later.
+commands below. M1.1 moved nginx from root to the user. HTTPS (M3), PHP installs and
+extensions (M2), Node and services, and Yard.app (M4) come later.
 
-Yard runs in the **trial profile** until `yard takeover` (M3): sites are
-`http://<site>.yard:8080`, and Herd keeps its `.test` domain, ports 80/443 and
-`/etc/resolver/test` untouched.
+Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
+`http://<site>.yard:8080` until `yard takeover` (M3). Herd keeps its `.test` domain,
+ports 80/443 and `/etc/resolver/test` untouched. `yard ports profile privileged` moves
+nginx to 80/443 through the helper, once nothing else holds them.
 
 ## Prerequisites
 
@@ -44,6 +47,8 @@ sudo ./target/release/yard helper install   # once, and after each upgrade
 ```
 
 Run the helper install in a real terminal: sudo needs one to ask for the password.
+Upgrading from M1, re-run it: it stops the root nginx M1's helper started and removes the
+two files that nginx left owned by root (`logs/nginx-error.log`, `run/nginx.pid`).
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it parks a PHP app and
 proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
 
@@ -71,7 +76,7 @@ error, 3 `yardd` is not running.
 | `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |
 | `yard ports` | yes | Registered ports with their mode, status and holder. |
 | `yard ports check` | optional | Reads `ports.toml` as it is now and probes every port in it; exits 1 on a conflict or a file that does not parse. |
-| `yard ports set <unit> <port>`, `pin`, `unpin`, `range <a-b>`, `profile <trial\|default>` | yes | Changes the port registry. |
+| `yard ports set <unit> <port>`, `pin`, `unpin`, `range <a-b>`, `profile <standard\|privileged>` | yes | Changes the port registry. `privileged` puts nginx on 80/443. |
 | `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 

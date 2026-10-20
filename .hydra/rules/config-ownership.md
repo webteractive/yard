@@ -28,9 +28,10 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   `yard doctor`, which names the override from `render::overrides_for` (a test keeps it
   in step with each file's header). A hand-edited file whose render changed is copied to
   `<file>.yard-backup` before it is written. A file with no stored hash is never deleted.
-- Every config change that touches `nginx/` runs `nginx -t` through the helper. On
-  failure, roll back the whole write set and return `NGINX_CONFIG_INVALID` with
-  nginx's output.
+- Every config change that touches `nginx/` runs `nginx -t` from yardd, as the user
+  (`nginx::NginxCommand::test`). On failure, roll back the whole write set and return
+  `NGINX_CONFIG_INVALID` with nginx's output. An nginx that cannot run at all is a
+  warning on reconcile and a refusal on `yard restart nginx`.
 - User overrides are applied too: the watcher sees `nginx/overrides/` and calls
   `Reconciler::apply_overrides`, which runs `nginx -t` and reloads only if it passes.
   `yard restart nginx` tests first and refuses a broken config, so a typo in an
