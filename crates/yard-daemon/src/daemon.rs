@@ -38,6 +38,8 @@ pub struct DaemonOptions {
     pub port_scan_interval: Duration,
     /// The `yard-shim` binary `bin/` links to; `None` leaves `bin/` alone.
     pub shim: Option<PathBuf>,
+    /// `/usr/bin/security`, which `ca.info` asks whether the login keychain trusts the CA.
+    pub security: PathBuf,
 }
 
 impl DaemonOptions {
@@ -53,6 +55,7 @@ impl DaemonOptions {
             port_scan_interval: Duration::from_secs(30),
             // Installed next to yardd.
             shim: std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("yard-shim"))),
+            security: PathBuf::from("/usr/bin/security"),
         }
     }
 }
@@ -66,6 +69,7 @@ pub struct Context {
     pub reconciler: Arc<Reconciler>,
     pub resolver_dir: PathBuf,
     pub jobs: Jobs,
+    pub security: PathBuf,
 }
 
 impl Context {
@@ -110,6 +114,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         reconciler,
         resolver_dir: opts.resolver_dir.clone(),
         jobs,
+        security: opts.security.clone(),
     });
 
     claim(&socket).await?;

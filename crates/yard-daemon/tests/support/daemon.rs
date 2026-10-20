@@ -38,6 +38,7 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         debounce: Duration::from_millis(50),
         port_scan_interval: Duration::from_millis(100),
         shim: None,
+        security: PathBuf::from("/nonexistent/security"),
     }
 }
 
@@ -59,7 +60,8 @@ pub async fn prepared_with(extra_ports: &str, privileged_ports: &[u16]) -> Daemo
         free_port()
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
-    let opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf(), resolver.path());
+    let mut opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf(), resolver.path());
+    opts.security = fx.security.clone();
     Daemon { fx, _resolver: resolver, projects, opts, stop: None, task: None }
 }
 

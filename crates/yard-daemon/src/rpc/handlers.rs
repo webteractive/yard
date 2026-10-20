@@ -19,7 +19,7 @@ use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
 use yard_proto::methods::{
     self, DocrootParams, JobParams, LinkParams, NameParams, PortSetParams, ProfileParams, ProxyParams,
-    RangeParams, UnitParams,
+    RangeParams, SiteParams, UnitParams,
 };
 use yard_proto::{
     DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
@@ -37,6 +37,9 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SITES_UNPROXY => json(unlink(ctx, parse(params)?, "proxy").await),
         methods::SITES_DOCROOT => json(docroot(ctx, parse(params)?).await),
         methods::SITES_ISOLATE => json(php::isolate(ctx, parse(params)?).await),
+        methods::SITES_SECURE => json(secure(ctx, parse(params)?, true).await),
+        methods::SITES_UNSECURE => json(secure(ctx, parse(params)?, false).await),
+        methods::CA_INFO => json(ctx.reconciler.ca_info(&ctx.security).await),
         methods::PORTS_LIST => json(Ok(port_infos(ctx).await)),
         // A check is about the file as it is now, so an edit that broke it fails here.
         methods::PORTS_CHECK => {
@@ -224,6 +227,23 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
             None => {
                 file.remove(&["sites", &p.site, "docroot"]);
             }
+        }
+        Ok(())
+    })?;
+    reconcile(ctx).await?;
+    site(ctx, &p.site).await
+}
+
+/// `sites.toml` keeps `secure` only where it differs from `secure_by_default`, so
+/// securing then unsecuring a site leaves the file as it was.
+async fn secure(ctx: &Context, p: SiteParams, on: bool) -> Result<SiteInfo, YardError> {
+    site(ctx, &p.site).await?;
+    let default = snapshot(ctx).await?.yard.secure_by_default;
+    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+        if on == default {
+            file.remove(&["sites", &p.site, "secure"]);
+        } else {
+            file.set(&["sites", &p.site, "secure"], value(on));
         }
         Ok(())
     })?;

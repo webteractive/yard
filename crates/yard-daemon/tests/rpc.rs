@@ -391,3 +391,83 @@ async fn park_method_is_gone() {
     }
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn secure_then_unsecure_round_trips_sites_toml() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let before = std::fs::read(d.fx.paths.sites_toml()).unwrap();
+    let mut c = d.client().await;
+
+    let site = c.call("sites.secure", json!({"site": "blog"})).await.unwrap();
+    assert_eq!(site["secure"], true);
+    assert!(site["url"].as_str().unwrap().starts_with("https://blog.yard:"), "{site}");
+    assert!(d.fx.paths.cert("blog").exists());
+
+    let site = c.call("sites.unsecure", json!({"site": "blog"})).await.unwrap();
+    assert_eq!(site["secure"], false);
+    assert!(site["url"].as_str().unwrap().starts_with("http://"), "{site}");
+    assert_eq!(std::fs::read(d.fx.paths.sites_toml()).unwrap(), before, "sites.toml is as it was");
+    assert!(!d.fx.paths.cert("blog").exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsecure_overrides_secure_by_default() {
+    let d = prepared("").await;
+    d.project("blog");
+    std::fs::write(d.fx.paths.yard_toml(), "secure_by_default = true\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let site = c.call("sites.unsecure", json!({"site": "blog"})).await.unwrap();
+    assert_eq!(site["secure"], false);
+    assert!(site["url"].as_str().unwrap().starts_with("http://"), "{site}");
+    let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(toml.contains("secure = false"), "{toml}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn secure_works_for_a_proxy() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let url = format!("http://127.0.0.1:{}", free_port());
+    c.call("sites.proxy", json!({"name": "api", "url": url})).await.unwrap();
+
+    let site = c.call("sites.secure", json!({"site": "api"})).await.unwrap();
+    assert_eq!(site["secure"], true);
+    assert!(d.fx.paths.cert("api").exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn secure_an_unknown_site_is_site_not_found() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    for method in ["sites.secure", "sites.unsecure"] {
+        let err = c.call(method, json!({"site": "nope"})).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::SiteNotFound, "{method}");
+    }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ca_info_reports_trust_from_security() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+
+    let info = c.call("ca.info", Value::Null).await.unwrap();
+    assert_eq!(info["trusted"], false);
+    let ca = d.fx.paths.ca_cert();
+    assert_eq!(info["cert"], ca.display().to_string());
+    assert_eq!(info["sha256"].as_str().unwrap().len(), 64, "{info}");
+
+    std::fs::write(d.fx.security_dir().join("fake-trusted"), "").unwrap();
+    let info = c.call("ca.info", Value::Null).await.unwrap();
+    assert_eq!(info["trusted"], true);
+    let log = std::fs::read_to_string(d.fx.security_dir().join("security.log")).unwrap();
+    assert!(log.contains(&format!("verify-cert -c {} -l -L -q -p basic", ca.display())), "{log}");
+    d.shutdown().await.unwrap();
+}

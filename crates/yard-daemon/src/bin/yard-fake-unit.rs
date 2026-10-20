@@ -1,4 +1,4 @@
-//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl and brew, chosen by `argv[0]`. Each reads the
+//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew and security, chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
 use std::io::Write;
@@ -20,6 +20,7 @@ fn main() -> ExitCode {
         Some("brew") => brew(Path::new(&argv0), &args),
         Some("php") => php(&args),
         Some("pecl") => pecl(Path::new(&argv0), &args),
+        Some("security") => security(Path::new(&argv0), &args),
         _ => mode(&args),
     }
 }
@@ -374,6 +375,21 @@ fn listen_unix(path: Option<PathBuf>) -> ExitCode {
 fn hang() -> ExitCode {
     loop {
         std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+/// macOS's `security`, which logs each call to `security.log` beside it. `verify-cert`
+/// passes while a `fake-trusted` file sits there too.
+fn security(argv0: &Path, args: &[String]) -> ExitCode {
+    let dir = argv0.parent().unwrap_or(Path::new("."));
+    let mut log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("security.log"));
+    if let Ok(log) = &mut log {
+        let _ = writeln!(log, "{}", args.join(" "));
+    }
+    match args.first().map(String::as_str) {
+        Some("verify-cert") if dir.join("fake-trusted").exists() => ExitCode::SUCCESS,
+        Some("verify-cert") => ExitCode::from(1),
+        _ => fail(format!("security {args:?} is not faked")),
     }
 }
 

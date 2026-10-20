@@ -13,6 +13,7 @@ use crate::tls;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -32,7 +33,7 @@ use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::tls::{LEAF_DAYS, needs_issue};
 use yard_core::{Paths, PhpVersion};
-use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
+use yard_proto::{CaInfo, ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
 
 const USER_OWNED_NGINX: &str =
     "# USER-OWNED — Yard never rewrites this file. nginx directives for this site go here.\n";
@@ -148,6 +149,34 @@ impl Reconciler {
             .iter()
             .filter(|s| s.secure)
             .any(|s| needs_issue(tls::facts(&state.paths, &s.name).as_ref(), &s.host, now))
+    }
+
+    /// Yard's CA, made now if it is missing, and whether `security` says the login
+    /// keychain trusts it. The CA is made under the reconcile lock, so a reconcile never
+    /// signs with one half written.
+    pub async fn ca_info(&self, security: &Path) -> Result<CaInfo, YardError> {
+        let paths = {
+            let state = self.state.lock().await;
+            tls::ensure_ca(&state.paths, &ca_user(), OffsetDateTime::now_utc())?;
+            state.paths.clone()
+        };
+        let cert = paths.ca_cert();
+        let trusted = tokio::process::Command::new(security)
+            .args(["verify-cert", "-c"])
+            .arg(&cert)
+            .args(["-l", "-L", "-q", "-p", "basic"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        Ok(CaInfo {
+            cert: cert.display().to_string(),
+            sha256: tls::ca_sha256(&paths)?,
+            trusted,
+            expires: tls::ca_expires(&paths)?,
+        })
     }
 
     /// `Ok(Err(..))` when nginx rejects the config; `Err` when the test could not run.
@@ -491,8 +520,7 @@ fn issue_certs(paths: &Paths, sites: &[SiteInfo], report: &mut ReconcileReport) 
         return Ok(false);
     }
     let now = OffsetDateTime::now_utc();
-    let user = std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "user".into());
-    tls::ensure_ca(paths, &user, now)?;
+    tls::ensure_ca(paths, &ca_user(), now)?;
     let mut issued = false;
     for site in secure {
         if needs_issue(tls::facts(paths, &site.name).as_ref(), &site.host, now.unix_timestamp()) {
@@ -502,6 +530,11 @@ fn issue_certs(paths: &Paths, sites: &[SiteInfo], report: &mut ReconcileReport) 
         }
     }
     Ok(issued)
+}
+
+/// Who the CA's name says it belongs to: `Yard CA (<user>)`.
+fn ca_user() -> String {
+    std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "user".into())
 }
 
 /// Removes every `certs/<name>.{pem,key}` whose site is not secure.

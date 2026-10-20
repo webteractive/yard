@@ -23,6 +23,9 @@ pub struct Fixture {
     pub brew: TempDir,
     pub paths: Paths,
     pub fake: PathBuf,
+    /// The fake `/usr/bin/security`: `verify-cert` passes while `fake-trusted` sits
+    /// beside it, and each call is appended to `security.log` there.
+    pub security: PathBuf,
 }
 
 impl Fixture {
@@ -35,6 +38,8 @@ impl Fixture {
         place(&brew_dir.path().join("bin/brew"), |dst| symlink(&fake, dst));
         place(&brew.nginx_bin(), |dst| symlink(&fake, dst));
         place(&brew.dnsmasq_bin(), |dst| symlink(&fake, dst));
+        let security = brew_dir.path().join("security/security");
+        place(&security, |dst| symlink(&fake, dst));
         let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::DEFAULT));
         for bin in ["sbin/php-fpm", "bin/php", "bin/pecl"] {
             place(&php_opt.join(bin), |dst| symlink(&fake, dst));
@@ -52,11 +57,15 @@ impl Fixture {
         ] {
             std::fs::create_dir_all(dir).unwrap();
         }
-        Self { root, brew: brew_dir, paths, fake }
+        Self { root, brew: brew_dir, paths, fake, security }
     }
 }
 
 impl Fixture {
+    pub fn security_dir(&self) -> &Path {
+        self.security.parent().unwrap()
+    }
+
     /// A brew keg for `v` whose binaries are the fake, as `brew install` would leave it.
     pub fn add_php(&self, v: &str) {
         let opt = self.brew.path().join(format!("opt/php@{v}"));
