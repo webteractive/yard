@@ -348,11 +348,14 @@ profile; Yard does not edit dotfiles.
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs`,
   `node.list|install|use`, `units.restart`, `takeover`, `env.print`.
-- Long operations (brew installs, takeover) return a `job_id`
-  immediately; progress arrives as `job.progress` / `job.finished` events.
-- Subscriptions (`subscribe` with topic list) push: `unit.state_changed`,
-  `site.added`, `site.removed`, `job.progress`, `job.finished`, `log.line`,
-  `port.conflict`.
+- Long operations (brew installs, takeover) return `{ job_id }` immediately;
+  progress arrives as `job_progress` events (one per output line) and the result as
+  one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20
+  lines in `data.tail` when a command exits non-zero), on the `jobs` topic. Jobs run
+  one at a time, in start order. A client subscribes to `jobs` before it calls.
+- Subscriptions (`subscribe` with topic list: `units`, `sites`, `logs`, `ports`,
+  `jobs`) push events tagged `unit_state_changed`, `site_added`, `site_removed`,
+  `job_progress`, `job_finished`, `log_line`, `port_conflict`.
 - Types are defined once in `yard-proto` (serde). `cargo xtask schema` emits
   JSON Schema; the Swift `Codable` models are generated from it and checked in
   CI for drift.

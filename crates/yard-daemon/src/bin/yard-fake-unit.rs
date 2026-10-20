@@ -1,4 +1,4 @@
-//! Test stand-in for nginx, dnsmasq and php-fpm, chosen by `argv[0]`. Each reads the
+//! Test stand-in for nginx, dnsmasq, php-fpm and brew, chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
 use std::io::Write;
@@ -17,6 +17,7 @@ fn main() -> ExitCode {
         Some("nginx") => nginx(&args),
         Some("dnsmasq") => dnsmasq(&args),
         Some("php-fpm") => php_fpm(&args),
+        Some("brew") => brew(Path::new(&argv0), &args),
         _ => mode(&args),
     }
 }
@@ -34,6 +35,10 @@ fn mode(args: &[String]) -> ExitCode {
             ExitCode::from(code)
         }
         Some("hang") => hang(),
+        Some("print-path") => {
+            println!("PATH={}", std::env::var("PATH").unwrap_or_default());
+            ExitCode::SUCCESS
+        }
         Some("lines") => {
             let n: u32 = arg(1).and_then(|n| n.parse().ok()).unwrap_or(0);
             let mut out = std::io::stdout().lock();
@@ -115,6 +120,70 @@ fn php_fpm(args: &[String]) -> ExitCode {
         Some(PathBuf::from(value.trim().trim_matches('"')))
     });
     listen_unix(socket)
+}
+
+/// `brew` at `<prefix>/bin/brew`. It logs each call to `<prefix>/fake-brew.log` and fails
+/// when an argument equals `<prefix>/fake-brew-fail`. `install`/`uninstall` of
+/// `shivammathur/php/php@<v>` create or remove a keg whose binaries are this fake;
+/// extension formulas exist when listed in `<prefix>/fake-ext-formulas`, and installing
+/// one writes the ini brew's formula would.
+fn brew(argv0: &Path, args: &[String]) -> ExitCode {
+    let Some(prefix) = argv0.parent().and_then(Path::parent) else {
+        return fail(format!("brew at {} has no prefix", argv0.display()));
+    };
+    let line = args.join(" ");
+    println!("==> fake brew {line}");
+    let log = prefix.join("fake-brew.log");
+    let logged = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::write(&log, format!("{logged}{line}\n"));
+    let failing = std::fs::read_to_string(prefix.join("fake-brew-fail")).unwrap_or_default();
+    if args.iter().any(|a| !failing.trim().is_empty() && a == failing.trim()) {
+        eprintln!("Error: fake failure for {}", failing.trim());
+        return ExitCode::from(1);
+    }
+    let formulas = std::fs::read_to_string(prefix.join("fake-ext-formulas")).unwrap_or_default();
+    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
+    let (verb, formula) = match arg(0) {
+        "info" => (arg(0), arg(2)),
+        verb => (verb, arg(1)),
+    };
+    let me = std::env::current_exe().unwrap_or_default();
+    let result = if let Some(v) = formula.strip_prefix("shivammathur/php/php@") {
+        let opt = prefix.join(format!("opt/php@{v}"));
+        match verb {
+            "install" => (|| {
+                for bin in ["sbin/php-fpm", "bin/php", "bin/pecl", "bin/phpize", "bin/php-config"] {
+                    let dst = opt.join(bin);
+                    std::fs::create_dir_all(dst.parent().unwrap_or(&opt))?;
+                    let _ = std::fs::remove_file(&dst);
+                    std::os::unix::fs::symlink(&me, &dst)?;
+                }
+                std::fs::create_dir_all(prefix.join(format!("etc/php/{v}/conf.d")))
+            })(),
+            "uninstall" => std::fs::remove_dir_all(&opt),
+            _ => Ok(()),
+        }
+    } else if let Some((name, v)) =
+        formula.strip_prefix("shivammathur/extensions/").and_then(|f| f.split_once('@'))
+    {
+        let ini = prefix.join(format!("etc/php/{v}/conf.d/20-{name}.ini"));
+        match verb {
+            "info" if !formulas.lines().any(|l| l.trim() == name) => {
+                eprintln!("Error: No available formula with the name \"{formula}\".");
+                return ExitCode::from(1);
+            }
+            "install" => std::fs::create_dir_all(prefix.join(format!("etc/php/{v}/conf.d")))
+                .and_then(|()| std::fs::write(&ini, format!("extension=\"{name}.so\"\n"))),
+            "uninstall" => std::fs::remove_file(&ini),
+            _ => Ok(()),
+        }
+    } else {
+        Ok(())
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(format!("fake brew {line}: {e}")),
+    }
 }
 
 fn listen_tcp(port: Option<u16>) -> ExitCode {

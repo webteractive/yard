@@ -30,7 +30,7 @@ impl Fixture {
         let paths = Paths::new(root.path());
         let brew = Brew::new(brew_dir.path());
         let fake = PathBuf::from(FAKE);
-        place(&brew_dir.path().join("bin/brew"), |dst| std::fs::write(dst, ""));
+        place(&brew_dir.path().join("bin/brew"), |dst| symlink(&fake, dst));
         place(&brew.nginx_bin(), |dst| symlink(&fake, dst));
         place(&brew.dnsmasq_bin(), |dst| symlink(&fake, dst));
         let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::DEFAULT));

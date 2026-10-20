@@ -175,6 +175,13 @@ pub struct StatusInfo {
     pub config_error: Option<YardError>,
 }
 
+/// The answer to a method that runs as a job: its progress and result arrive as
+/// `job_progress` and `job_finished` events on the `jobs` topic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobStarted {
+    pub job_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

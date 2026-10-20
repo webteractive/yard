@@ -4,6 +4,7 @@
 use crate::describe;
 use crate::events::EventBus;
 use crate::helper_client::HelperClient;
+use crate::jobs::Jobs;
 use crate::privileged::PrivilegedSockets;
 use crate::reconcile::Reconciler;
 use crate::supervisor::{Supervisor, SupervisorConfig};
@@ -60,6 +61,7 @@ pub struct Context {
     pub bus: EventBus,
     pub reconciler: Arc<Reconciler>,
     pub resolver_dir: PathBuf,
+    pub jobs: Jobs,
 }
 
 impl Context {
@@ -92,6 +94,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         bus.clone(),
         opts.resolver_dir.clone(),
     )?);
+    let jobs = Jobs::new(bus.clone());
     let ctx = Arc::new(Context {
         paths: opts.paths.clone(),
         brew,
@@ -99,6 +102,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         bus,
         reconciler,
         resolver_dir: opts.resolver_dir.clone(),
+        jobs,
     });
 
     claim(&socket).await?;

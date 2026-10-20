@@ -25,6 +25,8 @@ pub enum ErrorCode {
     InvalidRequest,
     /// Reported by the CLI when `yardd` does not answer on its socket.
     DaemonNotRunning,
+    /// A command a job ran (brew, pecl) exited non-zero; `data.tail` has its last lines.
+    JobFailed,
     Internal,
 }
 

@@ -7,6 +7,7 @@ pub mod paths;
 pub mod php;
 pub mod ports;
 pub mod render;
+pub mod shim;
 pub mod sites;
 pub mod supervise;
 
