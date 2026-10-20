@@ -21,6 +21,8 @@ pub struct SiteEntry {
     pub docroot: Option<PathBuf>,
     /// Present for a proxied site.
     pub proxy: Option<String>,
+    /// `yard isolate`: the PHP version this site runs instead of the default.
+    pub php: Option<crate::PhpVersion>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +57,22 @@ mod tests {
         assert_eq!(c.sites["api"].proxy.as_deref(), Some("http://127.0.0.1:3000"));
         assert_eq!(c.sites["blog"].path, Some(PathBuf::from("/code/blog")));
         assert_eq!(c.sites["blog"].docroot, Some(PathBuf::from("web")));
+    }
+
+    #[test]
+    fn site_php_is_parsed() {
+        let c = parse_sites(Some("[sites.old]\npath = \"/o\"\nphp = \"7.1\"\n"), Path::new("/r/sites.toml"))
+            .unwrap();
+        assert_eq!(c.sites["old"].php, Some("7.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn unsupported_site_php_is_config_invalid() {
+        let e = parse_sites(Some("[sites.old]\npath = \"/o\"\nphp = \"5.6\"\n"), Path::new("/r/sites.toml"))
+            .unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::ConfigInvalid);
+        assert_eq!(e.data.unwrap()["line"], 3);
+        assert!(e.message.contains("7.0–8.5"), "{}", e.message);
     }
 
     #[test]

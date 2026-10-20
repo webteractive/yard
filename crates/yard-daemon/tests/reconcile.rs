@@ -465,3 +465,29 @@ async fn old_parked_key_keeps_serving_with_a_warning() {
     assert!(e.conf("blog").exists());
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn isolating_starts_that_pool_and_points_nginx_at_it() {
+    let e = env().await;
+    e.fx.add_php("7.1");
+    e.site("old");
+    e.site("new");
+    e.rec.reconcile().await.unwrap();
+    e.unit(FPM, running).await;
+
+    let mut file = TomlFile::load(&e.fx.paths.sites_toml()).unwrap();
+    file.set(&["sites", "old", "php"], toml_edit::value("7.1"));
+    file.save().unwrap();
+    e.rec.reconcile().await.unwrap();
+    let conf = std::fs::read_to_string(e.conf("old")).unwrap();
+    assert!(conf.contains("run/php-7.1.sock"), "{conf}");
+    assert!(std::fs::read_to_string(e.conf("new")).unwrap().contains("run/php-8.4.sock"));
+    e.unit("php-fpm-7.1", running).await;
+
+    let mut file = TomlFile::load(&e.fx.paths.sites_toml()).unwrap();
+    file.remove(&["sites", "old", "php"]);
+    file.save().unwrap();
+    e.rec.reconcile().await.unwrap();
+    assert!(!e.sup.list().iter().any(|u| u.name == "php-fpm-7.1"), "{:?}", e.sup.list());
+    e.sup.shutdown().await;
+}

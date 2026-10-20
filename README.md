@@ -76,6 +76,7 @@ error, 3 `yardd` is not running.
 | `yard link [name]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. |
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
 | `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |
+| `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. |
 | `yard php [list]` | yes | Installed PHP versions, the default, the sites on each and its pool. |
 | `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output. `uninstall` is refused for the default version. |
 | `yard php default <ver>` | yes | Makes an installed version the default. |

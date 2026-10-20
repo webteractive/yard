@@ -5,7 +5,7 @@ use crate::output::{for_agents, table};
 use serde_json::Value;
 use std::path::Path;
 use yard_core::sites::host_label;
-use yard_proto::methods::{self, DocrootParams, LinkParams, NameParams, ProxyParams};
+use yard_proto::methods::{self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams};
 use yard_proto::{ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
 
 pub async fn list(ctx: &Ctx) -> Outcome {
@@ -75,7 +75,7 @@ pub async fn docroot(ctx: &Ctx, path: String, site: Option<String>) -> Outcome {
         Some(s) => s,
         None => {
             let sites: Vec<SiteInfo> = client.call(methods::SITES_LIST, Value::Null).await?;
-            containing(&sites, &cwd()?)?
+            containing(&sites, &cwd()?, &format!("yard docroot {path} --site <name>"))?
         }
     };
     let params = DocrootParams { site, path: Some(path) };
@@ -87,8 +87,9 @@ pub async fn docroot(ctx: &Ctx, path: String, site: Option<String>) -> Outcome {
     Ok(0)
 }
 
-/// The PHP site whose directory holds `dir`, the innermost when sites nest.
-fn containing(sites: &[SiteInfo], dir: &Path) -> Result<String, YardError> {
+/// The PHP site whose directory holds `dir`, the innermost when sites nest. `hint` is
+/// the command with `--site` for when there is none.
+fn containing(sites: &[SiteInfo], dir: &Path, hint: &str) -> Result<String, YardError> {
     sites
         .iter()
         .filter_map(|s| match &s.kind {
@@ -99,7 +100,7 @@ fn containing(sites: &[SiteInfo], dir: &Path) -> Result<String, YardError> {
         .map(|(_, name)| name.clone())
         .ok_or_else(|| {
             YardError::new(ErrorCode::SiteNotFound, format!("{} is not inside a site", dir.display()))
-                .with_hint("yard docroot <path> --site <name>")
+                .with_hint(hint)
         })
 }
 
@@ -110,4 +111,26 @@ fn name_of(dir: &Path) -> Result<String, YardError> {
         YardError::new(ErrorCode::InvalidArgument, format!("{base:?} does not make a site name"))
             .with_hint("pass one: yard link <name>")
     })
+}
+
+/// `yard isolate <ver>` (`php` set) and `yard unisolate` (`None`).
+pub async fn isolate(ctx: &Ctx, php: Option<String>, site: Option<String>) -> Outcome {
+    let mut client = ctx.client().await?;
+    let site = match site {
+        Some(s) => s,
+        None => {
+            let sites: Vec<SiteInfo> = client.call(methods::SITES_LIST, Value::Null).await?;
+            let hint = match &php {
+                Some(v) => format!("yard isolate {v} --site <name>"),
+                None => "yard unisolate --site <name>".to_string(),
+            };
+            containing(&sites, &cwd()?, &hint)?
+        }
+    };
+    let updated: SiteInfo = client.call(methods::SITES_ISOLATE, IsolateParams { site, php }).await?;
+    ctx.emit(&updated, || match &updated.kind {
+        SiteKind::Php { php, .. } => format!("{} now runs PHP {php}\n", updated.name),
+        SiteKind::Proxy { target } => format!("{} proxies to {target}\n", updated.name),
+    });
+    Ok(0)
 }

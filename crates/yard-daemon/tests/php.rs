@@ -140,3 +140,53 @@ async fn list_names_the_sites_and_the_pool() {
     assert!(php["pool"].is_string(), "{list}");
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn isolate_returns_the_site_on_its_version() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    d.project("old");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let site = c.call("sites.isolate", json!({"site": "old", "php": "7.1"})).await.unwrap();
+    assert_eq!(site["php"], "7.1", "{site}");
+    let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(toml.contains("php = \"7.1\""), "{toml}");
+    let site = c.call("sites.isolate", json!({"site": "old"})).await.unwrap();
+    assert_eq!(site["php"], "8.4", "{site}");
+    assert!(!std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap().contains("php ="));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn isolate_refuses_uninstalled_proxied_and_unknown() {
+    let d = prepared("").await;
+    d.project("old");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let err = c.call("sites.isolate", json!({"site": "old", "php": "7.1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PhpNotInstalled);
+    assert_eq!(err.hint.as_deref(), Some("yard php install 7.1"));
+    c.call("sites.proxy", json!({"name": "api", "url": "http://127.0.0.1:3000"})).await.unwrap();
+    let err = c.call("sites.isolate", json!({"site": "api", "php": "8.4"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgument);
+    let err = c.call("sites.isolate", json!({"site": "nope", "php": "8.4"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::SiteNotFound);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_refuses_an_isolated_version() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("sites.isolate", json!({"site": "blog", "php": "7.1"})).await.unwrap();
+    let err = c.call("php.uninstall", json!({"php": "7.1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PhpInUse);
+    assert!(err.message.contains("blog"), "{}", err.message);
+    assert_eq!(err.hint.as_deref(), Some("yard isolate <version> --site blog"));
+    assert!(!brew_log(&d).contains("uninstall"));
+    d.shutdown().await.unwrap();
+}

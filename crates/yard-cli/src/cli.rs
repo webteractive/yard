@@ -68,6 +68,20 @@ pub enum Command {
         #[arg(long)]
         site: Option<String>,
     },
+    /// Run a site on its own PHP version instead of the default.
+    Isolate {
+        /// The version, e.g. 7.1; it must be installed (yard php install).
+        version: String,
+        /// The site; defaults to the site that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
+    },
+    /// Run a site on the default PHP version again.
+    Unisolate {
+        /// The site; defaults to the site that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
+    },
     /// List the registered ports, or change one.
     Ports {
         #[command(subcommand)]

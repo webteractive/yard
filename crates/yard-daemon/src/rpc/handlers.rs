@@ -36,6 +36,7 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SITES_PROXY => json(proxy(ctx, parse(params)?).await),
         methods::SITES_UNPROXY => json(unlink(ctx, parse(params)?, "proxy").await),
         methods::SITES_DOCROOT => json(docroot(ctx, parse(params)?).await),
+        methods::SITES_ISOLATE => json(php::isolate(ctx, parse(params)?).await),
         methods::PORTS_LIST => json(Ok(port_infos(ctx).await)),
         // A check is about the file as it is now, so an edit that broke it fails here.
         methods::PORTS_CHECK => {
@@ -108,11 +109,11 @@ pub(super) async fn reconcile(ctx: &Context) -> Result<(), YardError> {
     Ok(())
 }
 
-async fn site(ctx: &Context, name: &str) -> Result<SiteInfo, YardError> {
+pub(super) async fn site(ctx: &Context, name: &str) -> Result<SiteInfo, YardError> {
     snapshot(ctx).await?.resolution.sites.into_iter().find(|s| s.name == name).ok_or_else(|| not_found(name))
 }
 
-fn not_found(name: &str) -> YardError {
+pub(super) fn not_found(name: &str) -> YardError {
     YardError::new(ErrorCode::SiteNotFound, format!("no site named {name:?}"))
         .with_hint("yard sites lists them")
 }

@@ -76,6 +76,8 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Proxy { name, url } => sites::proxy(&ctx, name, url).await,
         Command::Unproxy { name } => sites::unproxy(&ctx, name).await,
         Command::Docroot { path, site } => sites::docroot(&ctx, path, site).await,
+        Command::Isolate { version, site } => sites::isolate(&ctx, Some(version), site).await,
+        Command::Unisolate { site } => sites::isolate(&ctx, None, site).await,
         Command::Ports { action: None } => ports::list(&ctx).await,
         Command::Ports { action: Some(PortsAction::Check) } => ports::check(&ctx).await,
         Command::Ports { action: Some(action) } => ports::change(&ctx, action).await,

@@ -54,6 +54,17 @@ impl Fixture {
     }
 }
 
+impl Fixture {
+    /// A brew keg for `v` whose binaries are the fake, as `brew install` would leave it.
+    pub fn add_php(&self, v: &str) {
+        let opt = self.brew.path().join(format!("opt/php@{v}"));
+        for bin in ["sbin/php-fpm", "bin/php", "bin/pecl", "bin/phpize", "bin/php-config"] {
+            place(&opt.join(bin), |dst| symlink(&self.fake, dst));
+        }
+        std::fs::create_dir_all(self.brew.path().join(format!("etc/php/{v}/conf.d"))).unwrap();
+    }
+}
+
 fn place(dst: &Path, make: impl FnOnce(&Path) -> std::io::Result<()>) {
     std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
     make(dst).unwrap();

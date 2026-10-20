@@ -363,3 +363,43 @@ fn php_default_and_uninstall_send_the_version() {
     assert!(stdout(&out).contains("PHP 8.3 is now the default."), "{}", stdout(&out));
     assert_eq!(d.params("php.default"), [json!({"php": "8.3"})]);
 }
+
+fn php_site(name: &str, path: &str, php: &str) -> Value {
+    serde_json::to_value(SiteInfo {
+        name: name.into(),
+        host: format!("{name}.yard"),
+        url: format!("http://{name}.yard:8080/"),
+        source: SiteSource::Linked,
+        kind: SiteKind::Php { path: path.into(), docroot: path.into(), php: php.into() },
+    })
+    .unwrap()
+}
+
+#[test]
+fn isolate_defaults_site_from_cwd() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(project.path()).unwrap();
+    let path = dir.display().to_string();
+    let d = MockDaemon::start(&[
+        ("sites.list", Ok(json!([php_site("old", &path, "8.4")]))),
+        ("sites.isolate", Ok(php_site("old", &path, "7.1"))),
+    ]);
+    std::fs::create_dir(dir.join("app")).unwrap();
+    let out = d.yard().args(["isolate", "7.1"]).current_dir(dir.join("app")).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("sites.isolate"), [json!({"site": "old", "php": "7.1"})]);
+    assert!(stdout(&out).contains("old now runs PHP 7.1"), "{}", stdout(&out));
+
+    let out = d.yard().args(["unisolate", "--site", "old"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("sites.isolate")[1], json!({"site": "old", "php": null}));
+}
+
+#[test]
+fn isolate_outside_a_site_names_the_flag() {
+    let d = MockDaemon::start(&[("sites.list", Ok(json!([])))]);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let out = d.yard().args(["isolate", "7.1"]).current_dir(elsewhere.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("hint: yard isolate 7.1 --site <name>"), "{}", stderr(&out));
+}

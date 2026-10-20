@@ -233,7 +233,10 @@ For the CLI shims (current working directory), the version is the first match of
 resolved version does not satisfy it.
 
 Isolating a site regenerates its nginx config to `fastcgi_pass` the target
-version's socket, ensures that pool is running, and reloads nginx.
+version's socket, ensures that pool is running, and reloads nginx. The version is
+`php = "<ver>"` in the site's `sites.toml` entry; it must be installed, and only a
+linked site can have one (a proxy runs no PHP). `yard unisolate [--site]` removes it,
+and a pool no site resolves to stops.
 
 Shims in `bin/` (`php`, `composer`, `pecl`, `phpize`, `php-config`) are small
 Rust binaries (one multicall binary, dispatch on `argv[0]`) that resolve the

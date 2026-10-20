@@ -1,7 +1,7 @@
 //! `php.*`: the PHP versions brew has installed, installing and removing them as jobs,
 //! and the global default (spec §4.1).
 
-use super::handlers::{reconcile, snapshot};
+use super::handlers::{not_found, reconcile, site, snapshot};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::reconcile::fpm_unit;
@@ -9,10 +9,10 @@ use std::path::Path;
 use toml_edit::value;
 use yard_core::PhpVersion;
 use yard_core::brew::Brew;
-use yard_core::config::{TomlFile, load_yard};
+use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::php::formula;
-use yard_proto::methods::PhpParams;
-use yard_proto::{ErrorCode, JobStarted, PhpInfo, SiteKind, YardError};
+use yard_proto::methods::{IsolateParams, PhpParams};
+use yard_proto::{ErrorCode, JobStarted, PhpInfo, SiteInfo, SiteKind, YardError};
 
 fn installed(brew: &Brew) -> Vec<PhpVersion> {
     brew.installed_php(&|p: &Path| p.exists(), &|p: &Path| std::fs::read_link(p).ok())
@@ -66,7 +66,7 @@ pub(super) fn install(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardErr
     }))
 }
 
-/// Refused, before any brew runs, while the version is the default.
+/// Refused, before any brew runs, while the version is the default or a site's.
 pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardError> {
     let v: PhpVersion = p.php.parse()?;
     let versions = installed(&ctx.brew);
@@ -83,6 +83,17 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
         return Err(
             YardError::new(ErrorCode::PhpInUse, format!("PHP {v} is the default version")).with_hint(hint)
         );
+    }
+    let isolated: Vec<String> = load_sites(&ctx.paths)?
+        .sites
+        .into_iter()
+        .filter(|(_, e)| e.php == Some(v))
+        .map(|(name, _)| name)
+        .collect();
+    if let Some(first) = isolated.first() {
+        let message = format!("PHP {v} runs {}, isolated to it", isolated.join(", "));
+        return Err(YardError::new(ErrorCode::PhpInUse, message)
+            .with_hint(format!("yard isolate <version> --site {first}")));
     }
     let brew = ctx.brew.brew_bin();
     let reconciler = ctx.reconciler.clone();
@@ -101,4 +112,31 @@ pub(super) async fn set_default(ctx: &Context, p: PhpParams) -> Result<(), YardE
     file.set(&["default_php"], value(v.to_string()));
     file.save()?;
     reconcile(ctx).await
+}
+
+/// `yard isolate` and `unisolate`: a linked site's own version, or back to the default.
+pub(super) async fn isolate(ctx: &Context, p: IsolateParams) -> Result<SiteInfo, YardError> {
+    let version = p.php.as_deref().map(str::parse::<PhpVersion>).transpose()?;
+    let mut file = TomlFile::load(&ctx.paths.sites_toml())?;
+    let entry = file.doc().get("sites").and_then(|s| s.get(&p.site));
+    if entry.is_none() {
+        return Err(not_found(&p.site));
+    }
+    if entry.and_then(|e| e.get("path")).is_none() {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("{} is a proxy, so no PHP runs it", p.site),
+        )
+        .with_hint("yard sites shows which sites run PHP"));
+    }
+    match version {
+        Some(v) if !installed(&ctx.brew).contains(&v) => return Err(not_installed(v)),
+        Some(v) => file.set(&["sites", &p.site, "php"], value(v.to_string())),
+        None => {
+            file.remove(&["sites", &p.site, "php"]);
+        }
+    }
+    file.save()?;
+    reconcile(ctx).await?;
+    site(ctx, &p.site).await
 }

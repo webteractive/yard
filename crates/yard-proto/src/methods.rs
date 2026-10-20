@@ -12,6 +12,7 @@ pub const SITES_UNLINK: &str = "sites.unlink";
 pub const SITES_PROXY: &str = "sites.proxy";
 pub const SITES_UNPROXY: &str = "sites.unproxy";
 pub const SITES_DOCROOT: &str = "sites.docroot";
+pub const SITES_ISOLATE: &str = "sites.isolate";
 pub const PORTS_LIST: &str = "ports.list";
 pub const PORTS_CHECK: &str = "ports.check";
 pub const PORTS_SET: &str = "ports.set";
@@ -62,6 +63,14 @@ pub struct DocrootParams {
     /// `None` clears the override and returns to detection.
     #[serde(default)]
     pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IsolateParams {
+    pub site: String,
+    /// `None` unisolates: the site runs the default version again.
+    #[serde(default)]
+    pub php: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

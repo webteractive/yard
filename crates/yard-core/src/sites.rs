@@ -55,7 +55,6 @@ pub fn resolve(
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Resolution {
     let mut warnings = Vec::new();
-    let php = cfg.default_php.to_string();
     let url = |host: &str| match http_port {
         80 => format!("http://{host}/"),
         p => format!("http://{host}:{p}/"),
@@ -93,7 +92,7 @@ pub fn resolve(
                     kind: SiteKind::Php {
                         path: path.display().to_string(),
                         docroot: docroot.display().to_string(),
-                        php: php.clone(),
+                        php: entry.php.unwrap_or(cfg.default_php).to_string(),
                     },
                 });
             }
@@ -177,6 +176,22 @@ mod tests {
             SiteKind::Php { php, .. } => assert_eq!(php, "8.4"),
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn isolated_site_resolves_to_its_version() {
+        let fs = Fs::new(&["/code/old", "/code/new"]);
+        let s = sites(&[
+            ("old", SiteEntry { php: Some("7.1".parse().unwrap()), ..linked("/code/old") }),
+            ("new", linked("/code/new")),
+        ]);
+        let r = resolve(&cfg(), &s, "yard", 8080, &fs.is_dir());
+        let php = |name: &str| match &r.sites.iter().find(|s| s.name == name).unwrap().kind {
+            SiteKind::Php { php, .. } => php.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(php("old"), "7.1");
+        assert_eq!(php("new"), "8.4");
     }
 
     #[test]
