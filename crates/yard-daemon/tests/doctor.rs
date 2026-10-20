@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::Arc;
 use std::time::Duration;
-use support::{Fixture, fast, free_port, ports_toml, spawn_helper, wait_until};
+use support::{Fixture, fast, free_port, held_listener, ports_toml, spawn_helper, wait_until};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
 use yard_core::generated::{Hashes, sha256_hex};
@@ -176,7 +176,7 @@ async fn resolver_on_wrong_port_warns() {
 #[tokio::test]
 async fn port_held_by_listener_fails_with_holder() {
     let e = env().await;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = held_listener();
     let held = listener.local_addr().unwrap().port();
     std::fs::write(e.fx.paths.ports_toml(), ports_toml(held, free_port(), e.dns)).unwrap();
 

@@ -101,14 +101,32 @@ pub fn ports_toml(http: u16, https: u16, dns: u16) -> String {
 /// connection takes one too, so the sequence wraps within seconds and `:0` would give a
 /// second test a port the first has not bound yet.
 pub fn free_port() -> u16 {
-    static GIVEN: std::sync::Mutex<BTreeSet<u16>> = std::sync::Mutex::new(BTreeSet::new());
-    let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut given = given();
     loop {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         if given.insert(port) {
             return port;
         }
     }
+}
+
+/// A listener a test holds, never on a port `free_port` gave out: that port is free only
+/// until its unit binds it, and a listener there would answer the unit's health checks.
+/// `free_port` cannot hand out a held port either, since the OS skips ports in use.
+pub fn held_listener() -> std::net::TcpListener {
+    let given = given();
+    loop {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        if !given.contains(&listener.local_addr().unwrap().port()) {
+            return listener;
+        }
+    }
+}
+
+/// Every port a test in this binary was given or holds.
+fn given() -> std::sync::MutexGuard<'static, BTreeSet<u16>> {
+    static GIVEN: std::sync::Mutex<BTreeSet<u16>> = std::sync::Mutex::new(BTreeSet::new());
+    GIVEN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The helper, in-process as the current user, its socket under a short `/tmp` dir. `privileged_ports` stands in for 80 and
@@ -149,7 +167,7 @@ pub async fn wait_until(mut done: impl FnMut() -> bool, within: Duration) -> boo
 /// set: inheritable by a child spawned from another thread in that window.
 pub fn inheritable_listener() -> (std::net::TcpListener, u16) {
     use std::os::fd::AsRawFd;
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let l = held_listener();
     // SAFETY: clearing FD_CLOEXEC on a descriptor this function owns.
     assert_eq!(unsafe { libc::fcntl(l.as_raw_fd(), libc::F_SETFD, 0) }, 0);
     let port = l.local_addr().unwrap().port();

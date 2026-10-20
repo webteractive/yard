@@ -4,11 +4,10 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use support::{FAKE, fast, free_port};
+use support::{FAKE, fast, free_port, held_listener};
 use tokio::sync::broadcast::Receiver;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
@@ -179,7 +178,8 @@ async fn apply_restarts_only_changed_units() {
     let pb2 = free_port();
     h.sup.apply(vec![listener("a", pa), listener("b", pb2)]).await;
     let b2 = wait_for(&h.sup, "b", |u| running(u) && u.pid != b).await;
-    assert_eq!(info(&h.sup, "a").unwrap().pid, a, "unchanged unit keeps its process");
+    let now_a = info(&h.sup, "a").unwrap();
+    assert_eq!(now_a.pid, a, "unchanged unit keeps its process: {now_a:?}");
     assert!(b.is_some_and(|pid| !alive(pid)));
     assert!(b2.pid.is_some_and(alive));
 
@@ -203,10 +203,20 @@ async fn shutdown_stops_children() {
     assert!(h.sup.list().iter().all(|u| u.state == UnitState::Stopped && u.pid.is_none()));
 }
 
+#[test]
+fn a_held_listener_never_takes_a_port_given_out() {
+    // More binds than the ephemeral range holds, so the OS sequence wraps past `given`.
+    let given = free_port();
+    for _ in 0..20_000 {
+        let port = held_listener().local_addr().unwrap().port();
+        assert_ne!(port, given, "a held listener took a port free_port gave out");
+    }
+}
+
 #[tokio::test]
 async fn foreign_listener_blocks_start_without_backoff() {
     let h = harness(fast());
-    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let held = held_listener();
     let p = held.local_addr().unwrap().port();
     let mut rx = h.bus.subscribe();
     let mut spec = listener("web", p);
