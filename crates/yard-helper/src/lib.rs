@@ -3,7 +3,6 @@
 //! No caller sends a path or a command. The owning user, the data root and the brew
 //! prefix are fixed at install time; a caller passes at most a TLD and a port.
 
-mod nginx;
 mod peer;
 mod resolver;
 pub mod root_dir;

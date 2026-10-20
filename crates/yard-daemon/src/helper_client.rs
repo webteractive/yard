@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use yard_proto::helper::{self, HelperStatus, TestConfigResult};
+use yard_proto::helper::{self, HelperStatus};
 use yard_proto::rpc::{Request, Response, encode_line};
 use yard_proto::{ErrorCode, YardError};
 
@@ -25,22 +25,6 @@ impl HelperClient {
 
     pub fn socket(&self) -> &Path {
         &self.socket
-    }
-
-    pub async fn start_nginx(&self) -> Result<(), YardError> {
-        self.call(helper::NGINX_START, Value::Null).await
-    }
-
-    pub async fn stop_nginx(&self) -> Result<(), YardError> {
-        self.call(helper::NGINX_STOP, Value::Null).await
-    }
-
-    pub async fn reload_nginx(&self) -> Result<(), YardError> {
-        self.call(helper::NGINX_RELOAD, Value::Null).await
-    }
-
-    pub async fn test_nginx(&self) -> Result<TestConfigResult, YardError> {
-        self.call(helper::NGINX_TEST_CONFIG, Value::Null).await
     }
 
     pub async fn install_resolver(&self, tld: &str, port: u16) -> Result<(), YardError> {

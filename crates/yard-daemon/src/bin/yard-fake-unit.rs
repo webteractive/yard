@@ -2,12 +2,11 @@
 //! config Yard rendered and listens where it says. Never shipped.
 
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::os::unix::net::UnixListener;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
-use std::time::{Duration, Instant};
+use std::process::ExitCode;
+use std::time::Duration;
 
 fn main() -> ExitCode {
     let mut argv = std::env::args();
@@ -47,9 +46,8 @@ fn mode(args: &[String]) -> ExitCode {
     }
 }
 
-/// `-p <prefix> -c <conf> [-e <log>] [-t]`. A conf with `daemon off;`, as Yard renders,
-/// runs in the foreground, listening itself. Otherwise it "daemonizes": starts a listener
-/// child, writes the child's pid to the conf's `pid` path and exits.
+/// `-p <prefix> -c <conf> [-e <log>] [-t]`. Runs in the foreground, as Yard's
+/// `daemon off;` asks, listening on the conf's first `listen 127.0.0.1:N`.
 fn nginx(args: &[String]) -> ExitCode {
     let (Some(prefix), Some(conf)) = (flag(args, "-p"), flag(args, "-c")) else {
         return fail("nginx needs -p and -c".into());
@@ -63,41 +61,11 @@ fn nginx(args: &[String]) -> ExitCode {
         eprintln!("nginx: configuration file {conf} test is successful");
         return ExitCode::SUCCESS;
     }
-    let Ok(text) = std::fs::read_to_string(conf) else { return fail(format!("cannot read {conf}")) };
-    let port = text.lines().find_map(|l| {
+    let text = std::fs::read_to_string(conf).unwrap_or_default();
+    listen_tcp(text.lines().find_map(|l| {
         let rest = l.trim().strip_prefix("listen 127.0.0.1:")?;
         rest.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u16>().ok()
-    });
-    let pid_file = text.lines().find_map(|l| {
-        let value = l.trim().strip_prefix("pid ")?.trim_end_matches(';').trim();
-        Some(value.trim_matches('"').to_string())
-    });
-    if text.lines().any(|l| l.trim() == "daemon off;") {
-        return listen_tcp(port);
-    }
-    let (Some(port), Some(pid_file)) = (port, pid_file) else {
-        return fail(format!("{conf} has no `listen 127.0.0.1:N` or no `pid`"));
-    };
-    let Ok(exe) = std::env::current_exe() else { return fail("no current_exe".into()) };
-    let child = Command::new(exe)
-        .arg0("yard-fake-unit")
-        .args(["listen-tcp", &port.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(child) = child else { return fail("cannot spawn the listener".into()) };
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
-        if Instant::now() > deadline {
-            return fail(format!("listener on {port} did not come up"));
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    match std::fs::write(&pid_file, format!("{}\n", child.id())) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => fail(format!("cannot write {pid_file}: {e}")),
-    }
+    }))
 }
 
 /// `--conf-file=<path>` (or `--conf-file <path>`); listens on its `port=` over TCP.

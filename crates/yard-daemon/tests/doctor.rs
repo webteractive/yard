@@ -120,7 +120,6 @@ async fn all_ok_on_healthy_fixture() {
     })
     .await;
     sup.shutdown().await;
-    let _ = e.helper.stop_nginx().await;
 
     assert_eq!(ids(&report), IDS);
     for c in &report.checks {

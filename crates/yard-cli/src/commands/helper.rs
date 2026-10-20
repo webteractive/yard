@@ -5,6 +5,7 @@
 
 use super::lifecycle::{launchctl, sibling, unloaded};
 use super::{Ctx, Outcome};
+use serde_json::Value;
 use std::ffi::CString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -17,11 +18,15 @@ use yard_daemon::helper_client::HelperClient;
 use yard_proto::{ErrorCode, YardError};
 
 const PLIST: &str = "/Library/LaunchDaemons/dev.more.yard.helper.plist";
+/// M1's helper ran nginx as root. Sent to the helper being replaced, so its nginx lets go
+/// of the ports before yardd starts its own.
+const LEGACY_NGINX_STOP: &str = "nginx.stop";
 const READY_WAIT: Duration = Duration::from_secs(5);
 
 /// Whose helper this is: the user who ran sudo.
 struct Owner {
     uid: u32,
+    gid: u32,
     user: String,
     home: PathBuf,
 }
@@ -45,10 +50,12 @@ pub async fn install(ctx: &Ctx) -> Outcome {
     place(Path::new(PLIST), &plist, 0o644)?;
 
     let service = format!("system/{HELPER_LABEL}");
+    stop_legacy_nginx().await;
     // Not loaded yet is fine; a loaded one must go so the new binary and plist load.
     if launchctl(&["bootout", &service]).is_ok() {
         unloaded(&service).await;
     }
+    let handed_back = hand_back(&legacy_root_files(&paths), &owner);
     launchctl(&["bootstrap", "system", PLIST])?;
 
     let helper = HelperClient::new(HELPER_SOCKET);
@@ -68,27 +75,59 @@ pub async fn install(ctx: &Ctx) -> Outcome {
         }
     };
     ctx.emit(&status, || {
-        format!(
+        let mut out = String::new();
+        for file in &handed_back {
+            out.push_str(&format!("Gave {} back to {}.\n", file.display(), owner.user));
+        }
+        out.push_str(&format!(
             "Installed the helper {} for {} (data root {}).\nyard start runs yardd next.\n",
             status.version,
             owner.user,
             paths.root().display()
-        )
+        ));
+        out
     });
     Ok(0)
 }
 
+/// Asks the running helper to stop the root nginx M1 started. A helper without the verb,
+/// or no helper at all, has no nginx to stop.
+async fn stop_legacy_nginx() {
+    match HelperClient::new(HELPER_SOCKET).call::<Value>(LEGACY_NGINX_STOP, Value::Null).await {
+        Err(e) if !matches!(e.code, ErrorCode::MethodNotFound | ErrorCode::HelperNotInstalled) => eprintln!(
+            "warning: could not stop M1's nginx ({}); its pid is in run/nginx.pid under the data root",
+            e.message
+        ),
+        _ => {}
+    }
+}
+
+/// Files M1's root nginx created in the data root. yardd's nginx, running as the user,
+/// cannot open them until they are the owner's again.
+fn legacy_root_files(paths: &Paths) -> [PathBuf; 2] {
+    [paths.logs_dir().join("nginx-error.log"), paths.nginx_pid()]
+}
+
+/// Gives each root-owned regular file back to the owner, never following a symlink.
+/// Returns the files it changed.
+fn hand_back(files: &[PathBuf], owner: &Owner) -> Vec<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let mut changed = vec![];
+    for file in files {
+        let Ok(meta) = std::fs::symlink_metadata(file) else { continue };
+        if !meta.file_type().is_file() || meta.uid() != 0 {
+            continue;
+        }
+        match std::os::unix::fs::lchown(file, Some(owner.uid), Some(owner.gid)) {
+            Ok(()) => changed.push(file.clone()),
+            Err(e) => eprintln!("warning: cannot give {} back to {}: {e}", file.display(), owner.user),
+        }
+    }
+    changed
+}
+
 pub async fn uninstall(ctx: &Ctx) -> Outcome {
     require_root("uninstall")?;
-    // nginx outlives the helper's launchd job, and only the helper can stop it.
-    if let Err(e) = HelperClient::new(HELPER_SOCKET).stop_nginx().await
-        && e.code != ErrorCode::HelperNotInstalled
-    {
-        eprintln!(
-            "warning: could not stop nginx ({}); its pid is in run/nginx.pid under the data root",
-            e.message
-        );
-    }
     let _ = launchctl(&["bootout", &format!("system/{HELPER_LABEL}")]);
     for file in [PLIST, HELPER_BINARY] {
         match std::fs::remove_file(file) {
@@ -109,7 +148,7 @@ pub async fn uninstall(ctx: &Ctx) -> Outcome {
 }
 
 /// The data root the helper's plist names: absolute, since the helper runs from `/`, and
-/// writable by nobody but the owner, since root runs nginx from it.
+/// writable by nobody but the owner, since root changes files in it on install.
 fn helper_root(root: &Path, owner_uid: u32) -> Result<PathBuf, YardError> {
     let root = std::path::absolute(root).map_err(|e| {
         YardError::new(ErrorCode::InvalidArgument, format!("cannot resolve {}: {e}", root.display()))
@@ -140,23 +179,24 @@ fn owner() -> Result<Owner, YardError> {
     if uid == 0 {
         return Err(refuse());
     }
-    let home = home_of(&user).ok_or_else(|| {
+    let (home, gid) = passwd_of(&user).ok_or_else(|| {
         YardError::internal(format!("no home directory for {user}")).with_hint("pass --root <path>")
     })?;
-    Ok(Owner { uid, user, home })
+    Ok(Owner { uid, gid, user, home })
 }
 
-fn home_of(user: &str) -> Option<PathBuf> {
+/// The user's home directory and primary group.
+fn passwd_of(user: &str) -> Option<(PathBuf, u32)> {
     let name = CString::new(user).ok()?;
     // SAFETY: getpwnam returns null or a pointer into static storage that stays valid
-    // until the next getpw* call, and pw_dir is read before any other call.
+    // until the next getpw* call, and pw_dir and pw_gid are read before any other call.
     unsafe {
         let pw = libc::getpwnam(name.as_ptr());
         if pw.is_null() || (*pw).pw_dir.is_null() {
             return None;
         }
         let dir = std::ffi::CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
-        Some(PathBuf::from(dir))
+        Some((PathBuf::from(dir), (*pw).pw_gid))
     }
 }
 
@@ -201,6 +241,15 @@ mod tests {
     fn me() -> u32 {
         // SAFETY: getuid cannot fail.
         unsafe { libc::getuid() }
+    }
+
+    #[test]
+    fn legacy_root_files_are_m1_nginx_outputs() {
+        let paths = Paths::new("/r");
+        assert_eq!(
+            legacy_root_files(&paths),
+            [PathBuf::from("/r/logs/nginx-error.log"), PathBuf::from("/r/run/nginx.pid")]
+        );
     }
 
     #[test]

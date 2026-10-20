@@ -29,10 +29,8 @@ impl Fixture {
         let paths = Paths::new(root.path());
         let brew = Brew::new(brew_dir.path());
         let fake = PathBuf::from(FAKE);
-        // nginx is a copy, not a symlink: the helper only signals a pid whose executable is
-        // the canonical nginx path, and a plain `yard-fake-unit hang` child must fail that.
         place(&brew_dir.path().join("bin/brew"), |dst| std::fs::write(dst, ""));
-        place(&brew.nginx_bin(), |dst| std::fs::copy(&fake, dst).map(drop));
+        place(&brew.nginx_bin(), |dst| symlink(&fake, dst));
         place(&brew.dnsmasq_bin(), |dst| symlink(&fake, dst));
         let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::DEFAULT));
         place(&Brew::php_fpm(&php_opt), |dst| symlink(&fake, dst));
@@ -50,28 +48,6 @@ impl Fixture {
             std::fs::create_dir_all(dir).unwrap();
         }
         Self { root, brew: brew_dir, paths, fake }
-    }
-
-    /// The smallest nginx.conf the fake nginx understands: a pid path and one listener.
-    pub fn write_nginx_conf(&self, port: u16) {
-        let conf = format!(
-            "pid \"{pid}\";\nhttp {{\n    server {{\n        listen 127.0.0.1:{port};\n    }}\n    include \"{sites}\";\n}}\n",
-            pid = self.paths.nginx_pid().display(),
-            sites = self.paths.nginx_sites_dir().join("*.conf").display(),
-        );
-        std::fs::write(self.paths.nginx_conf(), conf).unwrap();
-    }
-}
-
-/// A test that panics never reaches its shutdown; stop the fake nginx it may have left.
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        if let Ok(pid) =
-            std::fs::read_to_string(self.paths.nginx_pid()).unwrap_or_default().trim().parse::<i32>()
-        {
-            // SAFETY: kill(2) on the pid the fake nginx wrote for this fixture.
-            unsafe { libc::kill(pid, libc::SIGTERM) };
-        }
     }
 }
 

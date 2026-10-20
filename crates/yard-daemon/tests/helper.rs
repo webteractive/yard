@@ -1,86 +1,12 @@
-//! The root helper's verbs, run in-process against a fake nginx and a temp resolver dir.
+//! The root helper's verbs, run in-process against a temp resolver dir.
 
 mod support;
 
 use serde_json::{Value, json};
-use std::time::Duration;
-use support::{FAKE, Fixture, free_port, spawn_helper, wait_until};
+use support::{Fixture, spawn_helper};
 use yard_core::render::resolver::resolver_file;
 use yard_daemon::helper_client::HelperClient;
-use yard_daemon::probe::is_listening;
 use yard_proto::ErrorCode;
-
-const FIVE_S: Duration = Duration::from_secs(5);
-
-#[tokio::test]
-async fn nginx_start_reload_stop_cycle() {
-    let fx = Fixture::new();
-    let p = free_port();
-    fx.write_nginx_conf(p);
-    let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
-
-    helper.start_nginx().await.unwrap();
-    assert!(wait_until(|| is_listening(p), FIVE_S).await, "nginx listens after start");
-    assert!(helper.status().await.unwrap().nginx_pid.is_some());
-
-    helper.reload_nginx().await.unwrap();
-    assert!(is_listening(p), "SIGHUP keeps nginx serving");
-
-    helper.stop_nginx().await.unwrap();
-    assert!(wait_until(|| !is_listening(p), FIVE_S).await, "nginx stops listening");
-    assert_eq!(helper.status().await.unwrap().nginx_pid, None);
-}
-
-#[tokio::test]
-async fn start_is_idempotent() {
-    let fx = Fixture::new();
-    let p = free_port();
-    fx.write_nginx_conf(p);
-    let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
-
-    helper.start_nginx().await.unwrap();
-    let first = helper.status().await.unwrap().nginx_pid;
-    helper.start_nginx().await.unwrap();
-    assert!(first.is_some());
-    assert_eq!(helper.status().await.unwrap().nginx_pid, first, "a second start is a no-op");
-    helper.stop_nginx().await.unwrap();
-}
-
-#[tokio::test]
-async fn test_config_reports_failure_output() {
-    let fx = Fixture::new();
-    fx.write_nginx_conf(free_port());
-    let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
-
-    assert!(helper.test_nginx().await.unwrap().ok);
-
-    let broken = fx.paths.nginx_override("blog");
-    std::fs::write(&broken, "yard-test-broken;\n").unwrap();
-    let result = helper.test_nginx().await.unwrap();
-    assert!(!result.ok);
-    assert!(result.output.contains(&broken.display().to_string()), "{}", result.output);
-}
-
-#[tokio::test]
-async fn refuses_to_signal_non_nginx_pid() {
-    let fx = Fixture::new();
-    fx.write_nginx_conf(free_port());
-    let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
-    let mut victim = std::process::Command::new(FAKE).arg("hang").spawn().unwrap();
-    std::fs::write(fx.paths.nginx_pid(), format!("{}\n", victim.id())).unwrap();
-
-    assert_eq!(helper.reload_nginx().await.unwrap_err().code, ErrorCode::HelperRefused);
-    assert_eq!(helper.stop_nginx().await.unwrap_err().code, ErrorCode::HelperRefused);
-    assert_eq!(helper.status().await.unwrap().nginx_pid, None);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(victim.try_wait().unwrap().is_none(), "the process was not signalled");
-    victim.kill().unwrap();
-    victim.wait().unwrap();
-}
 
 #[tokio::test]
 async fn resolver_install_and_remove() {
@@ -139,47 +65,22 @@ async fn unknown_method_is_method_not_found() {
 }
 
 #[tokio::test]
+async fn nginx_verbs_are_gone() {
+    let fx = Fixture::new();
+    let resolver = tempfile::tempdir().unwrap();
+    let helper = spawn_helper(&fx, resolver.path()).await;
+
+    // yardd runs nginx as the user now; root never starts it.
+    for verb in ["nginx.start", "nginx.stop", "nginx.reload", "nginx.test_config"] {
+        let err = helper.call::<Value>(verb, Value::Null).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::MethodNotFound, "{verb}");
+    }
+}
+
+#[tokio::test]
 async fn client_without_helper_reports_not_installed() {
     let client = HelperClient::new("/tmp/yard-test-missing/helper.sock");
     let err = client.status().await.unwrap_err();
     assert_eq!(err.code, ErrorCode::HelperNotInstalled);
     assert_eq!(err.hint.as_deref(), Some("sudo yard helper install"));
-}
-
-#[tokio::test]
-async fn nginx_does_not_inherit_helper_sockets() {
-    let fx = Fixture::new();
-    fx.write_nginx_conf(free_port());
-    let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
-    let (leaked, p) = support::inheritable_listener();
-
-    helper.start_nginx().await.unwrap();
-    drop(leaked);
-    let is_free = || yard_daemon::probe::is_free(p, yard_daemon::probe::Proto::Tcp);
-    let inherited = !wait_until(is_free, Duration::from_secs(2)).await;
-    helper.stop_nginx().await.unwrap();
-    assert!(!inherited, "nginx holds a socket it inherited from the helper");
-}
-
-#[tokio::test]
-async fn nginx_refuses_a_root_others_can_write() {
-    use std::os::unix::fs::PermissionsExt;
-    let fx = Fixture::new();
-    fx.write_nginx_conf(free_port());
-    let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path()).await;
-    let root = fx.paths.root();
-    helper.start_nginx().await.unwrap();
-    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o777)).unwrap();
-
-    // A reload makes root re-read the config as much as a start does.
-    assert_eq!(helper.reload_nginx().await.unwrap_err().code, ErrorCode::HelperRefused);
-    helper.stop_nginx().await.unwrap();
-    let start = helper.start_nginx().await.unwrap_err();
-    assert_eq!(start.code, ErrorCode::HelperRefused, "{start:?}");
-    assert!(start.message.contains("writable by other users"), "{}", start.message);
-    assert_eq!(helper.test_nginx().await.unwrap_err().code, ErrorCode::HelperRefused);
-    assert_eq!(helper.status().await.unwrap().nginx_pid, None);
-    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
 }

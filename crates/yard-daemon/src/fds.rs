@@ -9,8 +9,7 @@ const MAX_FDS: usize = 4096;
 ///
 /// macOS has no `SOCK_CLOEXEC`: a socket or pipe is created inheritable and marked
 /// close-on-exec a moment later. A unit spawned in that moment by another thread would
-/// keep, say, a port probe's socket and hold that port. `yard-helper` keeps the same
-/// function for nginx; change both together.
+/// keep, say, a port probe's socket and hold that port.
 pub fn cloexec_inherited() -> io::Result<()> {
     let mut fds = [libc::proc_fdinfo { proc_fd: 0, proc_fdtype: 0 }; MAX_FDS];
     let size = std::mem::size_of_val(&fds) as libc::c_int;
