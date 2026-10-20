@@ -229,7 +229,10 @@ custom = { source = "path", so = "/abs/custom.so" }
 opcache = { source = "bundled", enabled = false }
 ```
 
-`enabled` defaults to true. `path` needs an absolute `so`. `bundled` is an extension
+A `brew` extension loads the path its formula's ini in brew's `conf.d` names
+(shivammathur's formulas keep the `.so` in their own keg); `pecl` loads `<name>.so` from
+`extension_dir`. A brew ini whose absolute `.so` is gone (`brew uninstall` leaves the
+ini behind) is neither mirrored nor listed. `enabled` defaults to true. `path` needs an absolute `so`. `bundled` is an extension
 PHP itself loads (opcache), listed only to disable it. `xdebug` and `opcache` load as
 `zend_extension`. A disabled or bundled entry writes no `50-` ini.
 

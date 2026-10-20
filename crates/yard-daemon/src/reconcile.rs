@@ -25,7 +25,7 @@ use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry}
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
-use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, php_fpm_env, php_ini};
+use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::{Paths, PhpVersion};
@@ -226,11 +226,12 @@ impl Reconciler {
             rendered.insert(paths.fpm_conf(*v), fpm_conf(&ctx, *v));
             let exts = yard.extensions.get(v).unwrap_or(&no_exts);
             let conf_d = paths.php_conf_d(*v);
-            for (name, text) in brew_inis(&ctx, &ini_files(&state.brew.php_conf_d(*v)), exts) {
+            let brew_files = brew_conf_d(&state.brew.php_conf_d(*v));
+            for (name, text) in brew_inis(&ctx, &brew_files, exts) {
                 rendered.insert(conf_d.join(name), text);
             }
             for (name, entry) in exts {
-                if let Some(text) = ext_ini(&ctx, name, entry) {
+                if let Some(text) = ext_ini(&ctx, name, entry, &brew_files) {
                     rendered.insert(conf_d.join(format!("50-{name}.ini")), text);
                 }
             }
@@ -496,6 +497,14 @@ fn link_shims(bin: &Path, shim: &Path) -> Vec<String> {
         }
     }
     warnings
+}
+
+/// Brew's conf.d for one version, without the inis brew left behind for an uninstalled
+/// extension (whose `.so` is gone).
+pub(crate) fn brew_conf_d(dir: &Path) -> Vec<(String, String)> {
+    let mut files = ini_files(dir);
+    files.retain(|(_, text)| !is_stale(text, &|p: &Path| p.exists()));
+    files
 }
 
 /// The `.ini` files in brew's conf.d for one version, as `(name, text)`; a missing

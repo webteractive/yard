@@ -82,6 +82,17 @@ pub fn brew_inis(
 /// The modules an ini's `extension=` and `zend_extension=` lines load: each value's
 /// basename, without `.so` and a leading `php_`.
 pub fn ini_modules(text: &str) -> impl Iterator<Item = String> + '_ {
+    ini_loads(text).map(|(module, _)| module)
+}
+
+/// Whether an ini loads a `.so` by absolute path that does not exist. `brew uninstall` of
+/// an extension formula removes its keg but leaves its ini in brew's conf.d.
+pub fn is_stale(text: &str, exists: &dyn Fn(&std::path::Path) -> bool) -> bool {
+    ini_loads(text).any(|(_, value)| value.starts_with('/') && !exists(std::path::Path::new(value)))
+}
+
+/// Each `extension=`/`zend_extension=` line of an ini as (module, the value as written).
+fn ini_loads(text: &str) -> impl Iterator<Item = (String, &str)> + '_ {
     text.lines().filter_map(|line| {
         let (key, value) = line.trim().split_once('=')?;
         if !matches!(key.trim(), "extension" | "zend_extension") {
@@ -90,19 +101,29 @@ pub fn ini_modules(text: &str) -> impl Iterator<Item = String> + '_ {
         let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
         let base = value.rsplit('/').next().unwrap_or(value);
         let base = base.strip_suffix(".so").unwrap_or(base);
-        Some(base.strip_prefix("php_").unwrap_or(base).to_string())
+        Some((base.strip_prefix("php_").unwrap_or(base).to_string(), value))
     })
 }
 
 /// `50-<name>.ini` for one extension; `None` when nothing should load it (disabled, or
-/// bundled, which PHP's own ini or brew's mirrored one loads).
-pub fn ext_ini(ctx: &RenderCtx, name: &str, e: &ExtEntry) -> Option<String> {
+/// bundled, which PHP's own ini or brew's mirrored one loads). A `brew` extension loads
+/// the path its formula's ini in brew's conf.d (`brew_files`) names: shivammathur's
+/// formulas keep the `.so` in their own keg, outside `extension_dir`.
+pub fn ext_ini(ctx: &RenderCtx, name: &str, e: &ExtEntry, brew_files: &[(String, String)]) -> Option<String> {
     if !e.enabled || e.source == ExtSource::Bundled {
         return None;
     }
     let key = if matches!(name, "xdebug" | "opcache") { "zend_extension" } else { "extension" };
+    let from_brew = || {
+        brew_files
+            .iter()
+            .flat_map(|(_, text)| ini_loads(text).collect::<Vec<_>>())
+            .find(|(module, _)| module.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.to_string())
+    };
     let value = match (&e.source, &e.so) {
-        (ExtSource::Path, Some(so)) => so.display().to_string(),
+        (_, Some(so)) => so.display().to_string(),
+        (ExtSource::Brew, None) => from_brew().unwrap_or_else(|| format!("{name}.so")),
         _ => format!("{name}.so"),
     };
     Some(format!(
@@ -181,16 +202,40 @@ mod tests {
     fn ext_ini_snapshots() {
         let (p, b) = parts();
         let c = ctx(&p, &b);
-        assert_snapshot!("brew_redis", ext_ini(&c, "redis", &entry(ExtSource::Brew, true)).unwrap());
+        assert_snapshot!("brew_redis", ext_ini(&c, "redis", &entry(ExtSource::Brew, true), &[]).unwrap());
         let custom = ExtEntry {
             source: ExtSource::Path,
             enabled: true,
             so: Some(PathBuf::from("/Users/me/Library/Application Support/Yard/php/8.4/ext/custom.so")),
         };
-        assert_snapshot!("path_custom", ext_ini(&c, "custom", &custom).unwrap());
-        assert_snapshot!("brew_xdebug", ext_ini(&c, "xdebug", &entry(ExtSource::Brew, true)).unwrap());
-        assert_eq!(ext_ini(&c, "redis", &entry(ExtSource::Brew, false)), None);
-        assert_eq!(ext_ini(&c, "opcache", &entry(ExtSource::Bundled, true)), None);
+        assert_snapshot!("path_custom", ext_ini(&c, "custom", &custom, &[]).unwrap());
+        assert_snapshot!("brew_xdebug", ext_ini(&c, "xdebug", &entry(ExtSource::Brew, true), &[]).unwrap());
+        assert_eq!(ext_ini(&c, "redis", &entry(ExtSource::Brew, false), &[]), None);
+        assert_eq!(ext_ini(&c, "opcache", &entry(ExtSource::Bundled, true), &[]), None);
+    }
+
+    #[test]
+    fn brew_ext_loads_from_the_path_brews_ini_names() {
+        let (p, b) = parts();
+        let c = ctx(&p, &b);
+        // shivammathur's formulas keep the .so in their own keg, outside extension_dir.
+        let files = vec![(
+            "20-redis.ini".to_string(),
+            "[redis]\nextension=\"/opt/homebrew/opt/phpredis@7.1/redis.so\"\n".to_string(),
+        )];
+        let ini = ext_ini(&c, "redis", &entry(ExtSource::Brew, true), &files).unwrap();
+        assert!(ini.ends_with("extension = \"/opt/homebrew/opt/phpredis@7.1/redis.so\"\n"), "{ini}");
+        // pecl installs into extension_dir, so its bare name stays.
+        let ini = ext_ini(&c, "redis", &entry(ExtSource::Pecl, true), &files).unwrap();
+        assert!(ini.ends_with("extension = \"redis.so\"\n"), "{ini}");
+    }
+
+    #[test]
+    fn an_ini_whose_so_is_gone_is_stale() {
+        let ini = "[redis]\nextension=\"/opt/homebrew/opt/phpredis@7.1/redis.so\"\n";
+        assert!(is_stale(ini, &|_| false), "brew uninstall leaves the ini, not the .so");
+        assert!(!is_stale(ini, &|_| true));
+        assert!(!is_stale("zend_extension=\"opcache.so\"\n", &|_| false), "a bare name is PHP's to find");
     }
 
     #[test]

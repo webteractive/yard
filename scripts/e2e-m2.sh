@@ -57,7 +57,8 @@ cp -R "$fixtures/hello-php" "$fixtures/hello-php71" "$work/"
 added=()
 cleanup() {
   local ext
-  for ext in "${added[@]}"; do
+  # The +-form expands to nothing for an empty array; macOS bash 3.2 calls a bare one unbound.
+  for ext in ${added[@]+"${added[@]}"}; do
     # shellcheck disable=SC2086
     "$yard" ext remove $ext >/dev/null 2>&1 || true
   done
@@ -105,9 +106,10 @@ for site in hello-php:8.4 hello-php71:7.1; do
   pass "the shim in $dir runs $binary"
   pid="$(unit_pid "php-fpm-$v")"
   [[ -n $pid ]] || fail "php-fpm-$v is not running"
-  command="$(ps -o command= -p "$pid")"
-  [[ $command == /opt/homebrew/opt/php@$v/sbin/php-fpm* ]] || fail "php-fpm-$v is '$command'"
-  pass "php-fpm-$v (pid $pid) is brew's"
+  # php-fpm rewrites its process title, so ask for the file it executes.
+  exe="$(lsof -a -p "$pid" -d txt -Fn | sed -n 's/^n//p' | head -1)"
+  [[ $exe == /opt/homebrew/Cellar/php@$v/*/sbin/php-fpm ]] || fail "php-fpm-$v runs '$exe'"
+  pass "php-fpm-$v (pid $pid) runs $exe"
 done
 
 # 6. Xdebug off.

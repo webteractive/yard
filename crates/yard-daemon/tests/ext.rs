@@ -31,7 +31,12 @@ async fn ext_add_from_brew_formula_loads_and_is_recorded() {
     assert_eq!(error, None, "{lines:?}");
     let toml = String::from_utf8(yard_toml(&d).unwrap()).unwrap();
     assert!(toml.contains("redis = { source = \"brew\" }"), "{toml}");
-    assert!(conf_d(&d).join("50-redis.ini").is_file());
+    let ini = std::fs::read_to_string(conf_d(&d).join("50-redis.ini")).unwrap();
+    let keg_so = d.fx.brew.path().join("opt/redis@8.4/redis.so");
+    assert!(
+        ini.contains(&format!("extension = \"{}\"", keg_so.display())),
+        "loads brew's .so by path: {ini}"
+    );
     assert!(!conf_d(&d).join("10-brew-20-redis.ini").exists(), "brew's own ini must not load it");
     d.shutdown().await.unwrap();
 }
@@ -258,5 +263,18 @@ async fn unknown_extension_is_ext_not_found() {
         assert_eq!(e.code, ErrorCode::ExtNotFound, "{method}");
         assert_eq!(e.hint.as_deref(), Some("yard ext add nosuch --php 8.4"), "{method}");
     }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_ini_brew_left_behind_is_neither_mirrored_nor_listed() {
+    let d = prepared("").await;
+    let gone = d.fx.brew.path().join("opt/phpredis@8.4/redis.so");
+    let left = format!("[redis]\nextension=\"{}\"\n", gone.display());
+    std::fs::write(d.fx.brew.path().join("etc/php/8.4/conf.d/20-redis.ini"), left).unwrap();
+    let d = d.start().await;
+    assert!(!conf_d(&d).join("10-brew-20-redis.ini").exists());
+    let mut c = d.client().await;
+    assert_eq!(c.call("ext.list", json!({})).await.unwrap(), json!([]));
     d.shutdown().await.unwrap();
 }

@@ -250,8 +250,13 @@ mod tests {
             (p.fpm_conf(v("8.4")), php::fpm_conf(&c, v("8.4"))),
             (
                 p.php_conf_d(v("8.4")).join("50-redis.ini"),
-                php::ext_ini(&c, "redis", &ExtEntry { source: ExtSource::Brew, enabled: true, so: None })
-                    .unwrap(),
+                php::ext_ini(
+                    &c,
+                    "redis",
+                    &ExtEntry { source: ExtSource::Brew, enabled: true, so: None },
+                    &[],
+                )
+                .unwrap(),
             ),
             (
                 p.php_conf_d(v("8.4")).join("10-brew-ext-opcache.ini"),

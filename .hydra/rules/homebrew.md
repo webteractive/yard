@@ -28,6 +28,12 @@ triggers:
   extension behind `yard ext disable`. Reconcile mirrors brew's `conf.d` into Yard's as
   `10-brew-<file>.ini` (`render::php::brew_inis`), skipping files that load an
   extension `yard.toml` manages; reading brew's files is fine, writing them is not.
+- shivammathur's extension formulas keep the `.so` in their own keg
+  (`extension="/opt/homebrew/opt/phpredis@7.1/redis.so"`), outside `extension_dir`, so a
+  `brew` extension's `50-<name>.ini` loads the path brew's own ini names. The formula's
+  keg name can differ from the extension (`redis@7.1` installs `phpredis@7.1`).
+  `brew uninstall` removes the keg but leaves the ini in `etc/php/<v>/conf.d`; Yard
+  ignores an ini whose absolute `.so` is gone (`render::php::is_stale`).
 - **Never Herd's PHP.** Herd puts its `php` and `composer` first on PATH. Run PHP tools
   by absolute keg path (`Brew::php_bin`, never a bare `php`), and give every child the
   PATH from `yard_core::shim::child_path` (keg `bin` first, `Herd` directories dropped):

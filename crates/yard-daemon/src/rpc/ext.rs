@@ -5,7 +5,7 @@ use super::handlers::reconcile;
 use super::php::config_version;
 use crate::daemon::Context;
 use crate::ext::{Add, Remove};
-use crate::reconcile::ini_files;
+use crate::reconcile::brew_conf_d;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml_edit::{InlineTable, value};
@@ -70,7 +70,7 @@ fn managed(ctx: &Context, v: PhpVersion) -> Result<BTreeMap<String, ExtEntry>, Y
 
 /// Modules brew's `conf.d` loads for `v` that `exts` does not manage.
 fn bundled(ctx: &Context, v: PhpVersion, exts: &BTreeMap<String, ExtEntry>) -> BTreeSet<String> {
-    ini_files(&ctx.brew.php_conf_d(v))
+    brew_conf_d(&ctx.brew.php_conf_d(v))
         .iter()
         .flat_map(|(_, text)| ini_modules(text).collect::<Vec<_>>())
         .filter(|m| !exts.keys().any(|n| n.eq_ignore_ascii_case(m)))

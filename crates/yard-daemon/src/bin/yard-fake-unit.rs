@@ -136,8 +136,9 @@ fn php_fpm(args: &[String]) -> ExitCode {
 /// `brew` at `<prefix>/bin/brew`. It logs each call to `<prefix>/fake-brew.log` and fails
 /// when an argument equals `<prefix>/fake-brew-fail`. `install`/`uninstall` of
 /// `shivammathur/php/php@<v>` create or remove a keg whose binaries are this fake;
-/// extension formulas exist when listed in `<prefix>/fake-ext-formulas`, and installing
-/// one writes the ini brew's formula would.
+/// extension formulas exist when listed in `<prefix>/fake-ext-formulas`; installing one
+/// puts its `.so` in its keg and writes the ini brew's formula would, and uninstalling it
+/// removes the keg and leaves the ini, as brew does.
 fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     let Some(prefix) = argv0.parent().and_then(Path::parent) else {
         return fail(format!("brew at {} has no prefix", argv0.display()));
@@ -183,9 +184,15 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
                 eprintln!("Error: No available formula with the name \"{formula}\".");
                 return ExitCode::from(1);
             }
-            "install" => std::fs::create_dir_all(prefix.join(format!("etc/php/{v}/conf.d")))
-                .and_then(|()| std::fs::write(&ini, format!("extension=\"{name}.so\"\n"))),
-            "uninstall" => std::fs::remove_file(&ini),
+            "install" => std::fs::create_dir_all(prefix.join(format!("etc/php/{v}/conf.d"))).and_then(|()| {
+                // As shivammathur's formulas do: the .so stays in the formula's keg.
+                let so = prefix.join(format!("opt/{name}@{v}/{name}.so"));
+                std::fs::create_dir_all(so.parent().unwrap_or(prefix))?;
+                std::fs::write(&so, "")?;
+                std::fs::write(&ini, format!("extension=\"{}\"\n", so.display()))
+            }),
+            // Like brew: the keg goes, the ini in etc/ stays.
+            "uninstall" => std::fs::remove_dir_all(prefix.join(format!("opt/{name}@{v}"))),
             _ => Ok(()),
         }
     } else {
