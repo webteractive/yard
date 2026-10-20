@@ -633,3 +633,12 @@ fn a_second_ctrl_c_stops_waiting() {
     let out = interrupted_install(&d, 2);
     assert_eq!(out.status.code(), Some(130), "{}", stderr(&out));
 }
+
+#[test]
+fn bare_yard_prints_the_command_list() {
+    let (_root, out) = offline(&[]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = stderr(&out);
+    assert!(err.contains("Usage: yard"), "{err}");
+    assert!(err.contains("Commands:") && err.contains("link"), "{err}");
+}

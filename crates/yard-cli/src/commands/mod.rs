@@ -15,6 +15,7 @@ mod version;
 use crate::cli::{Cli, Command, ExtAction, HelperAction, OnOff, PhpAction, PortsAction};
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
+use clap::CommandFactory;
 use serde::Serialize;
 use yard_core::Paths;
 use yard_proto::methods::{self, JobParams};
@@ -63,7 +64,8 @@ pub async fn run(cli: Cli) -> i32 {
         (true, _) | (false, Some(Command::Version)) => Command::Version,
         (false, Some(c)) => c,
         (false, None) => {
-            eprintln!("yard: a command is required; yard --help lists them");
+            // As `git` and `cargo` do: bare `yard` shows what it can do.
+            eprintln!("{}", Cli::command().render_help());
             return 2;
         }
     };
