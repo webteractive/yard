@@ -16,6 +16,19 @@ impl Brew {
         Self { prefix: prefix.into() }
     }
 
+    /// `YARD_BREW_PREFIX` if set, which tests use to point Yard at a fake brew, else
+    /// [`Brew::detect`].
+    pub fn from_env(exists: &dyn Fn(&Path) -> bool) -> Result<Brew, YardError> {
+        Self::from_var(std::env::var_os("YARD_BREW_PREFIX").map(PathBuf::from), exists)
+    }
+
+    pub fn from_var(prefix: Option<PathBuf>, exists: &dyn Fn(&Path) -> bool) -> Result<Brew, YardError> {
+        match prefix {
+            Some(prefix) => Ok(Brew::new(prefix)),
+            None => Self::detect(exists),
+        }
+    }
+
     pub fn detect(exists: &dyn Fn(&Path) -> bool) -> Result<Brew, YardError> {
         let brew = Brew::new(DEFAULT_PREFIX);
         if exists(&brew.brew_bin()) {
@@ -190,6 +203,14 @@ mod tests {
         let e = brew().php_opt(v("8.5"), &ex, &ln).unwrap_err();
         assert_eq!(e.code, ErrorCode::PhpNotInstalled);
         assert_eq!(e.hint.as_deref(), Some("yard php install 8.5"));
+    }
+
+    #[test]
+    fn yard_brew_prefix_overrides_detection() {
+        let b = Brew::from_var(Some(PathBuf::from("/fake")), &exists_in(&[])).unwrap();
+        assert_eq!(b.prefix, Path::new("/fake"));
+        let e = Brew::from_var(None, &exists_in(&[])).unwrap_err();
+        assert_eq!(e.code, ErrorCode::BrewMissing);
     }
 
     #[test]

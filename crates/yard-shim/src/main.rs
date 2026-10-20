@@ -6,7 +6,7 @@
 use std::convert::Infallible;
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitCode};
 use yard_core::brew::Brew;
 use yard_core::config::yard::parse_yard;
@@ -50,11 +50,7 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
         eprintln!("yard-shim: {name} runs PHP {v} ({source})");
     }
     let exists = |p: &Path| p.exists();
-    // Tests point the shim at a fake prefix; everyone else has brew at /opt/homebrew.
-    let brew = match std::env::var_os("YARD_BREW_PREFIX") {
-        Some(prefix) => Brew::new(PathBuf::from(prefix)),
-        None => Brew::detect(&exists)?,
-    };
+    let brew = Brew::from_env(&exists)?;
     let opt = brew.php_opt(v, &exists, &|p| std::fs::read_link(p).ok())?;
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let (program, pre, env) = command(name, v, &opt, &brew, &paths, &inherited, &exists)?;

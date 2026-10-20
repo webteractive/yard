@@ -40,7 +40,7 @@ fn main() -> ExitCode {
             Err(e) => return fail(&e.message),
         },
     };
-    let brew = match Brew::detect(&|p| p.exists()) {
+    let brew = match Brew::from_env(&|p| p.exists()) {
         Ok(b) => b,
         Err(e) => return fail(&e.message),
     };

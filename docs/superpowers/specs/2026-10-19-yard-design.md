@@ -314,7 +314,8 @@ profile; Yard does not edit dotfiles.
   shim starts can reach Herd's `php` or `composer` (decided 2026-10-20).
 - Errors print `yard: <message>` and `  hint: <hint>` and exit 1. `YARD_SHIM_DEBUG=1`
   prints the chosen version and why. `YARD_BREW_PREFIX` overrides `/opt/homebrew`
-  (tests).
+  (tests), here and in `yardd` and the offline `yard doctor`; `yard helper install`
+  ignores it, since the root helper must not trust the caller's environment.
 - Reconcile keeps each `bin/<shim>` a symlink to the `yard-shim` installed next to
   `yardd`. A link to another `yard-shim` is moved; any other file there is left alone
   and reported.

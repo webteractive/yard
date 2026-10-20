@@ -27,7 +27,7 @@ pub async fn doctor(ctx: &Ctx) -> Outcome {
 
 async fn offline(ctx: &Ctx) -> DoctorReport {
     // A missing Homebrew is the brew check's to report, so fall back to its usual prefix.
-    let brew = Brew::detect(&|p: &Path| p.exists()).unwrap_or_else(|_| Brew::new(DEFAULT_PREFIX));
+    let brew = Brew::from_env(&|p: &Path| p.exists()).unwrap_or_else(|_| Brew::new(DEFAULT_PREFIX));
     let helper = HelperClient::new(HELPER_SOCKET);
     doctor::run(DoctorInput {
         paths: &ctx.paths,
