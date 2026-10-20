@@ -3,6 +3,7 @@
 
 use std::io::Write;
 use std::net::TcpListener;
+use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -47,7 +48,9 @@ fn mode(args: &[String]) -> ExitCode {
 }
 
 /// `-p <prefix> -c <conf> [-e <log>] [-t]`. Runs in the foreground, as Yard's
-/// `daemon off;` asks, listening on the conf's first `listen 127.0.0.1:N`.
+/// `daemon off;` asks. With `NGINX="fd;…"` it serves on the first inherited socket and
+/// logs the line real nginx logs; otherwise it listens on the conf's first
+/// `listen 127.0.0.1:N`.
 fn nginx(args: &[String]) -> ExitCode {
     let (Some(prefix), Some(conf)) = (flag(args, "-p"), flag(args, "-c")) else {
         return fail("nginx needs -p and -c".into());
@@ -60,6 +63,14 @@ fn nginx(args: &[String]) -> ExitCode {
         }
         eprintln!("nginx: configuration file {conf} test is successful");
         return ExitCode::SUCCESS;
+    }
+    if let Ok(fds) = std::env::var("NGINX") {
+        eprintln!("nginx: [notice] using inherited sockets from \"{fds}\"");
+        let Some(fd) = fds.split(';').next().and_then(|fd| fd.parse::<RawFd>().ok()) else {
+            return fail(format!("NGINX={fds:?} names no descriptor"));
+        };
+        // SAFETY: yardd handed this listening socket to nginx, which owns it from here.
+        return serve(unsafe { TcpListener::from_raw_fd(fd) });
     }
     let text = std::fs::read_to_string(conf).unwrap_or_default();
     listen_tcp(text.lines().find_map(|l| {
@@ -88,13 +99,17 @@ fn php_fpm(args: &[String]) -> ExitCode {
 
 fn listen_tcp(port: Option<u16>) -> ExitCode {
     let Some(port) = port else { return fail("listen-tcp needs a port".into()) };
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => serve(listener),
+        Err(e) => fail(format!("cannot listen on {port}: {e}")),
+    }
+}
+
+/// Accepts and closes connections until killed.
+fn serve(listener: TcpListener) -> ExitCode {
     // nginx reloads on SIGHUP; the fake must survive one.
     // SAFETY: setting a signal disposition to SIG_IGN has no preconditions.
     unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => return fail(format!("cannot listen on {port}: {e}")),
-    };
     for stream in listener.incoming() {
         drop(stream);
     }

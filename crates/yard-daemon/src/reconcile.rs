@@ -28,7 +28,7 @@ use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
 use yard_core::render::php::{fpm_conf, php_fpm_env, php_ini};
 use yard_core::sites::{self, DirEntry, EntryKind};
 use yard_core::{Paths, PhpVersion};
-use yard_proto::{ErrorCode, Event, PortMode, SiteInfo, SiteKind, UnitState, YardError};
+use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
 
 const USER_OWNED_NGINX: &str =
     "# USER-OWNED — Yard never rewrites this file. nginx directives for this site go here.\n";
@@ -165,7 +165,7 @@ impl Reconciler {
         let is_free = |p: u16| own.contains(&p) || probe::is_free(p, Proto::Tcp);
         let profile = registry.profile;
         let http = registry.ensure(NGINX_HTTP, PortMode::Pinned, Some(profile.http_port()), &is_free)?;
-        registry.ensure(NGINX_HTTPS, PortMode::Pinned, Some(profile.https_port()), &is_free)?;
+        let https = registry.ensure(NGINX_HTTPS, PortMode::Pinned, Some(profile.https_port()), &is_free)?;
         let dns = registry.ensure(DNSMASQ, PortMode::Pinned, Some(DNSMASQ_PORT), &is_free)?;
         let mut proxies = BTreeSet::new();
         for (name, entry) in &sites_cfg.sites {
@@ -260,8 +260,11 @@ impl Reconciler {
         }
         state.hashes = hashes;
 
-        // 7. Apply units; restart the ones whose files changed and reload nginx.
+        // 7. Apply units; restart the ones whose files changed and reload nginx. In the
+        // privileged profile nginx inherits the helper's sockets, whose bind is the probe.
         let existing: BTreeSet<String> = self.supervisor.list().into_iter().map(|u| u.name).collect();
+        let privileged = profile == Profile::Privileged;
+        let inherit = if privileged { vec![http, https] } else { vec![] };
         let mut desired = vec![
             UnitSpec {
                 name: "dnsmasq".into(),
@@ -274,6 +277,7 @@ impl Reconciler {
                 health: Health::Tcp(dns),
                 port: Some((dns, Proto::TcpUdp)),
                 reload: Reload::Restart,
+                inherit: vec![],
             },
             UnitSpec {
                 name: "nginx".into(),
@@ -281,8 +285,9 @@ impl Reconciler {
                 args: self.nginx.args(),
                 env: vec![],
                 health: Health::Tcp(http),
-                port: Some((http, Proto::Tcp)),
+                port: (!privileged).then_some((http, Proto::Tcp)),
                 reload: Reload::Signal(libc::SIGHUP),
+                inherit: inherit.clone(),
             },
         ];
         let mut restart = vec![];
@@ -317,9 +322,11 @@ impl Reconciler {
                 health: Health::Unix(paths.fpm_socket(*v)),
                 port: None,
                 reload: Reload::Signal(libc::SIGUSR2),
+                inherit: vec![],
             });
         }
         self.supervisor.apply(desired).await;
+        self.supervisor.sockets().release_except(&inherit);
         for name in restart.iter().filter(|n| existing.contains(*n)) {
             if let Err(e) = self.supervisor.restart(name).await {
                 report.warnings.push(format!("restarting {name}: {}", describe(&e)));

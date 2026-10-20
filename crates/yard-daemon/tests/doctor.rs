@@ -12,6 +12,7 @@ use yard_core::render::resolver::resolver_file;
 use yard_daemon::doctor::{self, DoctorInput};
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
+use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
 use yard_proto::{Check, CheckStatus, DoctorReport, UnitInfo, UnitState};
@@ -90,7 +91,12 @@ fn check(id: &str, status: CheckStatus) -> Check {
 async fn all_ok_on_healthy_fixture() {
     let e = env().await;
     let bus = EventBus::new();
-    let sup = Arc::new(Supervisor::new(fast(), e.fx.paths.logs_dir(), bus.clone()));
+    let sup = Arc::new(Supervisor::new(
+        fast(),
+        e.fx.paths.logs_dir(),
+        bus.clone(),
+        Arc::new(PrivilegedSockets::new(e.helper.clone())),
+    ));
     let rec = Reconciler::new(
         e.fx.paths.clone(),
         e.brew(),

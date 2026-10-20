@@ -5,6 +5,7 @@ mod unit;
 
 use crate::events::EventBus;
 use crate::logsink::LogSink;
+use crate::privileged::PrivilegedSockets;
 use crate::probe::Proto;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -42,6 +43,10 @@ pub struct UnitSpec {
     /// Checked with a bind probe before every start (spec §7, check 2).
     pub port: Option<(u16, Proto)>,
     pub reload: Reload,
+    /// Privileged ports whose loopback sockets the unit inherits through `NGINX`, from
+    /// the helper. Only nginx in the privileged profile has any; the helper's bind then
+    /// stands in for the probe.
+    pub inherit: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,13 +84,26 @@ pub struct Supervisor {
     cfg: SupervisorConfig,
     logs_dir: PathBuf,
     bus: EventBus,
+    sockets: Arc<PrivilegedSockets>,
     table: Table,
     units: tokio::sync::Mutex<BTreeMap<String, Handle>>,
 }
 
 impl Supervisor {
-    pub fn new(cfg: SupervisorConfig, logs_dir: PathBuf, bus: EventBus) -> Self {
-        Self { cfg, logs_dir, bus, table: Arc::default(), units: tokio::sync::Mutex::new(BTreeMap::new()) }
+    pub fn new(
+        cfg: SupervisorConfig,
+        logs_dir: PathBuf,
+        bus: EventBus,
+        sockets: Arc<PrivilegedSockets>,
+    ) -> Self {
+        Self {
+            cfg,
+            logs_dir,
+            bus,
+            sockets,
+            table: Arc::default(),
+            units: tokio::sync::Mutex::new(BTreeMap::new()),
+        }
     }
 
     /// Starts new units, stops removed ones and restarts the ones whose spec changed.
@@ -133,6 +151,10 @@ impl Supervisor {
         }
     }
 
+    pub fn sockets(&self) -> &Arc<PrivilegedSockets> {
+        &self.sockets
+    }
+
     pub fn list(&self) -> Vec<UnitInfo> {
         lock(&self.table).values().cloned().collect()
     }
@@ -163,7 +185,15 @@ impl Supervisor {
             },
         );
         let (control, rx) = mpsc::unbounded_channel();
-        let runner = Runner::new(spec.clone(), self.cfg, self.bus.clone(), sink, self.table.clone(), rx);
+        let runner = Runner::new(
+            spec.clone(),
+            self.cfg,
+            self.bus.clone(),
+            self.sockets.clone(),
+            sink,
+            self.table.clone(),
+            rx,
+        );
         Handle { spec, control, task: tokio::spawn(runner.run()) }
     }
 }

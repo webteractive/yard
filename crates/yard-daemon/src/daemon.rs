@@ -4,6 +4,7 @@
 use crate::describe;
 use crate::events::EventBus;
 use crate::helper_client::HelperClient;
+use crate::privileged::PrivilegedSockets;
 use crate::reconcile::Reconciler;
 use crate::supervisor::{Supervisor, SupervisorConfig};
 use crate::{portscan, rpc, watch};
@@ -81,7 +82,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let bus = EventBus::new();
     let helper = HelperClient::new(&opts.helper_socket);
     let brew = Brew::new(&opts.brew_prefix);
-    let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone()));
+    let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
+    let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
     let reconciler = Arc::new(Reconciler::new(
         opts.paths.clone(),
         brew.clone(),
@@ -118,6 +120,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     watcher.abort();
     scan.abort();
     ctx.supervisor().shutdown().await;
+    // The port goes back to the system: the next yardd asks the helper again.
+    ctx.supervisor().sockets().release_except(&[]);
     let _ = std::fs::remove_file(&socket);
     Ok(())
 }

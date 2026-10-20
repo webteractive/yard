@@ -86,8 +86,7 @@ pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
-/// Runs `serve` in-process as the current user, its socket under a short `/tmp` dir.
-/// The helper, in-process as the current user. `privileged_ports` stands in for 80 and
+/// The helper, in-process as the current user, its socket under a short `/tmp` dir. `privileged_ports` stands in for 80 and
 /// 443, which a test cannot bind.
 pub async fn spawn_helper(fx: &Fixture, resolver_dir: &Path, privileged_ports: &[u16]) -> HelperClient {
     let dir = tempfile::Builder::new().prefix("yard-test-").tempdir_in("/tmp").unwrap();
@@ -137,4 +136,21 @@ pub fn ppid(pid: u32) -> u32 {
     let out =
         std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().unwrap();
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+}
+
+/// Something accepted a connection on `127.0.0.1:port` and closed it, as the fake units
+/// do. A listener nobody accepts on still takes the connect into its backlog, so a bare
+/// connect cannot tell a served socket from one yardd merely holds.
+pub fn served(port: u16) -> bool {
+    use std::io::Read;
+    let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return false };
+    s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    s.read_to_end(&mut Vec::new()).is_ok()
+}
+
+/// How many times nginx started on sockets it inherited, from the line real nginx logs
+/// (and the fake copies): `using inherited sockets from "…"`.
+pub fn inherited_starts(paths: &Paths) -> usize {
+    let log = std::fs::read_to_string(paths.logs_dir().join("nginx.log")).unwrap_or_default();
+    log.lines().filter(|l| l.contains("using inherited sockets from")).count()
 }

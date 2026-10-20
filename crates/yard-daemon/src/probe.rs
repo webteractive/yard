@@ -1,6 +1,7 @@
 //! Is a port free to bind, and is something answering on it (spec §6.2).
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -19,29 +20,32 @@ pub fn proto_for(unit: &str) -> Proto {
 /// The first TCP bind goes without `SO_REUSEADDR`, which would let it succeed beside a
 /// wildcard listener. That bind also fails on a port left in TIME_WAIT, which nginx (setting
 /// `SO_REUSEADDR` itself) can still take, so a refused port counts as free when a reuse bind
-/// succeeds and nothing answers on it.
+/// succeeds and nothing answers on it. A user cannot bind loopback below 1024 at all
+/// (80 and 443, which the helper binds), so there a refused bind says nothing, and the
+/// port is free when nothing answers on it.
 pub fn is_free(port: u16, proto: Proto) -> bool {
     let addrs =
         [SocketAddr::from((Ipv4Addr::LOCALHOST, port)), SocketAddr::from((Ipv6Addr::LOCALHOST, port))];
-    let tcp_free = addrs.iter().all(|a| binds(a, Type::STREAM, Protocol::TCP, false))
-        || (addrs.iter().all(|a| binds(a, Type::STREAM, Protocol::TCP, true)) && !answers(&addrs));
+    let tcp = |reuse| addrs.map(|a| bind(&a, Type::STREAM, Protocol::TCP, reuse));
+    let plain = tcp(false);
+    let denied = plain.iter().all(|r| r.as_ref().is_err_and(|e| e.kind() == io::ErrorKind::PermissionDenied));
+    let tcp_free = plain.iter().all(Result::is_ok)
+        || ((denied || tcp(true).iter().all(Result::is_ok)) && !answers(&addrs));
     match proto {
         Proto::Tcp => tcp_free,
-        Proto::TcpUdp => tcp_free && addrs.iter().all(|a| binds(a, Type::DGRAM, Protocol::UDP, false)),
+        Proto::TcpUdp => tcp_free && addrs.iter().all(|a| bind(a, Type::DGRAM, Protocol::UDP, false).is_ok()),
     }
 }
 
-fn binds(addr: &SocketAddr, ty: Type, proto: Protocol, reuse: bool) -> bool {
-    let Ok(socket) = Socket::new(Domain::for_address(*addr), ty, Some(proto)) else {
-        return false;
-    };
-    if addr.is_ipv6() && socket.set_only_v6(true).is_err() {
-        return false;
+fn bind(addr: &SocketAddr, ty: Type, proto: Protocol, reuse: bool) -> io::Result<()> {
+    let socket = Socket::new(Domain::for_address(*addr), ty, Some(proto))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
     }
-    if reuse && socket.set_reuse_address(true).is_err() {
-        return false;
+    if reuse {
+        socket.set_reuse_address(true)?;
     }
-    socket.bind(&SockAddr::from(*addr)).is_ok()
+    socket.bind(&SockAddr::from(*addr))
 }
 
 fn answers(addrs: &[SocketAddr]) -> bool {
@@ -105,6 +109,27 @@ mod tests {
         let _ = client.read_to_end(&mut Vec::new());
         drop((client, server, l));
         assert!(is_free(p, Proto::Tcp));
+    }
+
+    /// A port below 1024 that tests may bind; never one Yard or Herd serves on.
+    const LOW: u16 = 999;
+
+    #[test]
+    fn privileged_port_without_a_listener_is_free() {
+        // SAFETY: geteuid cannot fail.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root binds it, and the plain probe answers
+        }
+        let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(is_free(LOW, Proto::Tcp), "a user cannot bind loopback below 1024, but nothing holds it");
+    }
+
+    #[test]
+    fn privileged_port_with_a_listener_is_busy() {
+        let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        // macOS lets any user bind the wildcard address below 1024.
+        let _l = TcpListener::bind(("0.0.0.0", LOW)).unwrap();
+        assert!(!is_free(LOW, Proto::Tcp));
     }
 
     #[test]

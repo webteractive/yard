@@ -10,6 +10,7 @@ use tempfile::TempDir;
 use yard_core::brew::Brew;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
+use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
 use yard_proto::{ErrorCode, Event, UnitInfo, UnitState};
@@ -44,7 +45,8 @@ fn env_with(fx: Fixture, resolver: TempDir, helper: HelperClient) -> Env {
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
     let bus = EventBus::new();
-    let sup = Arc::new(Supervisor::new(fast(), fx.paths.logs_dir(), bus.clone()));
+    let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
+    let sup = Arc::new(Supervisor::new(fast(), fx.paths.logs_dir(), bus.clone(), sockets));
     let rec = Reconciler::new(
         fx.paths.clone(),
         Brew::new(fx.brew.path()),
@@ -319,5 +321,64 @@ async fn tld_with_a_foreign_resolver_is_refused_and_the_old_tld_serves() {
     assert!(err.message.contains(".test"), "{}", err.message);
     assert_eq!(e.rec.snapshot().await.unwrap().tld, "yard");
     assert_eq!(e.rec.last_error().await.map(|e| e.code), Some(ErrorCode::ResolverForeign));
+    e.sup.shutdown().await;
+}
+
+/// Two free ports stand in for 80 and 443: the helper may bind them, and ports.toml puts
+/// the privileged profile on them.
+async fn privileged_env() -> (Env, u16) {
+    let fx = Fixture::new();
+    let resolver = tempfile::tempdir().unwrap();
+    let (http, https) = (free_port(), free_port());
+    let helper = spawn_helper(&fx, resolver.path(), &[http, https]).await;
+    let e = env_with(fx, resolver, helper);
+    let ports = format!("profile = \"privileged\"\n{}", support::ports_toml(http, https, free_port()));
+    std::fs::write(e.fx.paths.ports_toml(), ports).unwrap();
+    (e, http)
+}
+
+#[tokio::test]
+async fn privileged_profile_serves_on_helper_sockets() {
+    let (e, http) = privileged_env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    e.unit("nginx", running).await;
+    let inherited = || support::inherited_starts(&e.fx.paths) == 1;
+    assert!(support::wait_until(inherited, Duration::from_secs(5)).await, "nginx took the helper's sockets");
+    assert!(support::served(http), "nginx serves on the socket it inherited");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn privileged_port_held_fails_nginx_with_the_holder() {
+    let (e, http) = privileged_env().await;
+    let _held = std::net::TcpListener::bind(("127.0.0.1", http)).unwrap();
+    let mut rx = e.bus.subscribe();
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+
+    let nginx = e.unit("nginx", |u| matches!(u.state, UnitState::Failed { .. })).await;
+    assert_eq!(nginx.restarts, 0, "retrying cannot free a port someone else holds: {nginx:?}");
+    assert!(nginx.last_error.as_deref().is_some_and(|m| m.starts_with("PORT_IN_USE")), "{nginx:?}");
+    let conflict = std::iter::from_fn(|| rx.try_recv().ok())
+        .any(|ev| matches!(ev, Event::PortConflict { unit, port, .. } if unit == "nginx" && port == http));
+    assert!(conflict, "a port_conflict event names nginx and the port");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn switching_to_standard_releases_the_privileged_sockets() {
+    let (e, http) = privileged_env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    e.unit("nginx", running).await;
+    let inherited = || support::inherited_starts(&e.fx.paths) == 1;
+    assert!(support::wait_until(inherited, Duration::from_secs(5)).await, "nginx took the helper's sockets");
+
+    let standard = support::ports_toml(free_port(), free_port(), free_port());
+    std::fs::write(e.fx.paths.ports_toml(), standard).unwrap();
+    e.rec.reconcile().await.unwrap();
+    e.unit("nginx", running).await;
+    assert!(std::net::TcpListener::bind(("127.0.0.1", http)).is_ok(), "yardd let go of {http}");
     e.sup.shutdown().await;
 }

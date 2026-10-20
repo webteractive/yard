@@ -3,7 +3,9 @@
 use super::{Health, SupervisorConfig, Table, UnitSpec, lock};
 use crate::events::EventBus;
 use crate::logsink::LogSink;
-use crate::{holder, probe};
+use crate::privileged::PrivilegedSockets;
+use crate::{describe, holder, probe};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,7 +15,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use yard_core::supervise::{Decision, RestartPolicy};
-use yard_proto::{Event, Holder, UnitState, YardError};
+use yard_proto::{ErrorCode, Event, Holder, UnitState, YardError};
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(200);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -26,6 +28,10 @@ pub enum Control {
 /// Why one run of the unit ended. The process is already gone when this is returned.
 enum Ended {
     Failure(String),
+    /// A failure retrying cannot fix (no helper installed): straight to `Failed`.
+    Fatal(String),
+    /// The helper found the port held by someone else; handled like the pre-start probe.
+    Conflict(u16),
     Control(Control),
 }
 
@@ -33,6 +39,7 @@ pub struct Runner {
     spec: UnitSpec,
     cfg: SupervisorConfig,
     bus: EventBus,
+    sockets: Arc<PrivilegedSockets>,
     sink: Arc<Mutex<LogSink>>,
     table: Table,
     control: mpsc::UnboundedReceiver<Control>,
@@ -44,12 +51,13 @@ impl Runner {
         spec: UnitSpec,
         cfg: SupervisorConfig,
         bus: EventBus,
+        sockets: Arc<PrivilegedSockets>,
         sink: LogSink,
         table: Table,
         control: mpsc::UnboundedReceiver<Control>,
     ) -> Self {
         let policy = RestartPolicy::new(cfg.policy);
-        Self { spec, cfg, bus, sink: Arc::new(Mutex::new(sink)), table, control, policy }
+        Self { spec, cfg, bus, sockets, sink: Arc::new(Mutex::new(sink)), table, control, policy }
     }
 
     pub async fn run(mut self) {
@@ -57,12 +65,7 @@ impl Runner {
             if let Some((port, proto)) = self.spec.port
                 && !probe::is_free(port, proto)
             {
-                // Retrying cannot free a foreign port, so this skips the backoff.
-                let holder = holder::find_holder(port);
-                self.update(|u| u.last_error = Some(port_in_use(port, holder.as_ref())));
-                self.bus.emit(Event::PortConflict { unit: self.spec.name.clone(), port, holder });
-                self.enter_failed();
-                match self.next_control().await {
+                match self.conflict(port).await {
                     Control::Restart => self.policy.reset(),
                     Control::Stop(ack) => break ack,
                 }
@@ -71,6 +74,18 @@ impl Runner {
             match self.attempt().await {
                 Ended::Control(Control::Restart) => self.policy.reset(),
                 Ended::Control(Control::Stop(ack)) => break ack,
+                Ended::Conflict(port) => match self.conflict(port).await {
+                    Control::Restart => self.policy.reset(),
+                    Control::Stop(ack) => break ack,
+                },
+                Ended::Fatal(reason) => {
+                    self.update(|u| u.last_error = Some(reason));
+                    self.enter_failed();
+                    match self.next_control().await {
+                        Control::Restart => self.policy.reset(),
+                        Control::Stop(ack) => break ack,
+                    }
+                }
                 Ended::Failure(reason) => {
                     self.update(|u| u.last_error = Some(reason));
                     match self.policy.on_failure(Instant::now()) {
@@ -147,7 +162,34 @@ impl Runner {
         }
     }
 
+    /// Records a port someone else holds and waits in `Failed`: retrying cannot free it,
+    /// so this skips the backoff.
+    async fn conflict(&mut self, port: u16) -> Control {
+        let holder = holder::find_holder(port);
+        self.update(|u| u.last_error = Some(port_in_use(port, holder.as_ref())));
+        self.bus.emit(Event::PortConflict { unit: self.spec.name.clone(), port, holder });
+        self.enter_failed();
+        self.next_control().await
+    }
+
+    /// The sockets the unit inherits, from the helper; none for most units.
+    async fn inherited(&self) -> Result<Vec<OwnedFd>, Ended> {
+        if self.spec.inherit.is_empty() {
+            return Ok(vec![]);
+        }
+        self.sockets.get(&self.spec.inherit).await.map_err(|e| match e.code {
+            ErrorCode::HelperNotInstalled => Ended::Fatal(describe(&e)),
+            ErrorCode::PortInUse => {
+                let port =
+                    e.data.as_ref().and_then(|d| d["port"].as_u64()).and_then(|p| u16::try_from(p).ok());
+                Ended::Conflict(port.unwrap_or(self.spec.inherit[0]))
+            }
+            _ => Ended::Failure(describe(&e)),
+        })
+    }
+
     async fn start(&self) -> Result<Process, Ended> {
+        let inherited = self.inherited().await?;
         let UnitSpec { program, args, env, .. } = &self.spec;
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -156,8 +198,22 @@ impl Runner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        // SAFETY: the hook makes only async-signal-safe calls.
-        unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+        let keep: Vec<RawFd> = inherited.iter().map(AsRawFd::as_raw_fd).collect();
+        if !keep.is_empty() {
+            // nginx reads `NGINX="fd;fd;"` and serves on those sockets instead of binding.
+            cmd.env("NGINX", keep.iter().map(|fd| format!("{fd};")).collect::<String>());
+        }
+        // SAFETY: the hook makes only async-signal-safe calls: fcntl on descriptors this
+        // process owns, from a Vec allocated before the fork.
+        unsafe {
+            cmd.pre_exec(move || {
+                crate::fds::cloexec_inherited()?;
+                for fd in &keep {
+                    libc::fcntl(*fd, libc::F_SETFD, 0);
+                }
+                Ok(())
+            })
+        };
         let mut child =
             cmd.spawn().map_err(|e| Ended::Failure(format!("cannot run {}: {e}", program.display())))?;
         let mut readers = vec![];

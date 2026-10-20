@@ -40,9 +40,14 @@ fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Pat
 
 /// A configured data root and helper; `extra_ports` lines are appended to `[ports]`.
 async fn prepared(extra_ports: &str) -> Daemon {
+    prepared_with(extra_ports, &[]).await
+}
+
+/// As `prepared`, with a helper that may bind `privileged_ports` (standing in for 80/443).
+async fn prepared_with(extra_ports: &str, privileged_ports: &[u16]) -> Daemon {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
-    let helper = spawn_helper(&fx, resolver.path(), &[]).await;
+    let helper = spawn_helper(&fx, resolver.path(), privileged_ports).await;
     let parked = tempfile::tempdir().unwrap();
     std::fs::write(fx.paths.yard_toml(), format!("parked = [{:?}]\n", parked.path().display().to_string()))
         .unwrap();
@@ -78,6 +83,11 @@ impl Daemon {
     }
 
     async fn shutdown(mut self) -> Result<(), YardError> {
+        self.stop().await
+    }
+
+    /// Stops the daemon and keeps its data root, so `start` can run another on it.
+    async fn stop(&mut self) -> Result<(), YardError> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -320,6 +330,31 @@ async fn restart_nginx_refuses_when_the_config_cannot_be_tested() {
     let e = c.call("units.restart", json!({"unit": "nginx"})).await;
     assert!(e.is_err(), "restart reported success: {e:?}");
     assert_eq!(nginx_pid(&mut c).await, pid, "nginx was left alone");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn privileged_sockets_are_rebound_after_a_yardd_restart() {
+    let (http, https) = (free_port(), free_port());
+    let d = prepared_with("", &[http, https]).await;
+    let ports = format!("profile = \"privileged\"\n{}", support::ports_toml(http, https, free_port()));
+    std::fs::write(d.fx.paths.ports_toml(), ports).unwrap();
+    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    let paths = d.fx.paths.clone();
+    let starts = |n: usize| {
+        let paths = paths.clone();
+        move || support::inherited_starts(&paths) == n
+    };
+    let mut d = d.start().await;
+    nginx_pid(&mut d.client().await).await;
+    assert!(wait_until(starts(1), Duration::from_secs(5)).await, "the first yardd's nginx inherited");
+    assert!(support::served(http), "the first yardd serves {http}");
+
+    d.stop().await.unwrap();
+    let d = d.start().await;
+    nginx_pid(&mut d.client().await).await;
+    assert!(wait_until(starts(2), Duration::from_secs(5)).await, "the second yardd's nginx inherited");
+    assert!(support::served(http), "the second yardd got {http} from the helper again");
     d.shutdown().await.unwrap();
 }
 

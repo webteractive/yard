@@ -6,11 +6,14 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use support::{FAKE, fast, free_port};
 use tokio::sync::broadcast::Receiver;
 use yard_daemon::events::EventBus;
+use yard_daemon::helper_client::HelperClient;
 use yard_daemon::logsink::LogSink;
+use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::probe::Proto;
 use yard_daemon::supervisor::{Health, Reload, Supervisor, SupervisorConfig, UnitSpec};
 use yard_proto::{Event, UnitInfo, UnitState};
@@ -24,7 +27,8 @@ struct Harness {
 fn harness(cfg: SupervisorConfig) -> Harness {
     let logs = tempfile::tempdir().unwrap();
     let bus = EventBus::new();
-    Harness { sup: Supervisor::new(cfg, logs.path().to_path_buf(), bus.clone()), bus, logs }
+    let sockets = Arc::new(PrivilegedSockets::new(HelperClient::new("/tmp/yard-test-no-helper/helper.sock")));
+    Harness { sup: Supervisor::new(cfg, logs.path().to_path_buf(), bus.clone(), sockets), bus, logs }
 }
 
 fn process(name: &str, program: &str, args: &[&str], health: Health) -> UnitSpec {
@@ -36,6 +40,7 @@ fn process(name: &str, program: &str, args: &[&str], health: Health) -> UnitSpec
         health,
         port: None,
         reload: Reload::Restart,
+        inherit: vec![],
     }
 }
 
