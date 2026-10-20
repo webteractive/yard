@@ -106,3 +106,26 @@ fn a_missing_version_fails_with_a_hint() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.starts_with("yard: ") && stderr.contains("  hint: yard php install 7.1"), "{stderr}");
 }
+
+#[test]
+fn a_broken_sites_toml_warns_and_runs_the_default() {
+    let s = setup();
+    script(&s.brew.join("opt/php@8.4/bin/php"), "echo \"argv0:$0\"");
+    std::fs::write(s.root.join("sites.toml"), "[sites.old\n").unwrap();
+    let out = run(&s, &[], false);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stdout.contains("php@8.4/bin/php"), "{stdout}");
+    assert!(stderr.starts_with("yard: ") && stderr.contains("sites.toml"), "{stderr}");
+}
+
+#[test]
+fn a_broken_yard_toml_warns_and_keeps_site_isolation() {
+    let s = setup();
+    std::fs::write(s.root.join("yard.toml"), "default_php = \n").unwrap();
+    let out = run(&s, &[], false);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stdout.contains("php@7.1/bin/php"), "{stdout}");
+    assert!(stderr.starts_with("yard: ") && stderr.contains("yard.toml"), "{stderr}");
+}

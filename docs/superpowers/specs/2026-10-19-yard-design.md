@@ -303,7 +303,9 @@ profile; Yard does not edit dotfiles.
 - The shim reads `yard.toml` and `sites.toml` itself, with no daemon. The containing
   site is the linked site whose `path` is the longest ancestor of the cwd; one that is
   not isolated falls through to `.yard-php`. A bad `.yard-php` is `INVALID_ARGUMENT`
-  naming the file.
+  naming the file. A `yard.toml` or `sites.toml` that does not parse is only a warning
+  on stderr: the shim uses PHP 8.4 as the default, or ignores site isolation, so one
+  half-saved file does not stop every `php` on the machine.
 - It runs `<keg>/bin/<name>` (`composer`: `<keg>/bin/php <brew>/bin/composer`, and
   `FORMULA_MISSING`, hint `brew install composer`, without it). When the version's
   `php.ini` is rendered it sets `PHPRC=php/<ver>` and `PHP_INI_SCAN_DIR=php/<ver>/conf.d`,

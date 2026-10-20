@@ -8,10 +8,11 @@ use std::ffi::OsString;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use yard_core::Paths;
 use yard_core::brew::Brew;
-use yard_core::config::{load_sites, load_yard};
+use yard_core::config::yard::parse_yard;
+use yard_core::config::{SitesConfig, load_sites, load_yard};
 use yard_core::shim::{command, resolve_version};
+use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
 
 fn main() -> ExitCode {
@@ -28,8 +29,18 @@ fn main() -> ExitCode {
 
 fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     let paths = Paths::from_env()?;
-    let (yard, _) = load_yard(&paths)?;
-    let sites = load_sites(&paths)?;
+    // A TOML being edited must not stop every php on the machine: warn and carry on.
+    let yard = match load_yard(&paths) {
+        Ok((yard, _)) => yard,
+        Err(e) => {
+            eprintln!("yard: {}; using PHP {}", e.message, PhpVersion::DEFAULT);
+            parse_yard(None, &paths.yard_toml())?.0
+        }
+    };
+    let sites = load_sites(&paths).unwrap_or_else(|e| {
+        eprintln!("yard: {}; ignoring site isolation", e.message);
+        SitesConfig::default()
+    });
     let cwd = std::env::current_dir().map_err(|e| {
         YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
             .with_hint("cd into an existing directory")
