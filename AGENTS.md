@@ -22,8 +22,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `docs/superpowers/plans/2026-10-20-yard-m1.1-nginx-as-user.md`, verified on this
   machine on 2026-10-20 (helper reinstalled, `scripts/e2e-m1.sh` passing, nginx running
   as the maintainer under yardd).
-- M2 (multi-PHP, extensions, shims, removing parking) is in progress:
-  `docs/superpowers/plans/2026-10-20-yard-m2-multi-php.md`.
+- M2 (multi-PHP, extensions, shims, removing parking) is done:
+  `docs/superpowers/plans/2026-10-20-yard-m2-multi-php.md`, verified on this machine on
+  2026-10-20 (`scripts/e2e-m1.sh` and `scripts/e2e-m2.sh` passing). M3 needs its own plan.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
@@ -80,6 +81,10 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `~/Library/Application Support/Herd/config/valet/`. Its `config.json` has
   `tld = "test"` and parked paths `…/valet/Sites`, `~/Herd/` and `~/AI`, and
   `Nginx/` holds per-site configs for secured sites.
+- For M2 (2026-10-20) the maintainer approved `brew install shivammathur/php/php@7.1`, which
+  stays installed; the e2e adds and removes `redis@7.1` and `xdebug@8.4`. Brew's
+  extension formulas keep the `.so` in their own keg (`redis@7.1` installs keg
+  `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`.
 - Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
 
 ## Build & test
@@ -94,6 +99,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `doctor` and `ports check` also work with no daemon running.
 - `scripts/e2e-m1.sh` — real-machine check in the standard profile. It needs the
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
+- `scripts/e2e-m2.sh` — real-machine M2 check after `e2e-m1.sh`: brew-installs php@7.1
+  and two extension formulas, so ask the maintainer first. Run PHP only as
+  `"$HOME/Library/Application Support/Yard/bin/php"`; a bare `php` here is Herd's.
 
 ## Verifying a change on this machine
 

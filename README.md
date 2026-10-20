@@ -14,9 +14,11 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
 
 Milestone 1 (core serving, CLI only) is done and verified end to end beside a running
 Herd: linked PHP sites, proxies, the port registry, `yard doctor` and the commands
-below. M1.1 moved nginx from root to the user. M2 (in progress) makes sites explicit:
-a project is served only after `yard link` run in it, and M1's parking is gone. PHP
-installs and extensions (M2), HTTPS (M3), Node and services, and Yard.app (M4) come later.
+below. M1.1 moved nginx from root to the user. M2 is done too: sites are explicit
+(`yard link`, no parking), PHP 7.0–8.5 install from brew and run side by side, a site
+can be isolated to its own version, extensions come from brew, pecl or a `.so`, and
+the `php`/`composer`/`pecl` shims follow the site's version and never reach Herd's
+PHP. HTTPS (M3), Yard.app (M4), and Node and services (M5) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080` until `yard takeover` (M3). Herd keeps its `.test` domain,

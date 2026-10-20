@@ -593,7 +593,10 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   `https://<site>.yard:8443` and assert `PHP_VERSION`; add and verify an
   extension. M1 runs a first cut over HTTP until M3 (`scripts/e2e-m1.sh`: `standard`
   profile on :8080, a linked PHP 8.4 app and a proxy, Herd's resolver unchanged,
-  and the 80/443 profile refused with Herd named).
+  and the 80/443 profile refused with Herd named). `scripts/e2e-m2.sh` adds M2 over HTTP:
+  PHP 7.1 beside 8.4, a site isolated to 7.1, redis and xdebug added and checked with
+  `php -m` through the shim, every `php` and `php-fpm` brew's (never Herd's), and
+  `yard xdebug off`.
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 
@@ -618,7 +621,8 @@ Each milestone is usable on its own and gets its own implementation plan.
    `privileged` profile; profiles stop setting the TLD.
 2. **M2 Multi-PHP:** install/uninstall, pools per version, isolate, shims,
    extensions, overrides, `php config`, and removing parking
-   (sites are explicit links only, §5.1).
+   (sites are explicit links only, §5.1). Done 2026-10-20, verified by
+   `scripts/e2e-m2.sh` on the maintainer's machine.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal, `takeover`.
 4. **M4 Yard.app:** client, menu bar, main window, onboarding.
 5. **M5 Node and services:** fnm wrapper, MySQL, Postgres, Redis, Mailpit,
