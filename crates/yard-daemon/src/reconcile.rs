@@ -160,7 +160,7 @@ impl Reconciler {
             state.paths.clone()
         };
         let cert = paths.ca_cert();
-        let trusted = tls::trusted(security, &cert).await;
+        let trusted = tls::trusted(security, &cert).await.unwrap_or(false);
         Ok(CaInfo {
             cert: cert.display().to_string(),
             sha256: tls::ca_sha256(&paths)?,

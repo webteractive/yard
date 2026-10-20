@@ -214,7 +214,18 @@ const FIREFOX: &str = "/Applications/Firefox.app";
 /// exists, so a machine with no secured site never runs it.
 async fn ca(paths: &Paths, secured: bool, security: &Path) -> Check {
     let cert = paths.ca_cert();
-    if cert.exists() && tls::trusted(security, &cert).await {
+    let trusted = if cert.exists() { tls::trusted(security, &cert).await } else { Some(false) };
+    let Some(trusted) = trusted else {
+        return warn(
+            "ca",
+            format!(
+                "cannot tell whether the Yard CA is trusted: security did not answer within {} s",
+                tls::SECURITY_TIMEOUT.as_secs()
+            ),
+            "yard doctor",
+        );
+    };
+    if trusted {
         let mut message = format!(
             "the Yard CA is trusted in your login keychain; for Node: NODE_EXTRA_CA_CERTS={}",
             cert.display()

@@ -80,3 +80,15 @@ fn facts_of_a_missing_or_corrupt_cert_is_none() {
         .unwrap();
     assert_eq!(tls::facts(&paths, "blog"), None);
 }
+
+#[test]
+fn facts_of_a_cert_without_its_key_is_none() {
+    let (_dir, paths) = root();
+    tls::ensure_ca(&paths, "me", now()).unwrap();
+    tls::issue(&paths, "blog", "blog.yard", now(), 30).unwrap();
+    assert!(tls::facts(&paths, "blog").is_some());
+    std::fs::write(paths.cert_key("blog"), "not a key").unwrap();
+    assert!(tls::facts(&paths, "blog").is_none(), "an unreadable key");
+    std::fs::remove_file(paths.cert_key("blog")).unwrap();
+    assert!(tls::facts(&paths, "blog").is_none(), "a missing key");
+}

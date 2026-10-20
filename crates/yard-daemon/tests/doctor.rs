@@ -418,3 +418,18 @@ async fn ca_check_names_node_extra_ca_certs_when_trusted() {
     );
     assert!(c.message.starts_with(&expected), "{c:?}");
 }
+
+#[tokio::test]
+async fn ca_check_warns_when_security_does_not_answer() {
+    let e = env().await;
+    let _project = e.secured_site();
+    tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    std::fs::write(e.fx.security_dir().join("fake-hang"), "").unwrap();
+
+    let started = std::time::Instant::now();
+    let report = e.offline(&e.helper).await;
+    assert!(started.elapsed() < Duration::from_secs(20), "doctor waited {:?}", started.elapsed());
+    let c = only(&report, "ca");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("security did not answer"), "{c:?}");
+}

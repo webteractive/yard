@@ -160,6 +160,15 @@ mod tests {
     }
 
     #[test]
+    fn unknown_hosts_on_the_https_port_are_refused() {
+        let (p, b) = ctx_parts();
+        let conf = nginx::nginx_main(&ctx(&p, &b));
+        let block = conf.split("server {").find(|b| b.contains(":8443 ssl default_server;")).expect(&conf);
+        assert!(block.contains("listen [::1]:8443 ssl default_server;"), "{block}");
+        assert!(block.lines().any(|l| l.trim() == "ssl_reject_handshake on;"), "{block}");
+    }
+
+    #[test]
     fn default_index_escapes_names() {
         let (p, b) = ctx_parts();
         let html = nginx::default_index(&ctx(&p, &b), &[php_site("<b>", "/x"), proxy_site()]);

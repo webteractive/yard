@@ -30,8 +30,7 @@ pub struct Ctx {
     pub json: bool,
     /// Set by `--root` or `YARD_ROOT`; launchd and the helper must then be told the root.
     pub root_overridden: bool,
-    /// macOS's `security`, or `YARD_SECURITY` when it is an absolute path, which tests
-    /// point at a fake.
+    /// macOS's `security`, or `YARD_SECURITY` when set, which tests point at a fake.
     pub security: PathBuf,
 }
 

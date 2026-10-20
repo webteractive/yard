@@ -379,7 +379,7 @@ fn hang() -> ExitCode {
 }
 
 /// macOS's `security`, which logs each call to `security.log` beside it. `verify-cert`
-/// passes while a `fake-trusted` file sits there too.
+/// passes while a `fake-trusted` file sits there too, and never returns beside `fake-hang`.
 fn security(argv0: &Path, args: &[String]) -> ExitCode {
     let dir = argv0.parent().unwrap_or(Path::new("."));
     let mut log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("security.log"));
@@ -387,6 +387,8 @@ fn security(argv0: &Path, args: &[String]) -> ExitCode {
         let _ = writeln!(log, "{}", args.join(" "));
     }
     match args.first().map(String::as_str) {
+        // A stalled trustd, which leaves security waiting.
+        Some("verify-cert") if dir.join("fake-hang").exists() => hang(),
         Some("verify-cert") if dir.join("fake-trusted").exists() => ExitCode::SUCCESS,
         Some("verify-cert") => ExitCode::from(1),
         _ => fail(format!("security {args:?} is not faked")),

@@ -57,6 +57,14 @@ http {{
         }}
     }}
 
+    # Unknown hosts on the https port are refused, not handed to the first secured site.
+    server {{
+        listen 127.0.0.1:{https} ssl default_server;
+        listen [::1]:{https} ssl default_server;
+        server_name _;
+        ssl_reject_handshake on;
+    }}
+
     include {sites};
 }}
 ",
@@ -70,6 +78,7 @@ http {{
         uwsgi = temp("uwsgi"),
         scgi = temp("scgi"),
         default_root = q(&paths.nginx_default_dir()),
+        https = ctx.https_port,
         sites = q(&paths.nginx_sites_dir().join("*.conf")),
     )
 }

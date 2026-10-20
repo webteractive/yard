@@ -672,3 +672,27 @@ async fn no_secure_site_makes_no_ca() {
     assert!(!e.rec.certs_due().await);
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_deleted_or_mismatched_key_is_reissued() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+
+    std::fs::remove_file(e.fx.paths.cert_key("blog")).unwrap();
+    assert!(e.rec.certs_due().await, "a missing key is due");
+    e.rec.reconcile().await.unwrap();
+    assert!(e.fx.paths.cert_key("blog").exists());
+
+    // Another certificate's key beside this certificate: nginx would refuse the pair.
+    let other = tempfile::tempdir().unwrap();
+    let other_paths = yard_core::Paths::new(other.path());
+    tls::ensure_ca(&other_paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    tls::issue(&other_paths, "blog", "blog.yard", time::OffsetDateTime::now_utc(), 30).unwrap();
+    std::fs::copy(other_paths.cert_key("blog"), e.fx.paths.cert_key("blog")).unwrap();
+    assert!(e.rec.certs_due().await, "a mismatched key is due");
+    e.rec.reconcile().await.unwrap();
+    assert!(!e.rec.certs_due().await);
+    e.sup.shutdown().await;
+}

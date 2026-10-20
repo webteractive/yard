@@ -4,7 +4,7 @@
 
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose,
+    KeyPair, KeyUsagePurpose, PublicKeyData,
 };
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -61,13 +61,17 @@ pub fn issue(paths: &Paths, site: &str, host: &str, now: OffsetDateTime, days: i
     write_file(&paths.cert(site), &cert.pem())
 }
 
-/// What reconcile needs to know about `site`'s certificate; `None` when it is missing
-/// or does not parse.
+/// What reconcile needs to know about `site`'s certificate; `None` when it or its key is
+/// missing or does not parse, or the key is not the certificate's: nginx refuses all three.
 pub fn facts(paths: &Paths, site: &str) -> Option<CertFacts> {
     let leaf_pem = std::fs::read(paths.cert(site)).ok()?;
     let ca_pem = std::fs::read(paths.ca_cert()).ok();
     let (_, leaf) = parse_x509_pem(&leaf_pem).ok()?;
     let leaf = leaf.parse_x509().ok()?;
+    let key = KeyPair::from_pem(&std::fs::read_to_string(paths.cert_key(site)).ok()?).ok()?;
+    if key.subject_public_key_info() != leaf.public_key().raw {
+        return None;
+    }
     let dns_names = leaf
         .subject_alternative_name()
         .ok()
@@ -89,19 +93,27 @@ pub fn facts(paths: &Paths, site: &str) -> Option<CertFacts> {
     Some(CertFacts { dns_names, not_after: leaf.validity().not_after.timestamp(), signed_by_ca })
 }
 
+/// How long `security verify-cert` may take; a stalled trustd would otherwise hold a
+/// doctor or `ca.info` call forever.
+pub const SECURITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Whether `security` (`/usr/bin/security` outside tests) trusts the CA at `ca` for TLS,
-/// as the login keychain's settings decide.
-pub async fn trusted(security: &Path, ca: &Path) -> bool {
-    tokio::process::Command::new(security)
+/// as the login keychain's settings decide. `None` when `security` could not run or did
+/// not answer within [`SECURITY_TIMEOUT`].
+pub async fn trusted(security: &Path, ca: &Path) -> Option<bool> {
+    let status = tokio::process::Command::new(security)
         .args(["verify-cert", "-c"])
         .arg(ca)
         .args(["-l", "-L", "-q", "-p", "basic"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|s| s.success())
+        .kill_on_drop(true)
+        .status();
+    match tokio::time::timeout(SECURITY_TIMEOUT, status).await {
+        Ok(Ok(status)) => Some(status.success()),
+        Ok(Err(_)) | Err(_) => None,
+    }
 }
 
 /// Upper-case hex SHA-256 of the CA certificate's DER, as `security -Z` takes it.

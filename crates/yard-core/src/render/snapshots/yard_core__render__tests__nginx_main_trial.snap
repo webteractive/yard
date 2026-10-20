@@ -43,5 +43,13 @@ http {
         }
     }
 
+    # Unknown hosts on the https port are refused, not handed to the first secured site.
+    server {
+        listen 127.0.0.1:8443 ssl default_server;
+        listen [::1]:8443 ssl default_server;
+        server_name _;
+        ssl_reject_handshake on;
+    }
+
     include "/Users/me/Library/Application Support/Yard/nginx/sites/*.conf";
 }
