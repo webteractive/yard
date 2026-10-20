@@ -26,7 +26,11 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     `config_edit`, via `yard_core::ini`, which keeps every other line as written,
     and `generated::write_preserving`, which writes through a symlink and keeps the mode).
   - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`) are edited only through
-    `config::edit::TomlFile` (`toml_edit`), so comments and key order survive.
+    `config::edit::TomlFile` (`toml_edit`), so comments and key order survive. Every
+    read-modify-write in the daemon is one `TomlFile::edit(path, |file| …)`, which holds
+    a process-wide lock from load to save, so an RPC and a job never lose each other's
+    change; never `load` then `save` by hand, and never put old bytes back to undo an
+    edit (remove the entry instead).
 - **Write rule** (`generated::plan`): compare against the stored hash, not just the
   render. A hand-edited file whose render did not change is left alone and reported by
   `yard doctor`, which names the override from `render::overrides_for` (a test keeps it

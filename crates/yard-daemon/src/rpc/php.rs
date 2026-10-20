@@ -62,7 +62,7 @@ pub(super) fn install(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardErr
         if already {
             job.line(format!("PHP {v} is already installed"));
         } else {
-            job.run(&brew, &["install", &formula(v)], &[]).await?;
+            job.run(&brew, &["install", &formula(v)], &Brew::job_env()).await?;
         }
         reconciler.reconcile().await.map(|_| ())
     }))
@@ -82,12 +82,9 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
     let reconciler = ctx.reconciler.clone();
     Ok(ctx.jobs.start("php-uninstall", move |job: JobCtx| async move {
         refuse_in_use(&paths, v, &installed(&brew))?;
-        job.run(&brew.brew_bin(), &["uninstall", &formula(v)], &[]).await?;
+        job.run(&brew.brew_bin(), &["uninstall", &formula(v)], &Brew::job_env()).await?;
         // Bundled toggles are all that can be left: they go with the version.
-        let mut file = TomlFile::load(&paths.yard_toml())?;
-        if file.remove(&["php", &v.to_string()]) {
-            file.save()?;
-        }
+        TomlFile::edit(&paths.yard_toml(), |file| Ok(file.remove(&["php", &v.to_string()])))?;
         reconciler.reconcile().await.map(|_| ())
     }))
 }
@@ -143,35 +140,37 @@ pub(super) async fn set_default(ctx: &Context, p: PhpParams) -> Result<(), YardE
     if !installed(&ctx.brew).contains(&v) {
         return Err(not_installed(v));
     }
-    let mut file = TomlFile::load(&ctx.paths.yard_toml())?;
-    file.set(&["default_php"], value(v.to_string()));
-    file.save()?;
+    TomlFile::edit(&ctx.paths.yard_toml(), |file| {
+        file.set(&["default_php"], value(v.to_string()));
+        Ok(())
+    })?;
     reconcile(ctx).await
 }
 
 /// `yard isolate` and `unisolate`: a linked site's own version, or back to the default.
 pub(super) async fn isolate(ctx: &Context, p: IsolateParams) -> Result<SiteInfo, YardError> {
     let version = p.php.as_deref().map(str::parse::<PhpVersion>).transpose()?;
-    let mut file = TomlFile::load(&ctx.paths.sites_toml())?;
-    let entry = file.doc().get("sites").and_then(|s| s.get(&p.site));
-    if entry.is_none() {
-        return Err(not_found(&p.site));
-    }
-    if entry.and_then(|e| e.get("path")).is_none() {
-        return Err(YardError::new(
-            ErrorCode::InvalidArgument,
-            format!("{} is a proxy, so no PHP runs it", p.site),
-        )
-        .with_hint("yard sites shows which sites run PHP"));
-    }
-    match version {
-        Some(v) if !installed(&ctx.brew).contains(&v) => return Err(not_installed(v)),
-        Some(v) => file.set(&["sites", &p.site, "php"], value(v.to_string())),
-        None => {
-            file.remove(&["sites", &p.site, "php"]);
+    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+        let entry = file.doc().get("sites").and_then(|s| s.get(&p.site));
+        if entry.is_none() {
+            return Err(not_found(&p.site));
         }
-    }
-    file.save()?;
+        if entry.and_then(|e| e.get("path")).is_none() {
+            return Err(YardError::new(
+                ErrorCode::InvalidArgument,
+                format!("{} is a proxy, so no PHP runs it", p.site),
+            )
+            .with_hint("yard sites shows which sites run PHP"));
+        }
+        match version {
+            Some(v) if !installed(&ctx.brew).contains(&v) => return Err(not_installed(v)),
+            Some(v) => file.set(&["sites", &p.site, "php"], value(v.to_string())),
+            None => {
+                file.remove(&["sites", &p.site, "php"]);
+            }
+        }
+        Ok(())
+    })?;
     reconcile(ctx).await?;
     site(ctx, &p.site).await
 }

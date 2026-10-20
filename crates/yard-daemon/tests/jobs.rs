@@ -115,7 +115,7 @@ async fn jobs_run_one_at_a_time() {
     let wait = async {
         loop {
             match rx.recv().await.unwrap() {
-                Event::JobProgress { job_id, .. } => order.push(format!("progress {job_id}")),
+                Event::JobProgress { job_id, line } => order.push(format!("{job_id}: {line}")),
                 Event::JobFinished { job_id, .. } => {
                     order.push(format!("finished {job_id}"));
                     if job_id == second.job_id {
@@ -129,7 +129,9 @@ async fn jobs_run_one_at_a_time() {
     tokio::time::timeout(Duration::from_secs(10), wait).await.unwrap();
     let pos = |s: String| order.iter().position(|o| *o == s).unwrap();
     assert!(
-        pos(format!("finished {}", first.job_id)) < pos(format!("progress {}", second.job_id)),
+        pos(format!("finished {}", first.job_id)) < pos(format!("{}: b starts", second.job_id)),
         "{order:?}"
     );
+    // While it waits, the second says for which.
+    assert_eq!(order[0], format!("{}: waiting for {}", second.job_id, first.job_id), "{order:?}");
 }

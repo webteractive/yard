@@ -3,8 +3,9 @@
 # side, extensions, and the shims.
 #
 # Needs what e2e-m1.sh needs, plus brew installs it makes itself (ask first):
-# shivammathur/php/php@7.1 and the redis@7.1 and xdebug@8.4 extension formulas. It
-# links two temp projects, adds two extensions, and removes both again; PHP 7.1 stays
+# shivammathur/php/php@7.1 and the redis@7.1 and xdebug@8.4 extension formulas, plus
+# a pecl build of apcu 5.1.24 into brew's PHP 8.4 extension dir. It links two temp
+# projects, adds three extensions, and removes them again; PHP 7.1 stays
 # installed. Herd's resolver must come out unchanged. PHP is only ever run through
 # Yard's shim by absolute path: a bare `php` here is Herd's.
 set -euo pipefail
@@ -97,6 +98,15 @@ m84="$(modules "$work/hello-php")"
 grep -qx Xdebug <<<"$m84" || fail "Xdebug is not loaded in PHP 8.4"
 grep -qx 'Zend OPcache' <<<"$m84" || fail "Zend OPcache is not loaded in PHP 8.4"
 pass "Xdebug and Zend OPcache load in PHP 8.4"
+
+# A pinned release skips brew and builds with pecl, which must leave brew's php.ini alone.
+brew_ini=/opt/homebrew/etc/php/8.4/php.ini
+ini_before="$(shasum -a 256 "$brew_ini")"
+"$yard" ext add apcu-5.1.24 --php 8.4 >/dev/null
+added+=("apcu --php 8.4")
+modules "$work/hello-php" | grep -qx apcu || fail "apcu is not loaded in PHP 8.4"
+[[ $(shasum -a 256 "$brew_ini") == "$ini_before" ]] || fail "pecl edited $brew_ini"
+pass "apcu builds with pecl and loads in PHP 8.4; brew's php.ini is unchanged"
 
 # 5a. The binaries are brew's, never Herd's.
 for site in hello-php:8.4 hello-php71:7.1; do

@@ -400,9 +400,10 @@ impl Reconciler {
 
         // 9. Commit.
         if registry != before {
-            let mut file = TomlFile::load(&paths.ports_toml())?;
-            registry.save(&mut file);
-            file.save()?;
+            TomlFile::edit(&paths.ports_toml(), |file| {
+                registry.save(file);
+                Ok(())
+            })?;
         }
         let old: BTreeSet<String> = state
             .snapshot

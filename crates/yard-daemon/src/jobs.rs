@@ -9,6 +9,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -24,6 +25,8 @@ pub struct Jobs {
     bus: EventBus,
     next: AtomicU64,
     queue: mpsc::UnboundedSender<Work>,
+    /// Jobs queued or running, oldest first.
+    pending: Arc<Mutex<Vec<String>>>,
 }
 
 impl Jobs {
@@ -35,10 +38,10 @@ impl Jobs {
                 job.await;
             }
         });
-        Jobs { bus, next: AtomicU64::new(1), queue }
+        Jobs { bus, next: AtomicU64::new(1), queue, pending: Arc::default() }
     }
 
-    /// Queues `work` and returns its id at once.
+    /// Queues `work` and returns its id at once. A job that has to wait says for which.
     pub fn start<F, Fut>(&self, kind: &str, work: F) -> JobStarted
     where
         F: FnOnce(JobCtx) -> Fut + Send + 'static,
@@ -46,14 +49,25 @@ impl Jobs {
     {
         let job_id = format!("{kind}-{}", self.next.fetch_add(1, Ordering::Relaxed));
         let ctx = JobCtx { job_id: job_id.clone(), bus: self.bus.clone() };
-        let bus = self.bus.clone();
+        let ahead = {
+            let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+            let ahead = pending.last().cloned();
+            pending.push(job_id.clone());
+            ahead
+        };
+        if let Some(ahead) = ahead {
+            ctx.line(format!("waiting for {ahead}"));
+        }
+        let (bus, pending) = (self.bus.clone(), self.pending.clone());
         let id = job_id.clone();
         let job: Work = Box::pin(async move {
             let error = work(ctx).await.err();
+            pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|j| *j != id);
             bus.emit(Event::JobFinished { job_id: id, error });
         });
         if self.queue.send(job).is_err() {
             // The worker is gone only when the runtime is shutting down.
+            self.pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|j| *j != job_id);
             let error = Some(YardError::internal("yardd is shutting down"));
             self.bus.emit(Event::JobFinished { job_id: job_id.clone(), error });
         }

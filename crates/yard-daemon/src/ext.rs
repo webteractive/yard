@@ -12,7 +12,7 @@ use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
 use yard_core::config::yard::{ExtEntry, ExtSource};
 use yard_core::shim::child_path;
-use yard_core::{Paths, PhpVersion, generated};
+use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
 
 /// The modules `php -m` lists under `[PHP Modules]` and `[Zend Modules]`, lowercased.
@@ -68,28 +68,36 @@ impl Add {
                 let formula = format!("shivammathur/extensions/{module}@{v}");
                 let found = match &self.release {
                     Some(_) => false,
-                    None => job.capture(&brew, &["info", "--formula", &formula], &[]).await?.0,
+                    None => job.capture(&brew, &["info", "--formula", &formula], &Brew::job_env()).await?.0,
                 };
                 if found {
-                    job.run(&brew, &["install", &formula], &[]).await?;
+                    job.run(&brew, &["install", &formula], &Brew::job_env()).await?;
                     entry.insert("source", "brew".into());
                 } else {
                     let package = self.release.as_deref().unwrap_or(module);
                     if self.release.is_none() {
                         job.line(format!("brew has no {formula}; trying pecl"));
                     }
-                    job.run(&Brew::php_bin(&self.opt, "pecl"), &["install", package], &keg_env).await?;
+                    // `php_ini=` keeps pecl from adding `extension=` to brew's php.ini:
+                    // Yard writes the ini that loads it.
+                    job.run(
+                        &Brew::php_bin(&self.opt, "pecl"),
+                        &["-d", "php_ini=", "install", package],
+                        &keg_env,
+                    )
+                    .await?;
                     entry.insert("source", "pecl".into());
                 }
             }
         }
 
         let yard_toml = self.paths.yard_toml();
-        let before = std::fs::read_to_string(&yard_toml).ok();
+        let existed = yard_toml.exists();
         let keys = ["php", &v.to_string(), "extensions", module];
-        let mut file = TomlFile::load(&yard_toml)?;
-        file.set(&keys, value(entry.clone()));
-        file.save()?;
+        TomlFile::edit(&yard_toml, |file| {
+            file.set(&keys, value(entry.clone()));
+            Ok(())
+        })?;
         // Reconcile writes 50-<module>.ini and restarts the version's pool if it runs.
         let reconciled = self.reconciler.reconcile().await;
 
@@ -111,14 +119,19 @@ impl Add {
         // Roll back. A file Yard copied goes, with its entry. Something brew or pecl
         // installed stays installed but disabled: with no entry, brew's own ini would
         // load it again.
+        // Only this entry is undone: other edits made meanwhile stay.
         let installed = copied.is_none();
-        if installed {
-            entry.insert("enabled", false.into());
-            let mut file = TomlFile::load(&yard_toml)?;
-            file.set(&keys, value(entry));
-            file.save()?;
-        } else {
-            restore(&yard_toml, before.as_deref())?;
+        let emptied = TomlFile::edit(&yard_toml, |file| {
+            if installed {
+                entry.insert("enabled", false.into());
+                file.set(&keys, value(entry));
+            } else {
+                file.remove(&keys);
+            }
+            Ok(file.doc().is_empty())
+        })?;
+        if emptied && !existed {
+            remove_created(&yard_toml)?;
         }
         if let Some(copy) = &copied {
             let _ = std::fs::remove_file(copy);
@@ -160,11 +173,12 @@ impl Remove {
         match self.entry.source {
             ExtSource::Brew => {
                 let formula = format!("shivammathur/extensions/{module}@{v}");
-                job.run(&self.brew.brew_bin(), &["uninstall", &formula], &[]).await?;
+                job.run(&self.brew.brew_bin(), &["uninstall", &formula], &Brew::job_env()).await?;
             }
             ExtSource::Pecl => {
                 let env = [("PATH".to_string(), keg_path(&self.opt))];
-                job.run(&Brew::php_bin(&self.opt, "pecl"), &["uninstall", module], &env).await?;
+                job.run(&Brew::php_bin(&self.opt, "pecl"), &["-d", "php_ini=", "uninstall", module], &env)
+                    .await?;
             }
             ExtSource::Path | ExtSource::Bundled => {
                 if let Some(so) = &self.entry.so {
@@ -177,9 +191,9 @@ impl Remove {
                 }
             }
         }
-        let mut file = TomlFile::load(&self.paths.yard_toml())?;
-        file.remove(&["php", &v.to_string(), "extensions", module]);
-        file.save()?;
+        TomlFile::edit(&self.paths.yard_toml(), |file| {
+            Ok(file.remove(&["php", &v.to_string(), "extensions", module]))
+        })?;
         self.reconciler.reconcile().await.map(|_| ())
     }
 }
@@ -191,15 +205,13 @@ fn keg_path(opt: &Path) -> String {
     child_path(Some(&opt.join("bin")), &inherited).to_string_lossy().into_owned()
 }
 
-/// Puts `yard.toml` back as it was: its old text, or no file.
-fn restore(file: &Path, before: Option<&str>) -> Result<(), YardError> {
-    let io = |e: std::io::Error| YardError::internal(format!("cannot restore {}: {e}", file.display()));
-    match before {
-        Some(text) => generated::write_atomic(file, text).map_err(io),
-        None => match std::fs::remove_file(file) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io(e)),
-            _ => Ok(()),
-        },
+/// Deletes the `yard.toml` an add created, once the rollback has emptied it.
+fn remove_created(file: &Path) -> Result<(), YardError> {
+    match std::fs::remove_file(file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(YardError::internal(format!("cannot delete {}: {e}", file.display())))
+        }
+        _ => Ok(()),
     }
 }
 

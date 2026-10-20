@@ -39,6 +39,12 @@ impl Brew {
         }
     }
 
+    /// The environment every `brew` job runs with: no sweep of the formulae that depend on
+    /// the one being installed or removed, which can rebuild unrelated ones for minutes.
+    pub fn job_env() -> Vec<(String, String)> {
+        vec![("HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK".into(), "1".into())]
+    }
+
     /// `brew` itself, run by absolute path like every other binary Yard starts.
     pub fn brew_bin(&self) -> PathBuf {
         self.prefix.join("bin/brew")

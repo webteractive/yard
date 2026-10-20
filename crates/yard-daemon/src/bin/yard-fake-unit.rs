@@ -145,6 +145,9 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     };
     let line = args.join(" ");
     println!("==> fake brew {line}");
+    if std::env::var_os("HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK").is_some_and(|v| v == "1") {
+        println!("==> fake brew: dependents check off");
+    }
     let log = prefix.join("fake-brew.log");
     let logged = std::fs::read_to_string(&log).unwrap_or_default();
     let _ = std::fs::write(&log, format!("{logged}{line}\n"));

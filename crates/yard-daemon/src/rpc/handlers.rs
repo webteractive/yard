@@ -173,10 +173,11 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
 async fn link(ctx: &Context, p: LinkParams) -> Result<SiteInfo, YardError> {
     valid_name(&p.name)?;
     let dir = directory(&p.path)?;
-    let mut file = TomlFile::load(&ctx.paths.sites_toml())?;
-    file.remove(&["sites", &p.name, "proxy"]);
-    file.set(&["sites", &p.name, "path"], value(dir.display().to_string()));
-    file.save()?;
+    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+        file.remove(&["sites", &p.name, "proxy"]);
+        file.set(&["sites", &p.name, "path"], value(dir.display().to_string()));
+        Ok(())
+    })?;
     reconcile(ctx).await?;
     site(ctx, &p.name).await
 }
@@ -184,38 +185,44 @@ async fn link(ctx: &Context, p: LinkParams) -> Result<SiteInfo, YardError> {
 async fn proxy(ctx: &Context, p: ProxyParams) -> Result<SiteInfo, YardError> {
     valid_name(&p.name)?;
     parse_proxy_target(&p.url)?;
-    let mut file = TomlFile::load(&ctx.paths.sites_toml())?;
-    file.remove(&["sites", &p.name, "path"]);
-    file.set(&["sites", &p.name, "proxy"], value(p.url.as_str()));
-    file.save()?;
+    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+        file.remove(&["sites", &p.name, "path"]);
+        file.set(&["sites", &p.name, "proxy"], value(p.url.as_str()));
+        Ok(())
+    })?;
     reconcile(ctx).await?;
     site(ctx, &p.name).await
 }
 
 /// `unlink` and `unproxy`: the entry must exist with that `key`.
 async fn unlink(ctx: &Context, p: NameParams, key: &str) -> Result<(), YardError> {
-    let mut file = TomlFile::load(&ctx.paths.sites_toml())?;
-    let present = file.doc().get("sites").and_then(|s| s.get(&p.name)).and_then(|s| s.get(key)).is_some();
-    if !present {
-        let kind = if key == "proxy" { "proxied" } else { "linked" };
-        return Err(YardError::new(ErrorCode::SiteNotFound, format!("no {kind} site named {:?}", p.name))
+    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+        let present = file.doc().get("sites").and_then(|s| s.get(&p.name)).and_then(|s| s.get(key)).is_some();
+        if !present {
+            let kind = if key == "proxy" { "proxied" } else { "linked" };
+            return Err(YardError::new(
+                ErrorCode::SiteNotFound,
+                format!("no {kind} site named {:?}", p.name),
+            )
             .with_hint("yard sites lists them"));
-    }
-    file.remove(&["sites", &p.name]);
-    file.save()?;
+        }
+        file.remove(&["sites", &p.name]);
+        Ok(())
+    })?;
     reconcile(ctx).await
 }
 
 async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError> {
     site(ctx, &p.site).await?;
-    let mut file = TomlFile::load(&ctx.paths.sites_toml())?;
-    match &p.path {
-        Some(path) => file.set(&["sites", &p.site, "docroot"], value(path.as_str())),
-        None => {
-            file.remove(&["sites", &p.site, "docroot"]);
+    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+        match &p.path {
+            Some(path) => file.set(&["sites", &p.site, "docroot"], value(path.as_str())),
+            None => {
+                file.remove(&["sites", &p.site, "docroot"]);
+            }
         }
-    }
-    file.save()?;
+        Ok(())
+    })?;
     reconcile(ctx).await?;
     site(ctx, &p.site).await
 }
@@ -263,11 +270,12 @@ async fn edit_registry(
     ctx: &Context,
     change: impl FnOnce(&mut Registry) -> Result<(), YardError>,
 ) -> Result<(), YardError> {
-    let mut registry = Registry::load(&ctx.paths)?;
-    change(&mut registry)?;
-    let mut file = TomlFile::load(&ctx.paths.ports_toml())?;
-    registry.save(&mut file);
-    file.save()?;
+    TomlFile::edit(&ctx.paths.ports_toml(), |file| {
+        let mut registry = Registry::load(&ctx.paths)?;
+        change(&mut registry)?;
+        registry.save(file);
+        Ok(())
+    })?;
     reconcile(ctx).await
 }
 

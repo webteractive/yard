@@ -47,7 +47,7 @@ async fn ext_add_falls_back_to_pecl() {
     let mut c = d.client().await;
     let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "mongodb"})).await;
     assert_eq!(error, None, "{lines:?}");
-    assert!(lines.iter().any(|l| l.contains("fake pecl install mongodb")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("fake pecl -d php_ini= install mongodb")), "{lines:?}");
     let toml = String::from_utf8(yard_toml(&d).unwrap()).unwrap();
     assert!(toml.contains("mongodb = { source = \"pecl\" }"), "{toml}");
     assert!(conf_d(&d).join("50-mongodb.ini").is_file());
@@ -309,7 +309,7 @@ async fn a_pinned_pecl_version_installs_that_release_under_the_module_name() {
     let mut c = d.client().await;
     let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "xdebug-2.9.8"})).await;
     assert_eq!(error, None, "{lines:?}");
-    assert!(lines.iter().any(|l| l.contains("fake pecl install xdebug-2.9.8")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("fake pecl -d php_ini= install xdebug-2.9.8")), "{lines:?}");
     assert!(!lines.iter().any(|l| l.contains("fake brew")), "{lines:?}");
     let toml = toml_text(&d);
     assert!(toml.contains("xdebug = { source = \"pecl\" }"), "{toml}");

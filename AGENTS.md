@@ -100,7 +100,7 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - `scripts/e2e-m1.sh` — real-machine check in the standard profile. It needs the
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
 - `scripts/e2e-m2.sh` — real-machine M2 check after `e2e-m1.sh`: brew-installs php@7.1
-  and two extension formulas, so ask the maintainer first. Run PHP only as
+  and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Run PHP only as
   `"$HOME/Library/Application Support/Yard/bin/php"`; a bare `php` here is Herd's.
 
 ## Verifying a change on this machine

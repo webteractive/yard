@@ -121,49 +121,46 @@ pub(super) async fn toggle(ctx: &Context, p: ExtParams, on: bool) -> Result<(), 
     let exts = managed(ctx, v)?;
     let others = bundled(ctx, v, &exts);
     // Names match in any case: `yard ext disable OPcache` means opcache.
-    let name = exts
-        .keys()
-        .chain(others.keys())
-        .find(|n| n.eq_ignore_ascii_case(&p.name))
-        .cloned()
-        .unwrap_or(p.name);
+    let name =
+        exts.keys().chain(others.keys()).find(|n| n.eq_ignore_ascii_case(&p.name)).cloned().unwrap_or(p.name);
     let version = v.to_string();
     let keys = ["php", version.as_str(), "extensions", name.as_str()];
-    let mut file = TomlFile::load(&ctx.paths.yard_toml())?;
-    match exts.get(&name) {
-        Some(e) if e.source == ExtSource::Bundled && on => {
-            file.remove(&keys);
-        }
-        Some(_) => {
-            let inline = file
-                .doc()
-                .get("php")
-                .and_then(|t| t.get(version.as_str()))
-                .and_then(|t| t.get("extensions"))
-                .and_then(|t| t.get(name.as_str()))
-                .and_then(|item| item.as_inline_table())
-                .cloned();
-            match inline {
-                Some(mut table) => {
-                    table.insert("enabled", on.into());
-                    table.fmt();
-                    file.set(&keys, value(table));
+    TomlFile::edit(&ctx.paths.yard_toml(), |file| {
+        match exts.get(&name) {
+            Some(e) if e.source == ExtSource::Bundled && on => {
+                file.remove(&keys);
+            }
+            Some(_) => {
+                let inline = file
+                    .doc()
+                    .get("php")
+                    .and_then(|t| t.get(version.as_str()))
+                    .and_then(|t| t.get("extensions"))
+                    .and_then(|t| t.get(name.as_str()))
+                    .and_then(|item| item.as_inline_table())
+                    .cloned();
+                match inline {
+                    Some(mut table) => {
+                        table.insert("enabled", on.into());
+                        table.fmt();
+                        file.set(&keys, value(table));
+                    }
+                    None => file.set(&[keys.as_slice(), &["enabled"]].concat(), value(on)),
                 }
-                None => file.set(&[keys.as_slice(), &["enabled"]].concat(), value(on)),
             }
-        }
-        None if valid_ext_name(&name) && others.contains_key(&name) => {
-            if on {
-                return Ok(());
+            None if valid_ext_name(&name) && others.contains_key(&name) => {
+                if on {
+                    return Ok(());
+                }
+                let mut table = InlineTable::new();
+                table.insert("source", others[&name].name().into());
+                table.insert("enabled", false.into());
+                file.set(&keys, value(table));
             }
-            let mut table = InlineTable::new();
-            table.insert("source", others[&name].name().into());
-            table.insert("enabled", false.into());
-            file.set(&keys, value(table));
+            None => return Err(not_found(&name, v)),
         }
-        None => return Err(not_found(&name, v)),
-    }
-    file.save()?;
+        Ok(())
+    })?;
     // Reconcile rewrites conf.d and restarts the version's pool if it runs.
     reconcile(ctx).await
 }

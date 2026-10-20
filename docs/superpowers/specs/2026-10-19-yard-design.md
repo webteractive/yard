@@ -443,7 +443,10 @@ profile; Yard does not edit dotfiles.
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20
   lines in `data.tail` when a command exits non-zero), on the `jobs` topic. Jobs run
-  one at a time, in start order. A client subscribes to `jobs` before it calls.
+  one at a time, in start order; a job queued behind another first reports
+  `waiting for <job_id>`. Brew jobs run with `HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`,
+  and pecl with `-d php_ini=` so it never edits brew's `php.ini`. A client subscribes
+  to `jobs` before it calls. No job times out or can be cancelled yet (open question).
 - Subscriptions (`subscribe` with topic list: `units`, `sites`, `logs`, `ports`,
   `jobs`) push events tagged `unit_state_changed`, `site_added`, `site_removed`,
   `job_progress`, `job_finished`, `log_line`, `port_conflict`.

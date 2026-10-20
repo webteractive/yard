@@ -3,6 +3,8 @@
 
 use super::{config_error, read_optional};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 use yard_proto::{ErrorCode, YardError};
 
@@ -22,6 +24,24 @@ impl TomlFile {
             None => DocumentMut::new(),
         };
         Ok(Self { path: path.to_path_buf(), doc })
+    }
+
+    /// Loads `path`, applies `f`, and saves if `f` succeeded and changed anything, all
+    /// under one lock for the process, so two edits never lose each other's change.
+    /// Every read-modify-write of a user TOML in the daemon goes through here.
+    pub fn edit<R>(
+        path: &Path,
+        f: impl FnOnce(&mut TomlFile) -> Result<R, YardError>,
+    ) -> Result<R, YardError> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _held = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut file = Self::load(path)?;
+        let before = file.doc.to_string();
+        let result = f(&mut file)?;
+        if file.doc.to_string() != before {
+            file.save()?;
+        }
+        Ok(result)
     }
 
     pub fn doc(&self) -> &DocumentMut {
@@ -81,7 +101,10 @@ impl TomlFile {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
-        let tmp = self.path.with_extension("toml.tmp");
+        // Unique, so a save from another process (the offline CLI) never shares it.
+        static SAVES: AtomicU64 = AtomicU64::new(0);
+        let n = SAVES.fetch_add(1, Ordering::Relaxed);
+        let tmp = self.path.with_extension(format!("toml.{}.{n}.tmp", std::process::id()));
         std::fs::write(&tmp, self.doc.to_string()).map_err(io)?;
         std::fs::rename(&tmp, &self.path).map_err(io)
     }
@@ -176,6 +199,28 @@ mod tests {
         assert!(f.remove(&["sites", "a"]));
         assert!(!f.remove(&["sites", "a"]));
         assert!(!f.remove(&["nope", "x"]));
+    }
+
+    #[test]
+    fn concurrent_edits_lose_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yard.toml");
+        std::thread::scope(|s| {
+            for t in 0..4 {
+                let path = &path;
+                s.spawn(move || {
+                    for i in 0..25 {
+                        TomlFile::edit(path, |f| {
+                            f.set(&["k", &format!("t{t}_{i}")], value(true));
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let doc = TomlFile::load(&path).unwrap();
+        assert_eq!(doc.doc()["k"].as_table().unwrap().len(), 100);
     }
 
     #[test]

@@ -26,6 +26,8 @@ async fn install_creates_the_keg_and_list_shows_it() {
     let (lines, error) = run_job(&mut c, "php.install", json!({"php": "7.1"})).await;
     assert_eq!(error, None, "{lines:?}");
     assert!(lines.iter().any(|l| l.contains("fake brew install shivammathur/php/php@7.1")), "{lines:?}");
+    // brew would otherwise check, and maybe rebuild, everything that depends on the keg.
+    assert!(lines.iter().any(|l| l.contains("fake brew: dependents check off")), "{lines:?}");
     let list = c.call("php.list", Value::Null).await.unwrap();
     assert_eq!(versions(&list), [("7.1".to_string(), false), ("8.4".to_string(), true)], "{list}");
     d.shutdown().await.unwrap();
@@ -299,5 +301,18 @@ async fn uninstalling_the_only_version_hints_an_install() {
     let err = c.call("php.uninstall", json!({"php": "8.4"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::PhpInUse);
     assert_eq!(err.hint.as_deref(), Some("yard php install 8.5"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_queued_job_says_what_it_waits_for() {
+    let d = prepared("").await.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-brew-delay"), "1000").unwrap();
+    let mut c = d.client().await;
+    let first = c.call("php.install", json!({"php": "7.4"})).await.unwrap();
+    let (lines, error) = run_job(&mut c, "php.install", json!({"php": "7.3"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    let waiting = format!("waiting for {}", first["job_id"].as_str().unwrap());
+    assert_eq!(lines.first(), Some(&waiting), "{lines:?}");
     d.shutdown().await.unwrap();
 }
