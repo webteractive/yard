@@ -40,6 +40,7 @@ fn process(name: &str, program: &str, args: &[&str], health: Health) -> UnitSpec
         health,
         port: None,
         reload: Reload::Restart,
+        stop: libc::SIGTERM,
         inherit: vec![],
     }
 }
@@ -304,4 +305,89 @@ async fn reload_sends_the_units_signal() {
     let again = wait_for(&h.sup, "plain", |u| running(u) && u.pid != first).await;
     assert_ne!(again.pid, first, "Reload::Restart restarts");
     h.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn apply_reports_the_units_it_started() {
+    let h = harness(fast());
+    let port = free_port();
+    assert_eq!(h.sup.apply(vec![listener("a", port)]).await, BTreeSet::from(["a".to_string()]));
+    wait_for(&h.sup, "a", running).await;
+    assert!(h.sup.apply(vec![listener("a", port)]).await.is_empty(), "an unchanged unit keeps running");
+    let other = free_port();
+    assert_eq!(
+        h.sup.apply(vec![listener("a", other)]).await,
+        BTreeSet::from(["a".to_string()]),
+        "a changed spec restarts"
+    );
+    h.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn http_health_needs_an_answer_not_a_backlog() {
+    let h = harness(fast());
+    // A listener nobody accepts on takes a connect into its backlog but never answers.
+    let held = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port();
+    h.sup.apply(vec![process("silent", FAKE, &["hang"], Health::Http(port))]).await;
+    let u = wait_for(&h.sup, "silent", |u| {
+        matches!(u.state, UnitState::Backoff { .. } | UnitState::Failed { .. })
+    })
+    .await;
+    assert!(u.last_error.as_deref().is_some_and(|e| e.contains("not healthy")), "{u:?}");
+    h.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn stop_sends_the_units_stop_signal() {
+    let h = harness(fast());
+    let port = free_port();
+    let quit = UnitSpec {
+        stop: libc::SIGQUIT,
+        ..process("quit", FAKE, &["signals", &port.to_string()], Health::Tcp(port))
+    };
+    h.sup.apply(vec![quit]).await;
+    wait_for(&h.sup, "quit", running).await;
+    h.sup.shutdown().await;
+    let log = std::fs::read_to_string(h.logs.path().join("quit.log")).unwrap_or_default();
+    assert!(log.contains("got SIGQUIT"), "nginx stops gracefully on SIGQUIT: {log}");
+}
+
+#[tokio::test]
+async fn fake_nginx_exits_cleanly_on_sigquit() {
+    // Real nginx shuts down gracefully on SIGQUIT. A fake that died of the signal instead
+    // would leave a crash report behind and stall every stop while ReportCrash writes it.
+    let dir = tempfile::tempdir().unwrap();
+    let nginx = dir.path().join("nginx");
+    std::os::unix::fs::symlink(FAKE, &nginx).unwrap();
+    let port = free_port();
+    let conf = dir.path().join("nginx.conf");
+    std::fs::write(&conf, format!("listen 127.0.0.1:{port};\n")).unwrap();
+    let mut child =
+        tokio::process::Command::new(&nginx).arg("-p").arg(dir.path()).arg("-c").arg(&conf).spawn().unwrap();
+    let up = || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok();
+    assert!(support::wait_until(up, Duration::from_secs(5)).await, "the fake nginx listens");
+    // SAFETY: kill(2) on a child this test owns.
+    unsafe { libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGQUIT) };
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await.unwrap().unwrap();
+    assert!(status.success(), "the fake nginx exits 0 on SIGQUIT: {status:?}");
+}
+
+#[tokio::test]
+async fn a_unit_stopped_before_it_is_healthy_gets_sigterm() {
+    // Nothing is in flight before the first health check passes, and a process stopped
+    // that early may not have installed its SIGQUIT handler yet.
+    let h = harness(fast());
+    let port = free_port();
+    let never = UnitSpec {
+        stop: libc::SIGQUIT,
+        ..process("early", FAKE, &["signals", &port.to_string()], Health::Tcp(free_port()))
+    };
+    h.sup.apply(vec![never]).await;
+    // `signals` installs its handlers before it listens.
+    assert!(support::wait_until(|| support::served(port), Duration::from_secs(5)).await);
+    assert_eq!(info(&h.sup, "early").unwrap().state, UnitState::Starting);
+    h.sup.shutdown().await;
+    let log = std::fs::read_to_string(h.logs.path().join("early.log")).unwrap_or_default();
+    assert!(log.contains("got SIGTERM"), "{log}");
 }

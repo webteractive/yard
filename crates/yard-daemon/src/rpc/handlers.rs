@@ -273,13 +273,7 @@ async fn port_infos(ctx: &Context) -> Vec<PortInfo> {
             Err(_) => return vec![],
         },
     };
-    let running: BTreeSet<String> = ctx
-        .supervisor()
-        .list()
-        .into_iter()
-        .filter(|u| u.state == UnitState::Running)
-        .map(|u| u.name)
-        .collect();
+    let running = portscan::own_units(&ctx.supervisor().list());
     tokio::task::spawn_blocking(move || portscan::infos(&registry, &running)).await.unwrap_or_default()
 }
 

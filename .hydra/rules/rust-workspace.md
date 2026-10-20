@@ -29,7 +29,12 @@ triggers:
   rendered). Its nginx runs in the foreground; with `NGINX` set it serves on the first
   inherited socket and logs real nginx's `using inherited sockets from` line, which
   `support::inherited_starts` counts. A bare connect cannot prove inheritance, since
-  yardd's own copy of the listener accepts it into the backlog.
+  yardd's own copy of the listener accepts it into the backlog; that is also why the
+  nginx unit's health is `Health::Http` and the fake answers each connection with an
+  HTTP status line. Like nginx, the fake exits 0 on SIGQUIT: dying of the signal makes
+  macOS write a crash report, and ReportCrash holds the process (and its sockets) while
+  it does, which stalls stops and flakes tests. Its `signals <port>` mode logs which of
+  SIGQUIT and SIGTERM stopped it.
 - Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
 - A test that reconciles, probes or runs doctor writes a `ports.toml` first

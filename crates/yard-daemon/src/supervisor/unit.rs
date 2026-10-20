@@ -126,16 +126,18 @@ impl Runner {
 
         let interval = self.cfg.health_interval;
         let deadline = tokio::time::Instant::now() + self.cfg.start_grace;
+        // Until the first health check passes nothing is in flight, and the unit may not
+        // handle its graceful signal yet, so it gets SIGTERM.
         while !self.healthy().await {
             if tokio::time::Instant::now() >= deadline {
-                process.stop(self.cfg.stop_timeout).await;
+                process.stop(libc::SIGTERM, self.cfg.stop_timeout).await;
                 let grace = self.cfg.start_grace.as_secs_f32();
                 return Ended::Failure(format!("not healthy within {grace} s of starting"));
             }
             tokio::select! {
                 status = process.wait() => return Ended::Failure(status),
                 control = self.next_control() => {
-                    process.stop(self.cfg.stop_timeout).await;
+                    process.stop(libc::SIGTERM, self.cfg.stop_timeout).await;
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {}
@@ -148,13 +150,13 @@ impl Runner {
             tokio::select! {
                 status = process.wait() => return Ended::Failure(status),
                 control = self.next_control() => {
-                    process.stop(self.cfg.stop_timeout).await;
+                    process.stop(self.spec.stop, self.cfg.stop_timeout).await;
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {
                     misses = if self.healthy().await { 0 } else { misses + 1 };
                     if misses >= 2 {
-                        process.stop(self.cfg.stop_timeout).await;
+                        process.stop(self.spec.stop, self.cfg.stop_timeout).await;
                         return Ended::Failure("failed two health checks in a row".into());
                     }
                 }
@@ -178,7 +180,10 @@ impl Runner {
             return Ok(vec![]);
         }
         self.sockets.get(&self.spec.inherit).await.map_err(|e| match e.code {
-            ErrorCode::HelperNotInstalled | ErrorCode::HelperRefused => Ended::Fatal(describe(&e)),
+            // Retrying cannot install a helper or change which ports it opens.
+            ErrorCode::HelperNotInstalled | ErrorCode::HelperRefused | ErrorCode::InvalidArgument => {
+                Ended::Fatal(describe(&e))
+            }
             ErrorCode::PortInUse => {
                 let port =
                     e.data.as_ref().and_then(|d| d["port"].as_u64()).and_then(|p| u16::try_from(p).ok());
@@ -231,6 +236,9 @@ impl Runner {
             Health::Tcp(port) => {
                 let connect = TcpStream::connect(("127.0.0.1", *port));
                 matches!(tokio::time::timeout(HEALTH_TIMEOUT, connect).await, Ok(Ok(_)))
+            }
+            Health::Http(port) => {
+                matches!(tokio::time::timeout(HEALTH_TIMEOUT, http_status(*port)).await, Ok(true))
             }
             Health::Unix(path) => {
                 matches!(tokio::time::timeout(HEALTH_TIMEOUT, UnixStream::connect(path)).await, Ok(Ok(_)))
@@ -300,10 +308,10 @@ impl Process {
         }
     }
 
-    /// SIGTERM, then SIGKILL after `timeout`.
-    async fn stop(&mut self, timeout: Duration) {
+    /// `sig`, then SIGKILL after `timeout`.
+    async fn stop(&mut self, sig: libc::c_int, timeout: Duration) {
         if let Some(pid) = self.child.id() {
-            let _ = signal(pid, libc::SIGTERM);
+            let _ = signal(pid, sig);
         }
         if tokio::time::timeout(timeout, self.child.wait()).await.is_err() {
             let _ = self.child.start_kill();
@@ -311,6 +319,17 @@ impl Process {
         }
         drain(&mut self.readers).await;
     }
+}
+
+/// Whether `GET /` on `127.0.0.1:port` gets an HTTP status line back.
+async fn http_status(port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)).await else { return false };
+    if stream.write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n").await.is_err() {
+        return false;
+    }
+    let mut head = [0u8; 5];
+    stream.read_exact(&mut head).await.is_ok() && &head == b"HTTP/"
 }
 
 /// Copies a child's output into the log line by line; invalid UTF-8 is replaced.

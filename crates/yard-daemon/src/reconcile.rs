@@ -277,6 +277,7 @@ impl Reconciler {
                 health: Health::Tcp(dns),
                 port: Some((dns, Proto::TcpUdp)),
                 reload: Reload::Restart,
+                stop: libc::SIGTERM,
                 inherit: vec![],
             },
             UnitSpec {
@@ -284,9 +285,10 @@ impl Reconciler {
                 program: self.nginx.program().to_path_buf(),
                 args: self.nginx.args(),
                 env: vec![],
-                health: Health::Tcp(http),
+                health: Health::Http(http),
                 port: (!privileged).then_some((http, Proto::Tcp)),
                 reload: Reload::Signal(libc::SIGHUP),
+                stop: libc::SIGQUIT,
                 inherit: inherit.clone(),
             },
         ];
@@ -322,6 +324,7 @@ impl Reconciler {
                 health: Health::Unix(paths.fpm_socket(*v)),
                 port: None,
                 reload: Reload::Signal(libc::SIGUSR2),
+                stop: libc::SIGTERM,
                 inherit: vec![],
             });
         }
@@ -330,16 +333,18 @@ impl Reconciler {
         {
             report.warnings.push(format!("stopped nginx (pid {pid}), which an earlier yardd left running"));
         }
-        self.supervisor.apply(desired).await;
+        // A unit apply started reads the new files itself; restarting or reloading it on
+        // top would start it twice.
+        let started = self.supervisor.apply(desired).await;
         self.supervisor.sockets().release_except(&inherit);
-        for name in restart.iter().filter(|n| existing.contains(*n)) {
+        for name in restart.iter().filter(|n| existing.contains(*n) && !started.contains(*n)) {
             if let Err(e) = self.supervisor.restart(name).await {
                 report.warnings.push(format!("restarting {name}: {}", describe(&e)));
             }
         }
-        // A new nginx unit reads the new files as it starts; a running one reloads.
         if nginx_changed
             && existing.contains("nginx")
+            && !started.contains("nginx")
             && let Err(e) = self.supervisor.reload("nginx").await
         {
             report.warnings.push(format!("reloading nginx: {}", describe(&e)));

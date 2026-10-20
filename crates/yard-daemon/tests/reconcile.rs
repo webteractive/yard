@@ -435,3 +435,19 @@ async fn orphaned_nginx_is_stopped_before_nginx_starts() {
     assert!(!alive, "yardd stopped the orphan before starting its own nginx");
     e.sup.shutdown().await;
 }
+
+#[tokio::test]
+async fn privileged_profile_on_unlisted_ports_fails_without_retrying() {
+    let (e, _http) = privileged_env().await;
+    // Hand-written: privileged, but on ports the helper does not open.
+    let ports =
+        format!("profile = \"privileged\"\n{}", support::ports_toml(free_port(), free_port(), free_port()));
+    std::fs::write(e.fx.paths.ports_toml(), ports).unwrap();
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+
+    let nginx = e.unit("nginx", |u| matches!(u.state, UnitState::Failed { .. })).await;
+    assert_eq!(nginx.restarts, 0, "retrying cannot change what the helper opens: {nginx:?}");
+    assert!(nginx.last_error.as_deref().is_some_and(|m| m.starts_with("INVALID_ARGUMENT")), "{nginx:?}");
+    e.sup.shutdown().await;
+}

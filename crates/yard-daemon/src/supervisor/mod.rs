@@ -7,7 +7,7 @@ use crate::events::EventBus;
 use crate::logsink::LogSink;
 use crate::privileged::PrivilegedSockets;
 use crate::probe::Proto;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -21,6 +21,9 @@ use yard_proto::{ErrorCode, UnitInfo, UnitState, YardError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Health {
     Tcp(u16),
+    /// An HTTP status line in answer to `GET /`. A connect alone cannot tell a serving
+    /// nginx from a listener yardd holds for it, whose backlog accepts any connect.
+    Http(u16),
     Unix(PathBuf),
 }
 
@@ -43,6 +46,10 @@ pub struct UnitSpec {
     /// Checked with a bind probe before every start (spec §7, check 2).
     pub port: Option<(u16, Proto)>,
     pub reload: Reload,
+    /// Sent to stop a running unit; SIGKILL follows after `stop_timeout`. nginx gets
+    /// SIGQUIT, its graceful shutdown, so requests in flight finish. A unit that has not
+    /// passed a health check yet gets SIGTERM.
+    pub stop: i32,
     /// Privileged ports whose loopback sockets the unit inherits through `NGINX`, from
     /// the helper. Only nginx in the privileged profile has any; the helper's bind then
     /// stands in for the probe.
@@ -107,7 +114,8 @@ impl Supervisor {
     }
 
     /// Starts new units, stops removed ones and restarts the ones whose spec changed.
-    pub async fn apply(&self, desired: Vec<UnitSpec>) {
+    /// Returns the units it started, which need no restart or reload on top.
+    pub async fn apply(&self, desired: Vec<UnitSpec>) -> BTreeSet<String> {
         let mut units = self.units.lock().await;
         let wanted: BTreeMap<&str, &UnitSpec> = desired.iter().map(|s| (s.name.as_str(), s)).collect();
         let stale: Vec<String> = units
@@ -123,12 +131,15 @@ impl Supervisor {
                 lock(&self.table).remove(&name);
             }
         }
+        let mut started = BTreeSet::new();
         for spec in desired {
             if !units.contains_key(&spec.name) {
+                started.insert(spec.name.clone());
                 let handle = self.spawn(spec);
                 units.insert(handle.spec.name.clone(), handle);
             }
         }
+        started
     }
 
     /// `yard restart <unit>`: forget past failures and start again, whatever the state.

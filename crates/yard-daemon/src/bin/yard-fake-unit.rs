@@ -25,6 +25,7 @@ fn mode(args: &[String]) -> ExitCode {
     let arg = |i: usize| args.get(i).map(String::as_str);
     match arg(0) {
         Some("listen-tcp") => listen_tcp(arg(1).and_then(|p| p.parse().ok())),
+        Some("signals") => signals(arg(1).and_then(|p| p.parse().ok())),
         Some("listen-unix") => listen_unix(arg(1).map(PathBuf::from)),
         Some("exit") => {
             let code = arg(1).and_then(|c| c.parse::<u8>().ok()).unwrap_or(1);
@@ -64,19 +65,32 @@ fn nginx(args: &[String]) -> ExitCode {
         eprintln!("nginx: configuration file {conf} test is successful");
         return ExitCode::SUCCESS;
     }
+    // nginx shuts down gracefully on SIGQUIT. Dying of it instead would leave a crash
+    // report and hold up every stop while ReportCrash writes it.
+    extern "C" fn quit(_: libc::c_int) {
+        // SAFETY: _exit(2) is async-signal-safe.
+        unsafe { libc::_exit(0) };
+    }
+    // SAFETY: installing a handler that makes only an async-signal-safe call.
+    unsafe { libc::signal(libc::SIGQUIT, quit as libc::sighandler_t) };
     if let Ok(fds) = std::env::var("NGINX") {
         eprintln!("nginx: [notice] using inherited sockets from \"{fds}\"");
         let Some(fd) = fds.split(';').next().and_then(|fd| fd.parse::<RawFd>().ok()) else {
             return fail(format!("NGINX={fds:?} names no descriptor"));
         };
         // SAFETY: yardd handed this listening socket to nginx, which owns it from here.
-        return serve(unsafe { TcpListener::from_raw_fd(fd) });
+        return serve(unsafe { TcpListener::from_raw_fd(fd) }, true);
     }
     let text = std::fs::read_to_string(conf).unwrap_or_default();
-    listen_tcp(text.lines().find_map(|l| {
+    let port = text.lines().find_map(|l| {
         let rest = l.trim().strip_prefix("listen 127.0.0.1:")?;
         rest.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u16>().ok()
-    }))
+    });
+    let Some(port) = port else { return fail(format!("{conf} has no `listen 127.0.0.1:N`")) };
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => serve(listener, true),
+        Err(e) => fail(format!("cannot listen on {port}: {e}")),
+    }
 }
 
 /// `--conf-file=<path>` (or `--conf-file <path>`); listens on its `port=` over TCP.
@@ -100,20 +114,49 @@ fn php_fpm(args: &[String]) -> ExitCode {
 fn listen_tcp(port: Option<u16>) -> ExitCode {
     let Some(port) = port else { return fail("listen-tcp needs a port".into()) };
     match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(listener) => serve(listener),
+        Ok(listener) => serve(listener, false),
         Err(e) => fail(format!("cannot listen on {port}: {e}")),
     }
 }
 
-/// Accepts and closes connections until killed.
-fn serve(listener: TcpListener) -> ExitCode {
+/// Accepts and closes connections until killed. As nginx (`http`), answers each with a
+/// status line first, which is what the supervisor's HTTP health check looks for.
+fn serve(listener: TcpListener, http: bool) -> ExitCode {
     // nginx reloads on SIGHUP; the fake must survive one.
     // SAFETY: setting a signal disposition to SIG_IGN has no preconditions.
     unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
-    for stream in listener.incoming() {
-        drop(stream);
+    for mut stream in listener.incoming().flatten() {
+        if http {
+            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
+        }
     }
     ExitCode::SUCCESS
+}
+
+/// Like `listen-tcp`, and says which of SIGQUIT and SIGTERM stopped it.
+fn signals(port: Option<u16>) -> ExitCode {
+    extern "C" fn quit(_: libc::c_int) {
+        const MSG: &[u8] = b"got SIGQUIT\n";
+        // SAFETY: write(2) and _exit(2) are async-signal-safe.
+        unsafe {
+            libc::write(1, MSG.as_ptr().cast(), MSG.len());
+            libc::_exit(0);
+        }
+    }
+    extern "C" fn term(_: libc::c_int) {
+        const MSG: &[u8] = b"got SIGTERM\n";
+        // SAFETY: as above.
+        unsafe {
+            libc::write(1, MSG.as_ptr().cast(), MSG.len());
+            libc::_exit(0);
+        }
+    }
+    // SAFETY: installing handlers that make only async-signal-safe calls.
+    unsafe {
+        libc::signal(libc::SIGQUIT, quit as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, term as libc::sighandler_t);
+    }
+    listen_tcp(port)
 }
 
 fn listen_unix(path: Option<PathBuf>) -> ExitCode {

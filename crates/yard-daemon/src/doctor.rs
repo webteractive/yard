@@ -8,7 +8,6 @@ use crate::helper_client::HelperClient;
 use crate::reconcile::list_parked;
 use crate::state::State;
 use crate::{holder, portscan};
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
 use yard_core::config::{load_sites, load_yard};
@@ -175,12 +174,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
 
     match &view.registry {
         Some(registry) => {
-            let running: BTreeSet<String> = input
-                .units
-                .iter()
-                .filter(|u| u.state == UnitState::Running)
-                .map(|u| u.name.clone())
-                .collect();
+            let running = portscan::own_units(&input.units);
             let registry = registry.clone();
             let infos = tokio::task::spawn_blocking(move || portscan::infos(&registry, &running))
                 .await

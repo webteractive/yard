@@ -42,7 +42,11 @@ triggers:
   there a hard link or symlink to a root file. Upgrading from M1, `helper install`
   sends the old helper `nginx.stop` (`LEGACY_NGINX_STOP`, ignoring `METHOD_NOT_FOUND`)
   and then *removes* the two files M1's root nginx left (`legacy_root_files`):
-  unlinking never touches what a link points at, where a chown would follow it.
+  unlinking never touches what a link points at, where a chown would follow it. The old
+  helper returns before nginx has exited, so install reads the pid first and waits up to
+  10 s (`wait_gone`), warning if it lingers. Its output (`HelperInstall` under `--json`)
+  names each removed file and the next step: `yard restart nginx` when yardd is
+  running, `yard start` otherwise.
 - Resolver files carry `# Managed by Yard` on line 1. Never overwrite or delete a
   resolver file without that marker: `/etc/resolver/test` on this machine is Herd's.
 - Threat model: the helper protects against *other* local users and malformed input.

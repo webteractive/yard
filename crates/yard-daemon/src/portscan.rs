@@ -9,10 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use yard_core::ports::Registry;
-use yard_proto::{Event, PortInfo, PortMode, PortStatus, UnitState};
+use yard_proto::{Event, PortInfo, PortMode, PortStatus, UnitInfo, UnitState};
 
 /// Every registered port as `ports.list`, `ports check` and `doctor` show it. A port its
-/// running unit holds is `Yard`; any other holder is named. Blocks while it probes.
+/// own unit holds (`own_units`) is `Yard`; any other holder is named. Blocks while it probes.
 pub fn infos(registry: &Registry, running: &BTreeSet<String>) -> Vec<PortInfo> {
     registry
         .entries
@@ -41,6 +41,16 @@ pub fn infos(registry: &Registry, running: &BTreeSet<String>) -> Vec<PortInfo> {
         .collect()
 }
 
+/// The units that own their registered ports now: running, or started and not yet
+/// healthy. A starting nginx already holds 8080, and is not a foreign holder.
+pub fn own_units(units: &[UnitInfo]) -> BTreeSet<String> {
+    units
+        .iter()
+        .filter(|u| matches!(u.state, UnitState::Starting | UnitState::Running))
+        .map(|u| u.name.clone())
+        .collect()
+}
+
 pub fn spawn(ctx: Arc<Context>, interval: Duration) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut held: BTreeMap<String, bool> = BTreeMap::new();
@@ -48,14 +58,7 @@ pub fn spawn(ctx: Arc<Context>, interval: Duration) -> JoinHandle<()> {
         loop {
             tick.tick().await;
             let Some(snapshot) = ctx.reconciler.snapshot().await else { continue };
-            // A starting or running unit is expected to hold its port.
-            let busy_units: BTreeSet<String> = ctx
-                .supervisor()
-                .list()
-                .into_iter()
-                .filter(|u| matches!(u.state, UnitState::Starting | UnitState::Running))
-                .map(|u| u.name)
-                .collect();
+            let busy_units = own_units(&ctx.supervisor().list());
             let idle: Vec<(String, u16)> = snapshot
                 .registry
                 .entries
@@ -85,4 +88,32 @@ pub fn spawn(ctx: Arc<Context>, interval: Duration) -> JoinHandle<()> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::path::Path;
+
+    #[test]
+    fn a_starting_unit_owns_its_port() {
+        let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let held = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let text = format!("[ports]\nnginx-http = {{ port = {port}, mode = \"pinned\" }}\n");
+        let registry = Registry::parse(Some(&text), Path::new("/r/ports.toml")).unwrap();
+        // nginx has started but not yet passed its first health check.
+        let units = [UnitInfo {
+            name: "nginx".into(),
+            state: UnitState::Starting,
+            pid: Some(1),
+            restarts: 0,
+            last_error: None,
+        }];
+
+        let infos = infos(&registry, &own_units(&units));
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].status, PortStatus::Yard, "{infos:?}");
+    }
 }

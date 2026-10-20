@@ -47,8 +47,10 @@ sudo ./target/release/yard helper install   # once, and after each upgrade
 ```
 
 Run the helper install in a real terminal: sudo needs one to ask for the password.
-Upgrading from M1, re-run it: it stops the root nginx M1's helper started and removes the
-two files that nginx left owned by root (`logs/nginx-error.log`, `run/nginx.pid`).
+Upgrading from M1, re-run it: it stops the root nginx M1's helper started, waits for it to
+exit, and removes the two files that nginx left owned by root (`logs/nginx-error.log`,
+`run/nginx.pid`). It names each file it removed and the next step: `yard start`, or
+`yard restart nginx` when yardd is already running.
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it parks a PHP app and
 proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
 

@@ -3,7 +3,8 @@
 #
 # Needs nginx, dnsmasq and php@8.4 from brew, `sudo yard helper install` and
 # `yard start`. It uses the real data root, parks a temp directory, proxies to a
-# throwaway server, and removes both again. Herd's resolver must come out unchanged.
+# throwaway server, and removes both again with their override stubs. Herd's resolver
+# must come out unchanged.
 set -euo pipefail
 unset YARD_ROOT
 
@@ -44,6 +45,11 @@ server=$!
 cleanup() {
   "$yard" unproxy hello-proxy >/dev/null 2>&1 || true
   "$yard" unpark "$parked" >/dev/null 2>&1 || true
+  # The override stubs Yard created for the two sites, unless someone has edited them.
+  local stub
+  for stub in "$HOME/Library/Application Support/Yard/nginx/overrides/"{hello-php,hello-proxy}.conf; do
+    if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
+  done
   kill "$server" 2>/dev/null || true
   wait "$server" 2>/dev/null || true
   rm -rf "$work"

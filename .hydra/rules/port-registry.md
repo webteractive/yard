@@ -40,7 +40,8 @@ triggers:
 - Holders come from `/usr/sbin/lsof` plus `proc_pidpath`, not the `libproc` crate (its
   bindgen build needs libclang and adds BSD-3/ISC licenses).
 - A unit's own running port counts as free for that unit. A busy port whose unit is
-  `Running` has status `yard`: lsof does see nginx (it runs as the user and holds the
+  `Starting` or `Running` (`portscan::own_units`, used by `ports.list`, `doctor` and the
+  scan) has status `yard`: lsof does see nginx (it runs as the user and holds the
   listening sockets), but only as a plain `nginx` process, so whether it is Yard's
   comes from the unit, not the holder.
 - Socket tests take `crate::PORT_TESTS`: macOS hands out ephemeral ports in sequence,

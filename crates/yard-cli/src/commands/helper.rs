@@ -15,6 +15,7 @@ use yard_core::brew::Brew;
 use yard_core::paths::{HELPER_BINARY, HELPER_LABEL, HELPER_SOCKET, RESOLVER_DIR, RESOLVER_MARKER};
 use yard_core::render::launchd::helper_plist;
 use yard_daemon::helper_client::HelperClient;
+use yard_proto::helper::{HelperInstall, HelperStatus};
 use yard_proto::{ErrorCode, YardError};
 
 const PLIST: &str = "/Library/LaunchDaemons/dev.more.yard.helper.plist";
@@ -22,6 +23,8 @@ const PLIST: &str = "/Library/LaunchDaemons/dev.more.yard.helper.plist";
 /// of the ports before yardd starts its own.
 const LEGACY_NGINX_STOP: &str = "nginx.stop";
 const READY_WAIT: Duration = Duration::from_secs(5);
+/// How long M1's nginx gets to exit after the old helper stops it, before install goes on.
+const LEGACY_EXIT_WAIT: Duration = Duration::from_secs(10);
 
 /// Whose helper this is: the user who ran sudo.
 struct Owner {
@@ -49,7 +52,16 @@ pub async fn install(ctx: &Ctx) -> Outcome {
     place(Path::new(PLIST), &plist, 0o644)?;
 
     let service = format!("system/{HELPER_LABEL}");
-    stop_legacy_nginx().await;
+    // Read before the stop: nginx removes its pid file as it exits.
+    let legacy_pid = std::fs::read_to_string(paths.nginx_pid()).ok().and_then(|p| p.trim().parse().ok());
+    if stop_legacy_nginx().await
+        && let Some(pid) = legacy_pid
+        && !wait_gone(pid, LEGACY_EXIT_WAIT)
+    {
+        eprintln!(
+            "warning: M1's nginx (pid {pid}) is still running; yardd's nginx cannot start until it exits"
+        );
+    }
     // Not loaded yet is fine; a loaded one must go so the new binary and plist load.
     if launchctl(&["bootout", &service]).is_ok() {
         unloaded(&service).await;
@@ -73,32 +85,76 @@ pub async fn install(ctx: &Ctx) -> Outcome {
             }
         }
     };
-    ctx.emit(&status, || {
-        let mut out = String::new();
-        for file in &removed {
-            out.push_str(&format!("Removed {}, which M1's root nginx left behind.\n", file.display()));
-        }
-        out.push_str(&format!(
-            "Installed the helper {} for {} (data root {}).\nyard start runs yardd next.\n",
-            status.version,
-            owner.user,
-            paths.root().display()
-        ));
-        out
-    });
+    let daemon_running = std::os::unix::net::UnixStream::connect(paths.daemon_socket()).is_ok();
+    let (report, text) = install_output(&status, &removed, &owner.user, paths.root(), daemon_running);
+    ctx.emit(&report, || text);
     Ok(0)
 }
 
-/// Asks the running helper to stop the root nginx M1 started. A helper without the verb,
-/// or no helper at all, has no nginx to stop.
-async fn stop_legacy_nginx() {
+/// Asks the running helper to stop the root nginx M1 started, and says whether it did.
+/// A helper without the verb, or no helper at all, has no nginx to stop.
+async fn stop_legacy_nginx() -> bool {
     match HelperClient::new(HELPER_SOCKET).call::<Value>(LEGACY_NGINX_STOP, Value::Null).await {
-        Err(e) if !matches!(e.code, ErrorCode::MethodNotFound | ErrorCode::HelperNotInstalled) => eprintln!(
-            "warning: could not stop M1's nginx ({}); its pid is in run/nginx.pid under the data root",
-            e.message
-        ),
-        _ => {}
+        Ok(_) => true,
+        Err(e) if matches!(e.code, ErrorCode::MethodNotFound | ErrorCode::HelperNotInstalled) => false,
+        Err(e) => {
+            eprintln!(
+                "warning: could not stop M1's nginx ({}); its pid is in run/nginx.pid under the data root",
+                e.message
+            );
+            false
+        }
     }
+}
+
+/// Polls until `pid` has exited, up to `timeout`; false if it is still there. M1's
+/// helper returns from `nginx.stop` before nginx has finished its requests.
+fn wait_gone(pid: u32, timeout: Duration) -> bool {
+    let Ok(raw) = i32::try_from(pid) else { return true };
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: signal 0 only checks that the pid exists.
+        let alive = unsafe { libc::kill(raw, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if !alive {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The install's answer for both audiences: `HelperInstall` for `--json`, and text that
+/// names each file removed and the next step. A yardd already running started its nginx
+/// against the old helper, so it needs a restart rather than a `yard start`.
+fn install_output(
+    status: &HelperStatus,
+    removed: &[PathBuf],
+    user: &str,
+    root: &Path,
+    daemon_running: bool,
+) -> (HelperInstall, String) {
+    let report = HelperInstall {
+        version: status.version.clone(),
+        removed: removed.iter().map(|p| p.display().to_string()).collect(),
+    };
+    let mut text = String::new();
+    for file in &report.removed {
+        text.push_str(&format!("Removed {file}, which M1's root nginx left behind.\n"));
+    }
+    text.push_str(&format!(
+        "Installed the helper {} for {user} (data root {}).\n",
+        status.version,
+        root.display()
+    ));
+    text.push_str(if daemon_running {
+        "yardd is running: yard restart nginx picks up the new helper.\n"
+    } else {
+        "yard start runs yardd next.\n"
+    });
+    (report, text)
 }
 
 /// Files M1's root nginx created in the data root. yardd's nginx, running as the user,
@@ -284,6 +340,41 @@ mod tests {
             "another uid's file stays"
         );
         assert!(plain.exists());
+    }
+
+    #[test]
+    fn install_output_lists_removed_files_and_the_next_step() {
+        let status = HelperStatus { version: "0.1.0".into() };
+        let removed = [PathBuf::from("/r/logs/nginx-error.log")];
+        let (report, text) = install_output(&status, &removed, "me", Path::new("/r"), false);
+        assert_eq!(
+            report,
+            HelperInstall { version: "0.1.0".into(), removed: vec!["/r/logs/nginx-error.log".into()] }
+        );
+        assert!(text.contains("Removed /r/logs/nginx-error.log"), "{text}");
+        assert!(text.ends_with("yard start runs yardd next.\n"), "{text}");
+
+        let (_, running) = install_output(&status, &removed, "me", Path::new("/r"), true);
+        assert!(
+            running.ends_with("yardd is running: yard restart nginx picks up the new helper.\n"),
+            "{running}"
+        );
+    }
+
+    #[test]
+    fn wait_gone_waits_for_an_orphan_to_exit() {
+        let spawn = |secs: &str| -> u32 {
+            let out = std::process::Command::new("/bin/sh")
+                .args(["-c", &format!("sleep {secs} >/dev/null 2>&1 & echo $!")])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+        };
+        assert!(wait_gone(spawn("0.3"), Duration::from_secs(3)), "a process that exits is waited for");
+        let lingering = spawn("5");
+        assert!(!wait_gone(lingering, Duration::from_millis(200)), "a process that stays is reported");
+        // SAFETY: kill(2) on the sleep this test started.
+        unsafe { libc::kill(lingering as i32, libc::SIGKILL) };
     }
 
     #[test]

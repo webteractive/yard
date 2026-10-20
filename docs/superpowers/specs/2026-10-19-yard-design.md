@@ -321,7 +321,10 @@ profile; Yard does not edit dotfiles.
 - Every managed process is a `Unit` with `start`, `stop`, `reload` (optional),
   `health`, and a log sink.
 - Health: socket connect (FPM, mysql socket) or TCP connect (registered port),
-  every 5 s.
+  every 5 s. nginx must answer `GET /` with an HTTP status line: a connect alone
+  would also succeed against a privileged listener's backlog with no nginx behind it.
+- Stop: SIGTERM, then SIGKILL after 5 s. A running nginx gets SIGQUIT instead, its
+  graceful shutdown; a unit that has not passed a health check yet always gets SIGTERM.
 - Crash → restart with exponential backoff (1 s → 30 s). Five failures within
   60 s → `failed` state, retains the last 50 log lines, emits an event; no further
   restarts until `yard restart <unit>`.

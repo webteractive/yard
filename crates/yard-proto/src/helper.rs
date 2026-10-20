@@ -36,6 +36,14 @@ pub struct BindResult {
     pub addresses: Vec<String>,
 }
 
+/// What `yard helper install` did: the helper now running, and the files M1's root
+/// nginx left behind that it removed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HelperInstall {
+    pub version: String,
+    pub removed: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HelperStatus {
     pub version: String,
