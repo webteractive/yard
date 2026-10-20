@@ -1,20 +1,17 @@
-//! `yard.toml`: parked paths, default PHP, optional TLD override.
+//! `yard.toml`: default PHP and an optional TLD override.
 
 use super::{config_error, read_optional};
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
-use yard_proto::{ErrorCode, YardError};
+use std::path::Path;
+use yard_proto::YardError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YardConfig {
-    pub parked: Vec<PathBuf>,
     pub default_php: PhpVersion,
-    /// The TLD; `DEFAULT_TLD` when unset. `yard takeover` (M3) sets it to `test`.
     pub tld: Option<String>,
 }
 
-/// The TLD before `yard takeover`, whatever the port profile (spec §5.3).
 pub const DEFAULT_TLD: &str = "yard";
 
 impl YardConfig {
@@ -26,12 +23,13 @@ impl YardConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
-    parked: Option<Vec<String>>,
+    /// M1's parked paths. Sites are explicit links since M2; the key is read only to
+    /// say so, so an old `yard.toml` keeps serving.
+    parked: Option<toml::Value>,
     default_php: Option<PhpVersion>,
     tld: Option<toml::Spanned<String>>,
 }
 
-/// `^[a-z][a-z0-9-]{0,62}$`: a DNS label, and a file name that cannot leave `/etc/resolver`.
 pub fn valid_tld(tld: &str) -> bool {
     let mut bytes = tld.bytes();
     bytes.next().is_some_and(|b| b.is_ascii_lowercase())
@@ -39,24 +37,24 @@ pub fn valid_tld(tld: &str) -> bool {
         && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-pub fn load_yard(paths: &Paths) -> Result<YardConfig, YardError> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| YardError::new(ErrorCode::Internal, "HOME is not set"))?;
+/// The config and the warnings reading it produced.
+pub fn load_yard(paths: &Paths) -> Result<(YardConfig, Vec<String>), YardError> {
     let file = paths.yard_toml();
-    parse_yard(read_optional(&file)?.as_deref(), &file, &home)
+    parse_yard(read_optional(&file)?.as_deref(), &file)
 }
 
-/// A missing file (`text = None`) means all defaults.
-pub fn parse_yard(text: Option<&str>, file: &Path, home: &Path) -> Result<YardConfig, YardError> {
+pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<String>), YardError> {
     let raw: Raw = match text {
         Some(text) => toml::from_str(text).map_err(|e| config_error(file, text, e.span(), e.message()))?,
         None => Raw { parked: None, default_php: None, tld: None },
     };
-    let parked = match raw.parked {
-        Some(list) => list.iter().map(|p| expand_tilde(p, home)).collect(),
-        None => vec![home.join("Herd")],
-    };
+    let mut warnings = vec![];
+    if raw.parked.is_some() {
+        warnings.push(format!(
+            "{}: parked is no longer used (sites are explicit links); remove it",
+            file.display()
+        ));
+    }
     let tld = match raw.tld {
         Some(t) if !valid_tld(t.get_ref()) => {
             let message = format!(
@@ -67,45 +65,43 @@ pub fn parse_yard(text: Option<&str>, file: &Path, home: &Path) -> Result<YardCo
         }
         t => t.map(toml::Spanned::into_inner),
     };
-    Ok(YardConfig { parked, default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld })
-}
-
-fn expand_tilde(p: &str, home: &Path) -> PathBuf {
-    match p.strip_prefix("~/") {
-        Some(rest) => home.join(rest),
-        None if p == "~" => home.to_path_buf(),
-        None => PathBuf::from(p),
-    }
+    Ok((YardConfig { default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld }, warnings))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use yard_proto::ErrorCode;
 
     const FILE: &str = "/r/yard.toml";
 
-    #[test]
-    fn missing_yard_toml_uses_defaults() {
-        let c = parse_yard(None, Path::new(FILE), Path::new("/Users/me")).unwrap();
-        assert_eq!(c.parked, vec![PathBuf::from("/Users/me/Herd")]);
-        assert_eq!(c.default_php, crate::PhpVersion::DEFAULT);
-        assert_eq!(c.tld, None);
+    fn parse(text: Option<&str>) -> Result<YardConfig, YardError> {
+        parse_yard(text, Path::new(FILE)).map(|(c, _)| c)
     }
 
     #[test]
-    fn tilde_in_parked_is_expanded() {
-        let c =
-            parse_yard(Some("parked = [\"~/code\", \"/abs\"]\n"), Path::new(FILE), Path::new("/Users/me"))
-                .unwrap();
-        assert_eq!(c.parked, vec![PathBuf::from("/Users/me/code"), PathBuf::from("/abs")]);
+    fn missing_yard_toml_uses_defaults() {
+        let (c, warnings) = parse_yard(None, Path::new(FILE)).unwrap();
+        assert_eq!(c.default_php, crate::PhpVersion::DEFAULT);
+        assert_eq!(c.tld, None);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parked_key_is_ignored_with_a_warning() {
+        let (c, warnings) =
+            parse_yard(Some("parked = [\"~/Herd\"]\ntld = \"dev\"\n"), Path::new(FILE)).unwrap();
+        assert_eq!(c.tld.as_deref(), Some("dev"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("parked is no longer used"), "{}", warnings[0]);
+        assert!(warnings[0].contains(FILE), "{}", warnings[0]);
     }
 
     #[test]
     fn config_error_has_location() {
-        let text = "parked = [\"/a\"]\ndefault_php = 1\n";
-        let e = parse_yard(Some(text), Path::new(FILE), Path::new("/h")).unwrap_err();
+        let text = "tld = \"dev\"\ndefault_php = 1\n";
+        let e = parse(Some(text)).unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
         let data = e.data.unwrap();
         assert_eq!(data["file"], FILE);
@@ -115,10 +111,8 @@ mod tests {
 
     #[test]
     fn tld_defaults_to_yard_whatever_the_profile() {
-        let c = parse_yard(Some("parked = []\n"), Path::new(FILE), Path::new("/h")).unwrap();
-        assert_eq!(c.effective_tld(), "yard");
-        let c = parse_yard(Some("tld = \"test\"\n"), Path::new(FILE), Path::new("/h")).unwrap();
-        assert_eq!(c.effective_tld(), "test");
+        assert_eq!(parse(Some("")).unwrap().effective_tld(), "yard");
+        assert_eq!(parse(Some("tld = \"test\"\n")).unwrap().effective_tld(), "test");
     }
 
     #[test]
@@ -134,26 +128,25 @@ mod tests {
     #[test]
     fn invalid_tld_is_rejected_with_location() {
         for bad in [".yard", "Yard", "ya;rd", ""] {
-            let text = format!("parked = []\ntld = {bad:?}\n");
-            let e = parse_yard(Some(&text), Path::new(FILE), Path::new("/h")).unwrap_err();
+            let text = format!("default_php = \"8.4\"\ntld = {bad:?}\n");
+            let e = parse(Some(&text)).unwrap_err();
             assert_eq!(e.code, ErrorCode::ConfigInvalid, "{bad}");
             assert!(e.message.contains("tld"), "{}", e.message);
             assert_eq!(e.data.unwrap()["line"], 2, "{bad}");
         }
-        let ok = parse_yard(Some("tld = \"dev-1\"\n"), Path::new(FILE), Path::new("/h")).unwrap();
-        assert_eq!(ok.tld.as_deref(), Some("dev-1"));
+        assert_eq!(parse(Some("tld = \"dev-1\"\n")).unwrap().tld.as_deref(), Some("dev-1"));
     }
 
     #[test]
     fn unknown_key_is_rejected_by_name() {
-        let e = parse_yard(Some("parkd = []\n"), Path::new(FILE), Path::new("/h")).unwrap_err();
+        let e = parse(Some("parkd = []\n")).unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
         assert!(e.message.contains("parkd"), "{}", e.message);
     }
 
     #[test]
     fn unsupported_php_is_config_invalid() {
-        let e = parse_yard(Some("default_php = \"5.6\"\n"), Path::new(FILE), Path::new("/h")).unwrap_err();
+        let e = parse(Some("default_php = \"5.6\"\n")).unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
     }
 }

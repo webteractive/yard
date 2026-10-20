@@ -5,7 +5,6 @@
 
 use crate::daemon::VERSION;
 use crate::helper_client::HelperClient;
-use crate::reconcile::list_parked;
 use crate::state::State;
 use crate::{holder, portscan};
 use std::path::{Path, PathBuf};
@@ -62,7 +61,10 @@ impl View {
     }
 
     fn from_files(paths: &Paths) -> View {
-        let yard = load_yard(paths);
+        let (yard, yard_warnings) = match load_yard(paths) {
+            Ok((y, w)) => (Ok(y), w),
+            Err(e) => (Err(e), vec![]),
+        };
         let sites_cfg = load_sites(paths);
         let registry = Registry::load(paths);
         let config_error = [yard.as_ref().err(), sites_cfg.as_ref().err(), registry.as_ref().err()]
@@ -75,18 +77,9 @@ impl View {
         };
         let sites = match (&yard, &sites_cfg, &registry, &tld) {
             (Ok(y), Ok(s), Ok(r), Some(tld)) => {
-                let mut warnings = vec![];
-                let mut parked = vec![];
-                for dir in &y.parked {
-                    match list_parked(dir) {
-                        Ok(entries) => parked.push((dir.clone(), entries)),
-                        Err(e) => {
-                            warnings.push(format!("parked path {} is not readable: {e}", dir.display()))
-                        }
-                    }
-                }
+                let mut warnings = yard_warnings.clone();
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
-                let resolution = sites::resolve(y, s, &parked, tld, http, &|p: &Path| p.is_dir());
+                let resolution = sites::resolve(y, s, tld, http, &|p: &Path| p.is_dir());
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites.len()))
             }
@@ -193,7 +186,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         Some((warnings, _)) if !warnings.is_empty() => warn(
             "sites",
             warnings.join("; "),
-            "rename, unlink or unpark what the warnings name; yard sites shows what is served",
+            "rename or unlink what the warnings name; yard sites shows what is served",
         ),
         Some((_, count)) => ok("sites", format!("{count} sites resolve")),
         None => warn("sites", "not checked while the configuration does not parse", view.config_hint()),

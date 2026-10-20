@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use support::{Fixture, fast, free_port, spawn_helper};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
+use yard_core::config::TomlFile;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
 use yard_daemon::privileged::PrivilegedSockets;
@@ -20,7 +21,7 @@ const FPM: &str = "php-fpm-8.4";
 struct Env {
     fx: Fixture,
     resolver: TempDir,
-    parked: TempDir,
+    projects: TempDir,
     sup: Arc<Supervisor>,
     rec: Reconciler,
     bus: EventBus,
@@ -34,9 +35,7 @@ async fn env() -> Env {
 }
 
 fn env_with(fx: Fixture, resolver: TempDir, helper: HelperClient) -> Env {
-    let parked = tempfile::tempdir().unwrap();
-    std::fs::write(fx.paths.yard_toml(), format!("parked = [{:?}]\n", parked.path().display().to_string()))
-        .unwrap();
+    let projects = tempfile::tempdir().unwrap();
     let ports = format!(
         "[ports]\nnginx-http = {{ port = {}, mode = \"pinned\" }}\nnginx-https = {{ port = {}, mode = \"pinned\" }}\ndnsmasq = {{ port = {}, mode = \"pinned\" }}\n",
         free_port(),
@@ -56,14 +55,19 @@ fn env_with(fx: Fixture, resolver: TempDir, helper: HelperClient) -> Env {
         resolver.path().to_path_buf(),
     )
     .unwrap();
-    Env { fx, resolver, parked, sup, rec, bus }
+    Env { fx, resolver, projects, sup, rec, bus }
 }
 
 impl Env {
+    /// A project directory, linked as its host label, the way `yard link` run in it would.
     fn site(&self, name: &str) -> PathBuf {
-        let dir = self.parked.path().join(name);
+        let dir = self.projects.path().join(name);
         std::fs::create_dir_all(dir.join("public")).unwrap();
         std::fs::write(dir.join("public/index.php"), "<?php echo 'hi';\n").unwrap();
+        let label = yard_core::sites::host_label(name).unwrap();
+        let mut file = TomlFile::load(&self.fx.paths.sites_toml()).unwrap();
+        file.set(&["sites", &label, "path"], toml_edit::value(dir.display().to_string()));
+        file.save().unwrap();
         dir
     }
 
@@ -313,8 +317,7 @@ async fn tld_with_a_foreign_resolver_is_refused_and_the_old_tld_serves() {
     e.rec.reconcile().await.unwrap();
     // Herd's file: no Yard marker.
     std::fs::write(e.resolver.path().join("test"), "nameserver 127.0.0.1\n").unwrap();
-    let yard = std::fs::read_to_string(e.fx.paths.yard_toml()).unwrap();
-    std::fs::write(e.fx.paths.yard_toml(), format!("{yard}tld = \"test\"\n")).unwrap();
+    std::fs::write(e.fx.paths.yard_toml(), "tld = \"test\"\n").unwrap();
 
     let err = e.rec.reconcile().await.unwrap_err();
     assert_eq!(err.code, ErrorCode::ResolverForeign, "{err:?}");
@@ -449,5 +452,16 @@ async fn privileged_profile_on_unlisted_ports_fails_without_retrying() {
     let nginx = e.unit("nginx", |u| matches!(u.state, UnitState::Failed { .. })).await;
     assert_eq!(nginx.restarts, 0, "retrying cannot change what the helper opens: {nginx:?}");
     assert!(nginx.last_error.as_deref().is_some_and(|m| m.starts_with("INVALID_ARGUMENT")), "{nginx:?}");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn old_parked_key_keeps_serving_with_a_warning() {
+    let e = env().await;
+    e.site("blog");
+    std::fs::write(e.fx.paths.yard_toml(), "parked = [\"~/Herd\"]\n").unwrap();
+    let report = e.rec.reconcile().await.unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("parked is no longer used")), "{report:?}");
+    assert!(e.conf("blog").exists());
     e.sup.shutdown().await;
 }

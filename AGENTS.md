@@ -21,7 +21,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - M1.1 (nginx as the user, the privileged profile) is done:
   `docs/superpowers/plans/2026-10-20-yard-m1.1-nginx-as-user.md`, verified on this
   machine on 2026-10-20 (helper reinstalled, `scripts/e2e-m1.sh` passing, nginx running
-  as the maintainer under yardd). M2 needs its own plan.
+  as the maintainer under yardd).
+- M2 (multi-PHP, extensions, shims, removing parking) is in progress:
+  `docs/superpowers/plans/2026-10-20-yard-m2-multi-php.md`.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
@@ -51,7 +53,7 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   nginx: the helper hands yardd the two sockets (spec §3.1).
 - **Sites are explicit** (decided 2026-10-20): a project is served only after
   `yard link`; nothing is written into the project. Herd-style parking, which M1
-  shipped, is removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
+  shipped, was removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
   each project moves from Herd by `yard link` run in it.
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
@@ -102,11 +104,11 @@ change to serving, the helper or reconcile is only observable there, through `ya
   `nginx/overrides/<site>.conf`) into the scratchpad, and restore it with `cp -p` and a
   `cmp` at the end. Restore permissions with a `trap`.
 - Drive it with `yard status`, `yard doctor`, `yard ports [check]`, `yard sites`, and
-  `curl http://<site>.yard:8080/` (sites from `~/Herd` are parked). yardd applies a TOML
-  or override edit within about 2 s, and the docroot scan every 30 s.
-- For a scratch site, `yard park <scratch dir>` and `yard unpark` it afterwards, then
-  delete the `nginx/overrides/<name>.conf` Yard created for it.
-- Never create directories in `~/Herd` (Herd parks it too), and never touch Herd's files.
+  `curl http://<site>.yard:8080/` for a site you linked. yardd applies a TOML or override
+  edit within about 2 s, and the docroot scan every 30 s.
+- For a scratch site, `yard link <name>` run inside a scratch dir and `yard unlink <name>`
+  afterwards, then delete the `nginx/overrides/<name>.conf` Yard created for it.
+- Never create directories in `~/Herd` (Herd parks it), and never touch Herd's files.
 
 ## Layout (planned, spec §3.2)
 

@@ -21,10 +21,10 @@ fn sites() -> Vec<SiteInfo> {
             name: "blog".into(),
             host: "blog.yard".into(),
             url: "http://blog.yard:8080/".into(),
-            source: SiteSource::Parked,
+            source: SiteSource::Linked,
             kind: SiteKind::Php {
-                path: "/Users/me/Herd/blog".into(),
-                docroot: "/Users/me/Herd/blog/public".into(),
+                path: "/Users/me/code/blog".into(),
+                docroot: "/Users/me/code/blog/public".into(),
                 php: "8.4".into(),
             },
         },
@@ -74,7 +74,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], "0.1.0");
-    assert_eq!(v["protocol"], "1.0");
+    assert_eq!(v["protocol"], "2.0");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());
@@ -85,7 +85,7 @@ fn version_json_has_stable_shape() {
 fn version_reports_daemon_when_running() {
     let status = json!({
         "version": {"cli": null, "daemon": MOCK_VERSION, "helper": "0.1.0", "protocol": "1.0", "commit": "mock", "build_date": "2026-10-19"},
-        "profile": "standard", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": null
+        "profile": "standard", "tld": "yard", "units": [], "sites": 0, "config_error": null
     });
     let d = MockDaemon::start(&[("status", Ok(status))]);
     let out = d.yard().args(["version", "--json"]).output().unwrap();
@@ -118,7 +118,7 @@ fn ports_list_warns_when_ports_toml_is_invalid() {
     });
     let status = json!({
         "version": {"cli": null, "daemon": MOCK_VERSION, "helper": null, "protocol": "1.0", "commit": "mock", "build_date": "2026-10-19"},
-        "profile": "standard", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": bad
+        "profile": "standard", "tld": "yard", "units": [], "sites": 0, "config_error": bad
     });
     let d = MockDaemon::start(&[("ports.list", Ok(infos)), ("status", Ok(status))]);
     let out = d.yard().arg("ports").output().unwrap();
@@ -153,10 +153,7 @@ fn empty_sites_says_what_to_do() {
     let out = d.yard().arg("sites").output().unwrap();
     assert!(out.status.success());
     let text = stdout(&out);
-    assert!(
-        text.contains("No sites yet. Park a directory with yard park <path> or link one with yard link."),
-        "{text}"
-    );
+    assert!(text.contains("No sites yet. Serve a project with yard link, run inside it."), "{text}");
     assert!(text.contains("For agents and scripts: yard sites --json"), "{text}");
 }
 
@@ -255,10 +252,18 @@ fn helper_install_requires_root() {
 }
 
 #[test]
+fn park_is_not_a_command() {
+    for cmd in ["park", "unpark"] {
+        let (_root, out) = offline(&[cmd]);
+        assert_eq!(out.status.code(), Some(2), "{cmd}");
+    }
+}
+
+#[test]
 fn every_command_has_help() {
     for cmd in [
-        "start", "stop", "status", "version", "doctor", "sites", "park", "unpark", "link", "unlink", "proxy",
-        "unproxy", "docroot", "ports", "restart", "helper",
+        "start", "stop", "status", "version", "doctor", "sites", "link", "unlink", "proxy", "unproxy",
+        "docroot", "ports", "restart", "helper",
     ] {
         let (_root, out) = offline(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd}");

@@ -151,7 +151,7 @@ pub fn default_index(ctx: &RenderCtx, sites: &[SiteInfo]) -> String {
     }
     if sites.is_empty() {
         items.push_str(
-            "    <li>No sites yet. Park a directory with <code>yard park &lt;path&gt;</code>.</li>\n",
+            "    <li>No sites yet. Serve a project with <code>yard link</code>, run inside it.</li>\n",
         );
     }
     format!(

@@ -10,7 +10,6 @@ pub async fn status(ctx: &Ctx) -> Outcome {
     let info: StatusInfo = ctx.client().await?.call(methods::STATUS, Value::Null).await?;
     ctx.emit(&info, || {
         let profile = info.profile.name();
-        let parked = if info.parked.is_empty() { "none".to_string() } else { info.parked.join(", ") };
         let config = match &info.config_error {
             None => "ok".to_string(),
             Some(e) => match &e.hint {
@@ -19,7 +18,7 @@ pub async fn status(ctx: &Ctx) -> Outcome {
             },
         };
         let mut out = format!(
-            "Profile   {profile}\nTLD       .{}\nParked    {parked}\nSites     {}\nConfig    {config}\n\n",
+            "Profile   {profile}\nTLD       .{}\nSites     {}\nConfig    {config}\n\n",
             info.tld, info.sites
         );
         if info.units.is_empty() {

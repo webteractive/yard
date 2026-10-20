@@ -26,7 +26,7 @@ use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
 use yard_core::render::php::{fpm_conf, php_fpm_env, php_ini};
-use yard_core::sites::{self, DirEntry, EntryKind};
+use yard_core::sites;
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
 
@@ -112,8 +112,8 @@ impl Reconciler {
     }
 
     /// A served PHP site whose detected docroot changed since the last reconcile, e.g.
-    /// `public/` appearing after `laravel new` created the project. FSEvents does not see
-    /// that, since only a parked path's direct children are watched.
+    /// `public/` appearing after `laravel new` created the project. Nothing watches project
+    /// directories, so the periodic scan finds it.
     pub async fn docroots_stale(&self) -> bool {
         let state = self.state.lock().await;
         let Some(snap) = &state.snapshot else { return false };
@@ -143,7 +143,8 @@ impl Reconciler {
         // 1. Load config. A parse error keeps the last good state serving.
         let loaded = load_yard(&state.paths)
             .and_then(|y| Ok((y, load_sites(&state.paths)?, Registry::load(&state.paths)?)));
-        let (yard, sites_cfg, mut registry) = loaded?;
+        let ((yard, yard_warnings), sites_cfg, mut registry) = loaded?;
+        report.warnings.extend(yard_warnings);
         let tld = yard.effective_tld().to_string();
         // Moving to a TLD another tool's resolver claims would serve nothing (Herd's `.test`).
         let old_tld = state.snapshot.as_ref().map(|s| s.tld.as_str());
@@ -182,14 +183,7 @@ impl Reconciler {
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
 
         // 3. Resolve sites.
-        let mut parked = vec![];
-        for dir in &yard.parked {
-            match list_parked(dir) {
-                Ok(entries) => parked.push((dir.clone(), entries)),
-                Err(e) => report.warnings.push(format!("parked path {} is not readable: {e}", dir.display())),
-            }
-        }
-        let resolution = sites::resolve(&yard, &sites_cfg, &parked, &tld, http, &|p: &Path| p.is_dir());
+        let resolution = sites::resolve(&yard, &sites_cfg, &tld, http, &|p: &Path| p.is_dir());
         report.warnings.extend(resolution.warnings.iter().cloned());
 
         // 4. Render, and create the user-owned files the rendered ones include.
@@ -426,22 +420,6 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
             SiteKind::Proxy { .. } => None,
         })
         .collect()
-}
-
-/// A parked path's children, following symlinks to tell directories from files.
-pub(crate) fn list_parked(dir: &Path) -> std::io::Result<Vec<DirEntry>> {
-    let mut out = vec![];
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let kind = match std::fs::metadata(&path) {
-            Ok(m) if m.is_dir() => EntryKind::Dir,
-            Ok(_) => EntryKind::File,
-            Err(_) => EntryKind::BrokenLink,
-        };
-        out.push(DirEntry { name: entry.file_name().to_string_lossy().into_owned(), path, kind });
-    }
-    Ok(out)
 }
 
 fn files_in(dir: &Path) -> Vec<PathBuf> {

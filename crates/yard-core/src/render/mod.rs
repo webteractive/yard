@@ -83,7 +83,7 @@ mod tests {
             name: name.into(),
             host: format!("{name}.yard"),
             url: format!("http://{name}.yard:8080/"),
-            source: SiteSource::Parked,
+            source: SiteSource::Linked,
             kind: SiteKind::Php { path: path.into(), docroot: format!("{path}/public"), php: "8.4".into() },
         }
     }

@@ -10,15 +10,15 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use toml_edit::{Array, value};
+use toml_edit::value;
 use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{TomlFile, load_yard};
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
 use yard_proto::methods::{
-    self, DocrootParams, LinkParams, NameParams, PathParams, PortSetParams, ProfileParams, ProxyParams,
-    RangeParams, UnitParams,
+    self, DocrootParams, LinkParams, NameParams, PortSetParams, ProfileParams, ProxyParams, RangeParams,
+    UnitParams,
 };
 use yard_proto::{
     DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
@@ -35,8 +35,6 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SITES_PROXY => json(proxy(ctx, parse(params)?).await),
         methods::SITES_UNPROXY => json(unlink(ctx, parse(params)?, "proxy").await),
         methods::SITES_DOCROOT => json(docroot(ctx, parse(params)?).await),
-        methods::SITES_PARK => json(park(ctx, parse(params)?, true).await),
-        methods::SITES_UNPARK => json(park(ctx, parse(params)?, false).await),
         methods::PORTS_LIST => json(Ok(port_infos(ctx).await)),
         // A check is about the file as it is now, so an edit that broke it fails here.
         methods::PORTS_CHECK => {
@@ -147,14 +145,10 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
         tld: snapshot.as_ref().map_or_else(
             || {
                 load_yard(&ctx.paths)
-                    .map_or_else(|_| DEFAULT_TLD.to_string(), |y| y.effective_tld().to_string())
+                    .map_or_else(|_| DEFAULT_TLD.to_string(), |(y, _)| y.effective_tld().to_string())
             },
             |s| s.tld.clone(),
         ),
-        parked: snapshot
-            .as_ref()
-            .map(|s| s.yard.parked.iter().map(|p| p.display().to_string()).collect())
-            .unwrap_or_default(),
         units: ctx.supervisor().list(),
         sites: snapshot.as_ref().map_or(0, |s| s.resolution.sites.len()),
         config_error: ctx.reconciler.last_error().await,
@@ -209,33 +203,6 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
     file.save()?;
     reconcile(ctx).await?;
     site(ctx, &p.site).await
-}
-
-/// `park` adds and `unpark` removes. With no `parked` key the effective list is the
-/// default (`~/Herd`); it is written out first so editing it does not drop the default.
-async fn park(ctx: &Context, p: PathParams, add: bool) -> Result<(), YardError> {
-    let dir = if add {
-        directory(&p.path)?
-    } else {
-        std::fs::canonicalize(&p.path).unwrap_or_else(|_| PathBuf::from(&p.path))
-    };
-    let dir = dir.display().to_string();
-    let mut file = TomlFile::load(&ctx.paths.yard_toml())?;
-    if file.doc().get("parked").is_none() {
-        let mut current = Array::new();
-        for path in load_yard(&ctx.paths)?.parked {
-            current.push(path.display().to_string());
-        }
-        file.set(&["parked"], value(current));
-    }
-    let changed =
-        if add { file.array_push_unique(&["parked"], &dir) } else { file.array_remove(&["parked"], &dir) };
-    if !add && !changed {
-        return Err(YardError::new(ErrorCode::InvalidArgument, format!("{dir} is not parked"))
-            .with_hint("yard status lists the parked paths"));
-    }
-    file.save()?;
-    reconcile(ctx).await
 }
 
 /// A restarted nginx loads every override, so a broken one is refused here instead of

@@ -13,6 +13,7 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use yard_core::Paths;
+use yard_core::config::TomlFile;
 use yard_daemon::daemon::{DaemonOptions, run};
 use yard_proto::rpc::{Request, encode_line};
 use yard_proto::{CheckStatus, DoctorReport, ErrorCode, PROTOCOL_VERSION, YardError};
@@ -20,7 +21,7 @@ use yard_proto::{CheckStatus, DoctorReport, ErrorCode, PROTOCOL_VERSION, YardErr
 struct Daemon {
     fx: Fixture,
     _resolver: TempDir,
-    parked: TempDir,
+    projects: TempDir,
     opts: DaemonOptions,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<Result<(), YardError>>>,
@@ -48,9 +49,7 @@ async fn prepared_with(extra_ports: &str, privileged_ports: &[u16]) -> Daemon {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
     let helper = spawn_helper(&fx, resolver.path(), privileged_ports).await;
-    let parked = tempfile::tempdir().unwrap();
-    std::fs::write(fx.paths.yard_toml(), format!("parked = [{:?}]\n", parked.path().display().to_string()))
-        .unwrap();
+    let projects = tempfile::tempdir().unwrap();
     let ports = format!(
         "[ports]\nnginx-http = {{ port = {}, mode = \"pinned\" }}\nnginx-https = {{ port = {}, mode = \"pinned\" }}\ndnsmasq = {{ port = {}, mode = \"pinned\" }}\n{extra_ports}",
         free_port(),
@@ -59,10 +58,20 @@ async fn prepared_with(extra_ports: &str, privileged_ports: &[u16]) -> Daemon {
     );
     std::fs::write(fx.paths.ports_toml(), ports).unwrap();
     let opts = options(fx.paths.clone(), fx.brew.path(), helper.socket().to_path_buf(), resolver.path());
-    Daemon { fx, _resolver: resolver, parked, opts, stop: None, task: None }
+    Daemon { fx, _resolver: resolver, projects, opts, stop: None, task: None }
 }
 
 impl Daemon {
+    /// A project directory linked as `name`, as `yard link` writes it to `sites.toml`.
+    fn project(&self, name: &str) -> PathBuf {
+        let dir = self.projects.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file = TomlFile::load(&self.fx.paths.sites_toml()).unwrap();
+        file.set(&["sites", name, "path"], toml_edit::value(dir.display().to_string()));
+        file.save().unwrap();
+        dir
+    }
+
     async fn start(mut self) -> Self {
         let (stop, stopped) = oneshot::channel::<()>();
         let opts = self.opts.clone();
@@ -196,7 +205,7 @@ async fn doctor_reports_the_running_daemon() {
 async fn protocol_major_mismatch_is_refused() {
     let d = prepared("").await.start().await;
     let mut c = Client::connect(&d.fx.paths.daemon_socket()).await;
-    let err = c.call("hello", json!({"protocol": "2.0", "client": "test"})).await.unwrap_err();
+    let err = c.call("hello", json!({"protocol": "3.0", "client": "test"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::ProtocolMismatch);
     assert!(err.hint.is_some_and(|h| h.starts_with("upgrade yard and yardd together (yardd ")));
     assert!(c.closed().await, "the connection closes");
@@ -242,28 +251,28 @@ async fn link_and_unlink_round_trip() {
 }
 
 #[tokio::test]
-async fn parked_mkdir_emits_site_added() {
+async fn linking_in_sites_toml_emits_site_added() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;
     c.call("subscribe", json!({"topics": ["sites"]})).await.unwrap();
 
-    std::fs::create_dir(d.parked.path().join("fresh")).unwrap();
+    d.project("fresh");
     let added = c
         .event_where(Duration::from_secs(5), |e| e["type"] == "site_added" && e["site"]["name"] == "fresh")
         .await;
-    assert!(added.is_some(), "SiteAdded for the new directory");
+    assert!(added.is_some(), "SiteAdded for the new link");
     d.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn status_reports_a_failed_reconcile() {
     let d = prepared("").await;
-    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    d.project("blog");
     let d = d.start().await;
     let mut c = d.client().await;
     std::fs::write(d.fx.paths.nginx_override("blog"), "yard-test-broken;\n").unwrap();
 
-    std::fs::create_dir(d.parked.path().join("shop")).unwrap();
+    d.project("shop");
     assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
     d.shutdown().await.unwrap();
 }
@@ -284,7 +293,7 @@ async fn config_error_becomes(c: &mut Client, want: Value) -> Value {
 #[tokio::test]
 async fn override_edit_is_tested_and_applied() {
     let d = prepared("").await;
-    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    d.project("blog");
     let d = d.start().await;
     let mut c = d.client().await;
     let over = d.fx.paths.nginx_override("blog");
@@ -320,7 +329,7 @@ async fn nginx_pid(c: &mut Client) -> Value {
 #[tokio::test]
 async fn restart_nginx_refuses_when_the_config_cannot_be_tested() {
     let d = prepared("").await;
-    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    d.project("blog");
     let d = d.start().await;
     let mut c = d.client().await;
     let pid = nginx_pid(&mut c).await;
@@ -355,7 +364,7 @@ async fn privileged_sockets_are_rebound_after_a_yardd_restart() {
     let d = prepared_with("", &[http, https]).await;
     let ports = format!("profile = \"privileged\"\n{}", support::ports_toml(http, https, free_port()));
     std::fs::write(d.fx.paths.ports_toml(), ports).unwrap();
-    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    d.project("blog");
     let paths = d.fx.paths.clone();
     let starts = |n: usize| {
         let paths = paths.clone();
@@ -377,7 +386,7 @@ async fn privileged_sockets_are_rebound_after_a_yardd_restart() {
 #[tokio::test]
 async fn restart_nginx_refuses_a_broken_config() {
     let d = prepared("").await;
-    std::fs::create_dir_all(d.parked.path().join("blog")).unwrap();
+    d.project("blog");
     let d = d.start().await;
     let mut c = d.client().await;
     std::fs::write(d.fx.paths.nginx_override("blog"), "yard-test-broken;\n").unwrap();
@@ -410,8 +419,7 @@ async fn ports_check_reads_ports_toml_from_disk() {
 async fn docroot_created_after_the_project_is_picked_up() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;
-    let blog = d.parked.path().join("blog");
-    std::fs::create_dir(&blog).unwrap();
+    let blog = d.project("blog");
     let docroot = |sites: &Value| {
         sites
             .as_array()
@@ -535,4 +543,15 @@ async fn shutdown_removes_socket_and_stops_units() {
     d.shutdown().await.unwrap();
     assert!(!socket.exists());
     assert!(!yard_daemon::probe::is_listening(http), "nginx stopped");
+}
+
+#[tokio::test]
+async fn park_method_is_gone() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    for method in ["sites.park", "sites.unpark"] {
+        let err = c.call(method, json!({"path": "/tmp"})).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::MethodNotFound, "{method}");
+    }
+    d.shutdown().await.unwrap();
 }

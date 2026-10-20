@@ -11,7 +11,7 @@ triggers:
   `yard-proto` result type unchanged, or `{"error": YardError}`. Human output is aligned
   tables or text, never JSON.
 - Human list output ends with `For agents and scripts: <command> --json`. An empty list
-  says what to do next (`No sites yet. Park a directory with yard park <path> …`).
+  says what to do next (`No sites yet. Serve a project with yard link, run inside it.`).
 - Exit codes are part of the interface: 0 success, 1 Yard error (stderr
   `error: <message>` then `  hint: <hint>`), 2 usage, 3 `yardd is not running → yard start`
   (`DAEMON_NOT_RUNNING` under `--json`). `doctor` and `ports check` also exit 1 when a

@@ -43,7 +43,6 @@ impl Profile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SiteSource {
-    Parked,
     Linked,
     Proxy,
 }
@@ -170,7 +169,6 @@ pub struct StatusInfo {
     pub version: VersionInfo,
     pub profile: Profile,
     pub tld: String,
-    pub parked: Vec<String>,
     pub units: Vec<UnitInfo>,
     pub sites: usize,
     /// Why the last reconcile failed, until one succeeds; the last good state keeps serving.

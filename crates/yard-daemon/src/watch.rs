@@ -1,4 +1,4 @@
-//! FSEvents on the parked paths and the three TOML files; any change reconciles. An edit
+//! FSEvents on the three TOML files; any change reconciles. An edit
 //! in `nginx/overrides/` is tested with `nginx -t` and, if it passes, reloaded. Every
 //! `rescan`, sites whose docroot appeared or vanished since are reconciled too.
 //!
@@ -34,11 +34,11 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
         .iter()
         .map(|p| canonical(p))
         .collect();
-    let mut parked = parked_paths(&ctx).await.unwrap_or_default();
-    let first = [canonical(ctx.paths.root()), overrides.clone()].into_iter().chain(parked.iter().cloned());
-    change_watches(&debouncer, vec![], first.collect()).await;
+    change_watches(&debouncer, vec![canonical(ctx.paths.root()), overrides.clone()]).await;
 
     tokio::spawn(async move {
+        // Dropping the debouncer stops FSEvents, so the task owns it for as long as it runs.
+        let _debouncer = debouncer;
         let mut tick = tokio::time::interval(rescan);
         loop {
             let result = tokio::select! {
@@ -62,19 +62,13 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
                     continue;
                 }
             };
-            let relevant = events.iter().any(|e| {
-                let path = canonical(&e.path);
-                tomls.contains(&path)
-                    || parked.contains(&path)
-                    || path.parent().is_some_and(|p| parked.contains(p))
-            });
+            let relevant = events.iter().any(|e| tomls.contains(&canonical(&e.path)));
             let overridden = events.iter().any(|e| canonical(&e.path).parent() == Some(overrides.as_path()));
             if relevant {
                 match ctx.reconciler.reconcile().await {
                     Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
                     Err(e) => tracing::warn!("reconcile after a change: {}", describe(&e)),
                 }
-                rewatch(&ctx, &debouncer, &mut parked).await;
             }
             if overridden && let Err(e) = ctx.reconciler.apply_overrides().await {
                 tracing::warn!("applying an override edit: {}", describe(&e));
@@ -85,35 +79,14 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
 
 type Watcher = Arc<Mutex<Debouncer<RecommendedWatcher>>>;
 
-/// The parked paths of the current snapshot, canonical.
-async fn parked_paths(ctx: &Context) -> Option<BTreeSet<PathBuf>> {
-    let snapshot = ctx.reconciler.snapshot().await?;
-    Some(snapshot.yard.parked.iter().map(|p| canonical(p)).collect())
-}
-
-/// Watches the parked paths of the current snapshot, dropping ones no longer parked.
-async fn rewatch(ctx: &Context, debouncer: &Watcher, watched: &mut BTreeSet<PathBuf>) {
-    let Some(wanted) = parked_paths(ctx).await else { return };
-    let gone = watched.difference(&wanted).cloned().collect();
-    let new = wanted.difference(watched).cloned().collect();
-    change_watches(debouncer, gone, new).await;
-    *watched = wanted;
-}
-
-/// Applies watch changes as one batch: FSEvents restarts its stream for each change, and
-/// each restart waits on fseventsd, which can take seconds when the system is busy. The
-/// wait runs on the blocking pool, so yardd keeps answering requests meanwhile.
-async fn change_watches(debouncer: &Watcher, unwatch: Vec<PathBuf>, watch: Vec<PathBuf>) {
-    if unwatch.is_empty() && watch.is_empty() {
-        return;
-    }
+/// Adds the watches as one batch: FSEvents restarts its stream for each change, and each
+/// restart waits on fseventsd, which can take seconds when the system is busy. The wait
+/// runs on the blocking pool.
+async fn change_watches(debouncer: &Watcher, watch: Vec<PathBuf>) {
     let debouncer = debouncer.clone();
     let _ = tokio::task::spawn_blocking(move || {
         let mut debouncer = debouncer.lock().unwrap_or_else(PoisonError::into_inner);
         let mut paths = debouncer.watcher().paths_mut();
-        for gone in &unwatch {
-            let _ = paths.remove(gone);
-        }
         for new in &watch {
             if let Err(e) = paths.add(new, RecursiveMode::NonRecursive) {
                 tracing::warn!("cannot watch {}: {e}", new.display());

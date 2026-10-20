@@ -2,7 +2,7 @@
 # M1 end-to-end check on a real Mac, in the standard profile, beside a running Herd.
 #
 # Needs nginx, dnsmasq and php@8.4 from brew, `sudo yard helper install` and
-# `yard start`. It uses the real data root, parks a temp directory, proxies to a
+# `yard start`. It uses the real data root, links a temp project, proxies to a
 # throwaway server, and removes both again with their override stubs. Herd's resolver
 # must come out unchanged.
 set -euo pipefail
@@ -33,18 +33,16 @@ answer() {
 # 1. Herd's resolver, before.
 before="$(sum "$herd_resolver")"
 
-# 2. Fixtures: hello-php in a parked dir, hello-proxy on a free port outside it.
+# 2. Fixtures: hello-php in a temp dir, hello-proxy on a free port.
 work="$(mktemp -d /tmp/yard-e2e-XXXXXX)"
-parked="$work/parked"
-mkdir -p "$parked"
-cp -R "$fixtures/hello-php" "$parked/"
+cp -R "$fixtures/hello-php" "$work/"
 port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 python3 "$fixtures/hello-proxy/server.py" "$port" &
 server=$!
 
 cleanup() {
   "$yard" unproxy hello-proxy >/dev/null 2>&1 || true
-  "$yard" unpark "$parked" >/dev/null 2>&1 || true
+  "$yard" unlink hello-php >/dev/null 2>&1 || true
   # The override stubs Yard created for the two sites, unless someone has edited them.
   local stub
   for stub in "$HOME/Library/Application Support/Yard/nginx/overrides/"{hello-php,hello-proxy}.conf; do
@@ -56,10 +54,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 3. Park and proxy.
-"$yard" park "$parked" >/dev/null
+# 3. Link and proxy.
+(cd "$work/hello-php" && "$yard" link hello-php >/dev/null)
 "$yard" proxy hello-proxy "http://127.0.0.1:$port" >/dev/null
-pass "parked $parked and proxied hello-proxy to port $port"
+pass "linked $work/hello-php and proxied hello-proxy to port $port"
 
 # 4. Yard serves both on 8080; Herd still answers its own .test sites.
 version="$(answer http://hello-php.yard:8080/ "8.4.*")"

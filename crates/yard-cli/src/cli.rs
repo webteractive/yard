@@ -38,7 +38,7 @@ pub enum Command {
     Start,
     /// Stop yardd and unload its LaunchAgent; sites stop being served.
     Stop,
-    /// Show the profile, TLD, parked paths, units and site count.
+    /// Show the profile, TLD, units and site count.
     Status,
     /// Show the CLI, daemon, helper and protocol versions.
     Version,
@@ -46,16 +46,6 @@ pub enum Command {
     Doctor,
     /// List the sites Yard serves.
     Sites,
-    /// Serve every directory inside PATH as <dir>.<tld>.
-    Park {
-        /// The directory to park; defaults to the current directory.
-        path: Option<PathBuf>,
-    },
-    /// Stop serving the directories inside PATH.
-    Unpark {
-        /// The parked directory; defaults to the current directory.
-        path: Option<PathBuf>,
-    },
     /// Serve the current directory as NAME.<tld>.
     Link {
         /// The site name; defaults to the current directory's name.

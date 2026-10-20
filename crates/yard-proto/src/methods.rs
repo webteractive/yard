@@ -9,8 +9,6 @@ pub const DOCTOR: &str = "doctor";
 pub const SITES_LIST: &str = "sites.list";
 pub const SITES_LINK: &str = "sites.link";
 pub const SITES_UNLINK: &str = "sites.unlink";
-pub const SITES_PARK: &str = "sites.park";
-pub const SITES_UNPARK: &str = "sites.unpark";
 pub const SITES_PROXY: &str = "sites.proxy";
 pub const SITES_UNPROXY: &str = "sites.unproxy";
 pub const SITES_DOCROOT: &str = "sites.docroot";
@@ -46,11 +44,6 @@ pub struct LinkParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NameParams {
     pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PathParams {
-    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

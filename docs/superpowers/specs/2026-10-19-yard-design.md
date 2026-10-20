@@ -128,7 +128,7 @@ live. Side effects (spawning, binding, brew) live in `yard-daemon`.
 Root: `~/Library/Application Support/Yard/`
 
 ```
-yard.toml                     # global: default php, tld override, secure_by_default (M1 also: parked paths)
+yard.toml                     # global: default php, tld override, secure_by_default
 sites.toml                    # links, per-site php, secure flag, docroot overrides, proxies
 ports.toml                    # port registry and active profile (§7)
 state/hashes.json             # hash of every generated file as Yard last wrote it
@@ -242,16 +242,17 @@ profile; Yard does not edit dotfiles.
 - **Explicit only (decided 2026-10-20):** a project is a Yard site only when it
   has been linked. Yard never serves a directory just because of where it sits.
   M1 shipped Herd-style parking (`yard park`/`unpark`, every directory inside a
-  parked path becomes `<dirname>.<tld>`); M2 removes it. Moving a project from
-  Herd is `yard link` (and `yard isolate`) run in it by hand.
+  parked path became `<dirname>.<tld>`); M2 removed it. A `parked` key left in an
+  M1 `yard.toml` is ignored with a warning. Moving a project from Herd is
+  `yard link` (and `yard isolate`) run in it by hand.
 - **Linked:** `yard link [name]` serves the cwd as `<name>.<tld>`;
   `yard unlink [name]`. Nothing is written into the project.
 - **Proxied:** `yard proxy <name> <url>` serves `<name>.<tld>` as a reverse proxy
   (Node, Vite, etc.); `yard unproxy <name>`.
 - **Docroot detection** order: `public/`, `web/`, `public_html/`, project root.
   Override: `yard docroot <path> [--site]`.
-- Until M2 removes parking, `yardd` watches parked paths with FSEvents; adding or
-  removing a directory adds or removes the site and reloads nginx (debounced 500 ms).
+- `yardd` watches `yard.toml`, `sites.toml` and `ports.toml` with FSEvents; an edit
+  reconciles (debounced 500 ms), so a hand-added `[sites.<name>]` is served.
 
 ### 5.2 nginx
 
@@ -341,7 +342,7 @@ profile; Yard does not edit dotfiles.
 
 - JSON-RPC 2.0 over `yardd.sock` (mode 0600, owned by the user).
 - Request/response methods (non-exhaustive, same surface as the CLI):
-  `status`, `doctor`, `sites.list|link|unlink|proxy|isolate|secure|unsecure|docroot` (M1 also `park|unpark`),
+  `status`, `doctor`, `sites.list|link|unlink|proxy|isolate|secure|unsecure|docroot`,
   `php.list|install|uninstall|default|config.get|config.set|config.unset`,
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
@@ -511,7 +512,7 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   7.1, link a fixture Laravel app and a 7.1 app, `curl` both over
   `https://<site>.yard:8443` and assert `PHP_VERSION`; add and verify an
   extension. M1 runs a first cut over HTTP until M3 (`scripts/e2e-m1.sh`: `standard`
-  profile on :8080, a parked PHP 8.4 app and a proxy, Herd's resolver unchanged,
+  profile on :8080, a linked PHP 8.4 app and a proxy, Herd's resolver unchanged,
   and the 80/443 profile refused with Herd named).
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.

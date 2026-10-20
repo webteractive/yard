@@ -70,8 +70,6 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Version => version::version(&ctx).await,
         Command::Doctor => doctor::doctor(&ctx).await,
         Command::Sites => sites::list(&ctx).await,
-        Command::Park { path } => sites::park(&ctx, path, true).await,
-        Command::Unpark { path } => sites::park(&ctx, path, false).await,
         Command::Link { name } => sites::link(&ctx, name).await,
         Command::Unlink { name } => sites::unlink(&ctx, name).await,
         Command::Proxy { name, url } => sites::proxy(&ctx, name, url).await,

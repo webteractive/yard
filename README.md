@@ -13,9 +13,10 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
 ## Status
 
 Milestone 1 (core serving, CLI only) is done and verified end to end beside a running
-Herd: parked and linked PHP sites, proxies, the port registry, `yard doctor` and the
-commands below. M1.1 moved nginx from root to the user. HTTPS (M3), PHP installs and
-extensions (M2), Node and services, and Yard.app (M4) come later.
+Herd: linked PHP sites, proxies, the port registry, `yard doctor` and the commands
+below. M1.1 moved nginx from root to the user. M2 (in progress) makes sites explicit:
+a project is served only after `yard link` run in it, and M1's parking is gone. PHP
+installs and extensions (M2), HTTPS (M3), Node and services, and Yard.app (M4) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080` until `yard takeover` (M3). Herd keeps its `.test` domain,
@@ -51,7 +52,7 @@ Upgrading from M1, re-run it: it stops the root nginx M1's helper started, waits
 exit, and removes the two files that nginx left owned by root (`logs/nginx-error.log`,
 `run/nginx.pid`). It names each file it removed and the next step: `yard start`, or
 `yard restart nginx` when yardd is already running.
-`scripts/e2e-m1.sh` then checks the whole path on your machine: it parks a PHP app and
+`scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
 proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
@@ -68,11 +69,10 @@ error, 3 `yardd` is not running.
 |---|---|---|
 | `yard start` | no | Installs yardd's LaunchAgent and starts it. |
 | `yard stop` | no | Stops yardd and unloads its LaunchAgent. |
-| `yard status` | yes | Profile, TLD, parked paths, units and site count. |
+| `yard status` | yes | Profile, TLD, units and site count. |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. |
 | `yard sites` | yes | The sites Yard serves, with the directory each one serves. |
-| `yard park [path]` / `unpark [path]` | yes | Serves every directory inside a path (default: the current one). |
 | `yard link [name]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. |
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
 | `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |

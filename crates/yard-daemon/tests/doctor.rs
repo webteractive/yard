@@ -243,7 +243,7 @@ async fn failed_unit_reports_last_lines() {
 #[tokio::test]
 async fn offline_mode_reports_daemon_not_running_and_still_runs_local_checks() {
     let e = env().await;
-    std::fs::write(e.fx.paths.yard_toml(), "parked = [\n").unwrap();
+    std::fs::write(e.fx.paths.yard_toml(), "tld = [\n").unwrap();
     let gone = tempfile::tempdir().unwrap();
     let no_helper = HelperClient::new(gone.path().join("helper.sock"));
 

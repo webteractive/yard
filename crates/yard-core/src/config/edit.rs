@@ -145,19 +145,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("yard.toml");
         let mut f = TomlFile::load(&path).unwrap();
-        assert!(f.array_push_unique(&["parked"], "/a"));
+        assert!(f.array_push_unique(&["items"], "/a"));
         f.save().unwrap();
-        assert!(std::fs::read_to_string(&path).unwrap().contains("parked = [\"/a\"]"));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("items = [\"/a\"]"));
     }
 
     #[test]
     fn array_push_unique_does_not_duplicate() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = TomlFile::load(&dir.path().join("y.toml")).unwrap();
-        assert!(f.array_push_unique(&["parked"], "/a"));
-        assert!(!f.array_push_unique(&["parked"], "/a"));
-        assert!(f.array_remove(&["parked"], "/a"));
-        assert!(!f.array_remove(&["parked"], "/a"));
+        assert!(f.array_push_unique(&["items"], "/a"));
+        assert!(!f.array_push_unique(&["items"], "/a"));
+        assert!(f.array_remove(&["items"], "/a"));
+        assert!(!f.array_remove(&["items"], "/a"));
     }
 
     #[test]
