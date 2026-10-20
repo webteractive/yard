@@ -25,6 +25,9 @@ pub struct Daemon {
     task: Option<JoinHandle<Result<(), YardError>>>,
 }
 
+/// How long a test daemon may take to finish its first reconcile.
+const STARTUP: Duration = Duration::from_secs(60);
+
 pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Path) -> DaemonOptions {
     DaemonOptions {
         paths,
@@ -80,7 +83,13 @@ impl Daemon {
         self.stop = Some(stop);
         let socket = self.fx.paths.daemon_socket();
         let up = || std::os::unix::net::UnixStream::connect(&socket).is_ok();
-        assert!(wait_until(up, Duration::from_secs(5)).await, "the daemon answers on its socket");
+        assert!(wait_until(up, Duration::from_secs(5)).await, "the daemon listens on its socket");
+        // yardd binds before its first reconcile and answers only after it, which takes
+        // seconds when many test daemons start at once on a busy machine. Wait for that
+        // here, so the per-call timeout measures the call alone.
+        let mut c = Client::connect(&socket).await;
+        let hello = json!({"protocol": PROTOCOL_VERSION, "client": "test"});
+        c.call_within("hello", hello, STARTUP).await.unwrap();
         self
     }
 
@@ -120,13 +129,22 @@ impl Client {
     }
 
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, YardError> {
+        self.call_within(method, params, Duration::from_secs(10)).await
+    }
+
+    pub async fn call_within(
+        &mut self,
+        method: &str,
+        params: Value,
+        wait: Duration,
+    ) -> Result<Value, YardError> {
         let id = self.next_id;
         self.next_id += 1;
         self.write.write_all(&encode_line(&Request::new(id, method, params))).await.unwrap();
         loop {
-            let line = tokio::time::timeout(Duration::from_secs(10), self.lines.next_line())
+            let line = tokio::time::timeout(wait, self.lines.next_line())
                 .await
-                .expect("an answer within 10 s")
+                .unwrap_or_else(|_| panic!("an answer to {method} within {wait:?}"))
                 .unwrap()
                 .expect("connection open");
             let msg: Value = serde_json::from_str(&line).unwrap();

@@ -45,6 +45,9 @@ triggers:
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
   never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not
   to retry. Run timing suites several times before calling them done.
+- yardd binds its socket before its first reconcile and answers only after it.
+  `support::daemon::Daemon::start` therefore waits for an answered `hello` (60 s), so a
+  slow start under load (many test daemons, Herd busy) never eats a call's 10 s budget.
 - Rendering is pinned with `insta` snapshots. Review each new snapshot against the spec
   before accepting it.
 - New crates follow the global rust-dependencies rule: vet them, then run `cargo deny check`.
