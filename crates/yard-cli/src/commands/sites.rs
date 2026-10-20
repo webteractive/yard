@@ -1,12 +1,15 @@
-//! `yard sites`, `link`/`unlink`, `proxy`/`unproxy` and `docroot`.
+//! `yard sites`, `link`/`unlink`, `proxy`/`unproxy`, `docroot`, `isolate` and
+//! `secure`/`unsecure`.
 
 use super::{Ctx, Outcome, cwd};
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use std::path::Path;
 use yard_core::sites::host_label;
-use yard_proto::methods::{self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams};
-use yard_proto::{ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
+use yard_proto::methods::{
+    self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams, SiteParams,
+};
+use yard_proto::{CaInfo, ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
 
 pub async fn list(ctx: &Ctx) -> Outcome {
     let sites: Vec<SiteInfo> = ctx.client().await?.call(methods::SITES_LIST, Value::Null).await?;
@@ -132,5 +135,35 @@ pub async fn isolate(ctx: &Ctx, php: Option<String>, site: Option<String>) -> Ou
         SiteKind::Php { php, .. } => format!("{} now runs PHP {php}\n", updated.name),
         SiteKind::Proxy { target } => format!("{} proxies to {target}\n", updated.name),
     });
+    Ok(0)
+}
+
+pub async fn secure(ctx: &Ctx, site: Option<String>, on: bool) -> Outcome {
+    let mut client = ctx.client().await?;
+    let verb = if on { "secure" } else { "unsecure" };
+    let site = match site {
+        Some(s) => s,
+        None => {
+            let sites: Vec<SiteInfo> = client.call(methods::SITES_LIST, Value::Null).await?;
+            containing(&sites, &cwd()?, &format!("yard {verb} <site>"))?
+        }
+    };
+    let method = if on { methods::SITES_SECURE } else { methods::SITES_UNSECURE };
+    let updated: SiteInfo = client.call(method, SiteParams { site }).await?;
+    if ctx.json {
+        ctx.emit(&updated, String::new);
+        return Ok(0);
+    }
+    if !on {
+        println!("{} is back on {}", updated.name, updated.url);
+        return Ok(0);
+    }
+    println!("Secured {} → {}", updated.name, updated.url);
+    let ca: CaInfo = client.call(methods::CA_INFO, Value::Null).await?;
+    if !ca.trusted {
+        println!(
+            "The Yard CA is not trusted yet, so browsers will warn. Run yard trust (macOS asks for your password once)."
+        );
+    }
     Ok(0)
 }

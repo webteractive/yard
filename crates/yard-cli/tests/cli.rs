@@ -1,8 +1,10 @@
 mod support;
 
 use serde_json::{Value, json};
+use std::path::Path;
 use support::{MOCK_VERSION, MockDaemon, free_port, short_root, stderr, stdout, yard_at};
-use yard_proto::{ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
+use tempfile::TempDir;
+use yard_proto::{CaInfo, ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
 
 /// `yard` against an empty data root, so no daemon answers.
 fn offline(args: &[&str]) -> (tempfile::TempDir, std::process::Output) {
@@ -644,4 +646,157 @@ fn bare_yard_prints_the_command_list() {
     let err = stderr(&out);
     assert!(err.contains("Usage: yard"), "{err}");
     assert!(err.contains("Commands:") && err.contains("link"), "{err}");
+}
+
+fn secured_site(name: &str, path: &str) -> Value {
+    let mut site = php_site(name, path, "8.4");
+    site["secure"] = json!(true);
+    site["url"] = json!(format!("https://{name}.yard:8443/"));
+    site
+}
+
+fn ca_info(trusted: bool) -> Value {
+    json!({"cert": "/r/ca/yard-ca.pem", "sha256": "AB12", "trusted": trusted, "expires": "2036-10-19"})
+}
+
+/// A `security` that appends its arguments to `security.log` beside it and exits `code`.
+fn recording_security(code: i32) -> TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("security");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/security.log\"\nexit {code}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+fn security_log(dir: &TempDir) -> Option<String> {
+    std::fs::read_to_string(dir.path().join("security.log")).ok()
+}
+
+/// `yard <args>` with `security` from `dir` and `HOME` at `home`.
+fn yard_with_security(d: &MockDaemon, dir: &TempDir, home: &Path, args: &[&str]) -> std::process::Output {
+    d.yard().env("YARD_SECURITY", dir.path().join("security")).env("HOME", home).args(args).output().unwrap()
+}
+
+#[test]
+fn secure_prints_the_https_url_and_the_trust_hint() {
+    let d = MockDaemon::start(&[
+        ("sites.secure", Ok(secured_site("blog", "/p/blog"))),
+        ("sites.unsecure", Ok(php_site("blog", "/p/blog", "8.4"))),
+        ("ca.info", Ok(ca_info(false))),
+    ]);
+    let out = d.yard().args(["secure", "blog"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("sites.secure"), [json!({"site": "blog"})]);
+    assert_eq!(
+        stdout(&out),
+        "Secured blog → https://blog.yard:8443/\nThe Yard CA is not trusted yet, so browsers will warn. \
+         Run yard trust (macOS asks for your password once).\n"
+    );
+
+    let out = d.yard().args(["secure", "blog", "--json"]).output().unwrap();
+    let site: SiteInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(site.secure);
+
+    let out = d.yard().args(["unsecure", "blog"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "blog is back on http://blog.yard:8080/\n");
+    let out = d.yard().args(["unsecure", "blog", "--json"]).output().unwrap();
+    let site: SiteInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(!site.secure);
+}
+
+#[test]
+fn secure_defaults_to_the_site_containing_the_cwd() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(project.path()).unwrap();
+    let path = dir.display().to_string();
+    let d = MockDaemon::start(&[
+        ("sites.list", Ok(json!([php_site("blog", &path, "8.4")]))),
+        ("sites.secure", Ok(secured_site("blog", &path))),
+        ("ca.info", Ok(ca_info(true))),
+    ]);
+    let out = d.yard().arg("secure").current_dir(&dir).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("sites.secure"), [json!({"site": "blog"})]);
+    assert_eq!(stdout(&out), "Secured blog → https://blog.yard:8443/\n", "no trust hint once trusted");
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let out = d.yard().arg("unsecure").current_dir(elsewhere.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("hint: yard unsecure <site>"), "{}", stderr(&out));
+}
+
+#[test]
+fn trust_runs_add_trusted_cert_on_the_login_keychain() {
+    let d = MockDaemon::start_sequenced(&[("ca.info", vec![Ok(ca_info(false)), Ok(ca_info(true))])]);
+    let security = recording_security(0);
+    let home = tempfile::tempdir().unwrap();
+    let out = yard_with_security(&d, &security, home.path(), &["trust"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Trusted the Yard CA in your login keychain.\n");
+    let keychain = home.path().join("Library/Keychains/login.keychain-db");
+    assert_eq!(
+        security_log(&security).unwrap(),
+        format!("add-trusted-cert -r trustRoot -k {} /r/ca/yard-ca.pem\n", keychain.display())
+    );
+
+    let d = MockDaemon::start_sequenced(&[("ca.info", vec![Ok(ca_info(false)), Ok(ca_info(true))])]);
+    let out = yard_with_security(&d, &security, home.path(), &["trust", "--json"]);
+    let info: CaInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(info.trusted);
+}
+
+#[test]
+fn trust_when_trusted_runs_nothing() {
+    let d = MockDaemon::start(&[("ca.info", Ok(ca_info(true)))]);
+    let security = recording_security(0);
+    let home = tempfile::tempdir().unwrap();
+    let out = yard_with_security(&d, &security, home.path(), &["trust"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "The Yard CA is already trusted.\n");
+    assert_eq!(security_log(&security), None);
+}
+
+#[test]
+fn trust_that_does_not_take_is_ca_not_trusted() {
+    let home = tempfile::tempdir().unwrap();
+    for (code, message) in [(0, "the CA is still not trusted"), (3, "security exited with 3")] {
+        let d = MockDaemon::start(&[("ca.info", Ok(ca_info(false)))]);
+        let security = recording_security(code);
+        let out = yard_with_security(&d, &security, home.path(), &["trust"]);
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains(&format!("error: {message}")) && err.contains("hint: yard trust"), "{err}");
+
+        let out = yard_with_security(&d, &security, home.path(), &["trust", "--json"]);
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["error"]["code"], "CA_NOT_TRUSTED", "{v}");
+    }
+}
+
+#[test]
+fn untrust_deletes_by_sha256() {
+    let d = MockDaemon::start_sequenced(&[("ca.info", vec![Ok(ca_info(true)), Ok(ca_info(false))])]);
+    let security = recording_security(0);
+    let home = tempfile::tempdir().unwrap();
+    let out = yard_with_security(&d, &security, home.path(), &["untrust"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Removed the Yard CA from your login keychain.\n");
+    let keychain = home.path().join("Library/Keychains/login.keychain-db");
+    assert_eq!(
+        security_log(&security).unwrap(),
+        format!("delete-certificate -Z AB12 -t {}\n", keychain.display())
+    );
+
+    let out = yard_with_security(&d, &security, home.path(), &["untrust"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "The Yard CA is not in your login keychain.\n");
+    let out = yard_with_security(&d, &security, home.path(), &["untrust", "--json"]);
+    let info: CaInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(!info.trusted);
 }

@@ -65,6 +65,22 @@ proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unc
 `yardd` from beside the `yard` binary. Data lives in
 `~/Library/Application Support/Yard` (or `YARD_ROOT`, or `--root <path>`).
 
+## HTTPS
+
+`yard secure` serves a site at `https://<site>.yard:8443/` (443 in the privileged
+profile) and answers its http URL with a `301` there. `secure_by_default = true` in
+`yard.toml` secures every site; `yard unsecure <site>` still opts one out. yardd makes a
+local CA on first use (`ca/yard-ca.pem`, key mode 0600) and issues each secured site a
+certificate for `<site>.yard` and `*.<site>.yard`, renewing it 30 days before it
+expires and reissuing it when the TLD or the CA changes.
+
+Run `yard trust` once so Safari and Chrome accept those certificates: it runs
+`security add-trusted-cert` against your login keychain, as you, and macOS asks for your
+password. `yard untrust` removes it. Until then `yard doctor` warns. Node needs
+`NODE_EXTRA_CA_CERTS=<path to yard-ca.pem>`, curl takes `--cacert`, and Firefox needs
+`security.enterprise_roots.enabled` set in `about:config`; `yard doctor` prints the path
+and the Firefox note.
+
 ## Commands
 
 Every command has `--help`, accepts `--json` for scripts and the global `--root <path>`.
@@ -83,6 +99,8 @@ error, 3 `yardd` is not running.
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
 | `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |
 | `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. |
+| `yard secure [site]` / `unsecure [site]` | yes | Serves a site over HTTPS with a certificate from Yard's CA, its http URL redirecting there, or plain HTTP again. The site defaults to the one containing the current directory. |
+| `yard trust` / `untrust` | yes | Adds Yard's CA to your login keychain as trusted, or removes it; macOS asks for your password. |
 | `yard php [list]` | yes | Installed PHP versions, the default, the sites on each and its pool. |
 | `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels it. `uninstall` is refused while the version is the default, a site is isolated to it, or it has extensions you added. |
 | `yard php default <ver>` | yes | Makes an installed version the default. |

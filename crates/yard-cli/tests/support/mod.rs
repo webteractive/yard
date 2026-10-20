@@ -4,7 +4,7 @@
 
 use assert_cmd::Command;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -15,7 +15,8 @@ use yard_proto::{ErrorCode, PROTOCOL_VERSION, YardError};
 
 pub const MOCK_VERSION: &str = "9.9.9";
 
-type Answers = HashMap<String, Result<Value, YardError>>;
+/// Each method's answers in order; the last one repeats.
+type Answers = Mutex<HashMap<String, VecDeque<Result<Value, YardError>>>>;
 /// Event payloads pushed, in order, right after the answer to a method.
 type Events = HashMap<String, Vec<Value>>;
 
@@ -34,11 +35,23 @@ impl MockDaemon {
         answers: &[(&str, Result<Value, YardError>)],
         events: &[(&str, Vec<Value>)],
     ) -> Self {
+        let answers: Vec<(&str, Vec<Result<Value, YardError>>)> =
+            answers.iter().map(|(m, a)| (*m, vec![a.clone()])).collect();
+        Self::serve(&answers, events)
+    }
+
+    /// As `start`, with answers given in turn to each call of a method; the last repeats.
+    pub fn start_sequenced(answers: &[(&str, Vec<Result<Value, YardError>>)]) -> Self {
+        Self::serve(answers, &[])
+    }
+
+    fn serve(answers: &[(&str, Vec<Result<Value, YardError>>)], events: &[(&str, Vec<Value>)]) -> Self {
         let root = short_root();
         let events: Arc<Events> = Arc::new(events.iter().map(|(m, e)| (m.to_string(), e.clone())).collect());
         let listener = UnixListener::bind(root.path().join("yardd.sock")).unwrap();
-        let answers: Arc<Answers> =
-            Arc::new(answers.iter().map(|(m, a)| (m.to_string(), a.clone())).collect());
+        let answers: Arc<Answers> = Arc::new(Mutex::new(
+            answers.iter().map(|(m, a)| (m.to_string(), a.iter().cloned().collect())).collect(),
+        ));
         let requests = Arc::new(Mutex::new(vec![]));
         let seen = requests.clone();
         std::thread::spawn(move || {
@@ -85,9 +98,9 @@ fn serve(stream: UnixStream, answers: &Answers, events: &Events, seen: &Mutex<Ve
                 id,
                 json!({"protocol": PROTOCOL_VERSION, "daemon_version": MOCK_VERSION, "commit": "mock"}),
             ),
-            method => match answers.get(method) {
-                Some(Ok(value)) => Response::ok(id, value.clone()),
-                Some(Err(e)) => Response::err(id, e.clone()),
+            method => match next_answer(answers, method) {
+                Some(Ok(value)) => Response::ok(id, value),
+                Some(Err(e)) => Response::err(id, e),
                 None => Response::err(
                     id,
                     YardError::new(ErrorCode::MethodNotFound, format!("mock has no {method}")),
@@ -104,6 +117,12 @@ fn serve(stream: UnixStream, answers: &Answers, events: &Events, seen: &Mutex<Ve
             }
         }
     }
+}
+
+fn next_answer(answers: &Answers, method: &str) -> Option<Result<Value, YardError>> {
+    let mut answers = answers.lock().unwrap();
+    let queue = answers.get_mut(method)?;
+    if queue.len() > 1 { queue.pop_front() } else { queue.front().cloned() }
 }
 
 /// A data root short enough for a unix socket path.

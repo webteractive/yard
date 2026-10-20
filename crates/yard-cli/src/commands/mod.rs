@@ -9,6 +9,7 @@ mod php;
 mod ports;
 mod shims;
 mod sites;
+mod trust;
 mod units;
 mod version;
 
@@ -29,7 +30,8 @@ pub struct Ctx {
     pub json: bool,
     /// Set by `--root` or `YARD_ROOT`; launchd and the helper must then be told the root.
     pub root_overridden: bool,
-    /// macOS's `security`, or `YARD_SECURITY`, which tests point at a fake.
+    /// macOS's `security`, or `YARD_SECURITY` when it is an absolute path, which tests
+    /// point at a fake.
     pub security: PathBuf,
 }
 
@@ -88,6 +90,10 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Docroot { path, site } => sites::docroot(&ctx, path, site).await,
         Command::Isolate { version, site } => sites::isolate(&ctx, Some(version), site).await,
         Command::Unisolate { site } => sites::isolate(&ctx, None, site).await,
+        Command::Secure { site } => sites::secure(&ctx, site, true).await,
+        Command::Unsecure { site } => sites::secure(&ctx, site, false).await,
+        Command::Trust => trust::trust(&ctx).await,
+        Command::Untrust => trust::untrust(&ctx).await,
         Command::Ports { action: None } => ports::list(&ctx).await,
         Command::Ports { action: Some(PortsAction::Check) } => ports::check(&ctx).await,
         Command::Ports { action: Some(action) } => ports::change(&ctx, action).await,

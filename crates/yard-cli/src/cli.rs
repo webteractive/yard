@@ -82,6 +82,22 @@ pub enum Command {
         #[arg(long)]
         site: Option<String>,
     },
+    /// Serve a site over HTTPS, with a certificate from Yard's local CA.
+    Secure {
+        /// The site; defaults to the site that contains the current directory.
+        site: Option<String>,
+    },
+    /// Serve a site over plain HTTP again.
+    Unsecure {
+        /// The site; defaults to the site that contains the current directory.
+        site: Option<String>,
+    },
+    /// Trust Yard's CA in your login keychain, so browsers accept its certificates.
+    ///
+    /// Runs macOS's security add-trusted-cert as you; macOS asks for your password.
+    Trust,
+    /// Remove Yard's CA from your login keychain.
+    Untrust,
     /// List the registered ports, or change one.
     Ports {
         #[command(subcommand)]
