@@ -52,12 +52,15 @@ pub fn resolve(
     sites: &SitesConfig,
     tld: &str,
     http_port: u16,
+    https_port: u16,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Resolution {
     let mut warnings = Vec::new();
-    let url = |host: &str| match http_port {
-        80 => format!("http://{host}/"),
-        p => format!("http://{host}:{p}/"),
+    let url = |host: &str, secure: bool| match (secure, http_port, https_port) {
+        (false, 80, _) => format!("http://{host}/"),
+        (false, p, _) => format!("http://{host}:{p}/"),
+        (true, _, 443) => format!("https://{host}/"),
+        (true, _, p) => format!("https://{host}:{p}/"),
     };
     let docroot_for = |project: &Path, over: Option<&PathBuf>| match over {
         Some(d) if d.is_absolute() => d.clone(),
@@ -72,6 +75,7 @@ pub fn resolve(
             continue;
         }
         let host = format!("{name}.{tld}");
+        let secure = entry.secure.unwrap_or(cfg.secure_by_default);
         match (&entry.path, &entry.proxy) {
             (Some(_), Some(_)) => {
                 warnings.push(format!("sites.toml: {name} has both path and proxy; skipped"));
@@ -86,7 +90,7 @@ pub fn resolve(
                 let docroot = docroot_for(path, entry.docroot.as_ref());
                 out.push(SiteInfo {
                     name: name.clone(),
-                    url: url(&host),
+                    url: url(&host, secure),
                     host,
                     source: SiteSource::Linked,
                     kind: SiteKind::Php {
@@ -94,17 +98,17 @@ pub fn resolve(
                         docroot: docroot.display().to_string(),
                         php: entry.php.unwrap_or(cfg.default_php).to_string(),
                     },
-                    secure: false,
+                    secure,
                 });
             }
             (None, Some(target)) => match parse_proxy_target(target) {
                 Ok(_) => out.push(SiteInfo {
                     name: name.clone(),
-                    url: url(&host),
+                    url: url(&host, secure),
                     host,
                     source: SiteSource::Proxy,
                     kind: SiteKind::Proxy { target: target.clone() },
-                    secure: false,
+                    secure,
                 }),
                 Err(e) => warnings.push(format!("sites.toml: {name}: {}", e.message)),
             },
@@ -134,7 +138,12 @@ mod tests {
     }
 
     fn cfg() -> YardConfig {
-        YardConfig { default_php: crate::PhpVersion::DEFAULT, tld: None, extensions: Default::default() }
+        YardConfig {
+            default_php: crate::PhpVersion::DEFAULT,
+            tld: None,
+            secure_by_default: false,
+            extensions: Default::default(),
+        }
     }
 
     fn sites(entries: &[(&str, SiteEntry)]) -> SitesConfig {
@@ -155,9 +164,31 @@ mod tests {
     }
 
     #[test]
+    fn secure_site_has_an_https_url() {
+        let fs = Fs::new(&["/code/blog"]);
+        let s = sites(&[("blog", SiteEntry { secure: Some(true), ..linked("/code/blog") })]);
+        let r = resolve(&cfg(), &s, "yard", 8080, 8443, &fs.is_dir());
+        assert!(r.sites[0].secure);
+        assert_eq!(r.sites[0].url, "https://blog.yard:8443/");
+        let r = resolve(&cfg(), &s, "yard", 80, 443, &fs.is_dir());
+        assert_eq!(r.sites[0].url, "https://blog.yard/");
+    }
+
+    #[test]
+    fn secure_by_default_secures_unless_the_site_says_no() {
+        let fs = Fs::new(&["/a", "/b"]);
+        let cfg = YardConfig { secure_by_default: true, ..cfg() };
+        let s = sites(&[("a", linked("/a")), ("b", SiteEntry { secure: Some(false), ..linked("/b") })]);
+        let r = resolve(&cfg, &s, "yard", 8080, 8443, &fs.is_dir());
+        let secure: Vec<(&str, bool)> = r.sites.iter().map(|s| (s.name.as_str(), s.secure)).collect();
+        assert_eq!(secure, [("a", true), ("b", false)]);
+        assert_eq!(r.sites[1].url, "http://b.yard:8080/");
+    }
+
+    #[test]
     fn a_directory_is_served_only_when_linked() {
         let fs = Fs::new(&["/h/Herd", "/h/Herd/blog", "/h/Herd/blog/public"]);
-        let r = resolve(&cfg(), &SitesConfig::default(), "yard", 8080, &fs.is_dir());
+        let r = resolve(&cfg(), &SitesConfig::default(), "yard", 8080, 8443, &fs.is_dir());
         assert!(r.sites.is_empty(), "{:?}", r.sites);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
     }
@@ -165,7 +196,7 @@ mod tests {
     #[test]
     fn linked_dir_becomes_site_with_public_docroot() {
         let fs = Fs::new(&["/code/blog", "/code/blog/public"]);
-        let r = resolve(&cfg(), &sites(&[("blog", linked("/code/blog"))]), "yard", 8080, &fs.is_dir());
+        let r = resolve(&cfg(), &sites(&[("blog", linked("/code/blog"))]), "yard", 8080, 8443, &fs.is_dir());
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         let s = &r.sites[0];
         assert_eq!(
@@ -187,7 +218,7 @@ mod tests {
             ("old", SiteEntry { php: Some("7.1".parse().unwrap()), ..linked("/code/old") }),
             ("new", linked("/code/new")),
         ]);
-        let r = resolve(&cfg(), &s, "yard", 8080, &fs.is_dir());
+        let r = resolve(&cfg(), &s, "yard", 8080, 8443, &fs.is_dir());
         let php = |name: &str| match &r.sites.iter().find(|s| s.name == name).unwrap().kind {
             SiteKind::Php { php, .. } => php.clone(),
             other => panic!("{other:?}"),
@@ -199,7 +230,7 @@ mod tests {
     #[test]
     fn port_80_is_omitted_from_url() {
         let fs = Fs::new(&["/p/a"]);
-        let r = resolve(&cfg(), &sites(&[("a", linked("/p/a"))]), "test", 80, &fs.is_dir());
+        let r = resolve(&cfg(), &sites(&[("a", linked("/p/a"))]), "test", 80, 443, &fs.is_dir());
         assert_eq!(r.sites[0].url, "http://a.test/");
     }
 
@@ -213,8 +244,14 @@ mod tests {
 
     #[test]
     fn missing_linked_path_is_skipped_with_warning() {
-        let r =
-            resolve(&cfg(), &sites(&[("gone", linked("/nowhere"))]), "yard", 8080, &Fs::new(&[]).is_dir());
+        let r = resolve(
+            &cfg(),
+            &sites(&[("gone", linked("/nowhere"))]),
+            "yard",
+            8080,
+            8443,
+            &Fs::new(&[]).is_dir(),
+        );
         assert!(r.sites.is_empty());
         assert!(r.warnings[0].contains("gone"), "{:?}", r.warnings);
     }
@@ -225,7 +262,7 @@ mod tests {
             "api",
             SiteEntry { proxy: Some("http://127.0.0.1:3000".into()), ..Default::default() },
         )]);
-        let r = resolve(&cfg(), &s, "yard", 8080, &Fs::new(&[]).is_dir());
+        let r = resolve(&cfg(), &s, "yard", 8080, 8443, &Fs::new(&[]).is_dir());
         assert_eq!(r.sites[0].kind, SiteKind::Proxy { target: "http://127.0.0.1:3000".into() });
         assert_eq!(r.sites[0].source, SiteSource::Proxy);
         assert_eq!(r.sites[0].host, "api.yard");
@@ -238,7 +275,7 @@ mod tests {
             ("a", SiteEntry { docroot: Some("dist".into()), ..linked("/p/a") }),
             ("b", SiteEntry { docroot: Some("/elsewhere/www".into()), ..linked("/p/b") }),
         ]);
-        let r = resolve(&cfg(), &s, "yard", 8080, &fs.is_dir());
+        let r = resolve(&cfg(), &s, "yard", 8080, 8443, &fs.is_dir());
         assert_eq!(php_parts(&r.sites[0]).1, "/p/a/dist");
         assert_eq!(php_parts(&r.sites[1]).1, "/elsewhere/www");
     }
@@ -246,15 +283,21 @@ mod tests {
     #[test]
     fn docroot_without_path_or_proxy_is_skipped() {
         let s = sites(&[("blog", SiteEntry { docroot: Some("public".into()), ..Default::default() })]);
-        let r = resolve(&cfg(), &s, "yard", 8080, &Fs::new(&[]).is_dir());
+        let r = resolve(&cfg(), &s, "yard", 8080, 8443, &Fs::new(&[]).is_dir());
         assert!(r.sites.is_empty());
         assert_eq!(r.warnings, ["sites.toml: blog has no path or proxy; skipped"]);
     }
 
     #[test]
     fn invalid_site_name_is_skipped_with_warning() {
-        let r =
-            resolve(&cfg(), &sites(&[("My App", linked("/x"))]), "yard", 8080, &Fs::new(&["/x"]).is_dir());
+        let r = resolve(
+            &cfg(),
+            &sites(&[("My App", linked("/x"))]),
+            "yard",
+            8080,
+            8443,
+            &Fs::new(&["/x"]).is_dir(),
+        );
         assert!(r.sites.is_empty());
         assert!(r.warnings[0].contains("My App"), "{:?}", r.warnings);
     }
@@ -262,7 +305,7 @@ mod tests {
     #[test]
     fn entry_with_path_and_proxy_is_skipped_with_warning() {
         let s = sites(&[("both", SiteEntry { proxy: Some("http://127.0.0.1:1".into()), ..linked("/x") })]);
-        let r = resolve(&cfg(), &s, "yard", 8080, &Fs::new(&["/x"]).is_dir());
+        let r = resolve(&cfg(), &s, "yard", 8080, 8443, &Fs::new(&["/x"]).is_dir());
         assert!(r.sites.is_empty());
         assert!(r.warnings[0].contains("both"));
     }

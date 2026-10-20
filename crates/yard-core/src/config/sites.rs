@@ -23,6 +23,8 @@ pub struct SiteEntry {
     pub proxy: Option<String>,
     /// `yard isolate`: the PHP version this site runs instead of the default.
     pub php: Option<crate::PhpVersion>,
+    /// `yard secure` / `unsecure`; absent follows `secure_by_default` in `yard.toml`.
+    pub secure: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +59,16 @@ mod tests {
         assert_eq!(c.sites["api"].proxy.as_deref(), Some("http://127.0.0.1:3000"));
         assert_eq!(c.sites["blog"].path, Some(PathBuf::from("/code/blog")));
         assert_eq!(c.sites["blog"].docroot, Some(PathBuf::from("web")));
+    }
+
+    #[test]
+    fn secure_key_is_parsed() {
+        let c = parse_sites(
+            Some("[sites.a]\npath = \"/a\"\nsecure = true\n\n[sites.b]\npath = \"/b\"\n"),
+            Path::new("/r/sites.toml"),
+        )
+        .unwrap();
+        assert_eq!((c.sites["a"].secure, c.sites["b"].secure), (Some(true), None));
     }
 
     #[test]

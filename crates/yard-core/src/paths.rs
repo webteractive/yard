@@ -137,6 +137,30 @@ impl Paths {
     pub fn daemon_socket(&self) -> PathBuf {
         self.root.join("yardd.sock")
     }
+
+    pub fn ca_dir(&self) -> PathBuf {
+        self.root.join("ca")
+    }
+
+    pub fn ca_cert(&self) -> PathBuf {
+        self.ca_dir().join("yard-ca.pem")
+    }
+
+    pub fn ca_key(&self) -> PathBuf {
+        self.ca_dir().join("yard-ca.key")
+    }
+
+    pub fn certs_dir(&self) -> PathBuf {
+        self.root.join("certs")
+    }
+
+    pub fn cert(&self, site: &str) -> PathBuf {
+        self.certs_dir().join(format!("{site}.pem"))
+    }
+
+    pub fn cert_key(&self, site: &str) -> PathBuf {
+        self.certs_dir().join(format!("{site}.key"))
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +192,10 @@ mod tests {
         assert_eq!(p.log("nginx"), Path::new("/r/logs/nginx.log"));
         assert_eq!(p.daemon_socket(), Path::new("/r/yardd.sock"));
         assert_eq!(p.nginx_pid(), Path::new("/r/run/nginx.pid"));
+        assert_eq!(p.ca_cert(), Path::new("/r/ca/yard-ca.pem"));
+        assert_eq!(p.ca_key(), Path::new("/r/ca/yard-ca.key"));
+        assert_eq!(p.cert("blog"), Path::new("/r/certs/blog.pem"));
+        assert_eq!(p.cert_key("blog"), Path::new("/r/certs/blog.key"));
     }
 
     #[test]

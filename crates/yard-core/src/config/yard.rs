@@ -11,6 +11,8 @@ use yard_proto::YardError;
 pub struct YardConfig {
     pub default_php: PhpVersion,
     pub tld: Option<String>,
+    /// Sites without their own `secure` are served over HTTPS (spec §5.4).
+    pub secure_by_default: bool,
     /// `[php."<v>".extensions]`: the extensions Yard loads for each version (spec §4.3).
     pub extensions: BTreeMap<PhpVersion, BTreeMap<String, ExtEntry>>,
 }
@@ -81,6 +83,8 @@ struct Raw {
     default_php: Option<PhpVersion>,
     tld: Option<toml::Spanned<String>>,
     #[serde(default)]
+    secure_by_default: bool,
+    #[serde(default)]
     php: BTreeMap<toml::Spanned<String>, RawPhp>,
 }
 
@@ -100,7 +104,9 @@ pub fn load_yard(paths: &Paths) -> Result<(YardConfig, Vec<String>), YardError> 
 pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<String>), YardError> {
     let raw: Raw = match text {
         Some(text) => toml::from_str(text).map_err(|e| config_error(file, text, e.span(), e.message()))?,
-        None => Raw { parked: None, default_php: None, tld: None, php: BTreeMap::new() },
+        None => {
+            Raw { parked: None, default_php: None, tld: None, secure_by_default: false, php: BTreeMap::new() }
+        }
     };
     let mut warnings = vec![];
     if raw.parked.is_some() {
@@ -157,7 +163,12 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
         extensions.insert(v, exts);
     }
     Ok((
-        YardConfig { default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT), tld, extensions },
+        YardConfig {
+            default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT),
+            tld,
+            secure_by_default: raw.secure_by_default,
+            extensions,
+        },
         warnings,
     ))
 }
@@ -172,6 +183,13 @@ mod tests {
 
     fn parse(text: Option<&str>) -> Result<YardConfig, YardError> {
         parse_yard(text, Path::new(FILE)).map(|(c, _)| c)
+    }
+
+    #[test]
+    fn secure_by_default_is_parsed() {
+        let (c, _) = parse_yard(Some("secure_by_default = true\n"), Path::new("/r/yard.toml")).unwrap();
+        assert!(c.secure_by_default);
+        assert!(!parse_yard(None, Path::new("/r/yard.toml")).unwrap().0.secure_by_default);
     }
 
     #[test]

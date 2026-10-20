@@ -14,7 +14,7 @@ use yard_core::constraint::satisfies;
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::php::SUPPORTED;
-use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, Registry};
+use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::render::overrides_for;
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
@@ -81,7 +81,8 @@ impl View {
             (Ok(y), Ok(s), Ok(r), Some(tld)) => {
                 let mut warnings = yard_warnings.clone();
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
-                let resolution = sites::resolve(y, s, tld, http, &|p: &Path| p.is_dir());
+                let https = r.entries.get(NGINX_HTTPS).map_or(r.profile.https_port(), |e| e.port);
+                let resolution = sites::resolve(y, s, tld, http, https, &|p: &Path| p.is_dir());
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }

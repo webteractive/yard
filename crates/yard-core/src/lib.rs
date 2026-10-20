@@ -12,6 +12,7 @@ pub mod render;
 pub mod shim;
 pub mod sites;
 pub mod supervise;
+pub mod tls;
 
 pub use paths::Paths;
 pub use php::PhpVersion;

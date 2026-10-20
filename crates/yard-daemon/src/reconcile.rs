@@ -193,7 +193,7 @@ impl Reconciler {
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
 
         // 3. Resolve sites.
-        let resolution = sites::resolve(&yard, &sites_cfg, &tld, http, &|p: &Path| p.is_dir());
+        let resolution = sites::resolve(&yard, &sites_cfg, &tld, http, https, &|p: &Path| p.is_dir());
         report.warnings.extend(resolution.warnings.iter().cloned());
 
         // 4. Render, and create the user-owned files the rendered ones include.
