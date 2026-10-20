@@ -26,7 +26,6 @@ const READY_WAIT: Duration = Duration::from_secs(5);
 /// Whose helper this is: the user who ran sudo.
 struct Owner {
     uid: u32,
-    gid: u32,
     user: String,
     home: PathBuf,
 }
@@ -55,7 +54,7 @@ pub async fn install(ctx: &Ctx) -> Outcome {
     if launchctl(&["bootout", &service]).is_ok() {
         unloaded(&service).await;
     }
-    let handed_back = hand_back(&legacy_root_files(&paths), &owner);
+    let removed = remove_owned_by(&legacy_root_files(&paths), 0);
     launchctl(&["bootstrap", "system", PLIST])?;
 
     let helper = HelperClient::new(HELPER_SOCKET);
@@ -76,8 +75,8 @@ pub async fn install(ctx: &Ctx) -> Outcome {
     };
     ctx.emit(&status, || {
         let mut out = String::new();
-        for file in &handed_back {
-            out.push_str(&format!("Gave {} back to {}.\n", file.display(), owner.user));
+        for file in &removed {
+            out.push_str(&format!("Removed {}, which M1's root nginx left behind.\n", file.display()));
         }
         out.push_str(&format!(
             "Installed the helper {} for {} (data root {}).\nyard start runs yardd next.\n",
@@ -103,27 +102,31 @@ async fn stop_legacy_nginx() {
 }
 
 /// Files M1's root nginx created in the data root. yardd's nginx, running as the user,
-/// cannot open them until they are the owner's again.
+/// cannot open them, and recreates both once they are gone.
 fn legacy_root_files(paths: &Paths) -> [PathBuf; 2] {
     [paths.logs_dir().join("nginx-error.log"), paths.nginx_pid()]
 }
 
-/// Gives each root-owned regular file back to the owner, never following a symlink.
-/// Returns the files it changed.
-fn hand_back(files: &[PathBuf], owner: &Owner) -> Vec<PathBuf> {
+/// Removes each entry `uid` owns, other than a directory, whose parent is a real
+/// directory. Root removes rather than chowns: the owner can make these names hard links
+/// to any root file on the volume, and unlinking a link never touches what it points at.
+/// Returns the entries it removed.
+fn remove_owned_by(files: &[PathBuf], uid: u32) -> Vec<PathBuf> {
     use std::os::unix::fs::MetadataExt;
-    let mut changed = vec![];
+    let mut removed = vec![];
     for file in files {
+        let parent_is_dir =
+            file.parent().and_then(|p| std::fs::symlink_metadata(p).ok()).is_some_and(|m| m.is_dir());
         let Ok(meta) = std::fs::symlink_metadata(file) else { continue };
-        if !meta.file_type().is_file() || meta.uid() != 0 {
+        if !parent_is_dir || meta.is_dir() || meta.uid() != uid {
             continue;
         }
-        match std::os::unix::fs::lchown(file, Some(owner.uid), Some(owner.gid)) {
-            Ok(()) => changed.push(file.clone()),
-            Err(e) => eprintln!("warning: cannot give {} back to {}: {e}", file.display(), owner.user),
+        match std::fs::remove_file(file) {
+            Ok(()) => removed.push(file.clone()),
+            Err(e) => eprintln!("warning: cannot remove {}: {e}", file.display()),
         }
     }
-    changed
+    removed
 }
 
 pub async fn uninstall(ctx: &Ctx) -> Outcome {
@@ -179,24 +182,23 @@ fn owner() -> Result<Owner, YardError> {
     if uid == 0 {
         return Err(refuse());
     }
-    let (home, gid) = passwd_of(&user).ok_or_else(|| {
+    let home = home_of(&user).ok_or_else(|| {
         YardError::internal(format!("no home directory for {user}")).with_hint("pass --root <path>")
     })?;
-    Ok(Owner { uid, gid, user, home })
+    Ok(Owner { uid, user, home })
 }
 
-/// The user's home directory and primary group.
-fn passwd_of(user: &str) -> Option<(PathBuf, u32)> {
+fn home_of(user: &str) -> Option<PathBuf> {
     let name = CString::new(user).ok()?;
     // SAFETY: getpwnam returns null or a pointer into static storage that stays valid
-    // until the next getpw* call, and pw_dir and pw_gid are read before any other call.
+    // until the next getpw* call, and pw_dir is read before any other call.
     unsafe {
         let pw = libc::getpwnam(name.as_ptr());
         if pw.is_null() || (*pw).pw_dir.is_null() {
             return None;
         }
         let dir = std::ffi::CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
-        Some((PathBuf::from(dir), (*pw).pw_gid))
+        Some(PathBuf::from(dir))
     }
 }
 
@@ -250,6 +252,38 @@ mod tests {
             legacy_root_files(&paths),
             [PathBuf::from("/r/logs/nginx-error.log"), PathBuf::from("/r/run/nginx.pid")]
         );
+    }
+
+    #[test]
+    fn removes_only_regular_files_the_uid_owns() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let (logs, elsewhere) = (dir.path().join("logs"), dir.path().join("elsewhere"));
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let target = elsewhere.join("target");
+        std::fs::write(&target, "keep").unwrap();
+        let plain = logs.join("nginx-error.log");
+        std::fs::write(&plain, "m1").unwrap();
+        let hardlink = logs.join("hardlink");
+        std::fs::hard_link(&target, &hardlink).unwrap();
+        let link = logs.join("link");
+        symlink(&target, &link).unwrap();
+        // A parent that is a symlink is not followed either.
+        let run = dir.path().join("run");
+        symlink(&elsewhere, &run).unwrap();
+
+        let files = [plain.clone(), hardlink.clone(), link.clone(), run.join("target")];
+        assert_eq!(remove_owned_by(&files, me()), [plain.clone(), hardlink.clone(), link.clone()]);
+        assert!(!plain.exists() && !hardlink.exists() && std::fs::symlink_metadata(&link).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "the linked file is untouched");
+
+        std::fs::write(&plain, "mine").unwrap();
+        assert!(
+            remove_owned_by(std::slice::from_ref(&plain), me() + 1).is_empty(),
+            "another uid's file stays"
+        );
+        assert!(plain.exists());
     }
 
     #[test]
