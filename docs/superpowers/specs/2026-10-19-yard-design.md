@@ -23,8 +23,7 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
 
 ### Success criteria
 
-- `yard migrate herd` imports all Herd links, isolations and secured sites.
-- Every migrated site serves over `https://<site>.test` with its correct PHP version
+- Every site the maintainer links serves over `https://<site>.test` with its correct PHP version
   (on 443 with the `privileged` profile, on 8443 without it).
 - A PHP 7.1 legacy site and a PHP 8.4 site run side by side.
 - `yard ext add redis --php 7.1` and `yard ext add xdebug --php 8.4` work.
@@ -243,8 +242,8 @@ profile; Yard does not edit dotfiles.
 - **Explicit only (decided 2026-10-20):** a project is a Yard site only when it
   has been linked. Yard never serves a directory just because of where it sits.
   M1 shipped Herd-style parking (`yard park`/`unpark`, every directory inside a
-  parked path becomes `<dirname>.<tld>`); M2 removes it, and `yard migrate herd`
-  links each Herd site explicitly instead.
+  parked path becomes `<dirname>.<tld>`); M2 removes it. Moving a project from
+  Herd is `yard link` (and `yard isolate`) run in it by hand.
 - **Linked:** `yard link [name]` serves the cwd as `<name>.<tld>`;
   `yard unlink [name]`. Nothing is written into the project.
 - **Proxied:** `yard proxy <name> <url>` serves `<name>.<tld>` as a reverse proxy
@@ -304,12 +303,8 @@ profile; Yard does not edit dotfiles.
   previous TLD keeps serving, even when Herd is quit. Takeover is the only path
   that moves `.test` to Yard; how it treats Herd's resolver file is M3's to
   decide, and it asks first.
-- `yard migrate herd`: reads Herd's Valet config
-  (`~/Library/Application Support/Herd/config/valet/`) for parked paths, links,
-  isolated versions and secured sites; offers each project (including every
-  directory in a Herd parked path) to be linked, one by one; installs any missing
-  PHP versions via brew; writes `sites.toml`. Herd's files are only read, never modified.
-  `--dry-run` prints the plan.
+- No `yard migrate herd` (dropped 2026-10-20): Yard does not import Herd's
+  config. Each project moves by running `yard link` in it.
 - `yard takeover`: stops Herd (quits Herd.app and its services), moves the TLD
   to `test`, re-issues certs and reloads. It then offers the `privileged` profile
   for URLs without a port, running `yard ports check` against it first.
@@ -351,8 +346,8 @@ profile; Yard does not edit dotfiles.
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs`,
-  `node.list|install|use`, `units.restart`, `migrate.herd`, `takeover`, `env.print`.
-- Long operations (brew installs, migrate, takeover) return a `job_id`
+  `node.list|install|use`, `units.restart`, `takeover`, `env.print`.
+- Long operations (brew installs, takeover) return a `job_id`
   immediately; progress arrives as `job.progress` / `job.finished` events.
 - Subscriptions (`subscribe` with topic list) push: `unit.state_changed`,
   `site.added`, `site.removed`, `job.progress`, `job.finished`, `log.line`,
@@ -498,7 +493,7 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   generated from `yard-proto` schema. `@Observable` stores update from event
   subscriptions — no polling.
 - **Onboarding:** check Homebrew → install CLI symlink and `yardd` LaunchAgent →
-  register helper via `SMAppService` → offer `yard migrate herd` → offer
+  register helper via `SMAppService` → offer
   takeover, and with it 80/443.
 - The app bundle carries `yard`, `yardd`, `yard-helper` and the shim binary in
   `Contents/Helpers/`.
@@ -541,7 +536,7 @@ Each milestone is usable on its own and gets its own implementation plan.
    user; the helper's nginx verbs go and `ports.bind` arrives with the
    `privileged` profile; profiles stop setting the TLD.
 2. **M2 Multi-PHP:** install/uninstall, pools per version, isolate, shims,
-   extensions, overrides, `php config`, `migrate herd`, and removing parking
+   extensions, overrides, `php config`, and removing parking
    (sites are explicit links only, §5.1).
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal, `takeover`.
 4. **M4 Yard.app:** client, menu bar, main window, onboarding.

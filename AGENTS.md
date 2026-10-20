@@ -51,7 +51,8 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   nginx: the helper hands yardd the two sockets (spec §3.1).
 - **Sites are explicit** (decided 2026-10-20): a project is served only after
   `yard link`; nothing is written into the project. Herd-style parking, which M1
-  shipped, is removed in M2, and `yard migrate herd` links each Herd site instead.
+  shipped, is removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
+  each project moves from Herd by `yard link` run in it.
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
 - **v1 scope:** core serving, multi-PHP + isolate, HTTPS, Node + services.
@@ -70,7 +71,7 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   carries 5.6 and pre-release 8.6/8.7, which Yard does not support.
 - Herd is installed and running. Its nginx (`nginx-arm`) listens on
   127.0.0.1:80 and :443, and `/etc/resolver/test` (Herd's) points at
-  127.0.0.1. Herd's Valet config, the input for `yard migrate herd` (M2), is
+  127.0.0.1. Herd's Valet config is
   `~/Library/Application Support/Herd/config/valet/`. Its `config.json` has
   `tld = "test"` and parked paths `…/valet/Sites`, `~/Herd/` and `~/AI`, and
   `Nginx/` holds per-site configs for secured sites.
