@@ -12,9 +12,25 @@ use yard_proto::methods::{self, PortSetParams, ProfileParams, RangeParams, UnitP
 use yard_proto::{PortInfo, PortMode, PortStatus, Profile, YardError};
 
 pub async fn list(ctx: &Ctx) -> Outcome {
-    let infos: Vec<PortInfo> = ctx.client().await?.call(methods::PORTS_LIST, Value::Null).await?;
+    let mut client = ctx.client().await?;
+    let infos: Vec<PortInfo> = client.call(methods::PORTS_LIST, Value::Null).await?;
     print(ctx, &infos, "yard ports");
+    // yardd lists the last registry that parsed; say so when the file on disk does not.
+    if let Ok(status) = client.call::<_, Value>(methods::STATUS, Value::Null).await
+        && let Some(warning) = ports_toml_warning(&status)
+    {
+        eprintln!("{warning}");
+    }
     Ok(0)
+}
+
+fn ports_toml_warning(status: &Value) -> Option<String> {
+    let error = &status["config_error"];
+    let file = error["data"]["file"].as_str().filter(|f| f.ends_with("ports.toml"))?;
+    Some(format!(
+        "warning: {file} does not parse, so this is the last good registry: {}",
+        error["message"].as_str().unwrap_or_default()
+    ))
 }
 
 /// The daemon's probe when it runs, else the same probe in-process. Exit 1 when a pinned

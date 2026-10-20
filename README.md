@@ -64,13 +64,13 @@ error, 3 `yardd` is not running.
 | `yard status` | yes | Profile, TLD, parked paths, units and site count. |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. |
-| `yard sites` | yes | The sites Yard serves. |
+| `yard sites` | yes | The sites Yard serves, with the directory each one serves. |
 | `yard park [path]` / `unpark [path]` | yes | Serves every directory inside a path (default: the current one). |
 | `yard link [name]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. |
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
 | `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |
 | `yard ports` | yes | Registered ports with their mode, status and holder. |
-| `yard ports check` | optional | Probes every registered port now; exits 1 on a conflict. |
+| `yard ports check` | optional | Reads `ports.toml` as it is now and probes every port in it; exits 1 on a conflict or a file that does not parse. |
 | `yard ports set <unit> <port>`, `pin`, `unpin`, `range <a-b>`, `profile <trial\|default>` | yes | Changes the port registry. |
 | `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |

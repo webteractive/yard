@@ -31,7 +31,8 @@ fn row(site: &SiteInfo) -> Vec<String> {
         SiteSource::Proxy => "proxy",
     };
     let (target, php) = match &site.kind {
-        SiteKind::Php { path, php, .. } => (path.clone(), php.clone()),
+        // The directory nginx serves, so a `public/` that appears later shows up here.
+        SiteKind::Php { docroot, php, .. } => (docroot.clone(), php.clone()),
         SiteKind::Proxy { target } => (target.clone(), "-".into()),
     };
     vec![site.name.clone(), site.url.clone(), source.into(), target, php]

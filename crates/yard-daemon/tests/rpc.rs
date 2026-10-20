@@ -281,6 +281,11 @@ async fn override_edit_is_tested_and_applied() {
 
     std::fs::write(&over, "yard-test-broken;\n").unwrap();
     assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
+    // Nothing was rendered, so nothing was put back: nginx simply kept its config.
+    let message = c.call("status", Value::Null).await.unwrap()["config_error"]["message"].clone();
+    let message = message.as_str().unwrap_or_default();
+    assert!(message.contains("nginx keeps serving the config it had"), "{message}");
+    assert!(!message.contains("back in place"), "{message}");
     std::fs::write(&over, "client_max_body_size 2G;\n").unwrap();
     assert_eq!(config_error_becomes(&mut c, Value::Null).await, Value::Null);
     d.shutdown().await.unwrap();
@@ -299,6 +304,22 @@ async fn restart_nginx_refuses_a_broken_config() {
     let units = c.call("status", Value::Null).await.unwrap()["units"].clone();
     let nginx = units.as_array().unwrap().iter().find(|u| u["name"] == "nginx").unwrap().clone();
     assert_eq!(nginx["state"], "running", "nginx keeps serving: {nginx}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ports_check_reads_ports_toml_from_disk() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let file = d.fx.paths.ports_toml();
+    let text = std::fs::read_to_string(&file).unwrap();
+    let dns = text.lines().find(|l| l.starts_with("dnsmasq")).unwrap().replace("dnsmasq", "redis");
+    std::fs::write(&file, format!("{text}{dns}\n")).unwrap();
+
+    // `ports check` is about the file as it is now, not the last registry that parsed.
+    let e = c.call("ports.check", Value::Null).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ConfigInvalid, "{e:?}");
+    assert!(e.message.contains("ports.toml"), "{}", e.message);
     d.shutdown().await.unwrap();
 }
 

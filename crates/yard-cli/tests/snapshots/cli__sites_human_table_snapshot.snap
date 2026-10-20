@@ -2,8 +2,8 @@
 source: crates/yard-cli/tests/cli.rs
 expression: stdout(&out)
 ---
-SITE  URL                     SOURCE  TARGET                 PHP
-blog  http://blog.yard:8080/  parked  /Users/me/Herd/blog    8.4
-api   http://api.yard:8080/   proxy   http://127.0.0.1:3000  -
+SITE  URL                     SOURCE  TARGET                      PHP
+blog  http://blog.yard:8080/  parked  /Users/me/Herd/blog/public  8.4
+api   http://api.yard:8080/   proxy   http://127.0.0.1:3000       -
 
 For agents and scripts: yard sites --json

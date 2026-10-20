@@ -176,6 +176,9 @@ async fn nginx_test_failure_restores_previous_configs() {
     let output = err.data.as_ref().and_then(|d| d["output"].as_str()).unwrap_or_default().to_string();
     assert!(err.message.contains(&broken.display().to_string()), "{} / {output}", err.message);
     assert!(output.contains(&broken.display().to_string()), "{output}");
+    // The rendered files went back; whatever caused the change (here a new site) did not.
+    assert!(err.message.contains("Yard kept serving the previous config"), "{}", err.message);
+    assert!(err.hint.as_deref().unwrap_or_default().contains("saved"), "{:?}", err.hint);
     assert!(!e.conf("shop").exists(), "the new site's conf was rolled back");
     assert_eq!(std::fs::read(e.conf("blog")).unwrap(), before);
     assert_eq!(std::fs::read(e.fx.paths.nginx_default_index()).unwrap(), index_before);

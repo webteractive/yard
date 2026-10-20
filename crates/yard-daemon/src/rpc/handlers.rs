@@ -40,7 +40,12 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SITES_DOCROOT => json(docroot(ctx, parse(params)?).await),
         methods::SITES_PARK => json(park(ctx, parse(params)?, true).await),
         methods::SITES_UNPARK => json(park(ctx, parse(params)?, false).await),
-        methods::PORTS_LIST | methods::PORTS_CHECK => json(Ok(port_infos(ctx).await)),
+        methods::PORTS_LIST => json(Ok(port_infos(ctx).await)),
+        // A check is about the file as it is now, so an edit that broke it fails here.
+        methods::PORTS_CHECK => {
+            Registry::load(&ctx.paths)?;
+            json(Ok(port_infos(ctx).await))
+        }
         methods::PORTS_SET => {
             let p: PortSetParams = parse(params)?;
             json(edit_ports(ctx, &p.unit, |r| r.set(&p.unit, p.port)).await)

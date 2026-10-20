@@ -107,6 +107,38 @@ fn sites_human_table_snapshot() {
 }
 
 #[test]
+fn ports_list_warns_when_ports_toml_is_invalid() {
+    let infos =
+        json!([{"unit": "dnsmasq", "port": 53535, "mode": "pinned", "status": "yard", "holder": null}]);
+    let bad = json!({
+        "code": "CONFIG_INVALID",
+        "message": "/r/ports.toml line 9, column 1: port 53535 is registered to both dnsmasq and redis",
+        "hint": "fix /r/ports.toml",
+        "data": {"file": "/r/ports.toml", "line": 9, "column": 1}
+    });
+    let status = json!({
+        "version": {"cli": null, "daemon": MOCK_VERSION, "helper": null, "protocol": "1.0", "commit": "mock", "build_date": "2026-10-19"},
+        "profile": "trial", "tld": "yard", "parked": [], "units": [], "sites": 0, "config_error": bad
+    });
+    let d = MockDaemon::start(&[("ports.list", Ok(infos)), ("status", Ok(status))]);
+    let out = d.yard().arg("ports").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("warning: /r/ports.toml does not parse"), "{err}");
+    assert!(err.contains("last good registry"), "{err}");
+    assert!(err.contains("registered to both dnsmasq and redis"), "{err}");
+}
+
+#[test]
+fn ports_list_is_quiet_when_status_has_no_ports_error() {
+    let infos = json!([]);
+    let d = MockDaemon::start(&[("ports.list", Ok(infos))]);
+    let out = d.yard().arg("ports").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "", "a status call that fails is not a warning");
+}
+
+#[test]
 fn sites_json_is_proto_shape() {
     let d = MockDaemon::start(&[("sites.list", Ok(serde_json::to_value(sites()).unwrap()))]);
     let out = d.yard().args(["sites", "--json"]).output().unwrap();

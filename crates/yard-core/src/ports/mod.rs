@@ -142,7 +142,7 @@ impl Registry {
                     .iter()
                     .filter_map(|u| text.find(&format!("{u} ")).map(|i| i..i + u.len()))
                     .max_by_key(|r| r.start);
-                let message = format!("port {} is registered to both {first}, {unit}", e.port);
+                let message = format!("port {} is registered to both {first} and {unit}", e.port);
                 return Err(config_error(file, text, at, &message));
             }
         }
@@ -583,7 +583,11 @@ mailpit-http = { port = 33001, mode = "auto" }
         let text = "[ports]\nnginx-http = { port = 8080, mode = \"pinned\" }\ndnsmasq = { port = 8080, mode = \"pinned\" }\n";
         let e = Registry::parse(Some(text), file()).unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
-        assert!(e.message.contains("8080") && e.message.contains("dnsmasq, nginx-http"), "{}", e.message);
+        assert!(
+            e.message.contains("8080") && e.message.contains("both dnsmasq and nginx-http"),
+            "{}",
+            e.message
+        );
         assert_eq!(e.data.unwrap()["line"], 3);
     }
 

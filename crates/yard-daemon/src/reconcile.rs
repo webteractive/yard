@@ -118,7 +118,7 @@ impl Reconciler {
     /// `Ok(Err(..))` when nginx rejects the config; `Err` when the test could not run.
     pub async fn test_nginx(&self) -> Result<Result<(), YardError>, YardError> {
         let result = self.helper.test_nginx().await?;
-        Ok(if result.ok { Ok(()) } else { Err(nginx_rejected(&result.output)) })
+        Ok(if result.ok { Ok(()) } else { Err(nginx_rejected(&result.output, false)) })
     }
 
     /// Serialized: a second call waits for the first to finish.
@@ -230,7 +230,7 @@ impl Reconciler {
             match self.helper.test_nginx().await {
                 Ok(result) if !result.ok => {
                     generated::rollback(&applied, &mut hashes).map_err(io_error)?;
-                    return Err(nginx_rejected(&result.output));
+                    return Err(nginx_rejected(&result.output, true));
                 }
                 Ok(_) => {}
                 Err(e) => report.warnings.push(format!("nginx -t did not run: {}", describe(&e))),
@@ -440,19 +440,29 @@ fn prepare_dirs(paths: &Paths, sites: &[SiteInfo], versions: &BTreeSet<PhpVersio
     Ok(())
 }
 
-fn nginx_rejected(output: &str) -> YardError {
+/// `rolled_back`: Yard rendered a change and put its previous files back. Otherwise
+/// nothing was rendered (an override edit, a restart) and nginx keeps what it had.
+fn nginx_rejected(output: &str, rolled_back: bool) -> YardError {
     let first = output
         .lines()
         .find(|l| l.contains("[emerg]"))
         .or_else(|| output.lines().find(|l| !l.trim().is_empty()))
         .unwrap_or("nginx -t failed")
         .trim();
-    YardError::new(
-        ErrorCode::NginxConfigInvalid,
-        format!("nginx rejected the new config ({first}); the previous configs are back in place"),
-    )
-    .with_hint("fix the file named above; Yard applies it on the next change")
-    .with_data(serde_json::json!({ "output": output }))
+    let (message, hint) = if rolled_back {
+        (
+            format!("nginx rejected the new config ({first}); Yard kept serving the previous config"),
+            "fix the file named above; your change is saved and applies once nginx accepts it",
+        )
+    } else {
+        (
+            format!("nginx rejected the config ({first}); nginx keeps serving the config it had"),
+            "fix the file named above; Yard applies it when the file changes",
+        )
+    };
+    YardError::new(ErrorCode::NginxConfigInvalid, message)
+        .with_hint(hint)
+        .with_data(serde_json::json!({ "output": output }))
 }
 
 fn io_error(e: std::io::Error) -> YardError {

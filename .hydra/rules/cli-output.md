@@ -16,6 +16,9 @@ triggers:
   `error: <message>` then `  hint: <hint>`), 2 usage, 3 `yardd is not running → yard start`
   (`DAEMON_NOT_RUNNING` under `--json`). `doctor` and `ports check` also exit 1 when a
   check fails, after printing their report.
+- A command that shows yardd's last good state while a TOML on disk does not parse says
+  so on stderr (`yard ports`: `warning: <file> does not parse, so this is the last good
+  registry: …`). `ports check` reads `ports.toml` itself and fails on it instead.
 - Tests run `yard --root <tmp>` against `tests/support::MockDaemon`, never a real yardd,
   and never `yard start`/`stop` or `helper install` (they change launchd).
 - `--version` is ours, not clap's (`disable_version_flag`), because it asks yardd too.

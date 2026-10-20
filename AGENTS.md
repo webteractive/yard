@@ -82,6 +82,24 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - `scripts/e2e-m1.sh` — real-machine check in the trial profile. It needs the
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
 
+## Verifying a change on this machine
+
+The helper is bound to the real data root (`~/Library/Application Support/Yard`), so a
+change to serving, the helper or reconcile is only observable there, through `yard`.
+
+- `cargo build --release`, then `./target/release/yard stop && ./target/release/yard start`;
+  `yard --version` must show the new commit for yardd. A changed helper needs the maintainer to run
+  `sudo ./target/release/yard helper install` in a real terminal first.
+- Back up what you will touch (`yard.toml`, `sites.toml`, `ports.toml`, an
+  `nginx/overrides/<site>.conf`) into the scratchpad, and restore it with `cp -p` and a
+  `cmp` at the end. Restore permissions with a `trap`.
+- Drive it with `yard status`, `yard doctor`, `yard ports [check]`, `yard sites`, and
+  `curl http://<site>.yard:8080/` (sites from `~/Herd` are parked). yardd applies a TOML
+  or override edit within about 2 s, and the docroot scan every 30 s.
+- For a scratch site, `yard park <scratch dir>` and `yard unpark` it afterwards, then
+  delete the `nginx/overrides/<name>.conf` Yard created for it.
+- Never create directories in `~/Herd` (Herd parks it too), and never touch Herd's files.
+
 ## Layout (planned, spec §3.2)
 
 - `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and the Swift app via schema from M4).
