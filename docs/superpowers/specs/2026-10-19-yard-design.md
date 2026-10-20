@@ -401,10 +401,13 @@ profile; Yard does not edit dotfiles.
   from `secure_by_default`.
 - `secure_by_default = true` in `yard.toml` secures every current and future site.
 - Certs within 30 days of expiry are renewed automatically by `yardd`.
-- Reconcile issues missing certs, re-issues ones a new CA did not sign or whose names
-  no longer match the host, and removes the files of sites no longer secured, before
-  it renders nginx. A cert that cannot be issued fails the reconcile, so the previous
-  config keeps serving.
+- Reconcile issues missing certs and re-issues ones a new CA did not sign or whose
+  names no longer match the host, before it renders nginx; a new cert reloads nginx.
+  It removes the files of sites no longer secured only once `nginx -t` passes, since
+  until then the previous config still names them. A cert that cannot be issued fails
+  the reconcile, so the previous config keeps serving. The periodic scan reconciles
+  when a secured site's cert is due, so expiry and a deleted file are caught without
+  a config change.
 - `yard doctor` warns while a secured site's CA is untrusted (hint `yard trust`), and
   prints `NODE_EXTRA_CA_CERTS=<path>` for Node and, when Firefox is installed, the
   `security.enterprise_roots.enabled` setting to turn on. It edits neither.

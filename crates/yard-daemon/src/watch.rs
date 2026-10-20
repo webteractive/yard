@@ -47,10 +47,10 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
                     None => return,
                 },
                 _ = tick.tick() => {
-                    if ctx.reconciler.docroots_stale().await
+                    if (ctx.reconciler.docroots_stale().await || ctx.reconciler.certs_due().await)
                         && let Err(e) = ctx.reconciler.reconcile().await
                     {
-                        tracing::warn!("reconcile after a docroot change: {}", describe(&e));
+                        tracing::warn!("reconcile after a docroot or certificate change: {}", describe(&e));
                     }
                     continue;
                 }

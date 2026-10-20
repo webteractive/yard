@@ -14,6 +14,7 @@ use yard_daemon::helper_client::HelperClient;
 use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
+use yard_daemon::tls;
 use yard_proto::{ErrorCode, Event, UnitInfo, UnitState};
 
 const FPM: &str = "php-fpm-8.4";
@@ -69,6 +70,19 @@ impl Env {
         file.set(&["sites", &label, "path"], toml_edit::value(dir.display().to_string()));
         file.save().unwrap();
         dir
+    }
+
+    fn secure(&self, label: &str, on: bool) {
+        let mut file = TomlFile::load(&self.fx.paths.sites_toml()).unwrap();
+        file.set(&["sites", label, "secure"], toml_edit::value(on));
+        file.save().unwrap();
+    }
+
+    /// The names `label`'s certificate is issued for, sorted.
+    fn cert_names(&self, label: &str) -> Vec<String> {
+        let mut names = tls::facts(&self.fx.paths, label).expect("a certificate").dns_names;
+        names.sort();
+        names
     }
 
     fn conf(&self, label: &str) -> PathBuf {
@@ -545,5 +559,116 @@ async fn reconcile_links_the_shims() {
     std::fs::remove_file(&shim).unwrap();
     let report = e.rec.reconcile().await.unwrap();
     assert!(report.warnings.iter().any(|w| w.contains("yard-shim")), "{:?}", report.warnings);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn securing_a_site_writes_its_certificate_and_ssl_block() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+
+    let report = e.rec.reconcile().await.unwrap();
+    assert!(report.written.contains(&e.fx.paths.cert("blog")), "{report:?}");
+    assert!(e.fx.paths.cert_key("blog").exists());
+    assert_eq!(e.cert_names("blog"), ["*.blog.yard", "blog.yard"]);
+    assert!(tls::facts(&e.fx.paths, "blog").unwrap().signed_by_ca);
+    let conf = std::fs::read_to_string(e.conf("blog")).unwrap();
+    assert!(conf.contains("ssl_certificate"), "{conf}");
+    assert!(!e.rec.certs_due().await);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsecuring_removes_the_certificate() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+
+    e.secure("blog", false);
+    let report = e.rec.reconcile().await.unwrap();
+    assert!(report.removed.contains(&e.fx.paths.cert("blog")), "{report:?}");
+    assert!(!e.fx.paths.cert("blog").exists());
+    assert!(!e.fx.paths.cert_key("blog").exists());
+    let conf = std::fs::read_to_string(e.conf("blog")).unwrap();
+    assert!(!conf.contains("ssl_certificate"), "{conf}");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleted_certificate_is_reissued() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+
+    std::fs::remove_file(e.fx.paths.cert("blog")).unwrap();
+    assert!(e.rec.certs_due().await);
+    e.rec.reconcile().await.unwrap();
+    assert_eq!(e.cert_names("blog"), ["*.blog.yard", "blog.yard"]);
+    assert!(!e.rec.certs_due().await);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_ca_reissues_every_leaf() {
+    let e = env().await;
+    for name in ["blog", "shop"] {
+        e.site(name);
+        e.secure(name, true);
+    }
+    e.rec.reconcile().await.unwrap();
+    let old_ca = tls::ca_sha256(&e.fx.paths).unwrap();
+
+    std::fs::remove_dir_all(e.fx.paths.ca_dir()).unwrap();
+    assert!(e.rec.certs_due().await);
+    e.rec.reconcile().await.unwrap();
+    assert_ne!(tls::ca_sha256(&e.fx.paths).unwrap(), old_ca);
+    for name in ["blog", "shop"] {
+        assert!(tls::facts(&e.fx.paths, name).unwrap().signed_by_ca, "{name}");
+    }
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn tld_change_reissues_for_the_new_host() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+
+    std::fs::write(e.fx.paths.yard_toml(), "tld = \"yard2\"\n").unwrap();
+    e.rec.reconcile().await.unwrap();
+    assert_eq!(e.cert_names("blog"), ["*.blog.yard2", "blog.yard2"]);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_expiring_certificate_is_renewed() {
+    let e = env().await;
+    e.site("blog");
+    e.secure("blog", true);
+    e.rec.reconcile().await.unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    tls::issue(&e.fx.paths, "blog", "blog.yard", now, 20).unwrap();
+
+    assert!(e.rec.certs_due().await);
+    e.rec.reconcile().await.unwrap();
+    let not_after = tls::facts(&e.fx.paths, "blog").unwrap().not_after;
+    let expected = (now + time::Duration::days(yard_core::tls::LEAF_DAYS)).unix_timestamp();
+    assert!((not_after - expected).abs() < 86_400, "not_after {not_after}, expected about {expected}");
+    assert!(!e.rec.certs_due().await);
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn no_secure_site_makes_no_ca() {
+    let e = env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    assert!(!e.fx.paths.ca_dir().exists());
+    assert!(!e.fx.paths.certs_dir().exists());
+    assert!(!e.rec.certs_due().await);
     e.sup.shutdown().await;
 }

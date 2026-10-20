@@ -69,6 +69,14 @@ fn nginx(args: &[String]) -> ExitCode {
             eprintln!("nginx: configuration file {conf} test failed");
             return ExitCode::from(1);
         }
+        if let Some(missing) = missing_certificate(Path::new(prefix)) {
+            eprintln!(
+                "nginx: [emerg] cannot load certificate \"{}\": BIO_new_file() failed",
+                missing.display()
+            );
+            eprintln!("nginx: configuration file {conf} test failed");
+            return ExitCode::from(1);
+        }
         eprintln!("nginx: configuration file {conf} test is successful");
         return ExitCode::SUCCESS;
     }
@@ -386,6 +394,30 @@ fn find_broken(dir: &Path) -> Option<PathBuf> {
                 && std::fs::read_to_string(&path).is_ok_and(|t| t.contains("yard-test-broken"));
             broken.then_some(path)
         }
+    })
+}
+
+/// The first `ssl_certificate` or `ssl_certificate_key` file a conf under `dir` names
+/// that does not exist, which real nginx refuses at `-t`.
+fn missing_certificate(dir: &Path) -> Option<PathBuf> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    entries.into_iter().find_map(|path| {
+        if path.is_dir() {
+            return missing_certificate(&path);
+        }
+        if path.extension().is_none_or(|e| e != "conf") {
+            return None;
+        }
+        let text = std::fs::read_to_string(&path).ok()?;
+        text.lines().find_map(|line| {
+            let line = line.trim();
+            let rest = line
+                .strip_prefix("ssl_certificate_key ")
+                .or_else(|| line.strip_prefix("ssl_certificate "))?;
+            let file = PathBuf::from(rest.trim_end_matches(';').trim_matches('"'));
+            (!file.exists()).then_some(file)
+        })
     })
 }
 

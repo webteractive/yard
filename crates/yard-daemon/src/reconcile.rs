@@ -9,10 +9,12 @@ use crate::nginx::NginxCommand;
 use crate::probe::{self, Proto};
 use crate::state::{Snapshot, State};
 use crate::supervisor::{Health, Reload, Supervisor, UnitSpec};
+use crate::tls;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use yard_core::brew::Brew;
 use yard_core::config::edit::TomlFile;
@@ -28,6 +30,7 @@ use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::shim::SHIMS;
 use yard_core::sites;
+use yard_core::tls::{LEAF_DAYS, needs_issue};
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
 
@@ -134,6 +137,19 @@ impl Reconciler {
         })
     }
 
+    /// A secured site whose certificate is missing, from another CA, for other names or
+    /// close to expiry. Nothing watches `certs/` or the clock, so the periodic scan finds it.
+    pub async fn certs_due(&self) -> bool {
+        let state = self.state.lock().await;
+        let Some(snap) = &state.snapshot else { return false };
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        snap.resolution
+            .sites
+            .iter()
+            .filter(|s| s.secure)
+            .any(|s| needs_issue(tls::facts(&state.paths, &s.name).as_ref(), &s.host, now))
+    }
+
     /// `Ok(Err(..))` when nginx rejects the config; `Err` when the test could not run.
     pub async fn test_nginx(&self) -> Result<Result<(), YardError>, YardError> {
         Ok(self.nginx.test().await?.map_err(|output| nginx_rejected(&output, false)))
@@ -196,8 +212,11 @@ impl Reconciler {
         let resolution = sites::resolve(&yard, &sites_cfg, &tld, http, https, &|p: &Path| p.is_dir());
         report.warnings.extend(resolution.warnings.iter().cloned());
 
-        // 4. Render, and create the user-owned files the rendered ones include.
+        // 4. Issue the certificates secured sites need, which `nginx -t` loads.
         let paths = state.paths.clone();
+        let issued = issue_certs(&paths, &resolution.sites, &mut report)?;
+
+        // 5. Render, and create the user-owned files the rendered ones include.
         let ctx = RenderCtx {
             paths: &paths,
             brew: &state.brew,
@@ -239,7 +258,7 @@ impl Reconciler {
         }
         prepare_dirs(&paths, &resolution.sites, &inis).map_err(io_error)?;
 
-        // 5. Write.
+        // 6. Write.
         let mut hashes = state.hashes.clone();
         let mut managed = vec![paths.nginx_sites_dir()];
         for dir in subdirs(&paths.root().join("php")) {
@@ -272,9 +291,10 @@ impl Reconciler {
             report.warnings.extend(link_shims(&paths.bin_dir(), shim));
         }
 
-        // 6. Test nginx. Only a failed test rolls back; an nginx that cannot run is a warning.
+        // 7. Test nginx. Only a failed test rolls back; an nginx that cannot run is a warning.
+        // A new certificate is loaded only by a reload.
         let changed: BTreeSet<PathBuf> = applied.changed().map(Path::to_path_buf).collect();
-        let nginx_changed = changed.iter().any(|p| p.starts_with(paths.nginx_dir()));
+        let nginx_changed = issued || changed.iter().any(|p| p.starts_with(paths.nginx_dir()));
         if nginx_changed || state.snapshot.is_none() {
             match self.nginx.test().await {
                 Ok(Err(output)) => {
@@ -289,8 +309,10 @@ impl Reconciler {
             report.warnings.push(format!("cannot save {}: {e}", paths.hashes().display()));
         }
         state.hashes = hashes;
+        // Only now: until the new confs passed, the old ones still named these files.
+        report.removed.extend(prune_certs(&paths, &resolution.sites));
 
-        // 7. Apply units; restart the ones whose files changed and reload nginx. In the
+        // 8. Apply units; restart the ones whose files changed and reload nginx. In the
         // privileged profile nginx inherits the helper's sockets, whose bind is the probe.
         let existing: BTreeSet<String> = self.supervisor.list().into_iter().map(|u| u.name).collect();
         let privileged = profile == Profile::Privileged;
@@ -382,7 +404,7 @@ impl Reconciler {
             report.warnings.push(format!("reloading nginx: {}", describe(&e)));
         }
 
-        // 8. Resolver: install the new TLD's file, then drop the old one.
+        // 9. Resolver: install the new TLD's file, then drop the old one.
         let want = (tld.clone(), dns);
         if state.applied_resolver.as_ref() != Some(&want) {
             match self.helper.install_resolver(&tld, dns).await {
@@ -399,7 +421,7 @@ impl Reconciler {
             }
         }
 
-        // 9. Commit.
+        // 10. Commit.
         if registry != before {
             TomlFile::edit(&paths.ports_toml(), |file| {
                 registry.save(file);
@@ -458,6 +480,38 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
             SiteKind::Php { php, .. } => php.parse().ok(),
             SiteKind::Proxy { .. } => None,
         })
+        .collect()
+}
+
+/// Makes the CA when a site is secure and issues each secure site whose certificate
+/// `needs_issue`. `Ok(true)` when it issued one.
+fn issue_certs(paths: &Paths, sites: &[SiteInfo], report: &mut ReconcileReport) -> Result<bool, YardError> {
+    let secure: Vec<&SiteInfo> = sites.iter().filter(|s| s.secure).collect();
+    if secure.is_empty() {
+        return Ok(false);
+    }
+    let now = OffsetDateTime::now_utc();
+    let user = std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "user".into());
+    tls::ensure_ca(paths, &user, now)?;
+    let mut issued = false;
+    for site in secure {
+        if needs_issue(tls::facts(paths, &site.name).as_ref(), &site.host, now.unix_timestamp()) {
+            tls::issue(paths, &site.name, &site.host, now, LEAF_DAYS)?;
+            report.written.push(paths.cert(&site.name));
+            issued = true;
+        }
+    }
+    Ok(issued)
+}
+
+/// Removes every `certs/<name>.{pem,key}` whose site is not secure.
+fn prune_certs(paths: &Paths, sites: &[SiteInfo]) -> Vec<PathBuf> {
+    let secure: BTreeSet<&str> = sites.iter().filter(|s| s.secure).map(|s| s.name.as_str()).collect();
+    files_in(&paths.certs_dir())
+        .into_iter()
+        .filter(|f| f.extension().is_some_and(|e| e == "pem" || e == "key"))
+        .filter(|f| f.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !secure.contains(s)))
+        .filter(|f| std::fs::remove_file(f).is_ok())
         .collect()
 }
 
