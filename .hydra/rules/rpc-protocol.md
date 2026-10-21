@@ -19,7 +19,7 @@ triggers:
   Codes are stable SCREAMING_SNAKE strings and are never renamed. A new failure mode
   gets a new code, and its `hint` is the exact command that fixes it.
 - Types are defined once in `yard-proto` and used unchanged by the CLI's `--json`
-  output. From M4 the Swift models are generated from their JSON Schema, so a field
+  output. From M6 the Swift models are generated from their JSON Schema, so a field
   rename is a breaking change for the app too.
 - Adding a method touches, in one change: the `yard-proto` const and params, the daemon
   handler, the CLI command, the CLI tests' `MockDaemon`, and the method list in spec §6.2.

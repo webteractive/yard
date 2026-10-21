@@ -9,7 +9,7 @@ LaunchAgent) supervises php-fpm pools, dnsmasq and services. A tiny root helper
 (`yard-helper`, a LaunchDaemon) manages `/etc/resolver` and CA trust through a
 fixed verb set. nginx runs as the user, as a yardd unit; root only opens 80/443
 (`ports.bind`) when the user opts in to the privileged profile. The `yard` CLI and,
-from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
+from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Status
 
@@ -29,8 +29,9 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   done: `docs/superpowers/plans/2026-10-20-yard-m3-https.md`, verified on this machine on
   2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). The maintainer ran
   `yard trust` on 2026-10-21, so the login keychain trusts this machine's CA. There is no `yard takeover`
-  (dropped 2026-10-20). M4 needs its own plan.
-- Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
+  (dropped 2026-10-20). M4 (Node and services) needs its own plan.
+- Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
+  M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
 
 ## Goals (decided — do not re-litigate)
@@ -100,7 +101,7 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   If test daemons time out at startup, `target/debug/deps` has grown too big for FSEvents:
   run `cargo clean --profile dev` (never plain `cargo clean`: the LaunchAgent runs `target/release/yardd`).
 - `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check` — CI enforces both.
-- `cargo deny check` — after any `Cargo.lock` change (supply-chain gates; `deny.toml` from `~/AI/cooper`).
+- `cargo deny check` — after any `Cargo.lock` change (supply-chain gates; `deny.toml` follows the reference in `~/AI/skillset`).
 - `cargo run -p yard-daemon --bin yardd -- --root /tmp/yard-dev` — a daemon on a scratch data
   root (logs to stderr). `yardd --version` prints the build; the socket is `<root>/yardd.sock`.
 - `cargo run -p yard-cli -- --root /tmp/yard-dev sites` — the CLI against that daemon.
@@ -135,14 +136,14 @@ change to serving, the helper or reconcile is only observable there, through `ya
 
 ## Layout (planned, spec §3.2)
 
-- `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and the Swift app via schema from M4).
+- `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and the Swift app via schema from M6).
 - `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here.
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
 - `crates/yard-cli` — the `yard` binary.
 - `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` shims, one binary
   dispatching on `argv[0]`; it reads the TOMLs itself and needs no daemon.
-- `app/` — Yard.app (M4).
+- `app/` — Yard.app (M6).
 
 ## Conventions
 

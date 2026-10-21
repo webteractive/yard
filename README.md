@@ -19,8 +19,8 @@ below. M1.1 moved nginx from root to the user. M2 is done too: sites are explici
 can be isolated to its own version, extensions come from brew, pecl or a `.so`, and
 the `php`/`composer`/`pecl` shims follow the site's version and never reach Herd's
 PHP. M3 adds HTTPS: `yard secure` serves a site with a certificate from a local CA,
-and `yard trust` puts that CA in your login keychain. Yard.app (M4), and Node and
-services (M5) come later.
+and `yard trust` puts that CA in your login keychain. Node and services (M4),
+tunnels (M5) and Yard.app (M6) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080`. Herd keeps its `.test` domain,

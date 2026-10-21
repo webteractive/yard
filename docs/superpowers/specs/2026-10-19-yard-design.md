@@ -27,7 +27,7 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   (on 443 with the `privileged` profile, on 8443 without it).
 - A PHP 7.1 legacy site and a PHP 8.4 site run side by side.
 - `yard ext add redis --php 7.1` and `yard ext add xdebug --php 8.4` work.
-- MySQL, Redis and Mailpit run under Yard with no paid tier.
+- MySQL, Redis and emailulator run under Yard with no paid tier.
 - Herd can be uninstalled with no loss of function.
 
 ### Non-goals (v1)
@@ -45,7 +45,11 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
 - **Homebrew is required** on every machine. PHP comes from the
   `shivammathur/php` tap, extensions from `shivammathur/extensions`,
   plus brew's `nginx`, `dnsmasq`, `fnm`, `mysql`, `mysql@8.0`, `postgresql@16`,
-  `redis`, `mailpit`, `minio`.
+  `redis`, `minio`.
+- **emailulator** (ours, `emailulator 0.1.3` on 2026-10-21) is the one service that does not
+  come from brew: it is installed by its own release installer into `~/.local/bin` and keeps
+  itself current with `emailulator self-update`. Yard finds it on the user's PATH and never
+  installs or updates it.
 - Homebrew is a package source only, never a source of truth. Yard never uses
   `brew services` and never edits brew-owned config files.
 
@@ -57,7 +61,7 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
  yard (CLI) ─┐
              ├─ JSON-RPC over unix socket ─▶ yardd (LaunchAgent, runs as user)
  Yard.app ───┘                                  │  supervises: nginx, php-fpm pools, dnsmasq,
-                                                │  services (mysql, redis, mailpit, …)
+                                                │  services (mysql, redis, emailulator, …)
                                                 │
                                                 └─ narrow socket ─▶ yard-helper
                                                                     (LaunchDaemon, root)
@@ -93,8 +97,8 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   such as `/tmp` aside).
 - The helper is installed by `sudo yard helper install` (binary to
   `/Library/PrivilegedHelperTools/`, plist to `/Library/LaunchDaemons/`), which is
-  the only path while there is no app (M1–M3). Yard.app registers the same
-  helper through `SMAppService` from M4. Upgrading from M1, whose helper ran
+  the only path while there is no app (M1–M5). Yard.app registers the same
+  helper through `SMAppService` from M6. Upgrading from M1, whose helper ran
   nginx as root, the install first asks the old helper to stop that nginx and
   then removes the two files it left owned by root (`logs/nginx-error.log`,
   `run/nginx.pid`); it removes rather than chowns them, so a hard link planted
@@ -528,8 +532,8 @@ nginx-https  = { port = 8443,  mode = "pinned" }
 dnsmasq      = { port = 53535, mode = "pinned" }
 mysql-8-0    = { port = 3306,  mode = "preferred", preferred = 3306 }
 redis        = { port = 6379,  mode = "preferred", preferred = 6379 }
-mailpit-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
-mailpit-http = { port = 33001, mode = "auto" }
+emailulator-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
+emailulator-http = { port = 33001, mode = "auto" }
 "proxy:api"  = { port = 3000,  mode = "external" }
 ```
 
@@ -601,8 +605,24 @@ port(s) in the registry.
 | MySQL 8.4 / 8.0 | `mysql`, `mysql@8.0` | one instance per version; `root` with empty password, local only |
 | PostgreSQL 16 | `postgresql@16` | |
 | Redis | `redis` | |
-| Mailpit | `mailpit` | SMTP on registry port; UI proxied at `mail.<tld>` |
+| emailulator | not brew (see below) | SMTP and HTTP on registry ports; web UI proxied at `mail.<tld>` |
 | MinIO | `minio` | optional; console proxied at `minio.<tld>` |
+
+**emailulator** replaced Mailpit on 2026-10-21 (maintainer): it is our own mail catcher, with a
+web UI, a REST API and an MCP server, so agents can read the mail a site sent.
+
+- `yard service add emailulator` needs `emailulator` on the user's PATH; without it, it fails
+  with a hint naming emailulator's installer. Yard never downloads it (§2).
+- It runs as `emailulator run --smtp-addr 127.0.0.1:<smtp> --http-addr 127.0.0.1:<http>`, the
+  ports from the registry entries `emailulator-smtp` and `emailulator-http`. It keeps
+  emailulator's own message store, not `services/emailulator/data/`, so `emailulator app`,
+  `emailulator mcp` and `emailulator inbox|key` see the same mail.
+- emailulator can run itself as a LaunchAgent (`emailulator service install`, label
+  `com.webteractive.emailulator`), and while it does, `emailulator run` refuses to start a
+  second server. Yard then runs no unit: it records the agent's two ports as `external`
+  entries and points `mail.<tld>` and `yard env` at them. `yard doctor` says which of the two
+  is serving mail.
+- `yard env` prints `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1` and `MAIL_PORT=<smtp>`.
 
 Commands: `yard service add <name> [--version] [--port]`,
 `yard service remove <name> [--keep-data]`, `yard service start|stop|restart|logs <name>`,
@@ -666,7 +686,7 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 - Team updates via appdater; public updates via Sparkle if/when public.
 - Homebrew tap formula for CLI-only installs (`yard`, `yardd`, helper, shims).
 - Details follow the existing macOS release-signing and appdater conventions at
-  the time of M6.
+  the time of M7.
 
 ## 12. Milestones
 
@@ -685,7 +705,13 @@ Each milestone is usable on its own and gets its own implementation plan.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal (and re-issue on a
    TLD change). No `takeover` (dropped 2026-10-20, §5.5). Done 2026-10-21, verified by
    `scripts/e2e-m3.sh` on the maintainer's machine, where the maintainer ran `yard trust`.
-4. **M4 Yard.app:** client, menu bar, main window, onboarding.
-5. **M5 Node and services:** fnm wrapper, MySQL, Postgres, Redis, Mailpit,
+4. **M4 Node and services:** fnm wrapper, MySQL, Postgres, Redis, emailulator,
    MinIO, `yard env`.
-6. **M6 Distribution:** signing, notarization, appdater, brew tap.
+5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
+   cloudflared, for webhooks and similar. Designed in
+   `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.
+6. **M6 Yard.app:** client, menu bar, main window, onboarding.
+7. **M7 Distribution:** signing, notarization, appdater, brew tap.
+
+The maintainer reordered M4–M7 on 2026-10-21: Node and services first, then tunnels, then the
+app, then distribution (they were app, Node and services, distribution).

@@ -406,8 +406,8 @@ nginx-https  = { port = 8443,  mode = "pinned" }
 dnsmasq      = { port = 53535, mode = "pinned" }
 mysql-8-0    = { port = 3306,  mode = "preferred", preferred = 3306 }
 redis        = { port = 6379,  mode = "preferred", preferred = 6379 }
-mailpit-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
-mailpit-http = { port = 33001, mode = "auto" }
+emailulator-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
+emailulator-http = { port = 33001, mode = "auto" }
 "proxy:api"  = { port = 3000,  mode = "external" }
 "#;
 
@@ -433,7 +433,7 @@ mailpit-http = { port = 33001, mode = "auto" }
             r.entries["proxy:api"],
             PortEntry { port: 3000, mode: PortMode::External, preferred: None }
         );
-        assert_eq!(r.entries["mailpit-http"].mode, PortMode::Auto);
+        assert_eq!(r.entries["emailulator-http"].mode, PortMode::Auto);
         assert_eq!(r.entries["mysql-8-0"].preferred, Some(3306));
         assert_eq!(r.profile, Profile::Standard);
         assert!(r.validate().is_empty(), "{:?}", r.validate());
@@ -634,7 +634,7 @@ mailpit-http = { port = 33001, mode = "auto" }
         std::fs::write(&path, SPEC_EXAMPLE).unwrap();
         let mut r = Registry::parse(Some(SPEC_EXAMPLE), &path).unwrap();
         r.set("redis", 6380).unwrap();
-        r.entries.remove("mailpit-http");
+        r.entries.remove("emailulator-http");
         let mut f = TomlFile::load(&path).unwrap();
         r.save(&mut f);
         f.save().unwrap();
