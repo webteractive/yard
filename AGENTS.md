@@ -27,8 +27,8 @@ from M4, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   2026-10-20 (`scripts/e2e-m1.sh` and `scripts/e2e-m2.sh` passing).
 - M3 (HTTPS: a local CA, `yard secure`/`unsecure`, `yard trust`/`untrust`, renewal) is
   done: `docs/superpowers/plans/2026-10-20-yard-m3-https.md`, verified on this machine on
-  2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). `yard trust`
-  itself is not yet run here: macOS asks the maintainer for a password. There is no `yard takeover`
+  2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). The maintainer ran
+  `yard trust` on 2026-10-21, so the login keychain trusts this machine's CA. There is no `yard takeover`
   (dropped 2026-10-20). M4 needs its own plan.
 - Milestones M1–M6 (spec §12) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.

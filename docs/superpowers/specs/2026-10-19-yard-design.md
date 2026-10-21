@@ -684,7 +684,7 @@ Each milestone is usable on its own and gets its own implementation plan.
    `scripts/e2e-m2.sh` on the maintainer's machine.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal (and re-issue on a
    TLD change). No `takeover` (dropped 2026-10-20, §5.5). Done 2026-10-21, verified by
-   `scripts/e2e-m3.sh` on the maintainer's machine; `yard trust` waits for the maintainer at the screen.
+   `scripts/e2e-m3.sh` on the maintainer's machine, where the maintainer ran `yard trust`.
 4. **M4 Yard.app:** client, menu bar, main window, onboarding.
 5. **M5 Node and services:** fnm wrapper, MySQL, Postgres, Redis, Mailpit,
    MinIO, `yard env`.
