@@ -1,9 +1,8 @@
 # Yard tunnels — design spec
 
 Date: 2026-10-21
-Status: draft, not yet approved. It extends `2026-10-19-yard-design.md` (the main spec),
-which stays the source of truth. Where the two disagree, the main spec wins until this one
-is approved and folded in.
+Status: approved by the maintainer on 2026-10-22. It extends `2026-10-19-yard-design.md` (the main
+spec), which is updated when M5 is built (§15).
 
 Milestone numbers follow the order the maintainer set on 2026-10-21: M4 Node and services,
 **M5 Tunnels**, M6 Yard.app, M7 Distribution. The main spec's §12 is being renumbered

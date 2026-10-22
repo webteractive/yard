@@ -706,7 +706,8 @@ Each milestone is usable on its own and gets its own implementation plan.
    TLD change). No `takeover` (dropped 2026-10-20, §5.5). Done 2026-10-21, verified by
    `scripts/e2e-m3.sh` on the maintainer's machine, where the maintainer ran `yard trust`.
 4. **M4 Node and services:** fnm wrapper, MySQL, Postgres, Redis, emailulator,
-   MinIO, `yard env`.
+   MinIO, `yard env`, and the `.yard` project file with `yard init`, designed in
+   `docs/superpowers/specs/2026-10-22-yard-project-file-design.md`.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.

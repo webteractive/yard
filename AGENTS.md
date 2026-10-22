@@ -29,7 +29,11 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   done: `docs/superpowers/plans/2026-10-20-yard-m3-https.md`, verified on this machine on
   2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). The maintainer ran
   `yard trust` on 2026-10-21, so the login keychain trusts this machine's CA. There is no `yard takeover`
-  (dropped 2026-10-20). M4 (Node and services) needs its own plan.
+  (dropped 2026-10-20). M4 (Node and services, plus the `.yard` project file) needs its
+  own plan.
+- Approved on 2026-10-22, not built yet: the `.yard` project file and `yard init`
+  (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`, part of M4) and tunnels
+  (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
