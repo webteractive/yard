@@ -24,10 +24,9 @@ use yard_core::generated::{self, Action};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::php::system_timezone;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
-use yard_core::project::Projects;
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
-use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
+use yard_core::render::nginx::{default_index, nginx_main, nginx_site, setup_page};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::shim::SHIMS;
 use yard_core::sites;
@@ -133,7 +132,11 @@ impl Reconciler {
         let Some(snap) = &state.snapshot else { return false };
         snap.resolution.sites.iter().any(|site| {
             let SiteKind::Php { path, docroot, .. } = &site.kind else { return false };
-            let pinned = snap.sites_cfg.sites.get(&site.name).is_some_and(|e| e.docroot.is_some());
+            let pinned = match snap.projects.get(&site.name) {
+                Some(Ok(file)) => file.docroot.is_some(),
+                Some(Err(_)) => false,
+                None => snap.sites_cfg.sites.get(&site.name).is_some_and(|e| e.docroot.is_some()),
+            };
             !pinned && sites::detect_docroot(Path::new(path), &|p: &Path| p.is_dir()) != Path::new(docroot)
         })
     }
@@ -236,8 +239,10 @@ impl Reconciler {
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
 
         // 3. Resolve sites.
-        let resolution =
-            sites::resolve(&yard, &sites_cfg, &Projects::new(), &tld, http, https, &|p: &Path| p.is_dir());
+        let projects = crate::project::read_projects(&sites_cfg);
+        let mut resolution =
+            sites::resolve(&yard, &sites_cfg, &projects, &tld, http, https, &|p: &Path| p.is_dir());
+        crate::project::fill_needs(&mut resolution.sites, &projects, &yard, &state.brew, &state.paths);
         report.warnings.extend(resolution.warnings.iter().cloned());
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.
@@ -269,6 +274,9 @@ impl Reconciler {
         rendered.insert(paths.dnsmasq_conf(), dnsmasq_conf(&ctx, dns));
         for site in &resolution.sites {
             rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site));
+            if site.needs_setup() {
+                rendered.insert(paths.nginx_setup_page(&site.name), setup_page(&ctx, site));
+            }
         }
         let no_exts = BTreeMap::new();
         for v in &inis {
@@ -290,7 +298,7 @@ impl Reconciler {
 
         // 6. Write.
         let mut hashes = state.hashes.clone();
-        let mut managed = vec![paths.nginx_sites_dir()];
+        let mut managed = vec![paths.nginx_sites_dir(), paths.nginx_setup_dir()];
         for dir in subdirs(&paths.root().join("php")) {
             managed.push(dir.join("conf.d"));
             managed.push(dir);
@@ -472,7 +480,7 @@ impl Reconciler {
         for name in old.iter().filter(|n| !new.contains(n.as_str())) {
             self.bus.emit(Event::SiteRemoved { name: name.clone() });
         }
-        state.snapshot = Some(Snapshot { yard, sites_cfg, registry, tld, resolution });
+        state.snapshot = Some(Snapshot { yard, sites_cfg, projects, registry, tld, resolution });
         Ok(report)
     }
 
@@ -505,9 +513,11 @@ pub fn fpm_unit(v: PhpVersion) -> String {
     format!("php-fpm-{v}")
 }
 
+/// The versions served sites run; a site on its setup page runs none.
 fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
     sites
         .iter()
+        .filter(|s| !s.needs_setup())
         .filter_map(|s| match &s.kind {
             SiteKind::Php { php, .. } => php.parse().ok(),
             SiteKind::Proxy { .. } => None,
@@ -631,6 +641,7 @@ fn prepare_dirs(paths: &Paths, sites: &[SiteInfo], versions: &BTreeSet<PhpVersio
         paths.logs_dir(),
         paths.run_dir().join("nginx"),
         paths.nginx_sites_dir(),
+        paths.nginx_setup_dir(),
         paths.nginx_dir().join("overrides"),
     ] {
         std::fs::create_dir_all(dir)?;

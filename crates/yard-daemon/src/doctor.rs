@@ -14,7 +14,6 @@ use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
-use yard_core::project::Projects;
 use yard_core::render::overrides_for;
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
@@ -64,7 +63,7 @@ impl View {
         })
     }
 
-    fn from_files(paths: &Paths) -> View {
+    fn from_files(paths: &Paths, brew: &Brew) -> View {
         let (yard, yard_warnings) = match load_yard(paths) {
             Ok((y, w)) => (Ok(y), w),
             Err(e) => (Err(e), vec![]),
@@ -84,8 +83,10 @@ impl View {
                 let mut warnings = yard_warnings.clone();
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
                 let https = r.entries.get(NGINX_HTTPS).map_or(r.profile.https_port(), |e| e.port);
-                let resolution =
-                    sites::resolve(y, s, &Projects::new(), tld, http, https, &|p: &Path| p.is_dir());
+                let projects = crate::project::read_projects(s);
+                let mut resolution =
+                    sites::resolve(y, s, &projects, tld, http, https, &|p: &Path| p.is_dir());
+                crate::project::fill_needs(&mut resolution.sites, &projects, y, brew, paths);
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }
@@ -113,7 +114,7 @@ impl View {
 pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     let paths = input.paths;
     let brew = input.brew;
-    let mut view = input.state.and_then(View::from_state).unwrap_or_else(|| View::from_files(paths));
+    let mut view = input.state.and_then(View::from_state).unwrap_or_else(|| View::from_files(paths, brew));
     // yardd's last failure covers more than a parse error: nginx rejecting the config, say.
     if let Some(e) = input.state.and_then(|s| s.last_error.clone()) {
         view.config_error = Some(e);
@@ -246,16 +247,9 @@ async fn ca(paths: &Paths, secured: bool, security: &Path) -> Check {
 /// The largest `composer.json` doctor reads.
 const COMPOSER_JSON_MAX: u64 = 1 << 20;
 
-/// A project's `composer.json` if it is a regular file of sane size. A FIFO or device
-/// there would otherwise block doctor, and yardd's runtime with it.
+/// A project's `composer.json` if it is a regular file of sane size.
 fn read_composer_json(file: &Path) -> Option<String> {
-    use std::io::Read;
-    if !std::fs::metadata(file).ok()?.is_file() {
-        return None;
-    }
-    let mut text = String::new();
-    std::fs::File::open(file).ok()?.take(COMPOSER_JSON_MAX + 1).read_to_string(&mut text).ok()?;
-    (text.len() as u64 <= COMPOSER_JSON_MAX).then_some(text)
+    crate::project::read_small(file, COMPOSER_JSON_MAX)
 }
 
 /// A warning when a site's `composer.json` `require.php` rules out the version it runs

@@ -226,6 +226,11 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
 /// `php -m`: lists the module each `extension=`/`zend_extension=` line under
 /// `PHP_INI_SCAN_DIR` loads. A path containing `broken` fails to load, with PHP's warning.
 fn php(args: &[String]) -> ExitCode {
+    // `php -n -m`: no ini, so only what is compiled in.
+    if args == ["-n", "-m"] {
+        println!("[PHP Modules]\nCore\ndate\njson\nmbstring\npcre\n\n[Zend Modules]\n");
+        return ExitCode::SUCCESS;
+    }
     if args.first().map(String::as_str) != Some("-m") {
         return fail(format!("fake php supports only -m, not {args:?}"));
     }

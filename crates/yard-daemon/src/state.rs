@@ -5,6 +5,7 @@ use yard_core::brew::Brew;
 use yard_core::config::{SitesConfig, YardConfig};
 use yard_core::generated::Hashes;
 use yard_core::ports::Registry;
+use yard_core::project::Projects;
 use yard_core::sites::Resolution;
 use yard_proto::YardError;
 
@@ -13,6 +14,8 @@ use yard_proto::YardError;
 pub struct Snapshot {
     pub yard: YardConfig,
     pub sites_cfg: SitesConfig,
+    /// Each linked project's `.yard`, as last read.
+    pub projects: Projects,
     pub registry: Registry,
     pub tld: String,
     pub resolution: Resolution,
