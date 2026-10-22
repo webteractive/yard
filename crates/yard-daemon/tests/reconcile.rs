@@ -413,7 +413,10 @@ async fn failed_nginx_releases_the_privileged_sockets() {
     // SAFETY: kill(2) on the fake nginx this test's supervisor started.
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     e.unit("nginx", |u| matches!(u.state, UnitState::Failed { .. })).await;
-    assert!(std::net::TcpListener::bind(("127.0.0.1", http)).is_ok(), "a failed nginx holds no port");
+    // Another test's child can hold every descriptor for the moment between its fork and
+    // exec, so the port is free soon after, not necessarily at once. A leak never frees it.
+    let free = || std::net::TcpListener::bind(("127.0.0.1", http)).is_ok();
+    assert!(support::wait_until(free, Duration::from_secs(2)).await, "a failed nginx holds no port");
     e.sup.shutdown().await;
 }
 
