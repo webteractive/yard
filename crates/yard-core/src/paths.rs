@@ -85,6 +85,20 @@ impl Paths {
         self.nginx_default_dir().join("index.html")
     }
 
+    /// Setup pages for sites whose `.yard` is not met.
+    pub fn nginx_setup_dir(&self) -> PathBuf {
+        self.root.join("nginx/setup")
+    }
+
+    pub fn nginx_setup_page(&self, name: &str) -> PathBuf {
+        self.nginx_setup_dir().join(format!("{name}.html"))
+    }
+
+    /// The modules each PHP keg has compiled in, by the keg's canonical path.
+    pub fn php_modules_cache(&self) -> PathBuf {
+        self.root.join("state/php-modules.json")
+    }
+
     /// The shims: `php`, `composer`, … linked to `yard-shim`.
     pub fn bin_dir(&self) -> PathBuf {
         self.root.join("bin")
