@@ -164,3 +164,62 @@ async fn setup_page_goes_once_met() {
     assert!(wait_running(&mut c, "php-fpm-7.3").await);
     d.shutdown().await.unwrap();
 }
+
+async fn php_within(c: &mut Client, name: &str, want: &str, within: Duration) -> Value {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        let s = site(c, name).await;
+        if s["php"] == want || std::time::Instant::now() > deadline {
+            return s;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn editing_the_project_file_reconciles() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    let dir = d.project("ee");
+    write_yard(&dir, "php = \"8.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert_eq!(site(&mut c, "ee").await["php"], "8.4");
+    write_yard(&dir, "php = \"7.3\"\n");
+    let s = php_within(&mut c, "ee", "7.3", Duration::from_secs(2)).await;
+    assert_eq!(s["php"], "7.3", "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn deleting_the_project_file_reverts_the_site() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    let dir = d.project("ee");
+    write_yard(&dir, "php = \"7.3\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert_eq!(site(&mut c, "ee").await["php"], "7.3");
+    std::fs::remove_file(dir.join(".yard")).unwrap();
+    let s = php_within(&mut c, "ee", "8.4", Duration::from_secs(2)).await;
+    assert_eq!(s["php"], "8.4", "{s}");
+    assert_eq!(s["project_file"], Value::Null, "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_newly_linked_project_is_watched() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("fresh");
+    std::fs::create_dir_all(&dir).unwrap();
+    c.call("sites.link", json!({"name": "fresh", "path": dir.display().to_string()})).await.unwrap();
+    // The watcher learns of the link from sites.toml's change; give it that event first.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    write_yard(&dir, "php = \"7.3\"\n");
+    let s = php_within(&mut c, "fresh", "7.3", Duration::from_secs(2)).await;
+    assert_eq!(s["php"], "7.3", "{s}");
+    d.shutdown().await.unwrap();
+}
