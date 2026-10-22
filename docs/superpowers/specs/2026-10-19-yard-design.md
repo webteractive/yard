@@ -469,7 +469,7 @@ profile; Yard does not edit dotfiles.
 
 - JSON-RPC 2.0 over `yardd.sock` (mode 0600, owned by the user).
 - Request/response methods (non-exhaustive, same surface as the CLI):
-  `status`, `doctor`, `sites.list|link|unlink|proxy|isolate|secure|unsecure|docroot`,
+  `status`, `doctor`, `sites.list|link|unlink|proxy|isolate|secure|unsecure|docroot|init`,
   `php.list|install|uninstall|default|config.get|config.set|config.unset`,
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
@@ -503,7 +503,8 @@ profile; Yard does not edit dotfiles.
 Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_NOT_FOUND`,
 `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
-`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`. The CLI prints message and hint;
+`HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`,
+`SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `PROJECT_FILE_INVALID`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI

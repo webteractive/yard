@@ -66,6 +66,66 @@ pub struct SiteInfo {
     /// then `https://`.
     #[serde(default)]
     pub secure: bool,
+    /// The project's `.yard`, when it has one; the site is then served as that file says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_file: Option<String>,
+    /// What the `.yard` asks for that is not installed; the site serves a setup page
+    /// until it is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<Need>,
+    /// Why the `.yard` cannot be read (`PROJECT_FILE_INVALID`); the site serves a setup
+    /// page until it is fixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_error: Option<YardError>,
+}
+
+impl SiteInfo {
+    /// The site serves a setup page instead of the project.
+    pub fn needs_setup(&self) -> bool {
+        self.project_error.is_some() || !self.needs.is_empty()
+    }
+}
+
+/// Something a project's `.yard` asks for that is not installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Need {
+    Php {
+        php: String,
+    },
+    /// `name` as the `.yard` writes it, e.g. `xdebug-2.9.8`.
+    Extension {
+        name: String,
+        php: String,
+    },
+}
+
+impl Need {
+    /// `PHP 7.3`, `the redis extension for PHP 7.3`.
+    pub fn describe(&self) -> String {
+        match self {
+            Need::Php { php } => format!("PHP {php}"),
+            Need::Extension { name, php } => format!("the {name} extension for PHP {php}"),
+        }
+    }
+
+    /// The command that installs it.
+    pub fn command(&self) -> String {
+        match self {
+            Need::Php { php } => format!("yard php install {php}"),
+            Need::Extension { name, php } => format!("yard ext add {name} --php {php}"),
+        }
+    }
+}
+
+/// `sites.init`: the `.yard` (written now, or already there) and the site it serves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitResult {
+    pub file: String,
+    pub text: String,
+    /// `false` when the file was already there and left as it was.
+    pub written: bool,
+    pub site: SiteInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +354,55 @@ mod tests {
             json!({"cert":"/r/ca/yard-ca.pem","sha256":"AB12","trusted":true,"expires":"2036-10-18"})
         );
         assert_eq!(serde_json::from_value::<CaInfo>(v).unwrap(), ca);
+    }
+
+    #[test]
+    fn site_info_without_project_fields_still_parses() {
+        // What a 2.3 daemon sent: no project_file, needs or project_error.
+        let v = json!({"name":"blog","host":"blog.yard","url":"http://blog.yard:8080/","source":"linked",
+            "kind":"proxy","target":"http://127.0.0.1:3000","secure":false});
+        let site = serde_json::from_value::<SiteInfo>(v).unwrap();
+        assert_eq!((site.project_file, site.needs, site.project_error), (None, vec![], None));
+    }
+
+    #[test]
+    fn site_info_omits_empty_project_fields() {
+        let v = json!({"name":"blog","host":"blog.yard","url":"http://blog.yard:8080/","source":"linked",
+            "kind":"proxy","target":"http://127.0.0.1:3000","secure":false});
+        let site = serde_json::from_value::<SiteInfo>(v.clone()).unwrap();
+        assert!(!site.needs_setup());
+        assert_eq!(serde_json::to_value(&site).unwrap(), v);
+    }
+
+    #[test]
+    fn needs_setup_when_a_need_or_an_error() {
+        let v = json!({"name":"a","host":"a.yard","url":"http://a.yard:8080/","source":"linked",
+            "kind":"proxy","target":"http://127.0.0.1:3000"});
+        let mut site = serde_json::from_value::<SiteInfo>(v).unwrap();
+        site.needs.push(Need::Php { php: "7.3".into() });
+        assert!(site.needs_setup());
+        site.needs.clear();
+        site.project_error = Some(YardError::new(crate::ErrorCode::ProjectFileInvalid, "bad"));
+        assert!(site.needs_setup());
+    }
+
+    #[test]
+    fn need_is_tagged() {
+        let n = Need::Extension { name: "redis".into(), php: "7.3".into() };
+        assert_eq!(serde_json::to_value(&n).unwrap(), json!({"kind":"extension","name":"redis","php":"7.3"}));
+        assert_eq!(
+            serde_json::to_value(Need::Php { php: "7.3".into() }).unwrap(),
+            json!({"kind":"php","php":"7.3"})
+        );
+    }
+
+    #[test]
+    fn need_describe_and_command() {
+        let php = Need::Php { php: "7.3".into() };
+        assert_eq!((php.describe(), php.command()), ("PHP 7.3".into(), "yard php install 7.3".into()));
+        let ext = Need::Extension { name: "xdebug-2.9.8".into(), php: "7.3".into() };
+        assert_eq!(ext.describe(), "the xdebug-2.9.8 extension for PHP 7.3");
+        assert_eq!(ext.command(), "yard ext add xdebug-2.9.8 --php 7.3");
     }
 
     #[test]

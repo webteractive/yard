@@ -95,6 +95,9 @@ mod tests {
             source: SiteSource::Linked,
             kind: SiteKind::Php { path: path.into(), docroot: format!("{path}/public"), php: "8.4".into() },
             secure: false,
+            project_file: None,
+            needs: vec![],
+            project_error: None,
         }
     }
 
@@ -106,6 +109,9 @@ mod tests {
             source: SiteSource::Proxy,
             kind: SiteKind::Proxy { target: "http://127.0.0.1:3000".into() },
             secure: false,
+            project_file: None,
+            needs: vec![],
+            project_error: None,
         }
     }
 

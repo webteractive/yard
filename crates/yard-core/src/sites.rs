@@ -99,6 +99,9 @@ pub fn resolve(
                         php: entry.php.unwrap_or(cfg.default_php).to_string(),
                     },
                     secure,
+                    project_file: None,
+                    needs: vec![],
+                    project_error: None,
                 });
             }
             (None, Some(target)) => match parse_proxy_target(target) {
@@ -109,6 +112,9 @@ pub fn resolve(
                     source: SiteSource::Proxy,
                     kind: SiteKind::Proxy { target: target.clone() },
                     secure,
+                    project_file: None,
+                    needs: vec![],
+                    project_error: None,
                 }),
                 Err(e) => warnings.push(format!("sites.toml: {name}: {}", e.message)),
             },

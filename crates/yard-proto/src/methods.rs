@@ -13,6 +13,7 @@ pub const SITES_PROXY: &str = "sites.proxy";
 pub const SITES_UNPROXY: &str = "sites.unproxy";
 pub const SITES_DOCROOT: &str = "sites.docroot";
 pub const SITES_ISOLATE: &str = "sites.isolate";
+pub const SITES_INIT: &str = "sites.init";
 pub const SITES_SECURE: &str = "sites.secure";
 pub const SITES_UNSECURE: &str = "sites.unsecure";
 pub const CA_INFO: &str = "ca.info";
@@ -76,6 +77,18 @@ pub struct DocrootParams {
     /// `None` clears the override and returns to detection.
     #[serde(default)]
     pub path: Option<String>,
+}
+
+/// `sites.init`: write `.yard` in `path` (unless it is there and `force` is unset), move
+/// the site's settings into it and link it. `name` defaults to the existing link, else
+/// the directory's name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InitParams {
+    pub path: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// `sites.secure` and `sites.unsecure`.
@@ -146,6 +159,13 @@ mod tests {
         assert_eq!(UNITS_RESTART, "units.restart");
         assert_eq!(PORTS_PROFILE, "ports.profile");
         assert_eq!((SITES_SECURE, SITES_UNSECURE, CA_INFO), ("sites.secure", "sites.unsecure", "ca.info"));
+        assert_eq!(SITES_INIT, "sites.init");
+    }
+
+    #[test]
+    fn init_params_default_force_false() {
+        let p: InitParams = serde_json::from_value(json!({"path": "/code/blog"})).unwrap();
+        assert_eq!((p.name, p.force), (None, false));
     }
 
     #[test]

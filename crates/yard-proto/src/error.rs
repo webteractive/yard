@@ -42,10 +42,16 @@ pub enum ErrorCode {
     /// `yard untrust` ran `security`, but the CA is still trusted, for instance by trust
     /// settings outside the login keychain.
     CaStillTrusted,
+    /// A setting the site's `.yard` owns was to be changed by a command; edit the file.
+    SiteHasProjectFile,
+    /// A `.yard` needs something installed and nobody said yes; `data.needs` lists it.
+    NeedsInstall,
+    /// A `.yard` does not parse or has an unknown key; `data` has the file and line.
+    ProjectFileInvalid,
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct YardError {
     pub code: ErrorCode,
     pub message: String,
@@ -105,6 +111,15 @@ mod tests {
         assert_eq!(v, json!("DAEMON_NOT_RUNNING"));
         assert_eq!(serde_json::to_value(ErrorCode::CaNotTrusted).unwrap(), json!("CA_NOT_TRUSTED"));
         assert_eq!(serde_json::to_value(ErrorCode::CaStillTrusted).unwrap(), json!("CA_STILL_TRUSTED"));
+        assert_eq!(
+            serde_json::to_value(ErrorCode::SiteHasProjectFile).unwrap(),
+            json!("SITE_HAS_PROJECT_FILE")
+        );
+        assert_eq!(serde_json::to_value(ErrorCode::NeedsInstall).unwrap(), json!("NEEDS_INSTALL"));
+        assert_eq!(
+            serde_json::to_value(ErrorCode::ProjectFileInvalid).unwrap(),
+            json!("PROJECT_FILE_INVALID")
+        );
     }
 
     #[test]
