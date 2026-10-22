@@ -47,7 +47,7 @@ pub async fn link(ctx: &Ctx, name: Option<String>, yes: bool) -> Outcome {
     let name = name.map_or_else(|| name_of(&dir), Ok)?;
     let params = LinkParams { name, path: dir.display().to_string() };
     let site: SiteInfo = ctx.client().await?.call(methods::SITES_LINK, params).await?;
-    if site.needs.is_empty() {
+    if !site.needs_setup() {
         ctx.emit(&site, || format!("Linked {} → {}\n", dir.display(), site.url));
         return Ok(0);
     }

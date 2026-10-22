@@ -170,6 +170,40 @@ async fn uninstall_refuses_an_isolated_version() {
     d.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn uninstall_refuses_a_version_a_project_file_runs() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let dir = d.project("blog");
+    std::fs::write(dir.join(".yard"), "php = \"7.1\"\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let err = c.call("php.uninstall", json!({"php": "7.1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::PhpInUse);
+    assert!(err.message.contains("blog"), "{}", err.message);
+    let file = dir.join(".yard").display().to_string();
+    assert!(err.hint.as_deref().is_some_and(|h| h.contains(&file)), "{:?}", err.hint);
+    assert!(!brew_log(&d).contains("uninstall"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_ignores_an_isolation_a_project_file_overrides() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let dir = d.project("blog");
+    // A php left in sites.toml is not served while the .yard is there, and unisolate is refused.
+    let mut toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    toml.push_str("php = \"7.1\"\n");
+    std::fs::write(d.fx.paths.sites_toml(), toml).unwrap();
+    std::fs::write(dir.join(".yard"), "php = \"8.4\"\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "php.uninstall", json!({"php": "7.1"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    d.shutdown().await.unwrap();
+}
+
 fn fpm_pid(units: &Value, name: &str) -> Value {
     units["units"]
         .as_array()

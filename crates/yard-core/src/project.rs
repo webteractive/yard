@@ -38,7 +38,8 @@ struct Raw {
 }
 
 /// `PROJECT_FILE_INVALID` at the line at fault for a file that does not parse, has an
-/// unknown key, a docroot outside the project or an extension that is not a name.
+/// unknown key, a docroot outside the project or with a `$` nginx would expand, or an
+/// extension that is not a name.
 pub fn parse(text: &str, file: &Path) -> Result<ProjectFile, YardError> {
     let invalid = |span, message: &str| {
         located_error(
@@ -56,6 +57,11 @@ pub fn parse(text: &str, file: &Path) -> Result<ProjectFile, YardError> {
         Some(d) if !inside(d.get_ref()) => {
             let message =
                 format!("docroot {:?} must be a path inside the project, such as \"public\"", d.get_ref());
+            return Err(invalid(Some(d.span()), &message));
+        }
+        // nginx expands `$` in `root`: one site's file must not fail `nginx -t` for all.
+        Some(d) if d.get_ref().to_string_lossy().chars().any(|c| c == '$' || c.is_control()) => {
+            let message = format!("docroot {:?} cannot contain $ or control characters", d.get_ref());
             return Err(invalid(Some(d.span()), &message));
         }
         d => d.map(Spanned::into_inner),
@@ -103,12 +109,14 @@ pub struct Detected {
     pub php: Option<PhpVersion>,
     /// Relative to the project; `.` for its root.
     pub docroot: PathBuf,
-    pub secure: bool,
+    /// `None` leaves HTTPS to each teammate's `secure_by_default`.
+    pub secure: Option<bool>,
 }
 
 /// `php`: the site's isolation, else the version that best meets `composer.json`'s
 /// `require.php`, else none. `docroot`: the site's override, else the detected one.
-/// `secure`: the site's setting, else `secure_by_default`. A docroot outside the project
+/// `secure`: the site's own setting, else `true` under `secure_by_default`, else none, so
+/// the file never changes how this machine serves the site. A docroot outside the project
 /// is `INVALID_ARGUMENT`, since `.yard` cannot say it.
 pub fn detect(
     entry: Option<&SiteEntry>,
@@ -142,11 +150,11 @@ pub fn detect(
             .with_hint("yard docroot <a path inside the project>"));
         }
     };
-    let secure = entry.and_then(|e| e.secure).unwrap_or(secure_by_default);
+    let secure = entry.and_then(|e| e.secure).or(secure_by_default.then_some(true));
     Ok(Detected { php, docroot, secure })
 }
 
-/// A new `.yard`. `secure` is written only when true: absent, HTTPS follows each
+/// A new `.yard`. `secure` is written only when detected: absent, HTTPS follows each
 /// teammate's `secure_by_default`.
 pub fn render(d: &Detected) -> String {
     let mut out = HEADER.to_string();
@@ -154,14 +162,14 @@ pub fn render(d: &Detected) -> String {
         out.push_str(&format!("php = \"{v}\"\n"));
     }
     out.push_str(&format!("docroot = {}\n", toml_edit::Value::from(d.docroot.display().to_string())));
-    if d.secure {
-        out.push_str("secure = true\n");
+    if let Some(on) = d.secure {
+        out.push_str(&format!("secure = {on}\n"));
     }
     out
 }
 
 /// `existing` with the keys detection produced written over, keeping every other key and
-/// comment: `php` only when detected, `docroot` always, `secure` only when true.
+/// comment: `php` and `secure` only when detected, `docroot` always.
 pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
     let mut doc: toml_edit::DocumentMut = existing.parse().map_err(|e: toml_edit::TomlError| {
         YardError::new(ErrorCode::ProjectFileInvalid, format!(".yard does not parse: {}", e.message()))
@@ -171,8 +179,8 @@ pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
         doc["php"] = toml_edit::value(v.to_string());
     }
     doc["docroot"] = toml_edit::value(d.docroot.display().to_string());
-    if d.secure {
-        doc["secure"] = toml_edit::value(true);
+    if let Some(on) = d.secure {
+        doc["secure"] = toml_edit::value(on);
     }
     Ok(doc.to_string())
 }
@@ -255,6 +263,15 @@ mod tests {
     }
 
     #[test]
+    fn docroot_cannot_name_an_nginx_variable() {
+        // nginx expands `$` inside `root`, so one site's file would fail `nginx -t` for all.
+        for bad in ["public$foo", "x$http_host", "pub\tlic", "pub\nlic"] {
+            let e = parse(&format!("docroot = {bad:?}\n"), Path::new(FILE)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ProjectFileInvalid, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn extensions_are_names_not_paths() {
         for bad in ["/x/redis.so", "redis.so", "../x"] {
             let e = parse(&format!("extensions = [{bad:?}]\n"), Path::new(FILE)).unwrap_err();
@@ -290,12 +307,14 @@ mod tests {
 
     #[test]
     fn render_for_eepower() {
-        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: false };
+        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None };
         assert_eq!(
             render(&d),
             "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n"
         );
-        let d = Detected { php: None, docroot: ".".into(), secure: true };
+        let off = Detected { php: None, docroot: ".".into(), secure: Some(false) };
+        assert!(render(&off).ends_with("docroot = \".\"\nsecure = false\n"), "{}", render(&off));
+        let d = Detected { php: None, docroot: ".".into(), secure: Some(true) };
         assert_eq!(
             render(&d),
             "# .yard: how Yard serves this project. Commit it.\ndocroot = \".\"\nsecure = true\n"
@@ -312,18 +331,19 @@ mod tests {
         // Isolation wins over composer.json.
         let entry = SiteEntry { php: Some(v("7.1")), ..Default::default() };
         let d = detect(Some(&entry), project, composer, &[v("7.1")], false, &is_dir).unwrap();
-        assert_eq!(d, Detected { php: Some(v("7.1")), docroot: "public".into(), secure: false });
+        assert_eq!(d, Detected { php: Some(v("7.1")), docroot: "public".into(), secure: None });
         // composer.json: the lowest supported fit when none installed fits.
         let d = detect(None, project, composer, &[v("8.4")], false, &is_dir).unwrap();
         assert_eq!(d.php, Some(v("7.3")));
         assert_eq!(detect(None, project, None, &[v("8.4")], false, &is_dir).unwrap().php, None);
         // The root is the docroot when there is no public/web/public_html.
         let d = detect(None, Path::new("/q"), None, &[], true, &is_dir).unwrap();
-        assert_eq!((d.docroot, d.secure), (PathBuf::from("."), true));
+        assert_eq!((d.docroot, d.secure), (PathBuf::from("."), Some(true)));
         // Overrides: relative kept, absolute inside made relative, outside refused.
         let over = |d: &str| SiteEntry { docroot: Some(d.into()), secure: Some(false), ..Default::default() };
+        // An explicit unsecure under secure_by_default is kept, so serving does not change.
         let d = detect(Some(&over("web")), project, None, &[], true, &is_dir).unwrap();
-        assert_eq!((d.docroot, d.secure), (PathBuf::from("web"), false));
+        assert_eq!((d.docroot, d.secure), (PathBuf::from("web"), Some(false)));
         assert_eq!(
             detect(Some(&over("/p/dist")), project, None, &[], false, &is_dir).unwrap().docroot,
             PathBuf::from("dist")
@@ -337,7 +357,7 @@ mod tests {
     #[test]
     fn rewrite_keeps_extensions_and_comments() {
         let existing = "# ours\nphp = \"7.1\" # legacy\nextensions = [\"redis\"]\ndocroot = \"web\"\n";
-        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: false };
+        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None };
         let out = rewrite(existing, &d).unwrap();
         let f = parse(&out, Path::new(FILE)).unwrap();
         assert_eq!((f.php, f.docroot.as_deref()), (Some(v("7.3")), Some(Path::new("public"))));
@@ -346,11 +366,14 @@ mod tests {
         // A key detection does not produce is kept.
         let kept = rewrite(
             "php = \"7.1\"\nsecure = true\n",
-            &Detected { php: None, docroot: ".".into(), secure: false },
+            &Detected { php: None, docroot: ".".into(), secure: None },
         )
         .unwrap();
         let f = parse(&kept, Path::new(FILE)).unwrap();
         assert_eq!((f.php, f.secure), (Some(v("7.1")), Some(true)));
+        let off = Detected { php: None, docroot: ".".into(), secure: Some(false) };
+        let f = parse(&rewrite("secure = true\n", &off).unwrap(), Path::new(FILE)).unwrap();
+        assert_eq!(f.secure, Some(false));
         assert_eq!(rewrite("php = [", &d).unwrap_err().code, ErrorCode::ProjectFileInvalid);
     }
 

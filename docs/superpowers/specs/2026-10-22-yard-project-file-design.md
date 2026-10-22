@@ -94,6 +94,8 @@ emailulator = true
 
 - Unknown keys are an error naming the file and the key, as in `sites.toml`
   (`deny_unknown_fields`). A file that does not parse puts only that site on the setup page (§5).
+  So does a `docroot` outside the project (`/`, `..`) or with a `$` or control character,
+  which nginx would expand in `root` and fail `nginx -t` for every site.
 - **Extensions are per PHP version, not per site.** `extensions = ["redis"]` means
   "redis must be installed and enabled for 7.3", which every 7.3 site then has. Yard never
   disables an extension because a `.yard` stopped listing it; removing one stays
@@ -170,8 +172,10 @@ Run in a project directory.
      does. Otherwise it is left out and the site uses the default.
    - `docroot`: a `yard docroot` override carried over, else what `yard link` would
      detect (`public/` today).
-   - `secure`: the site's effective setting, whether it comes from `sites.toml` or
-     `secure_by_default`, so a teammate gets the same HTTPS **(builder's call)**.
+   - `secure`: the site's own setting in `sites.toml` (`true` or `false`), else `true`
+     when `secure_by_default` is on, else left out so each teammate's
+     `secure_by_default` decides **(builder's call)**. Serving on this machine never
+     changes.
    - `[services]` (from M4b): written commented out, since Yard does not read `.env`
      (maintainer). The user uncomments what the project needs and runs `yard init` again, which
      applies it. M4a writes no `[services]` lines.
@@ -185,7 +189,9 @@ Run in a project directory.
 2. **Move the site's settings into it.** If the project is already linked, its `php`,
    `secure` and `docroot` leave `sites.toml`, so the file is the only source of truth (§2). Serving does
    not change.
-3. **Link it** when it is not linked yet, as `yard link [NAME]` would.
+3. **Link it** when it is not linked yet, as `yard link [NAME]` would. Unlike `yard link`,
+   it refuses a name another project or proxy already uses (`INVALID_ARGUMENT`, hint
+   `yard init <another name>`), since step 2 would strip that site's settings.
 4. **Confirm installs** (§2): list what the file needs that is missing and ask. `--yes`
    answers yes; with no terminal and no `--yes`, it lists them, installs nothing, and exits
    1 with `NEEDS_INSTALL`, hint `yard init --yes` **(builder's call)**.

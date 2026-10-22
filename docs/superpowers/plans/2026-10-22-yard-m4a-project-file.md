@@ -29,7 +29,7 @@
 
 1. **M4 is split.** M4a is `.yard` with `php`, `docroot`, `secure` and `extensions`, which the `.yard` spec §8 allows. M4b (services, `yard env`) and M4c (Node) get their own plans and add `[services]` and `node` to the file. Cost if wrong: one parser change in M4b.
 2. **`yard init` writes no commented `[services]` block until M4b.** Uncommenting it in M4a would only produce `PROJECT_FILE_INVALID`.
-3. **`secure` is written only when it is true**, matching the spec's eepower example. An absent key leaves HTTPS to each teammate's `secure_by_default`.
+3. **`secure` is written only when it is true**, matching the spec's eepower example. An absent key leaves HTTPS to each teammate's `secure_by_default`. *(Changed in the final review: `secure = false` is also written when `sites.toml` set it, so `yard init` never turns on HTTPS for an unsecured site under `secure_by_default`.)*
 4. **`docroot` must be relative and stay inside the project** (no absolute path, no `..`). A cloned repo must not be able to serve `/` or a sibling directory. `yard init` writes `"."` when the project root is the docroot.
 5. **Extensions in `.yard` are names, never `.so` paths** (a path is machine-specific). They take `yard ext add`'s name forms, with pinned releases (`xdebug-2.9.8`) included.
 6. **An extension counts as present** when `yard.toml` manages it for that version (enabled or not), when brew's `conf.d` loads it, or when the version's PHP has it compiled in. The compiled-in list comes from `<keg>/bin/php -n -m`, cached in `state/php-modules.json` by the canonical keg path, so a `brew upgrade` (a new Cellar path) runs it again.

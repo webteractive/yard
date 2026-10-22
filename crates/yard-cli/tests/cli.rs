@@ -976,3 +976,41 @@ fn sites_shows_needs_setup() {
     assert!(so.lines().nth(1).unwrap().ends_with("needs setup"), "{so}");
     assert!(so.lines().nth(2).unwrap().ends_with("serving"), "{so}");
 }
+
+#[test]
+fn link_with_an_invalid_project_file_fails() {
+    let mut site = project_site(json!([]));
+    let bad = json!({
+        "code": "PROJECT_FILE_INVALID",
+        "message": "/Users/me/code/blog/.yard line 1, column 1: unknown field `node`",
+        "hint": "edit /Users/me/code/blog/.yard",
+    });
+    site["project_error"] = bad;
+    let d = MockDaemon::start(&[("sites.link", Ok(site))]);
+    let out = d.yard().args(["link", "blog"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("error: /Users/me/code/blog/.yard line 1, column 1: unknown field `node`"), "{err}");
+    assert!(err.contains("  hint: edit /Users/me/code/blog/.yard"), "{err}");
+    assert!(!stdout(&out).contains("→"), "no URL for a site that is not serving: {}", stdout(&out));
+}
+
+#[test]
+fn init_yes_reports_what_is_still_missing() {
+    let needs = json!([{"kind": "extension", "name": "opcache", "php": "8.4"}]);
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("sites.init", vec![Ok(init_result(project_site(needs.clone())))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("ext.add", vec![Ok(json!({"job_id": "ext-add-1"}))]),
+            ("sites.list", vec![Ok(json!([project_site(needs)]))]),
+        ],
+        &[("ext.add", job_events("ext-add-1", json!(null)))],
+    );
+    let out = d.yard().args(["init", "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!stdout(&out).contains("Serving"), "{}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("error: blog still needs the opcache extension for PHP 8.4"), "{err}");
+    assert!(err.contains("  hint: yard doctor"), "{err}");
+}

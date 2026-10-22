@@ -91,6 +91,19 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     if !exts.is_empty() {
         site = refetch(ctx, &site.name).await?;
     }
+    if let Some(e) = &site.project_error {
+        return Err(e.clone().into());
+    }
+    // Installed, yet still missing: a module PHP lists under another name, say.
+    if !site.needs.is_empty() {
+        return Err(YardError::new(
+            ErrorCode::NeedsInstall,
+            format!("{} still needs {}", site.name, Need::describe_all(&site.needs)),
+        )
+        .with_hint("yard doctor")
+        .with_data(json!({ "needs": site.needs }))
+        .into());
+    }
     if !ctx.json {
         println!("Serving {}", site.url);
     }

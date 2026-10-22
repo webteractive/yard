@@ -376,3 +376,41 @@ async fn init_refuses_another_name_for_a_linked_project() {
     assert_eq!(e.hint.as_deref(), Some("yard unlink ee"));
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn init_keeps_an_explicitly_unsecured_site_on_http() {
+    let d = prepared("").await;
+    std::fs::write(d.fx.paths.yard_toml(), "secure_by_default = true\n").unwrap();
+    let dir = d.project("ee");
+    let mut toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    toml.push_str("secure = false\n");
+    std::fs::write(d.fx.paths.sites_toml(), toml).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert_eq!(site(&mut c, "ee").await["secure"], false);
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert!(r["text"].as_str().unwrap().contains("secure = false\n"), "{}", r["text"]);
+    assert_eq!(r["site"]["secure"], false, "serving does not change");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_refuses_a_name_linked_elsewhere() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let other = d.project("blog");
+    let mut toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    toml.push_str("php = \"7.1\"\n");
+    std::fs::write(d.fx.paths.sites_toml(), &toml).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("copy").join("blog");
+    std::fs::create_dir_all(&dir).unwrap();
+    let e = init(&mut c, &dir, json!({})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
+    assert!(e.message.contains(&other.display().to_string()), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("yard init <another name>"));
+    assert_eq!(std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap(), toml, "blog is untouched");
+    assert!(!dir.join(".yard").exists(), "nothing is written");
+    d.shutdown().await.unwrap();
+}

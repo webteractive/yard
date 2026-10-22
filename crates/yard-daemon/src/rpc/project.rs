@@ -41,6 +41,16 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
     };
     valid_name(&name)?;
     let entry = linked.map(|(_, e)| e);
+    // Unlike `yard link`, init would also strip the other site's settings: refuse.
+    if let (None, Some(other)) = (entry, sites.sites.get(&name)) {
+        let serves = match (&other.path, &other.proxy) {
+            (Some(path), _) => path.display().to_string(),
+            (None, Some(url)) => url.clone(),
+            (None, None) => "another project".to_string(),
+        };
+        return Err(YardError::new(ErrorCode::InvalidArgument, format!("{name} already serves {serves}"))
+            .with_hint("yard init <another name>"));
+    }
 
     let file = dir.join(project::FILE);
     let existing = read_project_file(&file).transpose()?;

@@ -5,12 +5,13 @@ use super::handlers::{not_found, reconcile, refuse_project_file, site, snapshot}
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::reconcile::{USER_OWNED_INI, fpm_unit};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml_edit::value;
 use yard_core::brew::Brew;
 use yard_core::config::yard::ExtSource;
 use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::php::{SUPPORTED, formula};
+use yard_core::project;
 use yard_core::{Paths, PhpVersion};
 use yard_core::{generated, ini};
 use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpParams};
@@ -89,8 +90,8 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
     }))
 }
 
-/// `PHP_IN_USE` while `v` is the default, a site is isolated to it, or an extension Yard
-/// installed for it is recorded.
+/// `PHP_IN_USE` while `v` is the default, a site runs it (its `.yard` names it, or it is
+/// isolated to it), or an extension Yard installed for it is recorded.
 fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Result<(), YardError> {
     let (yard, _) = load_yard(paths)?;
     if yard.default_php == v {
@@ -106,13 +107,31 @@ fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Resul
             YardError::new(ErrorCode::PhpInUse, format!("PHP {v} is the default version")).with_hint(hint)
         );
     }
-    let isolated: Vec<String> = load_sites(paths)?
+    let sites = load_sites(paths)?;
+    // A site with a .yard runs the file's php; whatever sites.toml says is not served.
+    let projects = crate::project::read_projects(&sites);
+    let from_files: Vec<(&String, PathBuf)> = projects
+        .iter()
+        .filter(|(_, p)| matches!(p, Ok(f) if f.php == Some(v)))
+        .filter_map(|(name, _)| Some((name, sites.sites.get(name)?.path.as_ref()?.join(project::FILE))))
+        .collect();
+    if let Some((_, file)) = from_files.first() {
+        let names: Vec<&str> = from_files.iter().map(|(n, _)| n.as_str()).collect();
+        let message = format!("PHP {v} runs {}, from its .yard", names.join(", "));
+        return Err(YardError::new(ErrorCode::PhpInUse, message).with_hint(format!(
+            "edit {}: php = \"{}\"",
+            file.display(),
+            yard.default_php
+        )));
+    }
+    let isolated: Vec<&String> = sites
         .sites
-        .into_iter()
-        .filter(|(_, e)| e.php == Some(v))
+        .iter()
+        .filter(|(name, e)| e.php == Some(v) && !projects.contains_key(*name))
         .map(|(name, _)| name)
         .collect();
     if let Some(first) = isolated.first() {
+        let isolated: Vec<&str> = isolated.iter().map(|n| n.as_str()).collect();
         let message = format!("PHP {v} runs {}, isolated to it", isolated.join(", "));
         return Err(
             YardError::new(ErrorCode::PhpInUse, message).with_hint(format!("yard unisolate --site {first}"))

@@ -174,7 +174,8 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   `yard.toml` (decided 2026-10-20), so a version installed with brew directly counts too.
 - `yard php uninstall <ver>` → `brew uninstall`, as a job. It is refused with
   `PHP_IN_USE`, before brew runs, while the version is the default, any site is
-  isolated to it, or `yard.toml` records a brew, pecl or path extension for it (hint
+  isolated to it or names it in its `.yard` (hint: the edit to make in that file), or
+  `yard.toml` records a brew, pecl or path extension for it (hint
   `yard ext remove <name> --php <ver>`); the job checks again when it starts, since it
   may wait behind another. After brew removes it, the version's `[php."<ver>"]` table,
   by then only bundled toggles, goes too.
@@ -291,8 +292,8 @@ quoted when it holds spaces or `;`.
 ### 4.5 Version resolution and isolation
 
 For a site, the version is the first match of:
-1. The `.yard` at the project's root (project-file spec §5): its `php`, the highest
-   installed version that meets it. A site with a `.yard` refuses `yard isolate`,
+1. The `.yard` at the project's root (project-file spec §5): its `php`, a major.minor
+   version. A site with a `.yard` refuses `yard isolate`,
    `secure` and `docroot` (`SITE_HAS_PROJECT_FILE`): the file owns them.
 2. `sites.toml` isolation (`yard isolate <ver> [--site <name>]`).
 3. The global default.
