@@ -489,3 +489,29 @@ async fn unsecure_reads_secure_by_default_from_yard_toml_not_the_last_good_state
     assert!(toml.contains("secure = false"), "unsecure opts out of the default it will meet: {toml}");
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn commands_are_refused_with_a_project_file() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let dir = d.project("ee");
+    std::fs::write(dir.join(".yard"), "").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let before = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    let file = dir.join(".yard").display().to_string();
+    for (method, params, change) in [
+        ("sites.isolate", json!({"site": "ee", "php": "7.1"}), "php = \"7.1\""),
+        ("sites.isolate", json!({"site": "ee"}), "remove php"),
+        ("sites.secure", json!({"site": "ee"}), "secure = true"),
+        ("sites.unsecure", json!({"site": "ee"}), "secure = false"),
+        ("sites.docroot", json!({"site": "ee", "path": "web"}), "docroot = \"web\""),
+    ] {
+        let e = c.call(method, params).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::SiteHasProjectFile, "{method}");
+        assert_eq!(e.message, format!("ee is configured by {file}"), "{method}");
+        assert_eq!(e.hint, Some(format!("edit {file}: {change}")), "{method}");
+    }
+    assert_eq!(std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap(), before);
+    d.shutdown().await.unwrap();
+}

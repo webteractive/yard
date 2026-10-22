@@ -109,6 +109,16 @@ impl Need {
         }
     }
 
+    /// `PHP 7.3, the redis extension for PHP 7.3 and …`
+    pub fn describe_all(needs: &[Need]) -> String {
+        let items: Vec<String> = needs.iter().map(Need::describe).collect();
+        match items.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => String::new(),
+        }
+    }
+
     /// The command that installs it.
     pub fn command(&self) -> String {
         match self {

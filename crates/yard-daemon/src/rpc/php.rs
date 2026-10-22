@@ -1,7 +1,7 @@
 //! `php.*`: the PHP versions brew has installed, installing and removing them as jobs,
 //! and the global default (spec §4.1).
 
-use super::handlers::{not_found, reconcile, site, snapshot};
+use super::handlers::{not_found, reconcile, refuse_project_file, site, snapshot};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::reconcile::{USER_OWNED_INI, fpm_unit};
@@ -149,6 +149,11 @@ pub(super) async fn set_default(ctx: &Context, p: PhpParams) -> Result<(), YardE
 
 /// `yard isolate` and `unisolate`: a linked site's own version, or back to the default.
 pub(super) async fn isolate(ctx: &Context, p: IsolateParams) -> Result<SiteInfo, YardError> {
+    let change = match &p.php {
+        Some(v) => format!("php = {v:?}"),
+        None => "remove php".to_string(),
+    };
+    refuse_project_file(ctx, &p.site, &change)?;
     let version = p.php.as_deref().map(str::parse::<PhpVersion>).transpose()?;
     TomlFile::edit(&ctx.paths.sites_toml(), |file| {
         let entry = file.doc().get("sites").and_then(|s| s.get(&p.site));

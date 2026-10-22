@@ -9,16 +9,17 @@ use crate::state::State;
 use crate::{holder, portscan, tls};
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
-use yard_core::config::{load_sites, load_yard};
+use yard_core::config::{YardConfig, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
+use yard_core::project::Projects;
 use yard_core::render::overrides_for;
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
-    Check, CheckStatus, DoctorReport, Holder, HolderKind, PortInfo, PortMode, PortStatus, SiteInfo, SiteKind,
-    UnitInfo, UnitState, YardError,
+    Check, CheckStatus, DoctorReport, Holder, HolderKind, Need, PortInfo, PortMode, PortStatus, SiteInfo,
+    SiteKind, UnitInfo, UnitState, YardError,
 };
 
 /// How many of a failed unit's last log lines the `units` check quotes.
@@ -47,6 +48,9 @@ struct View {
     registry: Option<Registry>,
     /// The resolution warnings, and the sites.
     sites: Option<(Vec<String>, Vec<SiteInfo>)>,
+    /// The `yard.toml` the sites were resolved with, and their projects' `.yard`.
+    yard: Option<YardConfig>,
+    projects: Projects,
     hashes: Result<Hashes, YardError>,
 }
 
@@ -59,6 +63,8 @@ impl View {
             tld: Some(snap.tld.clone()),
             registry: Some(snap.registry.clone()),
             sites: Some((snap.resolution.warnings.clone(), snap.resolution.sites.clone())),
+            yard: Some(snap.yard.clone()),
+            projects: snap.projects.clone(),
             hashes: Ok(state.hashes.clone()),
         })
     }
@@ -78,12 +84,13 @@ impl View {
             (Ok(y), Ok(_)) => Some(y.effective_tld().to_string()),
             _ => None,
         };
+        let mut projects = Projects::new();
         let sites = match (&yard, &sites_cfg, &registry, &tld) {
             (Ok(y), Ok(s), Ok(r), Some(tld)) => {
                 let mut warnings = yard_warnings.clone();
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
                 let https = r.entries.get(NGINX_HTTPS).map_or(r.profile.https_port(), |e| e.port);
-                let projects = crate::project::read_projects(s);
+                projects = crate::project::read_projects(s);
                 let mut resolution =
                     sites::resolve(y, s, &projects, tld, http, https, &|p: &Path| p.is_dir());
                 crate::project::fill_needs(&mut resolution.sites, &projects, y, brew, paths);
@@ -98,6 +105,8 @@ impl View {
             tld,
             registry: registry.ok(),
             sites,
+            yard: yard.ok(),
+            projects,
             hashes: Hashes::load(&paths.hashes()),
         }
     }
@@ -205,6 +214,9 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     if let Some((_, sites)) = &view.sites {
         let installed = brew.installed_php(&exists, &read_link);
         checks.extend(sites.iter().filter_map(|site| php_constraint(site, &installed)));
+        for site in sites {
+            checks.extend(project_checks(site, view.yard.as_ref(), &view.projects));
+        }
     }
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
@@ -270,6 +282,50 @@ fn php_constraint(site: &SiteInfo, installed: &[PhpVersion]) -> Option<Check> {
     };
     let id = format!("php-constraint:{}", site.name);
     Some(warn(&id, format!("{} wants php {wanted} (composer.json) but runs {runs}", site.name), hint))
+}
+
+/// `project-file:<site>` for a site served from a `.yard`: fails while the file does not
+/// parse or asks for what is not installed, warns when it lists an extension switched off
+/// in `yard.toml`. `yard-php-ignored:<site>` warns that a `.yard-php` beside it is unused.
+fn project_checks(site: &SiteInfo, yard: Option<&YardConfig>, projects: &Projects) -> Vec<Check> {
+    let (Some(file), SiteKind::Php { path, php, .. }) = (&site.project_file, &site.kind) else {
+        return vec![];
+    };
+    let id = format!("project-file:{}", site.name);
+    let off: Vec<&str> = match (projects.get(&site.name), yard, php.parse::<PhpVersion>()) {
+        (Some(Ok(project)), Some(yard), Ok(v)) => project
+            .extensions
+            .iter()
+            .filter(|e| {
+                yard.extensions
+                    .get(&v)
+                    .and_then(|exts| exts.iter().find(|(k, _)| k.eq_ignore_ascii_case(&e.module)))
+                    .is_some_and(|(_, entry)| !entry.enabled)
+            })
+            .map(|e| e.module.as_str())
+            .collect(),
+        _ => vec![],
+    };
+    let mut checks = vec![if let Some(e) = &site.project_error {
+        from_error(&id, e)
+    } else if !site.needs.is_empty() {
+        let message = format!("{} needs {}", site.name, Need::describe_all(&site.needs));
+        fail(&id, message, format!("cd {path} && yard init"))
+    } else if let Some(first) = off.first() {
+        let message = format!("{} lists {}, which is off for PHP {php}", site.name, off.join(", "));
+        warn(&id, message, format!("yard ext enable {first} --php {php}"))
+    } else {
+        ok(&id, format!("{} is served as {file} says", site.name))
+    }];
+    let yard_php = Path::new(path).join(".yard-php");
+    if yard_php.exists() {
+        checks.push(warn(
+            &format!("yard-php-ignored:{}", site.name),
+            format!("{} has a .yard, so {} is ignored", site.name, yard_php.display()),
+            format!("delete {}", yard_php.display()),
+        ));
+    }
+    checks
 }
 
 /// 1 when any check failed; warnings alone still exit 0.

@@ -210,13 +210,8 @@ fn setup_text(site: &SiteInfo) -> String {
         SiteKind::Php { path, .. } => path.as_str(),
         SiteKind::Proxy { .. } => "",
     };
-    let items: Vec<String> = site.needs.iter().map(Need::describe).collect();
-    let list = match items.split_last() {
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-        None => String::new(),
-    };
-    let them = if items.len() > 1 { "them" } else { "it" };
+    let list = Need::describe_all(&site.needs);
+    let them = if site.needs.len() > 1 { "them" } else { "it" };
     format!("{} needs {list}.\nRun yard init in {path} to install {them}.\n", site.name)
 }
 

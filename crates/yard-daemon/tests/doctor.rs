@@ -451,3 +451,51 @@ async fn security_does_not_inherit_a_listener() {
     check.abort();
     assert!(free, "security kept the listener on {port}");
 }
+
+impl Env {
+    /// A linked site `name` whose project holds `.yard` with `text`.
+    fn yard_site(&self, name: &str, text: &str, dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let project = dir.path().join(name);
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(".yard"), text).unwrap();
+        let mut sites = std::fs::read_to_string(self.fx.paths.sites_toml()).unwrap_or_default();
+        sites.push_str(&format!("[sites.{name}]\npath = {:?}\n", project.display().to_string()));
+        std::fs::write(self.fx.paths.sites_toml(), sites).unwrap();
+        project
+    }
+}
+
+#[tokio::test]
+async fn doctor_reports_project_files() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        e.fx.paths.yard_toml(),
+        "[php.\"8.4\".extensions]\nxdebug = { source = \"pecl\", enabled = false }\n",
+    )
+    .unwrap();
+    e.yard_site("met", "php = \"8.4\"\n", &dir);
+    let needy = e.yard_site("needy", "php = \"7.3\"\n", &dir);
+    let bad = e.yard_site("bad", "node = \"20\"\n", &dir);
+    let both = e.yard_site("both", "", &dir);
+    std::fs::write(both.join(".yard-php"), "7.1\n").unwrap();
+    e.yard_site("off", "extensions = [\"xdebug\"]\n", &dir);
+
+    let report = e.offline(&e.helper).await;
+    assert_eq!(only(&report, "project-file:met").status, CheckStatus::Ok);
+    let c = only(&report, "project-file:needy");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert_eq!(c.message, "needy needs PHP 7.3");
+    assert_eq!(c.hint.as_deref(), Some(format!("cd {} && yard init", needy.display()).as_str()));
+    let c = only(&report, "project-file:bad");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert!(c.message.contains("node"), "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some(format!("edit {}", bad.join(".yard").display()).as_str()));
+    let c = only(&report, "yard-php-ignored:both");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some(format!("delete {}", both.join(".yard-php").display()).as_str()));
+    let c = only(&report, "project-file:off");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some("yard ext enable xdebug --php 8.4"));
+    assert!(!report.checks.iter().any(|c| c.id == "yard-php-ignored:met"));
+}

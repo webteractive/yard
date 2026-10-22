@@ -13,7 +13,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use toml_edit::value;
 use yard_core::config::yard::DEFAULT_TLD;
-use yard_core::config::{TomlFile, load_yard};
+use yard_core::config::{TomlFile, load_sites, load_yard};
+use yard_core::project;
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
@@ -134,6 +135,20 @@ pub(super) fn not_found(name: &str) -> YardError {
         .with_hint("yard sites lists them")
 }
 
+/// `SITE_HAS_PROJECT_FILE` when the site's project has a `.yard`, which owns every
+/// setting `isolate`, `secure` and `docroot` would change. `change` is the edit to make
+/// in the file instead. Yard never edits the file itself.
+pub(super) fn refuse_project_file(ctx: &Context, site: &str, change: &str) -> Result<(), YardError> {
+    let sites = load_sites(&ctx.paths)?;
+    let Some(path) = sites.sites.get(site).and_then(|e| e.path.as_ref()) else { return Ok(()) };
+    let file = path.join(project::FILE);
+    if file.symlink_metadata().is_err() {
+        return Ok(());
+    }
+    Err(YardError::new(ErrorCode::SiteHasProjectFile, format!("{site} is configured by {}", file.display()))
+        .with_hint(format!("edit {}: {change}", file.display())))
+}
+
 fn valid_name(name: &str) -> Result<(), YardError> {
     if host_label(name).as_deref() == Some(name) {
         Ok(())
@@ -220,6 +235,11 @@ async fn unlink(ctx: &Context, p: NameParams, key: &str) -> Result<(), YardError
 }
 
 async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError> {
+    let change = match &p.path {
+        Some(path) => format!("docroot = {path:?}"),
+        None => "remove docroot".to_string(),
+    };
+    refuse_project_file(ctx, &p.site, &change)?;
     site(ctx, &p.site).await?;
     TomlFile::edit(&ctx.paths.sites_toml(), |file| {
         match &p.path {
@@ -238,6 +258,7 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
 /// securing then unsecuring a site leaves the file as it was. The default is read from
 /// `yard.toml` as it is now: the last good state can predate an edit to it.
 async fn secure(ctx: &Context, p: SiteParams, on: bool) -> Result<SiteInfo, YardError> {
+    refuse_project_file(ctx, &p.site, &format!("secure = {on}"))?;
     site(ctx, &p.site).await?;
     let default = load_yard(&ctx.paths)?.0.secure_by_default;
     TomlFile::edit(&ctx.paths.sites_toml(), |file| {
