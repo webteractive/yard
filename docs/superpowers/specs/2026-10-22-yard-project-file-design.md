@@ -60,9 +60,10 @@ the site itself is served from `sites.toml`, which lives on one machine.
 
 ## 4. The file
 
-TOML, at the project root (the directory `yard link` was run in), named `.yard`. Only
-that one is read; a `.yard` in a subdirectory is ignored (maintainer). The maintainer asked for the name;
-TOML is the builder's call, to match Yard's other files.
+TOML, at the project root (the directory `yard link` was run in), named `.yard`. For
+serving, only that one is read; a `.yard` in a subdirectory of a linked project is ignored
+(maintainer). The shims, which work without a link, use the nearest one instead (§5). The maintainer
+asked for the name; TOML is the builder's call, to match Yard's other files.
 
 ```toml
 # .yard: how Yard serves this project. Commit it.
@@ -97,8 +98,10 @@ emailulator = true
   `yard ext remove` **(builder's call)**.
 - Names take the same forms as `yard ext add`, pinned releases included
   (`"xdebug-2.9.8"`). A name compiled into brew's PHP (`mbstring`, `intl`) counts as
-  present: Yard checks `php -m` once per keg version when linking or initialising, never
-  on every reconcile. An extension the user turned off in `yard.toml` (`enabled = false`,
+  present. Yard learns which those are from `php -m`, run once per keg version and cached
+  under the data root. Reconcile, including one triggered by a `.yard` edit, reads the
+  cache, and runs `php -m` only for a keg version it has not seen (a new install or a
+  `brew upgrade`), never on every reconcile **(builder's call)**. An extension the user turned off in `yard.toml` (`enabled = false`,
   e.g. `yard xdebug off`) stays off; doctor notes that the file lists it
   **(builder's call)**.
 - **Services are shared too.** `mysql = "8.0"` means "the mysql 8.0 instance must run".
@@ -125,7 +128,8 @@ emailulator = true
 - **Shims.** A shim looks for `.yard` in the cwd and its parents, as it does for
   `.yard-php`, whether or not the project is linked, so `composer install` before
   `yard init` already runs under the project's PHP **(builder's call)**. It uses the
-  file's `php` (and, from M4, `node`); a file with no `php` key means the default.
+  nearest `.yard`, so in a subdirectory with its own file the shims follow that file while
+  serving follows the root's (§4) **(builder's call)**. It uses the file's `php` (and, from M4, `node`); a file with no `php` key means the default.
   `.yard` replaces `.yard-php`: when both exist, `.yard` wins and `yard doctor` warns
   that `.yard-php` is ignored. A directory with only `.yard-php` works as today. A
   `.yard` that does not parse is an error naming the file, like a bad `.yard-php`; one
@@ -162,10 +166,10 @@ Run in a project directory.
      (`yard isolate`), that version. Otherwise `composer.json`'s `require.php`, resolved
      to the highest installed version that satisfies it, else the lowest supported one that
      does. Otherwise it is left out and the site uses the default.
-   - `docroot`: what `yard link` would detect (`public/` today).
+   - `docroot`: a `yard docroot` override carried over, else what `yard link` would
+     detect (`public/` today).
    - `secure`: the site's effective setting, whether it comes from `sites.toml` or
      `secure_by_default`, so a teammate gets the same HTTPS **(builder's call)**.
-   - `docroot`: a `yard docroot` override carried over, else the detected one.
    - `[services]`: written commented out, since Yard does not read `.env` (maintainer). The user
      uncomments what the project needs and runs `yard init` again, which applies it.
    When a `.yard` already exists, `init` writes nothing and goes on with steps 2–4, so
