@@ -1,7 +1,7 @@
 //! One function per method. Mutations edit a TOML through `TomlFile`, then reconcile;
 //! they never write generated files themselves.
 
-use super::{ext, php};
+use super::{ext, php, project};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use toml_edit::value;
 use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::project;
+use yard_core::project::FILE as PROJECT_FILE;
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
@@ -33,6 +33,7 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::DOCTOR => json(Ok(doctor(ctx).await)),
         methods::SITES_LIST => json(Ok(snapshot(ctx).await?.resolution.sites)),
         methods::SITES_LINK => json(link(ctx, parse(params)?).await),
+        methods::SITES_INIT => json(project::init(ctx, parse(params)?).await),
         methods::SITES_UNLINK => json(unlink(ctx, parse(params)?, "path").await),
         methods::SITES_PROXY => json(proxy(ctx, parse(params)?).await),
         methods::SITES_UNPROXY => json(unlink(ctx, parse(params)?, "proxy").await),
@@ -141,7 +142,7 @@ pub(super) fn not_found(name: &str) -> YardError {
 pub(super) fn refuse_project_file(ctx: &Context, site: &str, change: &str) -> Result<(), YardError> {
     let sites = load_sites(&ctx.paths)?;
     let Some(path) = sites.sites.get(site).and_then(|e| e.path.as_ref()) else { return Ok(()) };
-    let file = path.join(project::FILE);
+    let file = path.join(PROJECT_FILE);
     if file.symlink_metadata().is_err() {
         return Ok(());
     }
@@ -149,7 +150,7 @@ pub(super) fn refuse_project_file(ctx: &Context, site: &str, change: &str) -> Re
         .with_hint(format!("edit {}: {change}", file.display())))
 }
 
-fn valid_name(name: &str) -> Result<(), YardError> {
+pub(super) fn valid_name(name: &str) -> Result<(), YardError> {
     if host_label(name).as_deref() == Some(name) {
         Ok(())
     } else {
@@ -158,7 +159,7 @@ fn valid_name(name: &str) -> Result<(), YardError> {
     }
 }
 
-fn directory(path: &str) -> Result<PathBuf, YardError> {
+pub(super) fn directory(path: &str) -> Result<PathBuf, YardError> {
     std::fs::canonicalize(path)
         .ok()
         .filter(|p| p.is_dir())

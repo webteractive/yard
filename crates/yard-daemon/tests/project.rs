@@ -223,3 +223,156 @@ async fn a_newly_linked_project_is_watched() {
     assert_eq!(s["php"], "7.3", "{s}");
     d.shutdown().await.unwrap();
 }
+
+async fn init(c: &mut Client, dir: &Path, extra: Value) -> Result<Value, yard_proto::YardError> {
+    let mut params = json!({"path": dir.display().to_string()});
+    params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    c.call("sites.init", params).await
+}
+
+#[tokio::test]
+async fn init_writes_links_and_moves_settings() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let dir = d.project("ee");
+    std::fs::create_dir_all(dir.join("web")).unwrap();
+    let mut toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    toml.push_str("php = \"7.1\"\nsecure = true\ndocroot = \"web\"\n");
+    std::fs::write(d.fx.paths.sites_toml(), toml).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let before = site(&mut c, "ee").await;
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!(r["written"], true);
+    assert_eq!(
+        r["text"],
+        "# .yard: how Yard serves this project. Commit it.\nphp = \"7.1\"\ndocroot = \"web\"\nsecure = true\n"
+    );
+    assert_eq!(std::fs::read_to_string(dir.join(".yard")).unwrap(), r["text"].as_str().unwrap());
+    let sites = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(!sites.contains("php") && !sites.contains("secure") && !sites.contains("docroot"), "{sites}");
+    let after = site(&mut c, "ee").await;
+    for key in ["php", "docroot", "secure", "url"] {
+        assert_eq!(after[key], before[key], "{key}: {after}");
+    }
+    assert_eq!(r["site"]["name"], "ee");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_links_an_unlinked_project() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("Fresh_App");
+    std::fs::create_dir_all(dir.join("public")).unwrap();
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!(r["site"]["name"], "fresh-app");
+    assert_eq!(r["text"], "# .yard: how Yard serves this project. Commit it.\ndocroot = \"public\"\n");
+    let named = d.projects.path().join("other");
+    std::fs::create_dir_all(&named).unwrap();
+    assert_eq!(init(&mut c, &named, json!({"name": "mine"})).await.unwrap()["site"]["name"], "mine");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_twice_is_a_no_op() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    init(&mut c, &dir, json!({})).await.unwrap();
+    let (file, sites) =
+        (std::fs::read(dir.join(".yard")).unwrap(), std::fs::read(d.fx.paths.sites_toml()).unwrap());
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!(r["written"], false);
+    assert_eq!(std::fs::read(dir.join(".yard")).unwrap(), file);
+    assert_eq!(std::fs::read(d.fx.paths.sites_toml()).unwrap(), sites);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_keeps_an_existing_file_without_force() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    write_yard(&dir, "# hand written\nphp = \"8.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!(
+        (r["written"].clone(), r["text"].clone()),
+        (json!(false), json!("# hand written\nphp = \"8.4\"\n"))
+    );
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_force_keeps_extensions() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    std::fs::create_dir_all(dir.join("public")).unwrap();
+    write_yard(&dir, "docroot = \"web\"\nextensions = [\"redis\"]\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let r = init(&mut c, &dir, json!({"force": true})).await.unwrap();
+    assert_eq!(r["written"], true);
+    let text = std::fs::read_to_string(dir.join(".yard")).unwrap();
+    assert!(text.contains("docroot = \"public\"") && text.contains("extensions = [\"redis\"]"), "{text}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_refuses_an_invalid_file() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("bad");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_yard(&dir, "node = \"20\"\n");
+    let e = init(&mut c, &dir, json!({})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::ProjectFileInvalid);
+    let sites = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap_or_default();
+    assert!(!sites.contains("bad"), "nothing was linked: {sites}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_force_refuses_a_symlinked_file() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("ln");
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = d.projects.path().join("elsewhere.toml");
+    std::fs::write(&target, "php = \"8.4\"\n").unwrap();
+    std::os::unix::fs::symlink(&target, dir.join(".yard")).unwrap();
+    let e = init(&mut c, &dir, json!({"force": true})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "php = \"8.4\"\n",
+        "the link's target is untouched"
+    );
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_returns_needs() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    write_yard(&dir, "php = \"7.3\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!(r["site"]["needs"], json!([{"kind": "php", "php": "7.3"}]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_refuses_another_name_for_a_linked_project() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = init(&mut c, &dir, json!({"name": "other"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument);
+    assert_eq!(e.hint.as_deref(), Some("yard unlink ee"));
+    d.shutdown().await.unwrap();
+}

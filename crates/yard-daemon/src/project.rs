@@ -28,7 +28,7 @@ pub fn read_small(file: &Path, max: u64) -> Option<String> {
 }
 
 /// `None` when there is no `.yard`; an error when there is one Yard will not read.
-fn read_project_file(file: &Path) -> Option<Result<String, YardError>> {
+pub fn read_project_file(file: &Path) -> Option<Result<String, YardError>> {
     let invalid = |what: &str| {
         YardError::new(ErrorCode::ProjectFileInvalid, format!("{} {what}", file.display()))
             .with_hint(format!("replace {} with a text file", file.display()))

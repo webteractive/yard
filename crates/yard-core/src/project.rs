@@ -1,9 +1,11 @@
 //! The `.yard` project file (project-file spec §4): how Yard serves the project it sits in.
 
 use crate::PhpVersion;
-use crate::config::SitesConfig;
 use crate::config::located_error;
 use crate::config::yard::{ExtName, parse_ext_name};
+use crate::config::{SiteEntry, SitesConfig};
+use crate::constraint::best_version;
+use crate::sites::detect_docroot;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -92,6 +94,89 @@ pub fn needs(
     missing_php.into_iter().chain(missing_exts).collect()
 }
 
+/// The first line `yard init` writes.
+pub const HEADER: &str = "# .yard: how Yard serves this project. Commit it.\n";
+
+/// What `yard init` can tell about a project, never guessed (project-file spec §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Detected {
+    pub php: Option<PhpVersion>,
+    /// Relative to the project; `.` for its root.
+    pub docroot: PathBuf,
+    pub secure: bool,
+}
+
+/// `php`: the site's isolation, else the version that best meets `composer.json`'s
+/// `require.php`, else none. `docroot`: the site's override, else the detected one.
+/// `secure`: the site's setting, else `secure_by_default`. A docroot outside the project
+/// is `INVALID_ARGUMENT`, since `.yard` cannot say it.
+pub fn detect(
+    entry: Option<&SiteEntry>,
+    project: &Path,
+    composer_json: Option<&str>,
+    installed: &[PhpVersion],
+    secure_by_default: bool,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> Result<Detected, YardError> {
+    let php = entry.and_then(|e| e.php).or_else(|| {
+        let json: serde_json::Value = serde_json::from_str(composer_json?).ok()?;
+        best_version(json.get("require")?.get("php")?.as_str()?, installed).map(|(v, _)| v)
+    });
+    let absolute = match entry.and_then(|e| e.docroot.as_ref()) {
+        Some(d) if d.is_absolute() => d.clone(),
+        Some(d) => project.join(d),
+        None => detect_docroot(project, is_dir),
+    };
+    let docroot = match absolute.strip_prefix(project) {
+        Ok(rel) if rel.as_os_str().is_empty() => PathBuf::from("."),
+        Ok(rel) if inside(rel) => rel.to_path_buf(),
+        _ => {
+            return Err(YardError::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "the docroot {} is outside {}, which .yard cannot say",
+                    absolute.display(),
+                    project.display()
+                ),
+            )
+            .with_hint("yard docroot <a path inside the project>"));
+        }
+    };
+    let secure = entry.and_then(|e| e.secure).unwrap_or(secure_by_default);
+    Ok(Detected { php, docroot, secure })
+}
+
+/// A new `.yard`. `secure` is written only when true: absent, HTTPS follows each
+/// teammate's `secure_by_default`.
+pub fn render(d: &Detected) -> String {
+    let mut out = HEADER.to_string();
+    if let Some(v) = d.php {
+        out.push_str(&format!("php = \"{v}\"\n"));
+    }
+    out.push_str(&format!("docroot = {}\n", toml_edit::Value::from(d.docroot.display().to_string())));
+    if d.secure {
+        out.push_str("secure = true\n");
+    }
+    out
+}
+
+/// `existing` with the keys detection produced written over, keeping every other key and
+/// comment: `php` only when detected, `docroot` always, `secure` only when true.
+pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
+    let mut doc: toml_edit::DocumentMut = existing.parse().map_err(|e: toml_edit::TomlError| {
+        YardError::new(ErrorCode::ProjectFileInvalid, format!(".yard does not parse: {}", e.message()))
+            .with_hint("fix it first, or delete it and run yard init")
+    })?;
+    if let Some(v) = d.php {
+        doc["php"] = toml_edit::value(v.to_string());
+    }
+    doc["docroot"] = toml_edit::value(d.docroot.display().to_string());
+    if d.secure {
+        doc["secure"] = toml_edit::value(true);
+    }
+    Ok(doc.to_string())
+}
+
 /// The `.yard` of each linked site. `read` gives `None` when there is no file, and an
 /// error when there is one Yard cannot read.
 pub fn load(sites: &SitesConfig, read: &dyn Fn(&Path) -> Option<Result<String, YardError>>) -> Projects {
@@ -109,6 +194,7 @@ pub fn load(sites: &SitesConfig, read: &dyn Fn(&Path) -> Option<Result<String, Y
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SiteEntry;
     use crate::config::sites::parse_sites;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -196,6 +282,76 @@ mod tests {
             [Need::Extension { name: "xdebug-2.9.8".into(), php: "8.4".into() }]
         );
         assert_eq!(needs(&pinned, v("8.4"), &[v("8.4")], &|m| m == "xdebug"), []);
+    }
+
+    fn v(s: &str) -> crate::PhpVersion {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn render_for_eepower() {
+        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: false };
+        assert_eq!(
+            render(&d),
+            "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n"
+        );
+        let d = Detected { php: None, docroot: ".".into(), secure: true };
+        assert_eq!(
+            render(&d),
+            "# .yard: how Yard serves this project. Commit it.\ndocroot = \".\"\nsecure = true\n"
+        );
+        assert!(parse(&render(&d), Path::new(FILE)).is_ok());
+    }
+
+    #[test]
+    fn detect_table() {
+        let dirs = ["/p/public"];
+        let is_dir = |p: &Path| dirs.iter().any(|d| Path::new(d) == p);
+        let project = Path::new("/p");
+        let composer = Some(r#"{"require": {"php": "^7.3"}}"#);
+        // Isolation wins over composer.json.
+        let entry = SiteEntry { php: Some(v("7.1")), ..Default::default() };
+        let d = detect(Some(&entry), project, composer, &[v("7.1")], false, &is_dir).unwrap();
+        assert_eq!(d, Detected { php: Some(v("7.1")), docroot: "public".into(), secure: false });
+        // composer.json: the lowest supported fit when none installed fits.
+        let d = detect(None, project, composer, &[v("8.4")], false, &is_dir).unwrap();
+        assert_eq!(d.php, Some(v("7.3")));
+        assert_eq!(detect(None, project, None, &[v("8.4")], false, &is_dir).unwrap().php, None);
+        // The root is the docroot when there is no public/web/public_html.
+        let d = detect(None, Path::new("/q"), None, &[], true, &is_dir).unwrap();
+        assert_eq!((d.docroot, d.secure), (PathBuf::from("."), true));
+        // Overrides: relative kept, absolute inside made relative, outside refused.
+        let over = |d: &str| SiteEntry { docroot: Some(d.into()), secure: Some(false), ..Default::default() };
+        let d = detect(Some(&over("web")), project, None, &[], true, &is_dir).unwrap();
+        assert_eq!((d.docroot, d.secure), (PathBuf::from("web"), false));
+        assert_eq!(
+            detect(Some(&over("/p/dist")), project, None, &[], false, &is_dir).unwrap().docroot,
+            PathBuf::from("dist")
+        );
+        for outside in ["/elsewhere/www", "../x"] {
+            let e = detect(Some(&over(outside)), project, None, &[], false, &is_dir).unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidArgument, "{outside}");
+        }
+    }
+
+    #[test]
+    fn rewrite_keeps_extensions_and_comments() {
+        let existing = "# ours\nphp = \"7.1\" # legacy\nextensions = [\"redis\"]\ndocroot = \"web\"\n";
+        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: false };
+        let out = rewrite(existing, &d).unwrap();
+        let f = parse(&out, Path::new(FILE)).unwrap();
+        assert_eq!((f.php, f.docroot.as_deref()), (Some(v("7.3")), Some(Path::new("public"))));
+        assert_eq!(modules(&f), ["redis"]);
+        assert!(out.starts_with("# ours\n"), "{out}");
+        // A key detection does not produce is kept.
+        let kept = rewrite(
+            "php = \"7.1\"\nsecure = true\n",
+            &Detected { php: None, docroot: ".".into(), secure: false },
+        )
+        .unwrap();
+        let f = parse(&kept, Path::new(FILE)).unwrap();
+        assert_eq!((f.php, f.secure), (Some(v("7.1")), Some(true)));
+        assert_eq!(rewrite("php = [", &d).unwrap_err().code, ErrorCode::ProjectFileInvalid);
     }
 
     #[test]
