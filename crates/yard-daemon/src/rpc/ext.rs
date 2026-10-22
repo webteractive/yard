@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{InlineTable, value};
 use yard_core::PhpVersion;
-use yard_core::config::yard::{ExtEntry, ExtSource, valid_ext_name};
+use yard_core::config::yard::{ExtEntry, ExtSource, parse_ext_name, valid_ext_name};
 use yard_core::config::{TomlFile, load_yard};
 use yard_core::render::php::ini_loads;
 use yard_proto::methods::{ExtAddParams, ExtListParams, ExtParams, XdebugParams};
@@ -34,22 +34,17 @@ pub(super) fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardErro
         }
         None => (p.name.clone(), None),
     };
-    // `xdebug-2.9.8` pins a pecl release, which legacy PHP often needs: the module is
-    // `xdebug`, and pecl gets the whole name.
-    let (module, release) = match module.split_once('-') {
-        Some((m, version))
-            if so.is_none()
-                && version.starts_with(|c: char| c.is_ascii_digit())
-                && version.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') =>
-        {
-            (m.to_string(), Some(p.name.clone()))
+    let (module, release) = match so {
+        Some(_) if !valid_ext_name(&module) => {
+            return Err(bad(format!("{module:?} is not an extension name: use letters, digits and _"))
+                .with_hint("yard ext add --help"));
         }
-        _ => (module, None),
+        Some(_) => (module, None),
+        None => {
+            let name = parse_ext_name(&p.name)?;
+            (name.module, name.release)
+        }
     };
-    if !valid_ext_name(&module) {
-        return Err(bad(format!("{module:?} is not an extension name: use letters, digits and _"))
-            .with_hint("yard ext add --help"));
-    }
     let (yard, _) = load_yard(&ctx.paths)?;
     if yard.extensions.get(&v).is_some_and(|exts| exts.contains_key(&module)) {
         return Err(bad(format!("{module} is already added for PHP {v}"))

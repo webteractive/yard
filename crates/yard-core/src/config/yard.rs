@@ -59,6 +59,39 @@ pub fn valid_ext_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
+/// An extension as `yard ext add` and `.yard` name it: `redis`, or `xdebug-2.9.8`, a pinned
+/// pecl release, which legacy PHP often needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtName {
+    /// As given.
+    pub written: String,
+    /// The module PHP loads: `xdebug`.
+    pub module: String,
+    /// The pecl package to install when a release is pinned: `xdebug-2.9.8`.
+    pub release: Option<String>,
+}
+
+/// A name in `yard ext add`'s forms; not a `.so` path.
+pub fn parse_ext_name(name: &str) -> Result<ExtName, YardError> {
+    let (module, release) = match name.split_once('-') {
+        Some((m, version))
+            if version.starts_with(|c: char| c.is_ascii_digit())
+                && version.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') =>
+        {
+            (m, Some(name.to_string()))
+        }
+        _ => (name, None),
+    };
+    if !valid_ext_name(module) {
+        return Err(YardError::new(
+            yard_proto::ErrorCode::InvalidArgument,
+            format!("{module:?} is not an extension name: use letters, digits and _"),
+        )
+        .with_hint("yard ext add --help"));
+    }
+    Ok(ExtName { written: name.to_string(), module: module.to_string(), release })
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPhp {
@@ -283,6 +316,21 @@ custom = { source = "path", so = "/opt/ext/custom.so" }
             let e = parse(Some(bad)).unwrap_err();
             assert_eq!(e.code, ErrorCode::ConfigInvalid, "{bad}");
             assert_eq!(e.data.unwrap()["line"], line, "{bad}: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn parse_ext_name_forms() {
+        let x = parse_ext_name("xdebug-2.9.8").unwrap();
+        assert_eq!(
+            (x.written.as_str(), x.module.as_str(), x.release.as_deref()),
+            ("xdebug-2.9.8", "xdebug", Some("xdebug-2.9.8"))
+        );
+        let r = parse_ext_name("redis").unwrap();
+        assert_eq!((r.module.as_str(), r.release), ("redis", None));
+        // A suffix that is not a version stays part of the name, which is then invalid.
+        for bad in ["../x", "re dis", "pdo-mysql", ""] {
+            assert_eq!(parse_ext_name(bad).unwrap_err().code, ErrorCode::InvalidArgument, "{bad}");
         }
     }
 

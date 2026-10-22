@@ -15,13 +15,23 @@ use yard_proto::{ErrorCode, YardError};
 /// `CONFIG_INVALID` pointing at the offending line and column, so a typo in a
 /// hand-edited file is found without guessing.
 pub(crate) fn config_error(file: &Path, text: &str, span: Option<Range<usize>>, message: &str) -> YardError {
+    let hint = format!("fix {}; Yard keeps serving the last good configuration until then", file.display());
+    located_error(ErrorCode::ConfigInvalid, file, text, span, message, hint)
+}
+
+/// An error with `code` naming `file`, line and column, with `data { file, line, column }`.
+pub(crate) fn located_error(
+    code: ErrorCode,
+    file: &Path,
+    text: &str,
+    span: Option<Range<usize>>,
+    message: &str,
+    hint: String,
+) -> YardError {
     let (line, column) = span.map(|s| line_col(text, s.start)).unwrap_or((1, 1));
-    YardError::new(
-        ErrorCode::ConfigInvalid,
-        format!("{} line {line}, column {column}: {}", file.display(), message.trim()),
-    )
-    .with_hint(format!("fix {}; Yard keeps serving the last good configuration until then", file.display()))
-    .with_data(serde_json::json!({ "file": file.display().to_string(), "line": line, "column": column }))
+    YardError::new(code, format!("{} line {line}, column {column}: {}", file.display(), message.trim()))
+        .with_hint(hint)
+        .with_data(serde_json::json!({ "file": file.display().to_string(), "line": line, "column": column }))
 }
 
 fn line_col(text: &str, offset: usize) -> (usize, usize) {
