@@ -708,8 +708,8 @@ Each milestone is usable on its own and gets its own implementation plan.
 4. **M4 Node and services:** fnm wrapper, MySQL, Postgres, Redis, emailulator,
    MinIO, `yard env`.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
-   cloudflared, for webhooks and similar. Designed in
-   `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.
+   cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
+   Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.
 6. **M6 Yard.app:** client, menu bar, main window, onboarding.
 7. **M7 Distribution:** signing, notarization, appdater, brew tap.
 

@@ -49,8 +49,9 @@ Why:
 
 ### Non-goals (v1)
 
-- Other tunnel providers (ngrok, Tailscale Funnel, Expose). The design keeps the provider
-  behind one module, but v1 ships cloudflared only **(builder's call)**.
+- Building any provider but cloudflared. M5 ships the provider seam (§7.1) and cloudflared
+  behind it; ngrok and Tailscale Funnel follow, each with its own plan (maintainer, 2026-10-21).
+  Expose and others are not planned.
 - Cloudflare Access policies, WAF rules or anything else configured in the Cloudflare
   dashboard. Users do that themselves.
 - Deleting DNS records through the Cloudflare API (see §8 and open question 2).
@@ -59,7 +60,7 @@ Why:
   tunnels only **(builder's call)**.
 - Pausing a named tunnel without removing it. `yard untunnel` and `yard tunnel` again is the
   v1 path **(builder's call)**.
-- A production PHP profile, queue workers or a scheduler Tunnels share
+- A production PHP profile, queue workers or a scheduler. Tunnels share
   a dev site and nothing more (maintainer, 2026-10-21, §1).
 
 ### Anti-goals (never)
@@ -102,8 +103,8 @@ From the main spec and `.hydra/rules/`:
 
 | | Quick | Named |
 |---|---|---|
-| Command | `yard tunnel [site]` | `yard tunnel [site] --host <hostname>` |
-| Cloudflare account | none | yes, with the zone of `<hostname>`, and `cloudflared tunnel login` done |
+| Command | `yard tunnel [site] [--quick]` | `yard tunnel [site] --host <hostname>` |
+| Cloudflare account | none | yes, with `<hostname>` under a domain set up with `yard tunnels domain add` (§4.1) |
 | URL | random `https://<words>.trycloudflare.com`, new on every start | `https://<hostname>`, stable |
 | Lives in | yardd's memory only | `sites.toml` |
 | After yardd restarts | gone | comes back |
@@ -115,14 +116,58 @@ From the main spec and `.hydra/rules/`:
   They are held in `State.quick_tunnels` and reconcile adds their units like any other.
   Cloudflare documents quick tunnels as for testing, without uptime guarantees and rate
   limited; that is fine for "show this to someone now".
-- **One named tunnel per site (builder's call).** `yard tunnel --host` creates a Cloudflare
-  tunnel named `yard-<site>` unless `--tunnel <name|uuid>` names an existing one to adopt
-  (one made by hand, say). One tunnel per site keeps failure, restart and teardown per site,
-  and maps one-to-one onto a unit. The alternative, one tunnel per machine with an ingress
-  rule per hostname, is open question 3.
+- **One named tunnel per site (maintainer, 2026-10-21).** `yard tunnel --host` creates a
+  Cloudflare tunnel named `yard-<site>` unless `--tunnel <name|uuid>` names an existing one
+  to adopt (one made by hand, say). One tunnel per site keeps failure, restart and teardown
+  per site, and maps one-to-one onto a unit, so adding or removing one site never drops
+  another site's webhooks. One tunnel per machine was considered and rejected.
 - A site has at most one tunnel, and a named tunnel serves at most one hostname in v1
   **(builder's call)**. Several hostnames for one site can come later as a list.
 - Tunnels work for linked (PHP) sites and proxied sites alike.
+
+### 4.1 Custom domains (maintainer, 2026-10-21)
+
+The Cloudflare account and the domains a named tunnel may use are set up once, ahead of
+any tunnel, rather than discovered when one is made.
+
+- `yard tunnels domain add [DOMAIN]` runs `cloudflared tunnel login` for the user: it opens
+  the browser, where they sign in to Cloudflare and pick the zone. It is a job whose output
+  streams to the terminal, and it must run in a real terminal. When it finishes, Yard
+  records the zone as a domain in `yard.toml` (§6). `DOMAIN` is checked against the zone
+  picked; without it, Yard records whatever zone was picked.
+- `yard tunnels domain remove DOMAIN` forgets a domain. Named tunnels already on it keep
+  running; `yard tunnel --host` can no longer pick it.
+- `yard tunnels domains` lists them, with whether cloudflared's login is still present
+  (an existence check, never a read; §2 anti-goals).
+- **Several domains.** A `cloudflared tunnel login` authorizes one zone. Whether the
+  certificate it writes also lets `tunnel route dns` add records in a second zone of the
+  same account is for the plan to check on the installed cloudflared. If it does not, each
+  domain gets its own certificate, written by cloudflared to a path Yard names per domain
+  and passed back to cloudflared with `--origincert`; Yard still never reads, copies or
+  moves it **(builder's call)**.
+
+**Choosing a URL.** With no domain set up, `yard tunnel` makes a quick tunnel, as before.
+Once a domain is set up, `yard tunnel` with neither `--quick` nor `--host` asks:
+
+```
+$ yard tunnel
+Share blog at:
+  1) a random URL on trycloudflare.com (until yardd stops)
+  2) blog.example.com
+  3) another name on a domain you set up
+Choice [2]:
+```
+
+- The suggested name is `<site>.<domain>` for each domain set up, one line each; the
+  default is the first. Choice 3 asks for the name and checks it ends in a domain set up.
+- The prompt runs in the CLI, never in yardd: the CLI resolves the answer to `--quick` or
+  `--host` and sends `tunnels.add` as usual. yardd keeps no interactive state.
+- **No terminal, no prompt.** When stdin is not a TTY, or with `--json`, `yard tunnel`
+  never asks: with domains set up it fails with `TUNNEL_KIND_REQUIRED` and exit 2, hint
+  `yard tunnel <site> --quick` or `--host <name>`, so a script never gets a public URL it
+  did not choose **(builder's call)**.
+- `--host` on a name outside every domain set up fails with `TUNNEL_DOMAIN_NOT_SET_UP`,
+  hint `yard tunnels domain add <domain>`.
 
 ## 5. CLI
 
@@ -132,16 +177,25 @@ is positional and defaults to the site containing the current directory. Every c
 standard 0/1/2/3.
 
 ```
-yard tunnel [SITE] [--host HOSTNAME] [--tunnel NAME|UUID] [--overwrite-dns]
+yard tunnel [SITE] [--quick | --host HOSTNAME] [--provider NAME] [--tunnel NAME|UUID] [--overwrite-dns]
 yard untunnel [SITE] [--keep-tunnel]
 yard tunnels
+yard tunnels domain add [DOMAIN] [--provider NAME]
+yard tunnels domain remove DOMAIN
+yard tunnels domains
 ```
+
+`yard tunnels` with no subcommand lists tunnels, so `domain` and `domains` are subcommands
+of `tunnels`, never of `tunnel`, where they would read as a site name **(builder's call)**.
 
 `--help` text (first lines):
 
-- `tunnel`: "Share a site at a public URL through a cloudflared tunnel. Without --host,
-  a quick tunnel on trycloudflare.com that lasts until yardd stops; with --host, a named
-  tunnel on your Cloudflare zone that stays until yard untunnel."
+- `tunnel`: "Share a site at a public URL through a cloudflared tunnel. --quick gives a
+  random trycloudflare.com URL that lasts until yardd stops; --host gives a name on a domain
+  you set up with yard tunnels domain add, which stays until yard untunnel. With neither,
+  it asks when a domain is set up, and makes a quick tunnel when none is."
+- `tunnels domain add`: "Sign in to Cloudflare in your browser and pick a domain that
+  yard tunnel --host may use."
 - `untunnel`: "Stop sharing a site. For a named tunnel, also deletes the Cloudflare tunnel
   Yard created; the DNS record is left for you to delete."
 - `tunnels`: "List the sites shared through tunnels, with their public URLs and state."
@@ -232,6 +286,21 @@ host = "blog.example.com"
   table works too: reconcile runs it once its facts (below) exist, and otherwise reports
   `TUNNEL_NOT_FOUND` with the hint `yard tunnel <site> --host <host>`.
 
+### Domains: `yard.toml`
+
+The domains set up with `yard tunnels domain add` (§4.1) are machine-wide settings, so they
+live in `yard.toml`, edited like the rest of it, comments kept:
+
+```toml
+[tunnels.cloudflared]
+domains = ["example.com"]
+```
+
+Settings are per provider (§7.1); cloudflared's are its domains.
+
+A domain the user adds here by hand works once its certificate exists; `yard tunnels
+domains` and doctor say when it does not.
+
 ### Facts Yard learned: `state/tunnels.json`
 
 Machine-written, not user config (like `state/hashes.json`):
@@ -319,6 +388,9 @@ logs/tunnel-<site>.log              # the unit's log, rotated like the rest
 
 ## 7. How cloudflared runs
 
+cloudflared is the first provider behind the seam in §7.1; everything in this section is
+its implementation.
+
 - One unit per tunnel, named `tunnel-<site>` (like `php-fpm-8.4`) **(builder's call)**.
 - Program: `<prefix>/opt/cloudflared/bin/cloudflared`, resolved by `Brew` like nginx. A
   missing keg is `FORMULA_MISSING` with hint `brew install cloudflared` (`brew reinstall
@@ -350,16 +422,56 @@ logs/tunnel-<site>.log              # the unit's log, rotated like the rest
   cancel like brew jobs.
 - `yard stop` and yardd shutdown stop tunnel units with the rest. Named tunnels come back
   on `yard start` because they are config; quick tunnels do not.
-- Logging into Cloudflare stays the user's own step: Yard's hint is
-  `cloudflared tunnel login`, which opens a browser **(builder's call; no `yard tunnel
-  login` wrapper in v1)**.
+- Logging into Cloudflare is `yard tunnels domain add` (§4.1), which runs
+  `cloudflared tunnel login` (maintainer, 2026-10-21).
+
+### 7.1 Providers (maintainer, 2026-10-21)
+
+Tunnels are built so more providers can be added: ngrok and Tailscale Funnel for sure,
+cloudflared first and alone in M5.
+
+- **One trait, one module per provider.** `yard-daemon` gets a `tunnel::Provider` trait and
+  `tunnel::cloudflared` as its only implementation in M5 **(builder's call on the shape)**.
+  The trait covers what differs between providers:
+  - the unit for a running tunnel (program, args, env, health check)
+  - the add and remove steps run inside jobs
+  - how the public URL is learned
+  - domain or account setup
+  - its doctor checks
+
+  Pure parts, such as rendering a provider's config file, live in `yard-core` as
+  `tunnel::<provider>`, per the rust-workspace rule. Everything else in this design is shared
+  by all providers: the per-tunnel nginx listener (§9), the port entries (§11), `sites.toml`
+  intent, `state/tunnels.json`, the RPC methods and the CLI.
+- **Config names the provider.** `[sites.<site>.tunnel]` takes `provider`, and `yard.toml`
+  holds provider settings under `[tunnels.<provider>]` (§6). An omitted `provider` means
+  `cloudflared`, so M5's files stay valid when others arrive.
+- **The CLI takes `--provider NAME`** on `yard tunnel` and on `yard tunnels domain add`,
+  defaulting to `cloudflared`. In M5 any other name fails with `INVALID_ARGUMENT`, and the
+  error names the providers that exist.
+- **The wire names it too.** `TunnelInfo` and `TunnelDomain` carry
+  `provider: TunnelProvider`, an enum with the single variant `Cloudflared` in M5. Adding
+  `Ngrok` or `TailscaleFunnel` later is a protocol minor bump, per the rpc-protocol rule
+  **(builder's call)**.
+- **Known differences the seam must allow,** to be designed in their own specs:
+  - ngrok needs an authtoken. It is a secret, so Yard stores it in the login keychain or
+    leaves it in ngrok's own config, and never writes it to a file it owns. Custom domains
+    are reserved in ngrok's dashboard.
+  - Tailscale Funnel gives the machine one `<machine>.<tailnet>.ts.net` name, serves only on
+    ports 443, 8443 and 10000, and runs through the `tailscale` CLI and daemon, not a binary
+    Yard starts. There may be no unit at all, only `tailscale funnel` calls, and a hostname
+    per site may not be possible.
+
+  The trait is designed around cloudflared alone and must not grow features for these two
+  before they are planned. Their specs may change the trait.
 
 ## 8. DNS routing and cleanup
 
 Adding (`tunnels.add` with a host):
 
-1. Refuse early when `~/.cloudflared/cert.pem` does not exist (existence check only):
-   `TUNNEL_NOT_LOGGED_IN`, hint `cloudflared tunnel login`.
+1. Refuse early when the host is under no domain set up (`TUNNEL_DOMAIN_NOT_SET_UP`), or
+   when that domain's certificate does not exist (existence check only):
+   `TUNNEL_NOT_LOGGED_IN`, hint `yard tunnels domain add <domain>`.
 2. `cloudflared tunnel list --name <name> -o json`. With no `--tunnel`, an existing tunnel
    named `yard-<site>` that `state/tunnels.json` does not record as Yard's is refused:
    `TUNNEL_EXISTS`, hint `yard tunnel <site> --host <host> --tunnel yard-<site>` to adopt it.
@@ -521,7 +633,10 @@ this is built):
 | Method | Params | Result |
 |---|---|---|
 | `tunnels.list` | none | `Vec<TunnelInfo>` |
-| `tunnels.add` | `{ site, host?, tunnel?, overwrite_dns? }` | `JobStarted`; the job's result is a `TunnelInfo` |
+| `tunnels.domains` | none | `Vec<TunnelDomain>` (`{ provider, domain, logged_in }`) |
+| `tunnels.domain_add` | `{ provider?, domain? }` | `JobStarted`; the job runs `cloudflared tunnel login`, its result a `TunnelDomain` |
+| `tunnels.domain_remove` | `{ domain }` | `Vec<TunnelDomain>` |
+| `tunnels.add` | `{ site, provider?, host?, tunnel?, overwrite_dns? }` | `JobStarted`; the job's result is a `TunnelInfo` |
 | `tunnels.remove` | `{ site, keep_tunnel? }` | `JobStarted`; the job's result is a `TunnelRemoved` |
 
 `job_finished` carries no result today, so jobs that produce one need a `result: Option<Value>`
@@ -532,8 +647,11 @@ Types (in `yard-proto`, used unchanged by `--json`):
 ```rust
 pub enum TunnelKind { Quick, Named }
 
+pub enum TunnelProvider { Cloudflared }   // ngrok and Tailscale Funnel later (§7.1)
+
 pub struct TunnelInfo {
     pub site: String,
+    pub provider: TunnelProvider,
     pub kind: TunnelKind,
     pub url: Option<String>,          // None while a quick tunnel has no hostname yet
     pub host: Option<String>,         // named only
@@ -562,7 +680,9 @@ New error codes (stable, each with a hint that is the command that fixes it):
 
 | Code | When | Hint |
 |---|---|---|
-| `TUNNEL_NOT_LOGGED_IN` | a named tunnel needs Cloudflare and `cert.pem` is missing | `cloudflared tunnel login` |
+| `TUNNEL_NOT_LOGGED_IN` | a named tunnel needs Cloudflare and the domain's certificate is missing | `yard tunnels domain add <domain>` |
+| `TUNNEL_DOMAIN_NOT_SET_UP` | `--host` is under no domain set up | `yard tunnels domain add <domain>` |
+| `TUNNEL_KIND_REQUIRED` | domains are set up, and there is no terminal to ask in | `yard tunnel <site> --quick` or `--host <name>` |
 | `TUNNEL_EXISTS` | `yard-<site>` exists in the account but Yard did not make it | `yard tunnel <site> --host <host> --tunnel yard-<site>` |
 | `TUNNEL_NOT_FOUND` | the site has no tunnel, or `--tunnel` names none | `yard tunnel <site>` |
 | `TUNNEL_CREDENTIALS_MISSING` | the tunnel's credentials file is gone | `yard untunnel <site> && yard tunnel <site> --host <host>` |
@@ -583,7 +703,7 @@ New checks, only when at least one tunnel is configured or running:
 | id | ok | warn / fail |
 |---|---|---|
 | `cloudflared` | brew's cloudflared is at its keg | fail: `brew install cloudflared` |
-| `tunnel-login` | `~/.cloudflared/cert.pem` exists (stat only) | warn when named tunnels exist: `cloudflared tunnel login` (running needs no login; changing does) |
+| `tunnel-login` | each domain in `yard.toml` has its certificate (stat only) | warn per missing one: `yard tunnels domain add <domain>` (running needs no login; changing does) |
 | `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error; warn while `connecting` |
 | `tunnel-credentials:<site>` | credentials file exists (stat only) | fail: `TUNNEL_CREDENTIALS_MISSING` hint |
 | `tunnel-dns:<host>` | — | warn per `dns_left` record still resolving: "delete the CNAME <host> → <target> in the Cloudflare dashboard" |
@@ -628,6 +748,9 @@ against a scratch site and curls the trycloudflare URL; it needs the network and
 Cloudflare account, so ask the maintainer first. A named-tunnel e2e needs his zone and login and is a
 manual step.
 
+ngrok and Tailscale Funnel come after M5 as providers behind §7.1, each with its own
+spec and plan (maintainer, 2026-10-21). Where they fall in the milestone order is not set yet.
+
 When built, the same change updates: main spec §3.3 (data layout), §5 (a tunnels section),
 §6.1 (HTTP health), §6.2 (methods, topic), §6.3 (codes), §7 (tunnel entries), §12; the
 README; `AGENTS.md`; and the cli-output, port-registry, config-ownership and homebrew rules.
@@ -639,16 +762,13 @@ Most important first. Each answer changes what gets built.
 1. ~~Sharing a dev site, or running apps in production?~~ Answered by the maintainer on
    2026-10-21: sharing only, publicly or with whoever has the link, for webhooks and similar
    (§1).
-2. **May Yard hold a Cloudflare API token to delete DNS records?** cloudflared cannot delete
-   them. With a token (scoped to DNS edit, stored in the login keychain, never in a file),
-   `yard untunnel` could clean up fully. Without it, the user deletes the CNAME by hand and
-   doctor reminds them. This design assumes no token.
-3. **One Cloudflare tunnel per site, or one per machine?** Per site (this design) isolates
-   failures and maps onto units, but makes one tunnel and one credentials file per site.
-   One per machine, with an ingress rule per hostname, is Cloudflare's usual model, fewer
-   objects in the account, but every change restarts every tunnel.
-4. **Should named tunnels start at login?** As designed, they come back whenever yardd
-   starts, so a shared site is public whenever the Mac is on. If you would rather they
-   start only on request, a named tunnel needs an `enabled` flag and `yard tunnel start|stop`.
-5. **Is cloudflared the only provider for M5?** ngrok, Tailscale Funnel or Expose would each
-   need their own unit and auth story; this design keeps one provider behind one module.
+2. ~~May Yard hold a Cloudflare API token to delete DNS records?~~ the maintainer moved on without one
+   on 2026-10-21, so the design stands: no token; the user deletes the CNAME and doctor
+   reminds them.
+3. ~~One Cloudflare tunnel per site, or one per machine?~~ Per site (maintainer, 2026-10-21, §4),
+   with the account and its domains set up once (§4.1).
+4. ~~Should named tunnels start at login?~~ Yes (maintainer, 2026-10-21): a named tunnel comes
+   back whenever yardd starts, until `yard untunnel`, so webhooks keep arriving after a
+   restart. There is no `enabled` flag or `yard tunnel start|stop`.
+5. ~~Is cloudflared the only provider for M5?~~ Yes for M5 (maintainer, 2026-10-21), behind a
+   provider seam (§7.1), with ngrok and Tailscale Funnel to follow.
