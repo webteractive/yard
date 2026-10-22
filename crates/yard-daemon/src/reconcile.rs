@@ -24,6 +24,7 @@ use yard_core::generated::{self, Action};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::php::system_timezone;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
+use yard_core::project::Projects;
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site};
@@ -235,7 +236,8 @@ impl Reconciler {
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
 
         // 3. Resolve sites.
-        let resolution = sites::resolve(&yard, &sites_cfg, &tld, http, https, &|p: &Path| p.is_dir());
+        let resolution =
+            sites::resolve(&yard, &sites_cfg, &Projects::new(), &tld, http, https, &|p: &Path| p.is_dir());
         report.warnings.extend(resolution.warnings.iter().cloned());
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.

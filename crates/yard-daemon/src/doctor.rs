@@ -10,11 +10,11 @@ use crate::{holder, portscan, tls};
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
 use yard_core::config::{load_sites, load_yard};
-use yard_core::constraint::satisfies;
+use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
-use yard_core::php::SUPPORTED;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
+use yard_core::project::Projects;
 use yard_core::render::overrides_for;
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
@@ -84,7 +84,8 @@ impl View {
                 let mut warnings = yard_warnings.clone();
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
                 let https = r.entries.get(NGINX_HTTPS).map_or(r.profile.https_port(), |e| e.port);
-                let resolution = sites::resolve(y, s, tld, http, https, &|p: &Path| p.is_dir());
+                let resolution =
+                    sites::resolve(y, s, &Projects::new(), tld, http, https, &|p: &Path| p.is_dir());
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }
@@ -268,13 +269,10 @@ fn php_constraint(site: &SiteInfo, installed: &[PhpVersion]) -> Option<Check> {
     if satisfies(wanted, runs)? {
         return None;
     }
-    let fits = |v: &&PhpVersion| satisfies(wanted, **v) == Some(true);
-    let hint = match installed.iter().filter(fits).max() {
-        Some(v) => format!("yard isolate {v} --site {}", site.name),
-        None => match SUPPORTED.iter().find(fits) {
-            Some(v) => format!("yard php install {v}"),
-            None => format!("no PHP Yard supports (7.0–8.5) satisfies {wanted}; change composer.json"),
-        },
+    let hint = match best_version(wanted, installed) {
+        Some((v, true)) => format!("yard isolate {v} --site {}", site.name),
+        Some((v, false)) => format!("yard php install {v}"),
+        None => format!("no PHP Yard supports (7.0–8.5) satisfies {wanted}; change composer.json"),
     };
     let id = format!("php-constraint:{}", site.name);
     Some(warn(&id, format!("{} wants php {wanted} (composer.json) but runs {runs}", site.name), hint))

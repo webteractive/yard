@@ -2,6 +2,20 @@
 //! picks versions, not patch releases, so `>=7.1.3` is met by 7.1.
 
 use crate::PhpVersion;
+use crate::php::SUPPORTED;
+
+/// The version that best meets `wanted`: the highest installed one, else the lowest Yard
+/// supports (`false`: it needs installing). `None` when none does or Yard cannot read it.
+pub fn best_version(wanted: &str, installed: &[PhpVersion]) -> Option<(PhpVersion, bool)> {
+    let fits = |v: &PhpVersion| satisfies(wanted, *v) == Some(true);
+    installed
+        .iter()
+        .copied()
+        .filter(fits)
+        .max()
+        .map(|v| (v, true))
+        .or_else(|| SUPPORTED.iter().copied().find(fits).map(|v| (v, false)))
+}
 
 /// Whether `v` meets `constraint`: `*`, `7.1`/`7.1.*`, `^`, `~`, `>=`, `>`, `<=`, `<`,
 /// `!=`, terms joined by spaces or commas (and) and `||`/`|` (or). `None` for anything
@@ -100,6 +114,16 @@ fn term_holds(term: &str, v: PhpVersion) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn best_version_prefers_installed() {
+        let v = |s: &str| s.parse::<PhpVersion>().unwrap();
+        assert_eq!(best_version("^7.1", &[v("7.1"), v("7.4")]), Some((v("7.4"), true)));
+        assert_eq!(best_version("^7.2", &[]), Some((v("7.2"), false)));
+        assert_eq!(best_version("^7.2", &[v("8.4")]), Some((v("7.2"), false)));
+        assert_eq!(best_version(">=9", &[v("8.4")]), None);
+        assert_eq!(best_version("dev-main", &[v("8.4")]), None);
+    }
 
     #[test]
     fn constraint_table() {

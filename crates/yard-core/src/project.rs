@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use toml::Spanned;
-use yard_proto::{ErrorCode, YardError};
+use yard_proto::{ErrorCode, Need, YardError};
 
 /// The file's name, at the project root.
 pub const FILE: &str = ".yard";
@@ -73,6 +73,25 @@ fn inside(path: &Path) -> bool {
     path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
+/// What `file` asks for that is missing, for a site on `v`. `has_ext` says whether a
+/// module is present for `v`; while `v` is not installed it can only know what
+/// `yard.toml` manages, so every other listed extension is a need until PHP is there.
+pub fn needs(
+    file: &ProjectFile,
+    v: PhpVersion,
+    installed: &[PhpVersion],
+    has_ext: &dyn Fn(&str) -> bool,
+) -> Vec<Need> {
+    let php = v.to_string();
+    let missing_php = (!installed.contains(&v)).then(|| Need::Php { php: php.clone() });
+    let missing_exts = file
+        .extensions
+        .iter()
+        .filter(|e| !has_ext(&e.module))
+        .map(|e| Need::Extension { name: e.written.clone(), php: php.clone() });
+    missing_php.into_iter().chain(missing_exts).collect()
+}
+
 /// The `.yard` of each linked site. `read` gives `None` when there is no file, and an
 /// error when there is one Yard cannot read.
 pub fn load(sites: &SitesConfig, read: &dyn Fn(&Path) -> Option<Result<String, YardError>>) -> Projects {
@@ -93,7 +112,7 @@ mod tests {
     use crate::config::sites::parse_sites;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
-    use yard_proto::ErrorCode;
+    use yard_proto::{ErrorCode, Need};
 
     const FILE: &str = "/code/eepower/.yard";
 
@@ -158,6 +177,25 @@ mod tests {
         let f = parse_ok("extensions = [\"xdebug-2.9.8\"]\n");
         assert_eq!(modules(&f), ["xdebug"]);
         assert_eq!(f.extensions[0].written, "xdebug-2.9.8");
+    }
+
+    #[test]
+    fn needs_table() {
+        let v = |s: &str| s.parse::<crate::PhpVersion>().unwrap();
+        let file = parse_ok("php = \"7.3\"\nextensions = [\"redis\"]\n");
+        let php = Need::Php { php: "7.3".into() };
+        let redis = Need::Extension { name: "redis".into(), php: "7.3".into() };
+        // Missing PHP: what yard.toml manages for it is known, compiled-in modules are not.
+        assert_eq!(needs(&file, v("7.3"), &[v("8.4")], &|_| false), [php.clone(), redis.clone()]);
+        assert_eq!(needs(&file, v("7.3"), &[v("8.4")], &|m| m == "redis"), [php]);
+        assert_eq!(needs(&file, v("7.3"), &[v("7.3")], &|m| m == "redis"), []);
+        assert_eq!(needs(&file, v("7.3"), &[v("7.3")], &|_| false), [redis]);
+        let pinned = parse_ok("extensions = [\"xdebug-2.9.8\"]\n");
+        assert_eq!(
+            needs(&pinned, v("8.4"), &[v("8.4")], &|_| false),
+            [Need::Extension { name: "xdebug-2.9.8".into(), php: "8.4".into() }]
+        );
+        assert_eq!(needs(&pinned, v("8.4"), &[v("8.4")], &|m| m == "xdebug"), []);
     }
 
     #[test]
