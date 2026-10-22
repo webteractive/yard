@@ -11,7 +11,7 @@ use std::process::{Command, ExitCode};
 use yard_core::brew::Brew;
 use yard_core::config::yard::parse_yard;
 use yard_core::config::{SitesConfig, load_sites, load_yard};
-use yard_core::shim::{command, resolve_version};
+use yard_core::shim::{Source, command, resolve_version};
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
 
@@ -25,6 +25,19 @@ fn main() -> ExitCode {
         eprintln!("  hint: {hint}");
     }
     ExitCode::from(1)
+}
+
+/// The largest `.yard` or `.yard-php` the shim reads.
+const FILE_MAX: u64 = 64 * 1024;
+
+/// `file` if it is a small regular file: a FIFO named `.yard` in a parent directory would
+/// otherwise hang every `php` run below it.
+fn read_small(file: &Path) -> Option<String> {
+    let meta = std::fs::metadata(file).ok()?;
+    if !meta.is_file() || meta.len() > FILE_MAX {
+        return None;
+    }
+    std::fs::read_to_string(file).ok()
 }
 
 fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
@@ -45,13 +58,21 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
         YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
             .with_hint("cd into an existing directory")
     })?;
-    let (v, source) = resolve_version(&cwd, &yard, &sites, &|p| std::fs::read_to_string(p).ok())?;
+    let (v, source) = resolve_version(&cwd, &yard, &sites, &read_small)?;
     if std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1") {
         eprintln!("yard-shim: {name} runs PHP {v} ({source})");
     }
     let exists = |p: &Path| p.exists();
     let brew = Brew::from_env(&exists)?;
-    let opt = brew.php_opt(v, &exists, &|p| std::fs::read_link(p).ok())?;
+    let opt = brew.php_opt(v, &exists, &|p| std::fs::read_link(p).ok()).map_err(|e| match &source {
+        // The project asks for it, so `yard init` there is what installs it.
+        Source::Project(file) => YardError::new(
+            ErrorCode::FormulaMissing,
+            format!("PHP {v} is not installed ({})", file.display()),
+        )
+        .with_hint("yard init"),
+        _ => e,
+    })?;
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let (program, pre, env) = command(name, v, &opt, &brew, &paths, &inherited, &exists)?;
     let e = Command::new(&program).args(pre).args(args).envs(env).exec();

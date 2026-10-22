@@ -293,9 +293,11 @@ For a site, the version is the first match of:
 2. The global default.
 
 For the CLI shims (current working directory), the version is the first match of:
-1. The isolation of the site containing the cwd.
-2. A `.yard-php` file in the cwd or any parent.
-3. The global default.
+1. The nearest `.yard` in the cwd or any parent (project-file spec §5): its `php`, else
+   the global default.
+2. The isolation of the site containing the cwd.
+3. A `.yard-php` file in the cwd or any parent.
+4. The global default.
 
 `composer.json` `require.php` is advisory only: `yard doctor` warns when the
 resolved version does not satisfy it (check `php-constraint:<site>`). Constraints are
@@ -318,7 +320,10 @@ profile; Yard does not edit dotfiles.
 - The shim reads `yard.toml` and `sites.toml` itself, with no daemon. The containing
   site is the linked site whose `path` is the longest ancestor of the cwd; one that is
   not isolated falls through to `.yard-php`. A bad `.yard-php` is `INVALID_ARGUMENT`
-  naming the file. A `yard.toml` or `sites.toml` that does not parse is only a warning
+  naming the file, and a `.yard` that does not parse is `PROJECT_FILE_INVALID`. Only a
+  regular file of at most 64 KiB is read, so a FIFO cannot hang the shim. When a `.yard`
+  names a PHP that is not installed, the error is `FORMULA_MISSING`, `PHP <v> is not
+  installed (<file>)`, hint `yard init`. A `yard.toml` or `sites.toml` that does not parse is only a warning
   on stderr: the shim uses PHP 8.4 as the default, or ignores site isolation, so one
   half-saved file does not stop every `php` on the machine.
 - It runs `<keg>/bin/<name>` (`composer`: `<keg>/bin/php <brew>/bin/composer`, and

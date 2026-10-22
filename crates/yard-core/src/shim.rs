@@ -3,7 +3,7 @@
 
 use crate::brew::Brew;
 use crate::config::{SitesConfig, YardConfig};
-use crate::{Paths, PhpVersion};
+use crate::{Paths, PhpVersion, project};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -15,6 +15,8 @@ pub const SHIMS: [&str; 5] = ["php", "composer", "pecl", "phpize", "php-config"]
 /// Why the shim chose a version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
+    /// The nearest `.yard`: its `php`, or the default when it names none.
+    Project(PathBuf),
     /// The isolation of the linked site containing the cwd.
     Site(String),
     /// The nearest `.yard-php`.
@@ -25,6 +27,7 @@ pub enum Source {
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Source::Project(file) => write!(f, "{}", file.display()),
             Source::Site(name) => write!(f, "site {name} is isolated to it"),
             Source::File(file) => write!(f, "{}", file.display()),
             Source::Default => write!(f, "the default"),
@@ -32,14 +35,22 @@ impl fmt::Display for Source {
     }
 }
 
-/// The version a shim runs in `cwd` (spec §4.5): the isolation of the innermost linked
-/// site containing it, else the nearest `.yard-php`, else the default.
+/// The version a shim runs in `cwd` (spec §4.5, project-file spec §5): the nearest `.yard`
+/// (its `php`, else the default), else the isolation of the innermost linked site
+/// containing it, else the nearest `.yard-php`, else the default.
 pub fn resolve_version(
     cwd: &Path,
     yard: &YardConfig,
     sites: &SitesConfig,
     read: &dyn Fn(&Path) -> Option<String>,
 ) -> Result<(PhpVersion, Source), YardError> {
+    for dir in cwd.ancestors() {
+        let file = dir.join(project::FILE);
+        if let Some(text) = read(&file) {
+            let php = project::parse(&text, &file)?.php;
+            return Ok((php.unwrap_or(yard.default_php), Source::Project(file)));
+        }
+    }
     let site = sites
         .sites
         .iter()
@@ -176,6 +187,49 @@ php = "7.4"
             assert_eq!(e.code, ErrorCode::InvalidArgument, "{bad}");
             assert!(e.message.contains("/w/.yard-php"), "{}", e.message);
         }
+    }
+
+    #[test]
+    fn project_file_beats_isolation_and_yard_php() {
+        let (yard, sites) = configs(SITES);
+        let files = BTreeMap::from([
+            (PathBuf::from("/code/.yard-php"), "7.2\n".to_string()),
+            (PathBuf::from("/code/old/.yard"), "php = \"7.3\"\n".to_string()),
+        ]);
+        let read = |p: &Path| files.get(p).cloned();
+        let got = resolve_version(Path::new("/code/old/app"), &yard, &sites, &read).unwrap();
+        assert_eq!(got, (v("7.3"), Source::Project("/code/old/.yard".into())));
+        assert_eq!(got.1.to_string(), "/code/old/.yard");
+    }
+
+    #[test]
+    fn project_file_without_php_is_the_default() {
+        let (yard, sites) = configs(SITES);
+        let files = BTreeMap::from([(PathBuf::from("/code/old/.yard"), "docroot = \"web\"\n".to_string())]);
+        let read = |p: &Path| files.get(p).cloned();
+        let got = resolve_version(Path::new("/code/old/app"), &yard, &sites, &read).unwrap();
+        assert_eq!(got, (v("8.4"), Source::Project("/code/old/.yard".into())));
+    }
+
+    #[test]
+    fn nearest_project_file_wins() {
+        let (yard, sites) = configs("");
+        let files = BTreeMap::from([
+            (PathBuf::from("/code/a/.yard"), "php = \"7.3\"\n".to_string()),
+            (PathBuf::from("/code/a/sub/.yard"), "php = \"7.4\"\n".to_string()),
+        ]);
+        let read = |p: &Path| files.get(p).cloned();
+        let got = resolve_version(Path::new("/code/a/sub/x"), &yard, &sites, &read).unwrap();
+        assert_eq!(got, (v("7.4"), Source::Project("/code/a/sub/.yard".into())));
+    }
+
+    #[test]
+    fn bad_project_file_names_it() {
+        let (yard, sites) = configs("");
+        let read = |p: &Path| (p == Path::new("/w/.yard")).then(|| "php = 7.3\n".to_string());
+        let e = resolve_version(Path::new("/w/x"), &yard, &sites, &read).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(e.message.contains("/w/.yard"), "{}", e.message);
     }
 
     fn env_of(env: &[(String, String)], key: &str) -> Option<String> {

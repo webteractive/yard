@@ -129,3 +129,26 @@ fn a_broken_yard_toml_warns_and_keeps_site_isolation() {
     assert!(stdout.contains("php@7.1/bin/php"), "{stdout}");
     assert!(stderr.starts_with("yard: ") && stderr.contains("yard.toml"), "{stderr}");
 }
+
+#[test]
+fn missing_project_php_hints_init() {
+    let s = setup();
+    std::fs::write(s.project.join(".yard"), "php = \"7.3\"\n").unwrap();
+    let out = run(&s, &[], false);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let file = s.project.join(".yard");
+    assert!(stderr.contains(&format!("yard: PHP 7.3 is not installed ({})", file.display())), "{stderr}");
+    assert!(stderr.contains("  hint: yard init"), "{stderr}");
+}
+
+#[test]
+fn project_file_php_is_run() {
+    let s = setup();
+    script(&s.brew.join("opt/php@8.4/bin/php"), "echo \"argv0:$0\"");
+    std::fs::write(s.project.join(".yard"), "docroot = \"public\"\n").unwrap();
+    let out = run(&s, &[], true);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("php@8.4/bin/php"), "the file has no php, so the default: {stdout}");
+    assert!(stderr.contains(&s.project.join(".yard").display().to_string()), "{stderr}");
+}
