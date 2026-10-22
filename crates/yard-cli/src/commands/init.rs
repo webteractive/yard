@@ -8,10 +8,25 @@ use std::io::{BufRead, IsTerminal, Write};
 use yard_proto::methods::{self, ExtAddParams, InitParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
-pub async fn init(ctx: &Ctx, name: Option<String>, force: bool, yes: bool) -> Outcome {
-    let params = InitParams { path: cwd()?.display().to_string(), name, force };
-    let mut result: InitResult = ctx.client().await?.call(methods::SITES_INIT, params).await?;
+pub async fn init(ctx: &Ctx, name: Option<String>, force: bool, replace: bool, yes: bool) -> Outcome {
+    let mut params = InitParams { path: cwd()?.display().to_string(), name, force, replace };
+    let mut client = ctx.client().await?;
+    let mut result: InitResult = match client.call(methods::SITES_INIT, &params).await {
+        // The name serves another directory and this one has its own .yard: ask first.
+        Err(e) if e.code == ErrorCode::SiteNameTaken && interactive(ctx) => {
+            println!("{}.", e.message);
+            if !confirm("Replace it with this directory? [y/N] ") {
+                return Err(e.into());
+            }
+            params.replace = true;
+            client.call(methods::SITES_INIT, &params).await?
+        }
+        other => other?,
+    };
     if !ctx.json {
+        if let Some(from) = &result.moved_from {
+            println!("Moved {} here from {from}.", result.site.name);
+        }
         match result.written {
             true => println!("Wrote {}:", result.file),
             false => println!("{} is already there:", result.file),
@@ -46,8 +61,7 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
             println!("  {}  ({})", need.describe(), need.command());
         }
     }
-    let interactive = !ctx.json && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let agreed = yes || (interactive && confirm("Install these? [y/N] "));
+    let agreed = yes || (interactive(ctx) && confirm("Install these? [y/N] "));
     if !agreed {
         return Err(YardError::new(
             ErrorCode::NeedsInstall,
@@ -125,6 +139,11 @@ async fn refetch(ctx: &Ctx, name: &str) -> Result<SiteInfo, CliError> {
             .with_hint("yard sites lists them")
             .into()
     })
+}
+
+/// A person to ask: stdin and stdout are terminals, and the output is not `--json`.
+fn interactive(ctx: &Ctx) -> bool {
+    !ctx.json && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 fn confirm(question: &str) -> bool {

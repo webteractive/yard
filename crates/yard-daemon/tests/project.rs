@@ -394,23 +394,72 @@ async fn init_keeps_an_explicitly_unsecured_site_on_http() {
     d.shutdown().await.unwrap();
 }
 
+/// `ctl` linked at `<projects>/ctl/site` on PHP 7.1, as a project whose repository root
+/// is one level up. Returns the repository root.
+fn nested_site(d: &support::daemon::Daemon) -> std::path::PathBuf {
+    let root = d.projects.path().join("ctl");
+    std::fs::create_dir_all(root.join("site/public")).unwrap();
+    let toml = format!("[sites.ctl]\npath = {:?}\nphp = \"7.1\"\n", root.join("site").display().to_string());
+    std::fs::write(d.fx.paths.sites_toml(), toml).unwrap();
+    root
+}
+
 #[tokio::test]
-async fn init_refuses_a_name_linked_elsewhere() {
+async fn init_moves_a_site_to_a_directory_without_a_file() {
     let d = prepared("").await;
     d.fx.add_php("7.1");
-    let other = d.project("blog");
-    let mut toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
-    toml.push_str("php = \"7.1\"\n");
-    std::fs::write(d.fx.paths.sites_toml(), &toml).unwrap();
+    let root = nested_site(&d);
     let d = d.start().await;
     let mut c = d.client().await;
-    let dir = d.projects.path().join("copy").join("blog");
+    let r = init(&mut c, &root, json!({})).await.unwrap();
+    let canonical = root.canonicalize().unwrap();
+    assert_eq!(r["moved_from"], root.join("site").display().to_string(), "as sites.toml spelled it");
+    assert_eq!(
+        r["text"],
+        "# .yard: how Yard serves this project. Commit it.\nphp = \"7.1\"\ndocroot = \"site/public\"\n"
+    );
+    let sites = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(
+        sites.contains(&format!("{:?}", canonical.display().to_string())) && !sites.contains("php"),
+        "{sites}"
+    );
+    let s = site(&mut c, "ctl").await;
+    assert_eq!(s["php"], "7.1", "{s}");
+    assert_eq!(s["docroot"], canonical.join("site/public").display().to_string(), "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_asks_before_moving_a_site_onto_an_existing_file() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let root = nested_site(&d);
+    write_yard(&root, "docroot = \"site/public\"\n");
+    let before = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = init(&mut c, &root, json!({})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::SiteNameTaken, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some("yard init --replace"));
+    assert_eq!(e.data.as_ref().unwrap()["name"], "ctl");
+    assert_eq!(std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap(), before, "nothing moved");
+
+    let r = init(&mut c, &root, json!({"replace": true})).await.unwrap();
+    assert_eq!((r["written"].clone(), r["site"]["name"].clone()), (json!(false), json!("ctl")));
+    assert!(r["moved_from"].as_str().unwrap().ends_with("/ctl/site"), "{r}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_asks_before_replacing_a_proxy() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    c.call("sites.proxy", json!({"name": "api", "url": "http://127.0.0.1:3000"})).await.unwrap();
+    let dir = d.projects.path().join("api");
     std::fs::create_dir_all(&dir).unwrap();
     let e = init(&mut c, &dir, json!({})).await.unwrap_err();
-    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
-    assert!(e.message.contains(&other.display().to_string()), "{}", e.message);
-    assert_eq!(e.hint.as_deref(), Some("yard init <another name>"));
-    assert_eq!(std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap(), toml, "blog is untouched");
-    assert!(!dir.join(".yard").exists(), "nothing is written");
+    assert_eq!(e.code, yard_proto::ErrorCode::SiteNameTaken, "{e:?}");
+    assert!(e.message.contains("http://127.0.0.1:3000"), "{}", e.message);
+    assert!(!dir.join(".yard").exists());
     d.shutdown().await.unwrap();
 }

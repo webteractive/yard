@@ -1,9 +1,10 @@
 //! `sites.init`: write a project's `.yard`, link the project, and move its settings out
 //! of `sites.toml` (project-file spec §4).
 
-use super::handlers::{directory, reconcile, site, valid_name};
+use super::handlers::{directory, reconcile, site, snapshot, valid_name};
 use crate::daemon::Context;
 use crate::project::{read_project_file, read_small};
+use serde_json::json;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use toml_edit::value;
@@ -11,7 +12,7 @@ use yard_core::config::{SiteEntry, TomlFile, load_sites, load_yard};
 use yard_core::project::{self, Detected};
 use yard_core::sites::host_label;
 use yard_proto::methods::InitParams;
-use yard_proto::{ErrorCode, InitResult, YardError};
+use yard_proto::{ErrorCode, InitResult, SiteKind, YardError};
 
 /// The largest `composer.json` `init` reads for `require.php`.
 const COMPOSER_JSON_MAX: u64 = 1 << 20;
@@ -41,19 +42,31 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
     };
     valid_name(&name)?;
     let entry = linked.map(|(_, e)| e);
-    // Unlike `yard link`, init would also strip the other site's settings: refuse.
+    let file = dir.join(project::FILE);
+    let existing = read_project_file(&file).transpose()?;
+
+    // The name serves another directory: init codifies that site here. Without a .yard
+    // yet that is what the user is doing; a .yard here, or a proxy, needs `replace`.
+    let mut moved_from = None;
+    let mut carried = None;
     if let (None, Some(other)) = (entry, sites.sites.get(&name)) {
         let serves = match (&other.path, &other.proxy) {
             (Some(path), _) => path.display().to_string(),
             (None, Some(url)) => url.clone(),
             (None, None) => "another project".to_string(),
         };
-        return Err(YardError::new(ErrorCode::InvalidArgument, format!("{name} already serves {serves}"))
-            .with_hint("yard init <another name>"));
+        if (existing.is_some() || other.path.is_none()) && !p.replace {
+            return Err(YardError::new(ErrorCode::SiteNameTaken, format!("{name} already serves {serves}"))
+                .with_hint("yard init --replace")
+                .with_data(json!({ "name": name, "serves": serves })));
+        }
+        if other.path.is_some() {
+            carried = Some(carry(ctx, &name, other, &dir).await);
+        }
+        moved_from = Some(serves);
     }
+    let entry = carried.as_ref().or(entry);
 
-    let file = dir.join(project::FILE);
-    let existing = read_project_file(&file).transpose()?;
     let (text, written) = match existing {
         Some(text) if !p.force => {
             project::parse(&text, &file)?;
@@ -77,14 +90,36 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
         for key in ["php", "secure", "docroot"] {
             toml.remove(&["sites", &name, key]);
         }
-        if entry.is_none() {
+        if linked.is_none() {
             toml.remove(&["sites", &name, "proxy"]);
             toml.set(&["sites", &name, "path"], value(dir.display().to_string()));
         }
         Ok(())
     })?;
     reconcile(ctx).await?;
-    Ok(InitResult { file: file.display().to_string(), text, written, site: site(ctx, &name).await? })
+    let site = site(ctx, &name).await?;
+    Ok(InitResult { file: file.display().to_string(), text, written, site, moved_from })
+}
+
+/// The settings of `name`, linked at another directory, as they apply once it serves
+/// `dir`: its own `php` and `secure` (from `sites.toml`, else its old `.yard`), and the
+/// directory it serves when that is inside `dir`, so serving does not change.
+async fn carry(ctx: &Context, name: &str, other: &SiteEntry, dir: &Path) -> SiteEntry {
+    let snapshot = snapshot(ctx).await.ok();
+    let old_file = snapshot.as_ref().and_then(|s| s.projects.get(name)).and_then(|p| p.as_ref().ok());
+    let served =
+        snapshot.as_ref().and_then(|s| s.resolution.sites.iter().find(|s| s.name == name)).and_then(|s| {
+            match &s.kind {
+                SiteKind::Php { docroot, .. } => std::fs::canonicalize(docroot).ok(),
+                SiteKind::Proxy { .. } => None,
+            }
+        });
+    SiteEntry {
+        php: other.php.or(old_file.and_then(|f| f.php)),
+        secure: other.secure.or(old_file.and_then(|f| f.secure)),
+        docroot: served.filter(|d| d.starts_with(dir)),
+        ..Default::default()
+    }
 }
 
 fn dir_label(dir: &Path) -> Result<String, YardError> {

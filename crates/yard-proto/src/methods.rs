@@ -81,7 +81,8 @@ pub struct DocrootParams {
 
 /// `sites.init`: write `.yard` in `path` (unless it is there and `force` is unset), move
 /// the site's settings into it and link it. `name` defaults to the existing link, else
-/// the directory's name.
+/// the directory's name. A name another directory serves is `SITE_NAME_TAKEN` unless
+/// `replace` is set, which moves that site here and keeps how it serves.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InitParams {
     pub path: String,
@@ -89,6 +90,8 @@ pub struct InitParams {
     pub name: Option<String>,
     #[serde(default)]
     pub force: bool,
+    #[serde(default)]
+    pub replace: bool,
 }
 
 /// `sites.secure` and `sites.unsecure`.
@@ -165,7 +168,7 @@ mod tests {
     #[test]
     fn init_params_default_force_false() {
         let p: InitParams = serde_json::from_value(json!({"path": "/code/blog"})).unwrap();
-        assert_eq!((p.name, p.force), (None, false));
+        assert_eq!((p.name, p.force, p.replace), (None, false, false));
     }
 
     #[test]

@@ -48,6 +48,9 @@ pub enum ErrorCode {
     NeedsInstall,
     /// A `.yard` does not parse or has an unknown key; `data` has the file and line.
     ProjectFileInvalid,
+    /// `yard init` would take a name another directory or proxy already serves;
+    /// `data` has `name` and `serves`. `replace` moves that site here.
+    SiteNameTaken,
     Internal,
 }
 
@@ -116,6 +119,7 @@ mod tests {
             json!("SITE_HAS_PROJECT_FILE")
         );
         assert_eq!(serde_json::to_value(ErrorCode::NeedsInstall).unwrap(), json!("NEEDS_INSTALL"));
+        assert_eq!(serde_json::to_value(ErrorCode::SiteNameTaken).unwrap(), json!("SITE_NAME_TAKEN"));
         assert_eq!(
             serde_json::to_value(ErrorCode::ProjectFileInvalid).unwrap(),
             json!("PROJECT_FILE_INVALID")

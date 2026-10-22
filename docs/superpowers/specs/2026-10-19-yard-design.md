@@ -517,7 +517,7 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_NOT_FOUND`,
 `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`,
-`SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `PROJECT_FILE_INVALID`. The CLI prints message and hint;
+`SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI

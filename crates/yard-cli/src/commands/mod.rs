@@ -84,7 +84,7 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Doctor => doctor::doctor(&ctx).await,
         Command::Sites => sites::list(&ctx).await,
         Command::Link { name, yes } => sites::link(&ctx, name, yes).await,
-        Command::Init { name, force, yes } => init::init(&ctx, name, force, yes).await,
+        Command::Init { name, force, replace, yes } => init::init(&ctx, name, force, replace, yes).await,
         Command::Unlink { name } => sites::unlink(&ctx, name).await,
         Command::Proxy { name, url } => sites::proxy(&ctx, name, url).await,
         Command::Unproxy { name } => sites::unproxy(&ctx, name).await,

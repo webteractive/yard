@@ -136,6 +136,9 @@ pub struct InitResult {
     /// `false` when the file was already there and left as it was.
     pub written: bool,
     pub site: SiteInfo,
+    /// What the site served before `init` moved it here, when the name was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

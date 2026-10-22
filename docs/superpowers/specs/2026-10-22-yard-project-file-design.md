@@ -160,7 +160,7 @@ emailulator = true
 ## 6. `yard init`
 
 ```
-yard init [NAME] [--force] [--yes] [--json]
+yard init [NAME] [--force] [--replace] [--yes] [--json]
 ```
 
 Run in a project directory.
@@ -189,9 +189,14 @@ Run in a project directory.
 2. **Move the site's settings into it.** If the project is already linked, its `php`,
    `secure` and `docroot` leave `sites.toml`, so the file is the only source of truth (§2). Serving does
    not change.
-3. **Link it** when it is not linked yet, as `yard link [NAME]` would. Unlike `yard link`,
-   it refuses a name another project or proxy already uses (`INVALID_ARGUMENT`, hint
-   `yard init <another name>`), since step 2 would strip that site's settings.
+3. **Link it** when it is not linked yet, as `yard link [NAME]` would. When the name
+   already serves another directory, `init` is codifying that site here (maintainer,
+   2026-10-22): with no `.yard` here yet it moves the site without asking, keeping its
+   `php`, `secure` and, when it lies inside this directory, the directory it serves (a
+   site at `repo/site` initialised at `repo` gets `docroot = "site/public"`), and says
+   where it moved it from. When this directory already has a `.yard`, or the name is a
+   proxy, it asks `Replace it with this directory? [y/N]` on a terminal; `--replace`
+   answers yes, and otherwise it fails with `SITE_NAME_TAKEN`, hint `yard init --replace`.
 4. **Confirm installs** (§2): list what the file needs that is missing and ask. `--yes`
    answers yes; with no terminal and no `--yes`, it lists them, installs nothing, and exits
    1 with `NEEDS_INSTALL`, hint `yard init --yes` **(builder's call)**.
@@ -212,12 +217,14 @@ docroot = "public"
 
 ## 7. RPC and errors
 
-- `sites.init { path, name?, force? }` returns the written file's text and a `SiteInfo`;
+- `sites.init { path, name?, force?, replace? }` returns the written file's text, a
+  `SiteInfo` and `moved_from` when it moved a site whose name was taken;
   the CLI does the confirmation and then runs the installs as the existing jobs
   (`php.install`, `ext.add`, from M4 `service.add`).
 - `SiteInfo` gains `project_file: Option<String>` (the path) and `needs: Vec<Need>`
   (what the file asks for that is not installed). Additive; protocol minor bump.
-- New codes: `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, and `PROJECT_FILE_INVALID` (parse or unknown key, with the
+- New codes: `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN` (`data { name,
+  serves }`), and `PROJECT_FILE_INVALID` (parse or unknown key, with the
   file and line in `data`).
 - Doctor: `project-file:<site>` (parses, everything it needs is present) and
   `yard-php-ignored:<site>`.

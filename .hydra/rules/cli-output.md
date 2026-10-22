@@ -34,6 +34,9 @@ triggers:
   `  <what>  (<command>)` and asks `Install these? [y/N] ` only when stdin and stdout are
   terminals and `--json` is off. `--yes` skips the question. Otherwise it installs
   nothing and fails with `NEEDS_INSTALL`, hint `yard init --yes`, and the needs in
-  `data.needs`. Shared code: `commands/init.rs` `settle`.
+  `data.needs`. Shared code: `commands/init.rs` `settle`. `yard init` asks the same way
+  before moving a site onto a directory with its own `.yard` (`Replace it with this
+  directory? [y/N] `, `--replace`, else `SITE_NAME_TAKEN`); it never asks when there
+  is no `.yard` yet, since codifying the running site is what init is for.
 - Yard never edits dotfiles. Shell setup is printed for the user to paste
   (`yard install-shims`, M2).

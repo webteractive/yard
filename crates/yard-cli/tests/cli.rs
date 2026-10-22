@@ -1014,3 +1014,37 @@ fn init_yes_reports_what_is_still_missing() {
     assert!(err.contains("error: blog still needs the opcache extension for PHP 8.4"), "{err}");
     assert!(err.contains("  hint: yard doctor"), "{err}");
 }
+
+#[test]
+fn init_says_where_it_moved_the_site_from() {
+    let mut result = init_result(project_site(json!([])));
+    result["moved_from"] = json!("/Users/me/code/blog/site");
+    let d = MockDaemon::start(&[("sites.init", Ok(result))]);
+    let out = d.yard().arg("init").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    assert!(so.starts_with("Moved blog here from /Users/me/code/blog/site.\nWrote "), "{so}");
+}
+
+#[test]
+fn init_name_taken_without_terminal_is_the_error() {
+    let taken = YardError::new(ErrorCode::SiteNameTaken, "blog already serves /Users/me/old/blog")
+        .with_hint("yard init --replace")
+        .with_data(json!({"name": "blog", "serves": "/Users/me/old/blog"}));
+    let d = MockDaemon::start(&[("sites.init", Err(taken))]);
+    let out = d.yard().arg("init").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("error: blog already serves /Users/me/old/blog"), "{err}");
+    assert!(err.contains("  hint: yard init --replace"), "{err}");
+    assert_eq!(d.params("sites.init").len(), 1, "no retry without a yes");
+    assert_eq!(d.params("sites.init")[0]["replace"], false);
+}
+
+#[test]
+fn init_replace_is_sent() {
+    let d = MockDaemon::start(&[("sites.init", Ok(init_result(project_site(json!([])))))]);
+    let out = d.yard().args(["init", "--replace"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("sites.init")[0]["replace"], true);
+}
