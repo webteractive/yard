@@ -273,7 +273,7 @@ fn park_is_not_a_command() {
 fn every_command_has_help() {
     for cmd in [
         "start", "stop", "status", "version", "doctor", "sites", "link", "unlink", "proxy", "unproxy",
-        "docroot", "ports", "restart", "helper",
+        "docroot", "ports", "restart", "helper", "init",
     ] {
         let (_root, out) = offline(&[cmd, "--help"]);
         assert!(out.status.success(), "{cmd}");
@@ -851,4 +851,128 @@ fn untrust_without_a_ca_makes_none() {
     assert_eq!(stdout(&out), "null\n");
     assert!(d.params("ca.info").is_empty(), "ca.info would make a CA");
     assert_eq!(security_log(&security), None);
+}
+
+/// `blog` served from its `.yard`, needing what `needs` says.
+fn project_site(needs: Value) -> Value {
+    let mut site = serde_json::to_value(sites().remove(0)).unwrap();
+    site["project_file"] = json!("/Users/me/code/blog/.yard");
+    site["needs"] = needs;
+    site
+}
+
+fn init_result(site: Value) -> Value {
+    json!({
+        "file": "/Users/me/code/blog/.yard",
+        "text": "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n",
+        "written": true,
+        "site": site,
+    })
+}
+
+#[test]
+fn init_without_needs_prints_file_and_url() {
+    let d = MockDaemon::start(&[("sites.init", Ok(init_result(project_site(json!([])))))]);
+    let projects = tempfile::tempdir().unwrap();
+    let out = d.yard().arg("init").current_dir(projects.path()).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "Wrote /Users/me/code/blog/.yard:\n  # .yard: how Yard serves this project. Commit it.\n  php = \"7.3\"\n  docroot = \"public\"\nServing http://blog.yard:8080/\n"
+    );
+    let params = d.params("sites.init");
+    assert_eq!(params.len(), 1);
+    assert_eq!((params[0]["name"].clone(), params[0]["force"].clone()), (json!(null), json!(false)));
+    let path = Path::new(params[0]["path"].as_str().unwrap()).canonicalize().unwrap();
+    assert_eq!(path, projects.path().canonicalize().unwrap());
+}
+
+#[test]
+fn init_without_terminal_or_yes_is_needs_install() {
+    let mut result = init_result(project_site(json!([{"kind": "php", "php": "7.3"}])));
+    result["written"] = json!(false);
+    let d = MockDaemon::start(&[("sites.init", Ok(result))]);
+    let out = d.yard().args(["init", "--force", "blog"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let (so, err) = (stdout(&out), stderr(&out));
+    assert!(so.starts_with("/Users/me/code/blog/.yard is already there:\n"), "{so}");
+    assert!(so.contains("  PHP 7.3  (yard php install 7.3)\n"), "{so}");
+    assert!(err.contains("error: blog needs PHP 7.3"), "{err}");
+    assert!(err.contains("  hint: yard init --yes"), "{err}");
+    assert!(d.params("php.install").is_empty(), "nothing is installed without asking");
+    assert_eq!(d.params("sites.init")[0]["force"], true);
+    assert_eq!(d.params("sites.init")[0]["name"], "blog");
+}
+
+#[test]
+fn init_yes_installs_php_then_remaining_extensions() {
+    let needs = json!([
+        {"kind": "php", "php": "7.3"},
+        {"kind": "extension", "name": "redis", "php": "7.3"},
+        {"kind": "extension", "name": "mbstring", "php": "7.3"},
+    ]);
+    let after_php = project_site(json!([{"kind": "extension", "name": "redis", "php": "7.3"}]));
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("sites.init", vec![Ok(init_result(project_site(needs)))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("php.install", vec![Ok(json!({"job_id": "php-install-1"}))]),
+            ("ext.add", vec![Ok(json!({"job_id": "ext-add-1"}))]),
+            ("sites.list", vec![Ok(json!([after_php])), Ok(json!([project_site(json!([]))]))]),
+        ],
+        &[
+            ("php.install", job_events("php-install-1", json!(null))),
+            ("ext.add", job_events("ext-add-1", json!(null))),
+        ],
+    );
+    let out = d.yard().args(["init", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("php.install"), [json!({"php": "7.3"})]);
+    assert_eq!(d.params("ext.add"), [json!({"name": "redis", "php": "7.3"})]);
+    let so = stdout(&out);
+    assert!(so.ends_with("Serving http://blog.yard:8080/\n"), "{so}");
+}
+
+#[test]
+fn link_yes_settles_needs() {
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("sites.link", vec![Ok(project_site(json!([{"kind": "php", "php": "7.3"}])))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("php.install", vec![Ok(json!({"job_id": "php-install-1"}))]),
+            ("sites.list", vec![Ok(json!([project_site(json!([]))]))]),
+        ],
+        &[("php.install", job_events("php-install-1", json!(null)))],
+    );
+    let out = d.yard().args(["link", "blog", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("php.install"), [json!({"php": "7.3"})]);
+    assert!(stdout(&out).ends_with("Serving http://blog.yard:8080/\n"), "{}", stdout(&out));
+}
+
+#[test]
+fn init_json_needs_install_error() {
+    let needs = json!([{"kind": "extension", "name": "redis", "php": "8.4"}]);
+    let d = MockDaemon::start(&[("sites.init", Ok(init_result(project_site(needs.clone()))))]);
+    let out = d.yard().args(["init", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["error"]["code"], "NEEDS_INSTALL");
+    assert_eq!(printed["error"]["message"], "blog needs the redis extension for PHP 8.4");
+    assert_eq!(printed["error"]["hint"], "yard init --yes");
+    assert_eq!(printed["error"]["data"]["needs"], needs);
+}
+
+#[test]
+fn sites_shows_needs_setup() {
+    let mut list = serde_json::to_value(sites()).unwrap();
+    list[0] = project_site(json!([{"kind": "php", "php": "7.3"}]));
+    let d = MockDaemon::start(&[("sites.list", Ok(list))]);
+    let out = d.yard().arg("sites").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    let header = so.lines().next().unwrap();
+    assert!(header.ends_with("PHP  STATUS"), "{so}");
+    assert!(so.lines().nth(1).unwrap().ends_with("needs setup"), "{so}");
+    assert!(so.lines().nth(2).unwrap().ends_with("serving"), "{so}");
 }

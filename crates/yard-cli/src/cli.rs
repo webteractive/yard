@@ -50,6 +50,20 @@ pub enum Command {
     Link {
         /// The site name; defaults to the current directory's name.
         name: Option<String>,
+        /// Install what the project's .yard needs without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Write .yard for the current project, link it, and install what it needs after asking.
+    Init {
+        /// The site name when the project is not linked yet; defaults to the directory's name.
+        name: Option<String>,
+        /// Rewrite the settings Yard detects in an existing .yard, keeping the rest.
+        #[arg(long)]
+        force: bool,
+        /// Install what the .yard needs without asking.
+        #[arg(long)]
+        yes: bool,
     },
     /// Stop serving a linked site.
     Unlink {

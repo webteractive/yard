@@ -1,7 +1,7 @@
 //! `yard sites`, `link`/`unlink`, `proxy`/`unproxy`, `docroot`, `isolate` and
 //! `secure`/`unsecure`.
 
-use super::{Ctx, Outcome, cwd};
+use super::{Ctx, Outcome, cwd, init};
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use std::path::Path;
@@ -18,7 +18,7 @@ pub async fn list(ctx: &Ctx) -> Outcome {
             "No sites yet. Serve a project with yard link, run inside it.\n".to_string()
         } else {
             let rows: Vec<Vec<String>> = sites.iter().map(row).collect();
-            table(&["SITE", "URL", "SOURCE", "TARGET", "PHP"], &rows)
+            table(&["SITE", "URL", "SOURCE", "TARGET", "PHP", "STATUS"], &rows)
         };
         out.push('\n');
         out.push_str(&for_agents("yard sites"));
@@ -37,15 +37,27 @@ fn row(site: &SiteInfo) -> Vec<String> {
         SiteKind::Php { docroot, php, .. } => (docroot.clone(), php.clone()),
         SiteKind::Proxy { target } => (target.clone(), "-".into()),
     };
-    vec![site.name.clone(), site.url.clone(), source.into(), target, php]
+    let status = if site.needs_setup() { "needs setup" } else { "serving" };
+    vec![site.name.clone(), site.url.clone(), source.into(), target, php, status.into()]
 }
 
-pub async fn link(ctx: &Ctx, name: Option<String>) -> Outcome {
+/// A project with a `.yard` may need PHP or extensions installed first: `settle` asks.
+pub async fn link(ctx: &Ctx, name: Option<String>, yes: bool) -> Outcome {
     let dir = cwd()?;
     let name = name.map_or_else(|| name_of(&dir), Ok)?;
     let params = LinkParams { name, path: dir.display().to_string() };
     let site: SiteInfo = ctx.client().await?.call(methods::SITES_LINK, params).await?;
-    ctx.emit(&site, || format!("Linked {} → {}\n", dir.display(), site.url));
+    if site.needs.is_empty() {
+        ctx.emit(&site, || format!("Linked {} → {}\n", dir.display(), site.url));
+        return Ok(0);
+    }
+    if !ctx.json {
+        println!("Linked {}.", dir.display());
+    }
+    let site = init::settle(ctx, site, yes).await?;
+    if ctx.json {
+        ctx.emit(&site, String::new);
+    }
     Ok(0)
 }
 

@@ -4,6 +4,7 @@
 mod doctor;
 mod ext;
 mod helper;
+mod init;
 mod lifecycle;
 mod php;
 mod ports;
@@ -82,7 +83,8 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Version => version::version(&ctx).await,
         Command::Doctor => doctor::doctor(&ctx).await,
         Command::Sites => sites::list(&ctx).await,
-        Command::Link { name } => sites::link(&ctx, name).await,
+        Command::Link { name, yes } => sites::link(&ctx, name, yes).await,
+        Command::Init { name, force, yes } => init::init(&ctx, name, force, yes).await,
         Command::Unlink { name } => sites::unlink(&ctx, name).await,
         Command::Proxy { name, url } => sites::proxy(&ctx, name, url).await,
         Command::Unproxy { name } => sites::unproxy(&ctx, name).await,

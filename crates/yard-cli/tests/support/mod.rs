@@ -45,6 +45,14 @@ impl MockDaemon {
         Self::serve(answers, &[])
     }
 
+    /// As `start_sequenced`, and after answering a method in `events` it pushes those events.
+    pub fn start_sequenced_with_events(
+        answers: &[(&str, Vec<Result<Value, YardError>>)],
+        events: &[(&str, Vec<Value>)],
+    ) -> Self {
+        Self::serve(answers, events)
+    }
+
     fn serve(answers: &[(&str, Vec<Result<Value, YardError>>)], events: &[(&str, Vec<Value>)]) -> Self {
         let root = short_root();
         let events: Arc<Events> = Arc::new(events.iter().map(|(m, e)| (m.to_string(), e.clone())).collect());

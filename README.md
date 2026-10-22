@@ -99,8 +99,9 @@ error, 3 `yardd` is not running.
 | `yard status` | yes | Profile, TLD, units and site count. |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. |
-| `yard sites` | yes | The sites Yard serves, with the directory each one serves. |
-| `yard link [name]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. |
+| `yard sites` | yes | The sites Yard serves, with the directory each one serves and whether it is `serving` or `needs setup`. |
+| `yard link [name] [--yes]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. When its `.yard` needs a PHP or extension that is not installed, it asks before installing (`--yes` does not ask). |
+| `yard init [name] [--force] [--yes]` | yes | Writes `.yard` for the current project from its settings, links it, moves its `php`, `secure` and `docroot` out of `sites.toml`, and installs what the file needs after asking. An existing `.yard` is kept; `--force` rewrites the keys Yard detects and keeps the rest. |
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
 | `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |
 | `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. |
