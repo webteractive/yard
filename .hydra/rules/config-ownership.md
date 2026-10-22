@@ -5,10 +5,14 @@ paths:
   - "crates/yard-core/src/generated.rs"
   - "crates/yard-daemon/src/reconcile.rs"
   - "crates/yard-daemon/src/doctor.rs"
+  - "crates/yard-core/src/project.rs"
+  - "crates/yard-daemon/src/project.rs"
+  - "crates/yard-daemon/src/rpc/project.rs"
 triggers:
   - adding a generated config file
   - writing to a user's toml or override file
   - Yard overwrote something the user edited
+  - reading or writing a project's .yard
 ---
 
 # Config ownership
@@ -51,4 +55,11 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   and `doctor` report until a reconcile succeeds.
 - **Quote every path** in rendered output. The data root is
   `~/Library/Application Support/Yard`, and that space breaks unquoted nginx, fpm and ini values.
+- **A project's `.yard` is the project's file**, committed with it (project-file spec).
+  Yard reads it at most 64 KiB and only as a regular file, and writes it only in
+  `yard init` (`rpc/project.rs`): `project::render` for a new one, `project::rewrite`
+  (`toml_edit`, keeping every other key and comment) with `--force`, never through a
+  symlink. Reconcile, doctor and the shims only read it. Settings it owns
+  (`php`, `docroot`, `secure`) are refused by `isolate`, `secure` and `docroot` with
+  `SITE_HAS_PROJECT_FILE`, whose hint is the edit to make in the file.
 - Yard never writes project `.env` files (spec non-goal).

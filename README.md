@@ -19,8 +19,10 @@ below. M1.1 moved nginx from root to the user. M2 is done too: sites are explici
 can be isolated to its own version, extensions come from brew, pecl or a `.so`, and
 the `php`/`composer`/`pecl` shims follow the site's version and never reach Herd's
 PHP. M3 adds HTTPS: `yard secure` serves a site with a certificate from a local CA,
-and `yard trust` puts that CA in your login keychain. Node and services (M4),
-tunnels (M5) and Yard.app (M6) come later.
+and `yard trust` puts that CA in your login keychain. M4a adds the `.yard` project file:
+a project commits the PHP, docroot, HTTPS and extensions it needs, `yard init` writes it,
+and a site whose file asks for something not installed serves a setup page naming the
+fix. Services (M4b), Node (M4c), tunnels (M5) and Yard.app (M6) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080`. Herd keeps its `.test` domain,
@@ -103,9 +105,9 @@ error, 3 `yardd` is not running.
 | `yard link [name] [--yes]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. When its `.yard` needs a PHP or extension that is not installed, it asks before installing (`--yes` does not ask). |
 | `yard init [name] [--force] [--yes]` | yes | Writes `.yard` for the current project from its settings, links it, moves its `php`, `secure` and `docroot` out of `sites.toml`, and installs what the file needs after asking. An existing `.yard` is kept; `--force` rewrites the keys Yard detects and keeps the rest. |
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
-| `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. |
-| `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. |
-| `yard secure [site]` / `unsecure [site]` | yes | Serves a site over HTTPS with a certificate from Yard's CA, its http URL redirecting there, or plain HTTP again. The site defaults to the one containing the current directory. |
+| `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. Refused for a site with a `.yard`, which owns its docroot: edit the file. |
+| `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. Refused for a site with a `.yard`: edit its `php`. |
+| `yard secure [site]` / `unsecure [site]` | yes | Serves a site over HTTPS with a certificate from Yard's CA, its http URL redirecting there, or plain HTTP again. The site defaults to the one containing the current directory. Refused for a site with a `.yard`: edit its `secure`. |
 | `yard trust` / `untrust` | yes | Adds Yard's CA to your login keychain as trusted, or removes it; macOS asks for your password. |
 | `yard php [list]` | yes | Installed PHP versions, the default, the sites on each and its pool. |
 | `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels it. `uninstall` is refused while the version is the default, a site is isolated to it, or it has extensions you added. |

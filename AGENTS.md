@@ -30,11 +30,14 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). The maintainer ran
   `yard trust` on 2026-10-21, so the login keychain trusts this machine's CA. There is no `yard takeover`
   (dropped 2026-10-20). M4 is split into three plans: M4a, the `.yard` project file
-  (`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, written 2026-10-22 and
-  awaiting the maintainer's approval), then M4b services and `yard env`, and M4c Node, which still need plans.
-- Approved on 2026-10-22, not built yet: the `.yard` project file and `yard init`
-  (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`, part of M4) and tunnels
-  (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5).
+  and `yard init` (`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`,
+  approved 2026-10-22; built on branch `m4a-project-file` with the workspace suite
+  passing; `scripts/e2e-m4a.sh` not yet run on this machine), then M4b services and
+  `yard env`, and M4c Node, which still need plans.
+- Approved on 2026-10-22: the `.yard` project file
+  (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
+  `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
+  (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5, not built yet).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -65,7 +68,10 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   Herd, and moving to `.test` is the user's own steps once Herd is gone (spec §5.5). 80/443 is opt-in, and even then root never runs
   nginx: the helper hands yardd the two sockets (spec §3.1).
 - **Sites are explicit** (decided 2026-10-20): a project is served only after
-  `yard link`; nothing is written into the project. Herd-style parking, which M1
+  `yard link`; nothing is written into the project, except `.yard` by `yard init`
+  (2026-10-22), which never overwrites one without `--force`. A linked project's
+  `.yard` owns its `php`, `docroot`, `secure` and `extensions`, and `yard isolate`,
+  `secure` and `docroot` are refused for it. Herd-style parking, which M1
   shipped, was removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
   each project moves from Herd by `yard link` run in it.
 - **Never Herd's PHP** (maintainer, 2026-10-20): every PHP command Yard runs or a shim
@@ -97,6 +103,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   stays installed; the e2e adds and removes `redis@7.1` and `xdebug@8.4`. Brew's
   extension formulas keep the `.so` in their own keg (`redis@7.1` installs keg
   `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`.
+- On 2026-10-22 brew also had `php@7.3` and `php@7.4` installed (and the plain `php`
+  formula), so `scripts/e2e-m4a.sh` uses 7.2 as the version that is not installed.
 - Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
 
 ## Build & test
@@ -120,6 +128,10 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   curls it over HTTPS with `--cacert`, so it needs no keychain trust; ask the maintainer first. Tests
   never run the real `security` or touch a keychain: `DaemonOptions.security`, the
   fixture's fake `security` and the CLI's `YARD_SECURITY` stand in for it.
+- `scripts/e2e-m4a.sh` — real-machine M4a check after `e2e-m1.sh`: a scratch project's
+  `.yard` picks PHP 7.1, then 8.4 after an edit, then a missing 7.2 serves the setup
+  page, and `yard isolate` is refused. It needs php@7.1 (from `e2e-m2.sh`) and installs
+  nothing; ask the maintainer first.
 
 ## Verifying a change on this machine
 
@@ -179,7 +191,7 @@ Rule files are in `.hydra/rules`.
 | Applies when | Matches (path glob / command) | Rule |
 | --- | --- | --- |
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
-| adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` | config-ownership.md |
+| adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` | config-ownership.md |
 | running yard against the real data root on this machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
 | installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `brew ` | homebrew.md |
 | a unit needs a TCP or UDP port · adding a service or proxy that listens on or targets a port | `crates/yard-core/src/ports/**` · `crates/yard-daemon/src/probe.rs` · `crates/yard-daemon/src/holder.rs` · `crates/yard-daemon/src/portscan.rs` | port-registry.md |

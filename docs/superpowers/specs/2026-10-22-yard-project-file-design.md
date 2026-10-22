@@ -2,7 +2,9 @@
 
 Date: 2026-10-22
 Status: approved by the maintainer on 2026-10-22. It extends `2026-10-19-yard-design.md` (the main
-spec), which is updated when this is built (§8).
+spec). M4a built `php`, `docroot`, `secure`, `extensions` and `yard init`
+(`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, §8); `node` and
+`[services]` follow in M4c and M4b.
 
 Decisions marked **(maintainer)** are the maintainer's, from 2026-10-22. Decisions marked
 **(builder's call)** were made while writing this and can be reversed on their own.
@@ -170,12 +172,16 @@ Run in a project directory.
      detect (`public/` today).
    - `secure`: the site's effective setting, whether it comes from `sites.toml` or
      `secure_by_default`, so a teammate gets the same HTTPS **(builder's call)**.
-   - `[services]`: written commented out, since Yard does not read `.env` (maintainer). The user
-     uncomments what the project needs and runs `yard init` again, which applies it.
+   - `[services]` (from M4b): written commented out, since Yard does not read `.env`
+     (maintainer). The user uncomments what the project needs and runs `yard init` again, which
+     applies it. M4a writes no `[services]` lines.
    When a `.yard` already exists, `init` writes nothing and goes on with steps 2–4, so
    it is also the command that applies a cloned project's file. `--force` rewrites the
    keys detection produces and keeps the ones it cannot (`extensions`, `node`,
-   `[services]`) **(builder's call)**. The file is printed.
+   `[services]`) **(builder's call)**: `php` is written only when detected and `secure`
+   only when true, so `--force` never removes either. A `.yard` that is a symlink is
+   never written through, so a cloned project cannot point `init --force` at another
+   file **(builder's call)**. The file is printed.
 2. **Move the site's settings into it.** If the project is already linked, its `php`,
    `secure` and `docroot` leave `sites.toml`, so the file is the only source of truth (§2). Serving does
    not change.
@@ -187,7 +193,7 @@ Run in a project directory.
 `yard link` in a project that already has a `.yard` does steps 3 and 4: it links, reads
 the file, and asks before installing.
 
-For eepower today, `yard init` writes:
+For eepower today, `yard init` writes (the `[services]` lines from M4b):
 
 ```toml
 # .yard: how Yard serves this project. Commit it.
@@ -212,10 +218,11 @@ docroot = "public"
 
 ## 8. Milestone
 
-Part of **M4 Node and services (builder's call)**: half of what the file declares
-(`node`, `[services]`) is what M4 builds, and doing both together means services get a
-declarative form from day one. If M4's plan grows too large, `.yard` with `php`,
-`docroot`, `secure` and `extensions` can land first as its own plan.
+Part of **M4 Node and services (builder's call)**. M4 was split on 2026-10-22: **M4a**
+landed `.yard` with `php`, `docroot`, `secure` and `extensions`, the setup page, the
+shims following the file, and `yard init`; **M4b** adds `[services]` with the services
+themselves, and **M4c** adds `node` with the fnm wrapper. Until then `node` and
+`[services]` are unknown keys, so a file that has them is `PROJECT_FILE_INVALID`.
 
 When built, the same change updates the main spec (§4.5 resolution, §5.1 sites, the
 "nothing is written into the project" decision, which gains the `yard init` exception,

@@ -135,6 +135,7 @@ yard.toml                     # global: default php, tld override, secure_by_def
 sites.toml                    # links, per-site php, secure flag, docroot overrides, proxies
 ports.toml                    # port registry and active profile (§7)
 state/hashes.json             # hash of every generated file as Yard last wrote it
+state/php-modules.json        # each PHP keg's compiled-in modules (`php -n -m`), keyed by its canonical path
 dnsmasq/dnsmasq.conf          # generated
 php/<ver>/php.ini             # generated
 php/<ver>/fpm.conf            # generated
@@ -145,6 +146,7 @@ nginx/nginx.conf              # generated
 nginx/sites/<site>.conf       # generated
 nginx/overrides/<site>.conf   # USER-OWNED, included inside the site's server block
 nginx/default/index.html      # generated site list served for unknown hosts
+nginx/setup/<site>.html       # generated setup page for a site whose .yard is not met (503)
 ca/yard-ca.pem, ca/yard-ca.key
 certs/<site>.pem, certs/<site>.key
 services/<name>/data/         # service data dirs
@@ -289,8 +291,11 @@ quoted when it holds spaces or `;`.
 ### 4.5 Version resolution and isolation
 
 For a site, the version is the first match of:
-1. `sites.toml` isolation (`yard isolate <ver> [--site <name>]`).
-2. The global default.
+1. The `.yard` at the project's root (project-file spec §5): its `php`, the highest
+   installed version that meets it. A site with a `.yard` refuses `yard isolate`,
+   `secure` and `docroot` (`SITE_HAS_PROJECT_FILE`): the file owns them.
+2. `sites.toml` isolation (`yard isolate <ver> [--site <name>]`).
+3. The global default.
 
 For the CLI shims (current working directory), the version is the first match of:
 1. The nearest `.yard` in the cwd or any parent (project-file spec §5): its `php`, else
@@ -353,7 +358,9 @@ profile; Yard does not edit dotfiles.
   M1 `yard.toml` is ignored with a warning. Moving a project from Herd is
   `yard link` (and `yard isolate`) run in it by hand.
 - **Linked:** `yard link [name]` serves the cwd as `<name>.<tld>`;
-  `yard unlink [name]`. Nothing is written into the project.
+  `yard unlink [name]`. Nothing is written into the project, except by `yard init`,
+  which writes its `.yard` (project-file spec §4) and never overwrites one without
+  `--force`.
 - **Proxied:** `yard proxy <name> <url>` serves `<name>.<tld>` as a reverse proxy
   (Node, Vite, etc.); `yard unproxy <name>`.
 - **Docroot detection** order: `public/`, `web/`, `public_html/`, project root.
@@ -521,6 +528,10 @@ the app shows them inline with an action button when the hint maps to a command.
   `DAEMON_NOT_RUNNING`). `doctor` and `ports check` run in-process instead.
 - `yard --version` and `yard version --json` report CLI, daemon, helper and
   protocol versions plus build commit.
+- A command that would install something (`yard init`, and `yard link` for a project
+  whose `.yard` needs a PHP or extension) lists what it would install and asks on a
+  terminal; `--yes` skips the question, and without a terminal it installs nothing and
+  exits 1 with `NEEDS_INSTALL` (project-file spec §6).
 
 ## 7. Port registry
 
@@ -682,6 +693,9 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   `https://<site>.yard:8443` under `curl --cacert <ca.pem>`, its http URL answers
   `301` to the https one, its key is mode 0600, and `yard unsecure` serves http again
   and removes the certificate. It never runs `yard trust`, which macOS asks a password for.
+  `scripts/e2e-m4a.sh` adds the `.yard`: a scratch project's file picks its PHP, an edit
+  to it is served within seconds, a PHP that is not installed gives the 503 setup page
+  naming `yard init`, and `yard isolate` is refused. It installs nothing.
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 
@@ -711,9 +725,13 @@ Each milestone is usable on its own and gets its own implementation plan.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal (and re-issue on a
    TLD change). No `takeover` (dropped 2026-10-20, §5.5). Done 2026-10-21, verified by
    `scripts/e2e-m3.sh` on the maintainer's machine, where the maintainer ran `yard trust`.
-4. **M4 Node and services:** fnm wrapper, MySQL, Postgres, Redis, emailulator,
-   MinIO, `yard env`, and the `.yard` project file with `yard init`, designed in
-   `docs/superpowers/specs/2026-10-22-yard-project-file-design.md`.
+4. **M4 Node and services**, in three plans (split 2026-10-22):
+   - **M4a the `.yard` project file and `yard init`**, designed in
+     `docs/superpowers/specs/2026-10-22-yard-project-file-design.md`: `php`, `docroot`,
+     `secure` and `extensions`, the setup page, and the shims following the file.
+   - **M4b services:** MySQL, Postgres, Redis, emailulator, MinIO, `yard env`, and the
+     file's `[services]`.
+   - **M4c Node:** the fnm wrapper and the file's `node`.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.

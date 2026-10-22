@@ -29,5 +29,11 @@ triggers:
   stay accepted as aliases (`ProfileArg`), and output always uses the new names.
 - Offline commands (no daemon needed): `start`, `stop`, `version`, `doctor`,
   `ports check`, `install-shims`, `helper install|uninstall`. Everything else talks to `yardd`.
+- A command that would install something asks first (`yard init`, and `yard link` for a
+  project whose `.yard` needs a PHP or extension): it lists each need as
+  `  <what>  (<command>)` and asks `Install these? [y/N] ` only when stdin and stdout are
+  terminals and `--json` is off. `--yes` skips the question. Otherwise it installs
+  nothing and fails with `NEEDS_INSTALL`, hint `yard init --yes`, and the needs in
+  `data.needs`. Shared code: `commands/init.rs` `settle`.
 - Yard never edits dotfiles. Shell setup is printed for the user to paste
   (`yard install-shims`, M2).
