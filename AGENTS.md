@@ -31,8 +31,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `yard trust` on 2026-10-21, so the login keychain trusts this machine's CA. There is no `yard takeover`
   (dropped 2026-10-20). M4 is split into three plans: M4a, the `.yard` project file
   and `yard init` (`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`,
-  approved 2026-10-22; built on branch `m4a-project-file` with the workspace suite
-  passing; `scripts/e2e-m4a.sh` not yet run on this machine), then M4b services and
+  approved 2026-10-22; built on branch `m4a-project-file` and verified on this machine
+  on 2026-10-22 with `scripts/e2e-m1.sh` and `e2e-m4a.sh` passing), then M4b services and
   `yard env`, and M4c Node, which still need plans.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
