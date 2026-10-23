@@ -69,7 +69,11 @@ triggers:
   formula is listed by `Formula/<name>.rb` (also one shard down), a root `<name>.rb`,
   `Aliases/<name>`, or a key of `formula_renames.json`. Never ask `brew search`: it finds
   real names only, so `redis@8.4` (a rename of `phpredis@8.4`) is invisible to it. A tap
-  that is missing, or a renames file that is unreadable, counts as listing it.
+  that is missing, an unreadable `Formula/` or renames file, a renames file over 1 MiB or
+  not UTF-8 counts as listing it (the gate holds). Names are looked up lower-cased, as brew
+  does (`Redis` is `redis@8.4`), and the checks run in `spawn_blocking`. The layout mirrored
+  is flat or one-shard `Formula/`, `Aliases/` and `formula_renames.json`, not
+  `HomebrewFormula/` or `tap_migrations.json`.
 - **Trust is brew's, never Yard's.** Read it only with `brew trust --json=v1`; change it
   only with `brew trust` / `brew untrust` (`sources.trust|untrust` jobs, or the CLI's y/N
   prompt). Never read or write brew's `trust.json`, keep a list of Yard's own, or let

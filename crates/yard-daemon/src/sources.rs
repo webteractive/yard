@@ -79,32 +79,46 @@ pub async fn require_trusted(brew: &Brew, formula: &str) -> Result<(), YardError
     .with_data(serde_json::json!({ "formula": formula, "tap": tap })))
 }
 
+/// The most of `formula_renames.json` Yard reads: the real one is a few KiB.
+const MAX_RENAMES: u64 = 1 << 20;
+
 /// Whether the tap that `formula` names lists it, by what is in the tap's directory
 /// under brew's prefix: a formula file (in `Formula/`, a sharded `Formula/<x>/`, or the
-/// tap's root), an alias, or a rename in `formula_renames.json`. brew's `search` finds
-/// real names only, so it cannot say that `redis@8.4` is `phpredis@8.4`. A tap that is
-/// not there, or a file Yard cannot read, counts as listing it: the gate holds.
-fn tap_lists(brew: &Brew, formula: &str) -> bool {
+/// tap's root), an alias, or a rename in `formula_renames.json`, looked up by the
+/// lower-cased name as brew does. It mirrors the flat or one-shard tap layout plus
+/// `Aliases/` and `formula_renames.json`, and not `HomebrewFormula/` or
+/// `tap_migrations.json`. brew's `search` finds real names only, so it cannot say that
+/// `redis@8.4` is `phpredis@8.4`. A tap that is not there, or a file Yard cannot read
+/// (or that is over `MAX_RENAMES`, or not UTF-8), counts as listing it: the gate holds.
+/// Symlinked taps are followed. Blocking reads: run it with `spawn_blocking`.
+fn tap_lists(prefix: &Path, formula: &str) -> bool {
+    use std::io::{ErrorKind, Read};
     let Some(dir) = sources::tap_dir(formula) else { return true };
-    let root = brew.prefix.join("Library/Taps").join(dir);
+    let root = prefix.join("Library/Taps").join(dir);
     if !root.is_dir() {
         return true;
     }
-    let name = sources::short_name(formula);
-    if sources::listing_paths(name).iter().any(|path| root.join(path).exists()) {
+    let name = sources::tap_name(formula);
+    if sources::listing_paths(&name).iter().any(|path| root.join(path).exists()) {
         return true;
     }
-    let sharded = std::fs::read_dir(root.join("Formula"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|shard| shard.path().join(format!("{name}.rb")).exists());
-    if sharded {
-        return true;
+    match std::fs::read_dir(root.join("Formula")) {
+        Ok(shards) => {
+            if shards.flatten().any(|shard| shard.path().join(format!("{name}.rb")).exists()) {
+                return true;
+            }
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(_) => return true,
     }
-    match std::fs::read_to_string(root.join("formula_renames.json")) {
-        Ok(text) => sources::renames_name(&text, name),
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    let file = match std::fs::File::open(root.join("formula_renames.json")) {
+        Ok(file) => file,
+        Err(e) => return e.kind() != ErrorKind::NotFound,
+    };
+    let mut text = String::new();
+    match file.take(MAX_RENAMES + 1).read_to_string(&mut text) {
+        Ok(read) if read as u64 <= MAX_RENAMES => sources::renames_name(&text, &name),
+        _ => true,
     }
 }
 
@@ -112,10 +126,14 @@ fn tap_lists(brew: &Brew, formula: &str) -> bool {
 /// extension: with no formula the job builds it with pecl, which needs no tap). An
 /// untrusted formula the tap does not list is let through; one it lists is refused.
 pub async fn require_trusted_if_listed(brew: &Brew, formula: &str) -> Result<(), YardError> {
-    match require_trusted(brew, formula).await {
-        Err(refusal) if refusal.code == ErrorCode::FormulaUntrusted && !tap_lists(brew, formula) => Ok(()),
-        other => other,
+    let Err(refusal) = require_trusted(brew, formula).await else { return Ok(()) };
+    if refusal.code != ErrorCode::FormulaUntrusted {
+        return Err(refusal);
     }
+    let (prefix, formula) = (brew.prefix.clone(), formula.to_string());
+    // A task that panicked or was cancelled counts as listing it.
+    let listed = tokio::task::spawn_blocking(move || tap_lists(&prefix, &formula)).await.unwrap_or(true);
+    if listed { Err(refusal) } else { Ok(()) }
 }
 
 /// The formulae from Yard's taps that Yard knows are installed: the PHP versions' kegs,

@@ -176,6 +176,61 @@ async fn ext_add_is_gated_when_the_tap_lists_the_formula_as_a_rename() {
 }
 
 #[tokio::test]
+async fn ext_add_is_gated_when_the_name_differs_only_in_case() {
+    // brew lowercases the name before it looks, so `Redis` is the `redis@8.4` rename.
+    let err = untrusted_ext_add("Redis", |tap| {
+        std::fs::write(tap.join("Formula/phpredis@8.4.rb"), "").unwrap();
+        std::fs::write(tap.join("formula_renames.json"), r#"{"redis@8.4": "phpredis@8.4"}"#).unwrap();
+    })
+    .await;
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+}
+
+/// Puts a directory's mode back when it drops, so the temp prefix can be removed.
+struct Restore(std::path::PathBuf);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_tap_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = prepared("").await.start().await;
+    set_trust(&d, &[], &[]);
+    let formulae = ext_tap(&d).join("Formula");
+    let _restore = Restore(formulae.clone());
+    std::fs::set_permissions(&formulae, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Not a user who can read it anyway (root): the test would prove nothing.
+    if std::fs::read_dir(&formulae).is_ok() {
+        d.shutdown().await.unwrap();
+        return;
+    }
+    let mut c = d.client().await;
+    let err = c.call("ext.add", json!({"name": "mongodb", "php": "8.4"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_renames_file_is_oversized_or_not_text() {
+    // Valid JSON that does not name mongodb, over the 1 MiB Yard reads.
+    let big = format!(r#"{{"a": "{}"}}"#, "x".repeat((1 << 20) + 16));
+    let err =
+        untrusted_ext_add("mongodb", |tap| std::fs::write(tap.join("formula_renames.json"), &big).unwrap())
+            .await;
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+    let err = untrusted_ext_add("mongodb", |tap| {
+        std::fs::write(tap.join("formula_renames.json"), [0xff, 0xfe, b'{', b'}']).unwrap();
+    })
+    .await;
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+}
+
+#[tokio::test]
 async fn ext_add_is_gated_when_the_tap_lists_the_formula_as_an_alias() {
     let err = untrusted_ext_add("redis", |tap| {
         std::fs::create_dir_all(tap.join("Aliases")).unwrap();

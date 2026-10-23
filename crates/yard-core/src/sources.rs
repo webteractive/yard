@@ -75,6 +75,12 @@ pub fn short_name(formula: &str) -> &str {
     formula.rsplit('/').next().unwrap_or(formula)
 }
 
+/// The name brew looks up: `short_name` in lower case, as `Tap.with_formula_name` does, so
+/// `Redis@8.4` finds the `redis@8.4` file, alias or rename.
+pub fn tap_name(formula: &str) -> String {
+    short_name(formula).to_lowercase()
+}
+
 /// Where, relative to the tap's directory, a tap that lists `name` has a file for it: the
 /// formula in `Formula/` or at the tap's root, or an alias. (A formula in a sharded
 /// `Formula/<x>/` directory is the caller's to look for.)
@@ -160,6 +166,7 @@ mod tests {
         assert_eq!(short_name(formula), "redis@8.4");
         assert_eq!((tap_dir("mysql@8.4"), tap_dir("homebrew/core/redis")), (None, None));
         assert_eq!(short_name("mysql@8.4"), "mysql@8.4");
+        assert_eq!(tap_name("shivammathur/extensions/Redis@8.4"), "redis@8.4");
     }
 
     #[test]
