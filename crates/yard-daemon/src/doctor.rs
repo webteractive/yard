@@ -423,6 +423,8 @@ fn stop_command(h: &Holder, port: u16) -> String {
         HolderKind::Herd => "herd stop".into(),
         HolderKind::BrewServices => "brew services stop <formula> (brew services list names it)".into(),
         HolderKind::Docker => format!("docker ps --filter publish={port} names the container to stop"),
+        HolderKind::Dbngin => "quit DBngin, or stop the server it runs on that port".into(),
+        HolderKind::PostgresApp => "quit Postgres.app, or stop its server".into(),
         HolderKind::Yard => format!("stop the Yard that runs pid {}", h.pid),
         HolderKind::Unknown => format!("kill {}", h.pid),
     }

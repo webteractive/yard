@@ -73,12 +73,13 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     }
 
     let mut site = site;
+    // Service needs are skipped here until the CLI adds them (M4b Task 13).
     let php: Vec<String> = site
         .needs
         .iter()
         .filter_map(|n| match n {
             Need::Php { php } => Some(php.clone()),
-            Need::Extension { .. } => None,
+            Need::Extension { .. } | Need::Service { .. } => None,
         })
         .collect();
     for v in &php {
@@ -94,7 +95,7 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         .iter()
         .filter_map(|n| match n {
             Need::Extension { name, php } => Some((name.clone(), php.clone())),
-            Need::Php { .. } => None,
+            Need::Php { .. } | Need::Service { .. } => None,
         })
         .collect();
     for (name, php) in &exts {

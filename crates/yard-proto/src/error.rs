@@ -51,6 +51,19 @@ pub enum ErrorCode {
     /// `yard init` would take a name another directory or proxy already serves;
     /// `data` has `name` and `serves`. `replace` moves that site here.
     SiteNameTaken,
+    /// No service instance has that name; `yard services` lists them.
+    ServiceNotFound,
+    /// That service instance is already added.
+    ServiceExists,
+    /// A site's `.yard` lists the instance, so removing it needs confirmation or `--yes`;
+    /// `data.sites` names them.
+    ServiceInUse,
+    /// The engine has no such line in brew; `data.available` lists the lines it has.
+    ServiceVersionUnsupported,
+    /// Homebrew does not trust the formula's tap (`brew trust`); `data` names the tap and formula.
+    FormulaUntrusted,
+    /// The command removes data or trusts a source and needs a yes it did not get.
+    NeedsConfirmation,
     Internal,
 }
 
@@ -124,6 +137,16 @@ mod tests {
             serde_json::to_value(ErrorCode::ProjectFileInvalid).unwrap(),
             json!("PROJECT_FILE_INVALID")
         );
+        for (code, name) in [
+            (ErrorCode::ServiceNotFound, "SERVICE_NOT_FOUND"),
+            (ErrorCode::ServiceExists, "SERVICE_EXISTS"),
+            (ErrorCode::ServiceInUse, "SERVICE_IN_USE"),
+            (ErrorCode::ServiceVersionUnsupported, "SERVICE_VERSION_UNSUPPORTED"),
+            (ErrorCode::FormulaUntrusted, "FORMULA_UNTRUSTED"),
+            (ErrorCode::NeedsConfirmation, "NEEDS_CONFIRMATION"),
+        ] {
+            assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use crate::YardError;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A named set of pinned nginx ports (spec §7). `standard` needs no root for nginx;
 /// `privileged` takes 80/443 from the helper. Neither sets the TLD. M1 called them
@@ -98,6 +99,26 @@ pub enum Need {
         name: String,
         php: String,
     },
+    /// A `[services]` entry with no instance yet. `engine` is `mysql`, `postgres`, `redis`
+    /// or `minio`; `version` is the line (`8.4`), and `None` (`true` in the file) asks for
+    /// the engine's default line.
+    Service {
+        engine: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+    },
+}
+
+/// How a service engine is named to people: `mysql` is `MySQL`. An engine Yard does not
+/// know is shown as written.
+pub fn engine_display(engine: &str) -> &str {
+    match engine {
+        "mysql" => "MySQL",
+        "postgres" => "PostgreSQL",
+        "redis" => "Redis",
+        "minio" => "MinIO",
+        other => other,
+    }
 }
 
 impl Need {
@@ -106,6 +127,8 @@ impl Need {
         match self {
             Need::Php { php } => format!("PHP {php}"),
             Need::Extension { name, php } => format!("the {name} extension for PHP {php}"),
+            Need::Service { engine, version: Some(v) } => format!("{} {v}", engine_display(engine)),
+            Need::Service { engine, version: None } => engine_display(engine).to_string(),
         }
     }
 
@@ -124,6 +147,8 @@ impl Need {
         match self {
             Need::Php { php } => format!("yard php install {php}"),
             Need::Extension { name, php } => format!("yard ext add {name} --php {php}"),
+            Need::Service { engine, version: Some(v) } => format!("yard service add {engine} --version {v}"),
+            Need::Service { engine, version: None } => format!("yard service add {engine}"),
         }
     }
 }
@@ -200,6 +225,10 @@ pub enum HolderKind {
     Herd,
     BrewServices,
     Docker,
+    /// DBngin.app's servers, which run from `/Users/Shared/DBngin/`.
+    Dbngin,
+    /// Postgres.app's servers, which run from `/Applications/Postgres.app/`.
+    PostgresApp,
     Yard,
     Unknown,
 }
@@ -297,6 +326,107 @@ pub struct CaInfo {
     pub trusted: bool,
     /// The day it expires, `YYYY-MM-DD`.
     pub expires: String,
+}
+
+/// The state of a service instance (`services.list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    Running,
+    Starting,
+    Stopped,
+    Failed { last_lines: Vec<String> },
+}
+
+/// A login a service accepts. `user: None` means the service has no authentication;
+/// `password: Some("")` means the account has no password. Yard stores no other password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    pub user: Option<String>,
+    pub password: Option<String>,
+}
+
+/// A registered port: the `ports.toml` entry's name and its number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortRef {
+    pub name: String,
+    pub port: u16,
+}
+
+/// One row of `services.list`: an instance in `services.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceInfo {
+    /// `mysql-8.4`, `postgres-17`, `redis`, `minio`.
+    pub name: String,
+    pub engine: String,
+    /// The line (`8.4`); `None` for engines that have one (`redis`, `minio`).
+    pub version: Option<String>,
+    pub formula: String,
+    pub ports: Vec<PortRef>,
+    pub state: ServiceState,
+    /// Stopped by `yard service stop`, so yardd leaves it stopped.
+    pub stopped_by_user: bool,
+    pub account: Account,
+    /// The web console's URL, when the engine has one (MinIO).
+    pub console: Option<String>,
+    /// Sites whose `.yard` lists this instance.
+    pub used_by: Vec<String>,
+}
+
+/// One block of `env.print`: the `.env` lines for an instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvBlock {
+    pub instance: String,
+    pub lines: Vec<String>,
+    /// Something to tell the reader, such as a missing instance or a clash with another block.
+    pub note: Option<String>,
+}
+
+/// One formula in a source tap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceFormula {
+    pub name: String,
+    pub trusted: bool,
+    pub installed: bool,
+}
+
+/// One row of `sources.list`: a Homebrew tap Yard installs from, and what brew trusts in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceInfo {
+    pub tap: String,
+    pub tapped: bool,
+    pub trusted: bool,
+    pub formulae: Vec<SourceFormula>,
+}
+
+/// Where a setting of a site comes from (`sites.info`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingSource {
+    ProjectFile,
+    SitesToml,
+    Default,
+}
+
+/// A `[services]` entry of a site's `.yard`, with the instance that meets it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteService {
+    pub engine: String,
+    /// The line the `.yard` asks for; `None` for `true`.
+    pub want: Option<String>,
+    /// The instance that meets it, `None` while it is missing.
+    pub service: Option<ServiceInfo>,
+}
+
+/// `sites.info`: a site, where each of its settings comes from, and its services.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteDetail {
+    pub site: SiteInfo,
+    /// The full PHP version, `8.4.3`, when the site runs PHP and it is installed.
+    pub php_full: Option<String>,
+    /// `php`, `docroot` and `secure`.
+    pub sources: BTreeMap<String, SettingSource>,
+    pub services: Vec<SiteService>,
 }
 
 /// The answer to a method that runs as a job: its progress and result arrive as
@@ -425,5 +555,102 @@ mod tests {
             serde_json::to_value(&k).unwrap(),
             json!({"kind":"proxy","target":"http://127.0.0.1:3000"})
         );
+    }
+
+    #[test]
+    fn need_service_is_tagged() {
+        let n = Need::Service { engine: "mysql".into(), version: Some("8.4".into()) };
+        assert_eq!(
+            serde_json::to_value(&n).unwrap(),
+            json!({"kind":"service","engine":"mysql","version":"8.4"})
+        );
+        let redis = Need::Service { engine: "redis".into(), version: None };
+        let v = serde_json::to_value(&redis).unwrap();
+        // `true` in the `.yard` means the engine's default line: no version on the wire.
+        assert_eq!(v, json!({"kind":"service","engine":"redis"}));
+        assert_eq!(serde_json::from_value::<Need>(v).unwrap(), redis);
+    }
+
+    #[test]
+    fn need_service_describe_and_command() {
+        let mysql = Need::Service { engine: "mysql".into(), version: Some("8.4".into()) };
+        assert_eq!(mysql.describe(), "MySQL 8.4");
+        assert_eq!(mysql.command(), "yard service add mysql --version 8.4");
+        let redis = Need::Service { engine: "redis".into(), version: None };
+        assert_eq!((redis.describe(), redis.command()), ("Redis".into(), "yard service add redis".into()));
+        let names: Vec<String> = ["mysql", "postgres", "redis", "minio"]
+            .iter()
+            .map(|e| Need::Service { engine: (*e).into(), version: None }.describe())
+            .collect();
+        assert_eq!(names, ["MySQL", "PostgreSQL", "Redis", "MinIO"]);
+    }
+
+    #[test]
+    fn service_state_failed_carries_lines() {
+        let s = ServiceState::Failed { last_lines: vec!["boom".into()] };
+        assert_eq!(serde_json::to_value(&s).unwrap(), json!({"failed":{"last_lines":["boom"]}}));
+        assert_eq!(serde_json::to_value(ServiceState::Running).unwrap(), json!("running"));
+        assert_eq!(serde_json::to_value(ServiceState::Starting).unwrap(), json!("starting"));
+        assert_eq!(serde_json::to_value(ServiceState::Stopped).unwrap(), json!("stopped"));
+        assert_eq!(
+            serde_json::from_value::<ServiceState>(json!({"failed":{"last_lines":[]}})).unwrap(),
+            ServiceState::Failed { last_lines: vec![] }
+        );
+    }
+
+    #[test]
+    fn service_info_round_trips() {
+        let info = ServiceInfo {
+            name: "mysql-8.4".into(),
+            engine: "mysql".into(),
+            version: Some("8.4".into()),
+            formula: "mysql@8.4".into(),
+            ports: vec![PortRef { name: "mysql-8.4".into(), port: 3306 }],
+            state: ServiceState::Running,
+            stopped_by_user: false,
+            account: Account { user: Some("root".into()), password: Some(String::new()) },
+            console: None,
+            used_by: vec!["blog".into()],
+        };
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!(v["state"], "running");
+        assert_eq!(v["account"], json!({"user":"root","password":""}));
+        assert_eq!(v["ports"], json!([{"name":"mysql-8.4","port":3306}]));
+        assert_eq!(serde_json::from_value::<ServiceInfo>(v).unwrap(), info);
+    }
+
+    #[test]
+    fn holder_kinds_for_database_apps() {
+        assert_eq!(serde_json::to_value(HolderKind::Dbngin).unwrap(), json!("dbngin"));
+        assert_eq!(serde_json::to_value(HolderKind::PostgresApp).unwrap(), json!("postgres_app"));
+    }
+
+    #[test]
+    fn site_detail_and_sources_round_trip() {
+        let site: SiteInfo = serde_json::from_value(json!({"name":"a","host":"a.yard",
+            "url":"http://a.yard:8080/","source":"linked","kind":"proxy","target":"http://127.0.0.1:3000"}))
+        .unwrap();
+        let detail = SiteDetail {
+            site,
+            php_full: Some("8.4.3".into()),
+            sources: BTreeMap::from([("php".to_string(), SettingSource::ProjectFile)]),
+            services: vec![SiteService { engine: "redis".into(), want: None, service: None }],
+        };
+        let v = serde_json::to_value(&detail).unwrap();
+        assert_eq!(v["sources"], json!({"php":"project_file"}));
+        assert_eq!(serde_json::to_value(SettingSource::SitesToml).unwrap(), json!("sites_toml"));
+        assert_eq!(serde_json::to_value(SettingSource::Default).unwrap(), json!("default"));
+        assert_eq!(serde_json::from_value::<SiteDetail>(v).unwrap(), detail);
+
+        let src = SourceInfo {
+            tap: "minio/stable".into(),
+            tapped: true,
+            trusted: false,
+            formulae: vec![SourceFormula { name: "minio".into(), trusted: false, installed: true }],
+        };
+        assert_eq!(serde_json::from_value::<SourceInfo>(serde_json::to_value(&src).unwrap()).unwrap(), src);
+        let env =
+            EnvBlock { instance: "redis".into(), lines: vec!["REDIS_HOST=127.0.0.1".into()], note: None };
+        assert_eq!(serde_json::from_value::<EnvBlock>(serde_json::to_value(&env).unwrap()).unwrap(), env);
     }
 }

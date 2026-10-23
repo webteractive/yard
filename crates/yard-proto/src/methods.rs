@@ -2,6 +2,7 @@
 
 use crate::{Profile, Topic};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const HELLO: &str = "hello";
 pub const STATUS: &str = "status";
@@ -16,6 +17,7 @@ pub const SITES_ISOLATE: &str = "sites.isolate";
 pub const SITES_INIT: &str = "sites.init";
 pub const SITES_SECURE: &str = "sites.secure";
 pub const SITES_UNSECURE: &str = "sites.unsecure";
+pub const SITES_INFO: &str = "sites.info";
 pub const CA_INFO: &str = "ca.info";
 pub const PORTS_LIST: &str = "ports.list";
 pub const PORTS_CHECK: &str = "ports.check";
@@ -38,6 +40,18 @@ pub const EXT_ENABLE: &str = "ext.enable";
 pub const EXT_DISABLE: &str = "ext.disable";
 pub const EXT_REMOVE: &str = "ext.remove";
 pub const XDEBUG_SET: &str = "xdebug.set";
+pub const SERVICES_LIST: &str = "services.list";
+pub const SERVICES_ADD: &str = "services.add";
+pub const SERVICES_REMOVE: &str = "services.remove";
+pub const SERVICES_START: &str = "services.start";
+pub const SERVICES_STOP: &str = "services.stop";
+pub const SERVICES_RESTART: &str = "services.restart";
+pub const SERVICES_LOGS: &str = "services.logs";
+pub const SERVICES_PORT: &str = "services.port";
+pub const ENV_PRINT: &str = "env.print";
+pub const SOURCES_LIST: &str = "sources.list";
+pub const SOURCES_TRUST: &str = "sources.trust";
+pub const SOURCES_UNTRUST: &str = "sources.untrust";
 pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
@@ -77,6 +91,15 @@ pub struct DocrootParams {
     /// `None` clears the override and returns to detection.
     #[serde(default)]
     pub path: Option<String>,
+}
+
+/// `doctor`. `client_env` is what the CLI's shell sets that brew reads (`XDG_CONFIG_HOME`
+/// and every `HOMEBREW_FORBIDDEN_*`), so the daemon can say where its own environment
+/// differs. Older clients send no params at all.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorParams {
+    #[serde(default)]
+    pub client_env: BTreeMap<String, String>,
 }
 
 /// `sites.init`: write `.yard` in `path` (unless it is there and `force` is unset), move
@@ -163,6 +186,49 @@ mod tests {
         assert_eq!(PORTS_PROFILE, "ports.profile");
         assert_eq!((SITES_SECURE, SITES_UNSECURE, CA_INFO), ("sites.secure", "sites.unsecure", "ca.info"));
         assert_eq!(SITES_INIT, "sites.init");
+        assert_eq!(
+            [SERVICES_LIST, SERVICES_ADD, SERVICES_REMOVE, SERVICES_START],
+            ["services.list", "services.add", "services.remove", "services.start"]
+        );
+        assert_eq!(
+            [SERVICES_STOP, SERVICES_RESTART, SERVICES_LOGS, SERVICES_PORT],
+            ["services.stop", "services.restart", "services.logs", "services.port"]
+        );
+        assert_eq!((ENV_PRINT, SITES_INFO), ("env.print", "sites.info"));
+        assert_eq!(
+            [SOURCES_LIST, SOURCES_TRUST, SOURCES_UNTRUST],
+            ["sources.list", "sources.trust", "sources.untrust"]
+        );
+    }
+
+    #[test]
+    fn doctor_params_without_client_env_parse() {
+        let p: DoctorParams = serde_json::from_value(json!({})).unwrap();
+        assert!(p.client_env.is_empty());
+        let p: DoctorParams = serde_json::from_value(json!({"client_env":{"XDG_CONFIG_HOME":"/x"}})).unwrap();
+        assert_eq!(p.client_env["XDG_CONFIG_HOME"], "/x");
+    }
+
+    #[test]
+    fn service_params_default_their_options() {
+        let p: ServiceAddParams = serde_json::from_value(json!({"engine":"redis"})).unwrap();
+        assert_eq!((p.engine.as_str(), p.version, p.port), ("redis", None, None));
+        let p: ServiceRemoveParams = serde_json::from_value(json!({"name":"redis"})).unwrap();
+        assert!(!p.keep_data);
+        let p: ServiceLogsParams = serde_json::from_value(json!({"name":"redis"})).unwrap();
+        assert_eq!(p.lines, None);
+        let p: EnvParams = serde_json::from_value(json!({"path":"/code/blog"})).unwrap();
+        assert_eq!((p.path.as_deref(), p.site, p.service), (Some("/code/blog"), None, None));
+        let p: EnvParams = serde_json::from_value(json!({})).unwrap();
+        assert_eq!((p.path, p.site, p.service), (None, None, None));
+        let p: SiteDetailParams = serde_json::from_value(json!({"site":"blog"})).unwrap();
+        assert_eq!((p.path, p.site.as_deref()), (None, Some("blog")));
+        let p: SourceParams = serde_json::from_value(json!({"target":"minio"})).unwrap();
+        assert!(!p.tap);
+        let p: ServicePortParams = serde_json::from_value(json!({"name":"redis","port":6380})).unwrap();
+        assert_eq!(p.port, 6380);
+        let p: ServiceParams = serde_json::from_value(json!({"name":"redis"})).unwrap();
+        assert_eq!(p.name, "redis");
     }
 
     #[test]
@@ -214,4 +280,73 @@ pub struct XdebugParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobParams {
     pub job_id: String,
+}
+
+/// `services.add`: `version` is a line such as `8.4` (the engine's default when unset) and
+/// `port` pins the instance's port (the usual one, or the next free one, when unset).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceAddParams {
+    pub engine: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+/// `services.start|stop|restart`: an instance name such as `mysql-8.4`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceParams {
+    pub name: String,
+}
+
+/// `services.remove`: `keep_data` leaves the instance's data directory in place.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceRemoveParams {
+    pub name: String,
+    #[serde(default)]
+    pub keep_data: bool,
+}
+
+/// `services.port`: move an instance to another port.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServicePortParams {
+    pub name: String,
+    pub port: u16,
+}
+
+/// `services.logs`: the last `lines` lines (a default when unset).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceLogsParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<usize>,
+}
+
+/// `env.print`: `service` names one instance; else `site`, else the site whose path
+/// contains `path`; else every instance.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnvParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+}
+
+/// `sites.info`: a site by name, or by a `path` inside it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteDetailParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+}
+
+/// `sources.trust|untrust`: a formula (`minio`) or, with `tap`, a whole tap (`minio/stable`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceParams {
+    pub target: String,
+    #[serde(default)]
+    pub tap: bool,
 }

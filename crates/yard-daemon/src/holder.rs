@@ -34,6 +34,8 @@ pub fn label(holder: Option<&Holder>) -> String {
         HolderKind::Herd => "Herd",
         HolderKind::BrewServices => "brew services",
         HolderKind::Docker => "Docker",
+        HolderKind::Dbngin => "DBngin",
+        HolderKind::PostgresApp => "Postgres.app",
         HolderKind::Yard => "Yard",
         HolderKind::Unknown => "unknown",
     };
@@ -114,6 +116,16 @@ mod tests {
         };
         assert_eq!(label(Some(&herd)), "nginx-arm (pid 4534, Herd)");
         assert_eq!(label(None), "a process not visible to this user");
+        let dbngin = Holder {
+            pid: 77034,
+            name: "mysqld".into(),
+            path: Some("/Users/Shared/DBngin/mysql/8.0.19/bin/mysqld".into()),
+            ppid: Some(1),
+            kind: HolderKind::Dbngin,
+        };
+        assert_eq!(label(Some(&dbngin)), "mysqld (pid 77034, DBngin)");
+        let pg = Holder { kind: HolderKind::PostgresApp, name: "postgres".into(), pid: 812, ..dbngin };
+        assert_eq!(label(Some(&pg)), "postgres (pid 812, Postgres.app)");
     }
 
     #[test]

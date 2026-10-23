@@ -486,7 +486,8 @@ profile; Yard does not edit dotfiles.
   `php.list|install|uninstall|default|config.get|config.set|config.unset`,
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
-  `services.list|add|remove|start|stop|restart|logs`,
+  `services.list|add|remove|start|stop|restart|logs|port`, `sites.info`,
+  `sources.list|trust|untrust`,
   `ca.info`, `node.list|install|use`, `units.restart`, `jobs.cancel`, `env.print`.
 - Long operations (brew installs) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
@@ -517,7 +518,9 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PORT_IN_USE`, `PHP_NOT_INSTALLED`, `PHP_IN_USE`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_NOT_FOUND`,
 `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`,
-`SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`. The CLI prints message and hint;
+`SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`,
+`SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
+`FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI
