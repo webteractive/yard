@@ -74,6 +74,17 @@ triggers:
   does (`Redis` is `redis@8.4`), and the checks run in `spawn_blocking`. The layout mirrored
   is flat or one-shard `Formula/`, `Aliases/` and `formula_renames.json`, not
   `HomebrewFormula/` or `tap_migrations.json`.
+- **`services.add`** (`rpc/services.rs`, `services::resolve`) asks brew `search --formula
+  "/^<base>(@|$)/"` and `info --json=v2 <name>` once per formula, never from inside a job's
+  command loop. A formula whose `disabled` is true is not a line; a deprecated one is, and the job
+  prints a line naming its `disable_date`. The line's winning formula that brew lists but cannot
+  describe is `FORMULA_MISSING`, not `SERVICE_VERSION_UNSUPPORTED`. The trust gate runs for a
+  non-core formula whose keg is missing (MinIO's `minio/stable/minio`), in the handler and again in
+  the job before `brew install`, since an install that waited behind another job must not meet a
+  tap that was untrusted meanwhile. An existing `opt/minio` is asked about with `brew info
+  --json=v2 minio`: homebrew/core's is used as it is (no install, no gate, its full name recorded),
+  anything else is recorded as `minio/stable/minio`. Yard never runs `brew uninstall` for a
+  service.
 - **Trust is brew's, never Yard's.** Read it only with `brew trust --json=v1`; change it
   only with `brew trust` / `brew untrust` (`sources.trust|untrust` jobs, or the CLI's y/N
   prompt). Never read or write brew's `trust.json`, keep a list of Yard's own, or let

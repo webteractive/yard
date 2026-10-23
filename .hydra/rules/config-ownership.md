@@ -37,6 +37,12 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     `99-overrides.ini` through `yard php config set|unset` (`rpc/php.rs`
     `config_edit`, via `yard_core::ini`, which keeps every other line as written,
     and `generated::write_preserving`, which writes through a symlink and keeps the mode).
+  - `services.add` writes the `services.toml` entry and the pinned `ports.toml` entries, through
+    `TomlFile` (`services::Add`), and `services.remove` deletes them. A failed or cancelled add
+    deletes only what it created in `services/<i>/`: a file or directory that was there before (the
+    user's `overrides.conf`, or data left by `remove --keep-data`) stays, and so does `data/` when the
+    add reused it. `remove` deletes the whole directory, or all but `data/` with `keep_data`, and only
+    once the unit is gone.
   - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`, `services.toml`) are edited only through
     `config::edit::TomlFile` (`toml_edit`), so comments and key order survive. Every
     read-modify-write in the daemon is one `TomlFile::edit(path, |file| …)`, which holds

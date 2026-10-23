@@ -114,7 +114,10 @@ pub fn init_command(
     match engine {
         Engine::Mysql => Some(UnitCommand {
             program: bin("mysqld"),
+            // `--no-defaults` first: mysqld reads `/etc/my.cnf` and `~/.my.cnf` unless told
+            // not to, and a user's `datadir` or `port` there would shape what Yard creates.
             args: vec![
+                arg("--no-defaults"),
                 arg("--initialize-insecure"),
                 arg(format!("--datadir={}", data.display())),
                 arg(format!("--basedir={}", keg.display())),
@@ -303,6 +306,7 @@ mod tests {
         assert_eq!(
             mysql.args,
             os(&[
+                "--no-defaults",
                 "--initialize-insecure",
                 &format!("--datadir={}", data.display()),
                 &format!("--basedir={}", keg.display()),

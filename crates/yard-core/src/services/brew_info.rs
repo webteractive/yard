@@ -13,6 +13,8 @@ pub struct Formula {
     pub version: String,
     pub deprecated: bool,
     pub deprecation_date: Option<String>,
+    /// brew already refuses to install it (`disabled`): it is not offered as a line.
+    pub disabled: bool,
     pub disable_date: Option<String>,
     pub aliases: Vec<String>,
 }
@@ -36,6 +38,8 @@ struct Raw {
     deprecated: bool,
     #[serde(default)]
     deprecation_date: Option<String>,
+    #[serde(default)]
+    disabled: bool,
     #[serde(default)]
     disable_date: Option<String>,
     #[serde(default)]
@@ -61,6 +65,7 @@ pub fn parse(json: &str) -> Result<Vec<Formula>, String> {
             version: raw.versions.stable.unwrap_or_default(),
             deprecated: raw.deprecated,
             deprecation_date: raw.deprecation_date,
+            disabled: raw.disabled,
             disable_date: raw.disable_date,
             aliases: raw.aliases,
         })
@@ -106,8 +111,18 @@ mod tests {
         assert_eq!(f.version, "8.0.46");
         assert!(f.deprecated);
         assert_eq!(f.deprecation_date.as_deref(), Some("2026-04-30"));
+        assert!(!f.disabled);
         assert_eq!(f.disable_date, None);
         assert!(f.aliases.is_empty());
+    }
+
+    #[test]
+    fn brew_info_reads_disabled() {
+        let f =
+            parse(r#"{"formulae":[{"name":"postgresql@13","disabled":true,"disable_date":"2026-11-13"}]}"#)
+                .unwrap();
+        assert!(f[0].disabled);
+        assert_eq!(f[0].disable_date.as_deref(), Some("2026-11-13"));
     }
 
     #[test]

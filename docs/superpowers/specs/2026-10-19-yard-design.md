@@ -627,16 +627,45 @@ proxies and `mail.<tld>`). `yard env` always prints the actual assigned ports.
 
 ### 8.2 Services
 
-Each service is a supervised `Unit` with data in `services/<name>/data/` and its
-port(s) in the registry.
+Each service instance is a supervised `Unit` with data in `services/<instance>/data/` and its
+port(s) in the registry, listed in `services.toml` (M4b design:
+`2026-10-23-yard-m4b-services-design.md`). Instances are named `<engine>-<line>`.
 
-| Service | Formula | Notes |
+| Instance | Formula | Notes |
 |---|---|---|
-| MySQL 8.4 / 8.0 | `mysql`, `mysql@8.0` | one instance per version; `root` with empty password, local only |
-| PostgreSQL 16 | `postgresql@16` | |
-| Redis | `redis` | |
-| emailulator | not brew (see below) | SMTP and HTTP on registry ports; web UI proxied at `mail.<tld>` |
-| MinIO | `minio` | optional; console proxied at `minio.<tld>` |
+| `mysql-<line>` (`8.0`, `8.4`, …) | `mysql@<line>`, else the plain `mysql` when it is on that line | `root` with empty password, local only; one instance per line |
+| `postgres-<line>` (`15`–`18`) | `postgresql@<line>` | the macOS user, no password |
+| `redis` | `redis` | no auth |
+| `minio` | `minio/stable/minio` (a homebrew/core `minio` already installed is used as it is) | `minioadmin`; console proxied at `minio.<tld>` |
+| emailulator | not brew (see below) | SMTP and HTTP on registry ports; web UI proxied at `mail.<tld>` (M4d, not built) |
+
+The lines are brew's: `add` runs `brew search --formula "/^<base>(@|$)/"` and `brew info
+--json=v2` for each name found, once per add. A formula brew reports as disabled is not a
+line; a deprecated one is, with a job line naming brew's disable date.
+
+As built (daemon methods; the CLI is M4b Task 13):
+
+- `services.list` answers a `ServiceInfo` per instance in `services.toml`.
+- `services.add { engine, version?, port? }` is a job. Before it starts: an unknown engine,
+  a `version` for Redis or MinIO or one that is not a line, and `port` 0 are
+  `INVALID_ARGUMENT`; an instance that exists is `SERVICE_EXISTS`; a line brew does not have
+  is `SERVICE_VERSION_UNSUPPORTED` naming the lines it has; a formula brew lists but cannot
+  describe is `FORMULA_MISSING`; and a formula from a non-core tap that is yet to be
+  installed goes through the trust gate (`FORMULA_UNTRUSTED`, M4b §8). The job re-checks
+  that the instance does not exist (jobs run one at a time, so a second add queued behind
+  the first meets its entry), runs `brew install <formula>` when the keg is missing,
+  allocates the ports in `ports.toml` (pinned: `--port` exactly, else the engine's usual
+  port or the next free one, skipping DBngin's and Postgres.app's), runs the engine's init
+  into an absent or empty `data/` (`mysqld --no-defaults --initialize-insecure`, `initdb`;
+  otherwise the job says `reusing the data in <dir>`), writes the entry, reconciles, and waits
+  up to 60 s for the unit to run (`failed` ends it with the last lines). A failure or cancel
+  removes the entry and port entries it wrote and what it created in `services/<i>/`, never
+  data that was there before or a file the user put there.
+- `services.remove { name, keep_data? }` refuses an unknown instance (`SERVICE_NOT_FOUND`) and
+  one a linked site's `.yard` asks for (`SERVICE_IN_USE`, hint `edit <that .yard>`). Otherwise
+  it removes the entry and port entries, reconciles, waits until the unit is gone, and only
+  then deletes `services/<i>/`, keeping `data/` with `keep_data`. It never runs `brew
+  uninstall`. Confirmation is the CLI's.
 
 **emailulator** replaced Mailpit on 2026-10-21 (maintainer): it is our own mail catcher, with a
 web UI, a REST API and an MCP server, so agents can read the mail a site sent.
@@ -654,8 +683,8 @@ web UI, a REST API and an MCP server, so agents can read the mail a site sent.
   is serving mail.
 - `yard env` prints `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1` and `MAIL_PORT=<smtp>`.
 
-Commands: `yard service add <name> [--version] [--port]`,
-`yard service remove <name> [--keep-data]`, `yard service start|stop|restart|logs <name>`,
+Commands: `yard service add <engine> [--version] [--port]`,
+`yard service remove <instance> [--keep-data]`, `yard service start|stop|restart|logs <instance>`,
 `yard services` (list).
 
 Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines

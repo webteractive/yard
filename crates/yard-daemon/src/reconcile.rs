@@ -31,7 +31,6 @@ use yard_core::render::nginx::{default_index, nginx_main, nginx_site, service_si
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::services::Engine;
 use yard_core::services::render::config_file;
-use yard_core::services::reserved::reserved_ports;
 use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::tls::{LEAF_DAYS, needs_issue};
@@ -587,8 +586,11 @@ impl Reconciler {
         let missing = services.services.iter().any(|(i, e)| {
             services::port_entries(e.engine, i).iter().any(|(n, ..)| !registry.entries.contains_key(n))
         });
-        let reserved =
-            if missing { reserved_ports(&self.app_dirs, &|p: &Path| p.exists()) } else { Default::default() };
+        let reserved = if missing {
+            services::reserved(&self.app_dirs, self.usual_ports.as_ref())
+        } else {
+            Default::default()
+        };
         let mut settled = BTreeMap::new();
         'instances: for (instance, entry) in &services.services {
             let mut ports = vec![];

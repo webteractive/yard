@@ -22,7 +22,7 @@ pub fn ext_formula(module: &str, v: yard_core::PhpVersion) -> String {
 /// Runs `brew <args>` outside a job, for the read-only questions the gate asks. Stdout,
 /// and whether it exited 0 (stderr is kept for the error). Brew's environment is yardd's
 /// own: nothing is added.
-async fn brew_stdout(brew: &Brew, args: &[&str]) -> Result<(bool, String, String), YardError> {
+pub(crate) async fn brew_stdout(brew: &Brew, args: &[&str]) -> Result<(bool, String, String), YardError> {
     let program = brew.brew_bin();
     let shown = format!("brew {}", args.join(" "));
     let mut cmd = Command::new(&program);

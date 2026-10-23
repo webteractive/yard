@@ -73,7 +73,16 @@ triggers:
   be had is a reconcile warning with no unit. `DaemonOptions.usual_ports` (keys `mysql`, `postgres`,
   `redis`, `minio`, `minio-console`) replaces the engine's usual ports and `app_dirs` where DBngin
   and Postgres.app are looked for; tests set the first from `free_port()` and the second to a
-  directory with neither, so no test binds 3306, 5432, 6379, 9000 or 9001.
+  directory with neither, so no test binds 3306, 5432, 6379, 9000 or 9001. `services::reserved(app_dirs,
+  usual_ports)` is the one place the reservation is computed (reconcile and the add job both call it):
+  with `usual_ports` set, each reserved real port is replaced by that engine's override, so a test
+  that fakes `DBngin.app` reserves the test's own usual port, not 3306.
+- `services.add` takes its ports in the job (`services::Add::allocate`, one `TomlFile::edit` of
+  `ports.toml`, in `spawn_blocking` since it probes and runs lsof): `--port` is the first entry's
+  (MinIO's API) and goes through `allocate_exact`; a refusal is rewritten by `refuse_port` to name the
+  holder (`port N is held by mysqld (pid …, DBngin)`) and to hint at a different `--port`, since the
+  registry's own hint (`yard ports set`, `auto_fallback`) is about something else. A failed or
+  cancelled add removes the entries it wrote; `services.remove` removes them with the instance.
 - While DBngin.app is installed, 3306, 5432 and 6379 are reserved, and while Postgres.app is
   installed, 5432 (`services::reserved::reserved_ports`, which looks for the app bundle in
   `/Applications` and `~/Applications` and reads none of their files). A probe only sees live

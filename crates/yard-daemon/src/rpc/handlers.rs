@@ -1,7 +1,7 @@
 //! One function per method. Mutations edit a TOML through `TomlFile`, then reconcile;
 //! they never write generated files themselves.
 
-use super::{ext, php, project, sources};
+use super::{ext, php, project, services, sources};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
@@ -91,6 +91,9 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SOURCES_LIST => json(sources::list(ctx).await),
         methods::SOURCES_TRUST => json(sources::change(ctx, parse(params)?, true)),
         methods::SOURCES_UNTRUST => json(sources::change(ctx, parse(params)?, false)),
+        methods::SERVICES_LIST => json(services::list(ctx).await),
+        methods::SERVICES_ADD => json(services::add(ctx, parse(params)?).await),
+        methods::SERVICES_REMOVE => json(services::remove(ctx, parse(params)?).await),
         methods::JOBS_CANCEL => {
             let p: JobParams = parse(params)?;
             json(ctx.jobs.cancel(&p.job_id))

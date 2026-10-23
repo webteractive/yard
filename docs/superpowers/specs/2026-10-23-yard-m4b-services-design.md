@@ -159,7 +159,9 @@ when brew has it, else the plain formula when its version has that major.minor. 
 resolves it with `brew info --json=v2`, which also lists the lines brew has; a line brew
 does not have is `SERVICE_VERSION_UNSUPPORTED`, listing the ones it has. A deprecated
 formula (`mysql@8.0`, `postgresql@14`) installs with a warning naming brew's disable date
-**(builder's call)**.
+**(builder's call)**; a formula brew has already disabled is not offered as a line. `add`
+asks brew once per formula, and a winning formula brew lists but cannot describe is
+`FORMULA_MISSING` (`brew could not describe <formula>`), not a missing line.
 
 **The plain formula moves.** `brew upgrade mysql` takes the plain `mysql` from 26.10 to
 the next line; mysqld upgrades the instance's data in place and cannot go back. The
@@ -170,8 +172,11 @@ Projects that need a stable MySQL use a versioned line.
 
 ### 5.1 MySQL
 
-- Initialize: `mysqld --initialize-insecure --datadir=<data> --basedir=<keg>`, so `root`
-  has an empty password (main spec §8.2).
+- Initialize: `mysqld --no-defaults --initialize-insecure --datadir=<data> --basedir=<keg>`, so
+  `root` has an empty password (main spec §8.2). `--no-defaults` comes first: mysqld reads
+  `/etc/my.cnf` and `~/.my.cnf` otherwise, and a `datadir`, `port` or `basedir` in a user's
+  file would shape what Yard creates. The instance's own run reads only its `my.cnf`
+  (`--defaults-file`).
 - Run: `mysqld --defaults-file=<root>/services/<i>/my.cnf`. The generated `my.cnf` sets
   `port`, `bind-address = 127.0.0.1`, `socket = <root>/run/<i>.sock`, `datadir`,
   `mysqlx = OFF` (the X Protocol would otherwise take 33060 for every instance), and
@@ -230,7 +235,7 @@ Projects that need a stable MySQL use a versioned line.
 - Every instance port is a port registry entry named after the instance
   (`mysql-8.4`; MinIO's are `minio` and `minio-console`).
 - **Allocation, once, at `add`:** `--port` if given (refused with `PORT_IN_USE` naming the
-  holder if busy); else the engine's usual port; else the next port above it that is
+  holder if busy, with a hint to pass a different `--port` or leave it out); else the engine's usual port; else the next port above it that is
   free and not registered to another unit (3306 → 3307 → 3308). On this machine today
   that gives `mysql-8.4` 3307 (DBngin holds 3306), `postgres-17` 5433 (Postgres.app),
   `redis` 6380 (DBngin), and `minio` 9000/9001.
@@ -292,11 +297,19 @@ follows the cli-output rule.
   the formula if its keg is missing; allocates ports (§6); initializes the data directory
   if it is empty; writes the `services.toml` entry; reconciles; and waits for the
   instance to pass its health check, then prints the `yard env` lines. A job that fails
-  or is cancelled after initializing removes the data directory it created, the entry
-  and the ports. Adding an instance that exists is `SERVICE_EXISTS`. Adding into a
-  `services/<i>/data/` left by `remove --keep-data` reuses that data and says so.
-- **`remove`** stops the instance, removes its entry and ports, and deletes
-  `services/<i>/` unless `--keep-data`. On a terminal it asks `Delete mysql-8.4 and its
+  or is cancelled after it began removes the entry and the ports it wrote, and what it
+  created in `services/<i>/`: the data directory it initialized, and any file that was not
+  there before (a `my.cnf` reconcile wrote, say). It never deletes data that was already there
+  or a file the user put there first (`overrides.conf`). Adding an instance that exists is
+  `SERVICE_EXISTS`: checked by the handler, and again as the job starts, since jobs run one
+  at a time and a second add queued behind the first must not touch the first's ports or
+  data. Adding into a `services/<i>/data/` left by `remove --keep-data` reuses that data and
+  says so (`reusing the data in <dir>`); the init runs only into an absent or empty `data/`.
+  Init runs before the entry is written, because reconcile starts only instances that have one
+  and runs no init.
+- **`remove`** removes the instance's entry and ports, reconciles to stop it, waits until the
+  unit is gone (so a running mysqld never writes into a directory being deleted), and then
+  deletes `services/<i>/`, or everything in it but `data/` with `--keep-data`. On a terminal it asks `Delete mysql-8.4 and its
   data? [y/N]` (`--yes` skips); without a terminal and without `--yes` it refuses with
   `NEEDS_CONFIRMATION` **(builder's call)**. It refuses with `SERVICE_IN_USE` when a
   linked site's `.yard` asks for it, naming the sites, the way `yard php uninstall`

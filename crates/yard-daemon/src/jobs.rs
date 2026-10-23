@@ -113,6 +113,12 @@ impl JobCtx {
         &self.job_id
     }
 
+    /// `JOB_CANCELLED` once a cancel was requested: a job waiting on something other than a
+    /// command checks this between polls.
+    pub fn check_cancelled(&self) -> Result<(), YardError> {
+        if *self.cancel.borrow() { Err(cancelled(&self.job_id)) } else { Ok(()) }
+    }
+
     pub fn line(&self, text: impl Into<String>) {
         self.bus.emit(Event::JobProgress { job_id: self.job_id.clone(), line: text.into() });
     }

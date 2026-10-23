@@ -87,6 +87,9 @@ pub struct Context {
     pub resolver_dir: PathBuf,
     pub jobs: Jobs,
     pub security: PathBuf,
+    /// `DaemonOptions.usual_ports` and `app_dirs`, which `services.add` allocates ports from.
+    pub usual_ports: Option<BTreeMap<String, u16>>,
+    pub app_dirs: Vec<PathBuf>,
 }
 
 impl Context {
@@ -133,6 +136,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         resolver_dir: opts.resolver_dir.clone(),
         jobs,
         security: opts.security.clone(),
+        usual_ports: opts.usual_ports.clone(),
+        app_dirs: opts.app_dirs.clone(),
     });
 
     claim(&socket).await?;

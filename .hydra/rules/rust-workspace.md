@@ -49,11 +49,13 @@ triggers:
   real redis does): `mysqld --defaults-file=F` listens on the `port` in `F` and exits 1 with
   `unknown variable` when the overrides file `F` includes contains `bad`; `postgres -c port=N`,
   `redis-server F` and `minio server … --address A --console-address C` listen where they are
-  told. `mysqld --initialize-insecure --datadir=D` and `initdb -D D` create `D/ibdata1` and
+  told. `mysqld --no-defaults --initialize-insecure --datadir=D` and `initdb -D D` create `D/ibdata1` and
   `D/PG_VERSION`, wait `<prefix>/fake-init-delay` ms and fail while `<prefix>/fake-init-fail`
   exists. `Fixture::add_formula(name)` makes the keg `opt/<name>/bin/<binaries>` as the fake
   brew's `install` does, and `Fixture::add_service(instance, formula, stopped)` appends an entry
-  to `services.toml`.
+  to `services.toml`. The fake brew reads `tap`, `versions.stable`, `deprecated`, `disabled` and
+  `disable_date` from a `fake-formulae.json` entry, and `fake-brew-delay` (ms) holds every install, which
+  keeps an add job busy while a second one is queued behind it.
 - Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
 - A test that reconciles, probes or runs doctor writes a `ports.toml` first

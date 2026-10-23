@@ -7,16 +7,17 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use support::daemon::{Client, prepared, run_job};
+use support::daemon::{Client, Daemon, prepared, run_job};
 use support::{Fixture, fast, free_port, served, spawn_helper, wait_until};
 use yard_core::brew::Brew;
+use yard_core::config::load_services;
 use yard_core::ports::Registry;
 use yard_daemon::events::EventBus;
 use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::services::service_info;
 use yard_daemon::supervisor::Supervisor;
-use yard_proto::{PortMode, ServiceState, UnitState};
+use yard_proto::{ErrorCode, PortMode, ServiceState, UnitState};
 
 /// A `ports.toml` line pinning `unit` to `port`.
 fn pin(unit: &str, port: u16) -> String {
@@ -504,5 +505,551 @@ async fn a_deleted_port_entry_is_pinned_again() {
     };
     assert!(wait_until(pinned, Duration::from_secs(10)).await, "{:?}", Registry::load(&d.fx.paths));
     assert!(wait_until(|| served(usual), Duration::from_secs(10)).await, "mysql-8.4 runs on the new pin");
+    d.shutdown().await.unwrap();
+}
+
+// `services.add`, `services.remove` and `services.list` (M4b spec §4 to §8, §12).
+
+/// One `brew info --json=v2` formula object, as the fake brew's `fake-formulae.json` holds it.
+fn formula(name: &str, full_name: &str, tap: &str, version: &str) -> Value {
+    json!({
+        "name": name, "full_name": full_name, "tap": tap, "aliases": [],
+        "versions": {"stable": version}, "deprecated": false, "disabled": false,
+        "deprecation_date": null, "disable_date": null,
+    })
+}
+
+fn core(name: &str, version: &str) -> Value {
+    formula(name, name, "homebrew/core", version)
+}
+
+/// `entry` deprecated, and brew disabling it on `date`.
+fn deprecated(mut entry: Value, date: &str) -> Value {
+    entry["deprecated"] = json!(true);
+    entry["deprecation_date"] = json!("2026-04-30");
+    entry["disable_date"] = json!(date);
+    entry
+}
+
+fn write_formulae(d: &Daemon, entries: &[Value]) {
+    std::fs::write(d.fx.brew.path().join("fake-formulae.json"), json!(entries).to_string()).unwrap();
+}
+
+fn brew_log(d: &Daemon) -> String {
+    std::fs::read_to_string(d.fx.brew.path().join("fake-brew.log")).unwrap_or_default()
+}
+
+/// The `usual_ports` override the daemon was given for `key`.
+fn usual(d: &Daemon, key: &str) -> u16 {
+    d.opts.usual_ports.as_ref().unwrap()[key]
+}
+
+async fn add(
+    c: &mut Client,
+    engine: &str,
+    version: Option<&str>,
+) -> (Vec<String>, Option<yard_proto::YardError>) {
+    let mut params = json!({"engine": engine});
+    if let Some(v) = version {
+        params["version"] = json!(v);
+    }
+    run_job(c, "services.add", params).await
+}
+
+async fn list(c: &mut Client) -> Vec<Value> {
+    c.call("services.list", Value::Null).await.unwrap().as_array().unwrap().clone()
+}
+
+fn port_of(d: &Daemon, unit: &str) -> Option<(u16, PortMode)> {
+    Registry::load(&d.fx.paths).unwrap().entries.get(unit).map(|e| (e.port, e.mode))
+}
+
+fn has_entry(d: &Daemon, instance: &str) -> bool {
+    load_services(&d.fx.paths).unwrap().services.contains_key(instance)
+}
+
+/// Nothing of `instance` is left: no directory, no entry, no port entry.
+fn assert_gone(d: &Daemon, instance: &str) {
+    assert!(!d.fx.paths.service_dir(instance).exists(), "services/{instance} is gone");
+    assert!(!has_entry(d, instance), "no services.toml entry");
+    let ports = Registry::load(&d.fx.paths).unwrap();
+    let left: Vec<&String> = ports.entries.keys().filter(|k| k.starts_with(instance)).collect();
+    assert!(left.is_empty(), "no port entries: {left:?}");
+}
+
+#[tokio::test]
+async fn add_installs_initializes_and_runs() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    let port = usual(&d, "mysql");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("brew install mysql@8.4")), "{lines:?}");
+    assert!(
+        d.fx.paths.service_data("mysql-8.4").join("ibdata1").exists(),
+        "the data directory is initialized"
+    );
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    assert!(served(port), "it runs on the usual port");
+    assert_eq!(port_of(&d, "mysql-8.4"), Some((port, PortMode::Pinned)), "pinned, so nothing moves it");
+    let entry = load_services(&d.fx.paths).unwrap().services["mysql-8.4"].clone();
+    assert_eq!((entry.version.as_deref(), entry.formula.as_str()), (Some("8.4"), "mysql@8.4"));
+
+    let rows = list(&mut c).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "mysql-8.4");
+    assert_eq!(rows[0]["account"]["user"], "root");
+    assert_eq!(rows[0]["state"], "running");
+    assert_eq!(rows[0]["ports"], json!([{"name": "mysql-8.4", "port": port}]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_is_empty_without_instances() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    assert!(list(&mut c).await.is_empty());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn two_mysql_lines_run_side_by_side() {
+    let d = prepared("").await;
+    write_formulae(&d, &[deprecated(core("mysql@8.0", "8.0.46"), "2027-04-30"), core("mysql@8.4", "8.4.13")]);
+    let usual = usual(&d, "mysql");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.0")).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("mysql@8.0") && l.contains("deprecated") && l.contains("2027-04-30")),
+        "a deprecated formula names brew's disable date: {lines:?}"
+    );
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("deprecated")), "{lines:?}");
+
+    let (old, new) = (port_of(&d, "mysql-8.0").unwrap(), port_of(&d, "mysql-8.4").unwrap());
+    assert_eq!(old, (usual, PortMode::Pinned));
+    assert_eq!(new.1, PortMode::Pinned);
+    assert!(new.0 > usual, "the usual port is taken, so the next free one: {new:?}");
+    assert!(reaches(&mut c, "mysql-8.0", "running").await.is_ok());
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    assert!(served(old.0) && served(new.0));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_respects_reserved_ports() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    // DBngin keeps MySQL's usual port, which here is a free port, never 3306.
+    std::fs::create_dir_all(d.opts.app_dirs[0].join("DBngin.app")).unwrap();
+    let usual = usual(&d, "mysql");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    let (port, mode) = port_of(&d, "mysql-8.4").unwrap();
+    assert!(port > usual, "the reserved usual port {usual} is skipped: got {port}");
+    assert_eq!(mode, PortMode::Pinned);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_unknown_line_lists_lines() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.0", "8.0.46"), core("mysql@8.4", "8.4.13")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let e = c.call("services.add", json!({"engine": "mysql", "version": "9.9"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceVersionUnsupported);
+    assert!(e.message.contains("8.0, 8.4"), "{}", e.message);
+    assert!(!brew_log(&d).contains("install"), "nothing was installed");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_disabled_formula_is_not_offered() {
+    let d = prepared("").await;
+    let mut old = core("postgresql@13", "13.9");
+    old["disabled"] = json!(true);
+    old["disable_date"] = json!("2026-11-13");
+    write_formulae(&d, &[old, core("postgresql@17", "17.2")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let e = c.call("services.add", json!({"engine": "postgres", "version": "13"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceVersionUnsupported);
+    assert!(e.message.contains("it offers 17") && !e.message.contains("13, "), "{}", e.message);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_formula_brew_cannot_describe_is_its_own_error() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    // brew lists the formula but fails on `brew info mysql@8.4`.
+    std::fs::write(d.fx.brew.path().join("fake-brew-fail"), "mysql@8.4").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let e = c.call("services.add", json!({"engine": "mysql", "version": "8.4"})).await.unwrap_err();
+    assert_ne!(e.code, ErrorCode::ServiceVersionUnsupported, "{e:?}");
+    assert!(e.message.contains("could not describe mysql@8.4"), "{}", e.message);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_checks_its_arguments() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    for params in [
+        json!({"engine": "mariadb"}),
+        json!({"engine": "redis", "version": "8"}),
+        json!({"engine": "minio", "version": "1"}),
+        json!({"engine": "mysql", "version": "8"}),
+        json!({"engine": "mysql", "version": "latest"}),
+        json!({"engine": "postgres", "version": "17.2"}),
+        json!({"engine": "redis", "port": 0}),
+    ] {
+        let e = c.call("services.add", params.clone()).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidArgument, "{params}: {e:?}");
+    }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_twice_is_service_exists() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    let e = c.call("services.add", json!({"engine": "mysql", "version": "8.4"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceExists);
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok(), "the instance is left alone");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn two_adds_at_once_write_one_entry() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    // The first job sits in `brew install`, so the second passes the handler's check too.
+    std::fs::write(d.fx.brew.path().join("fake-brew-delay"), "800").unwrap();
+    let port = usual(&d, "mysql");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("subscribe", json!({"topics": ["jobs"]})).await.unwrap();
+    let params = json!({"engine": "mysql", "version": "8.4"});
+    let first = c.call("services.add", params.clone()).await.unwrap()["job_id"].as_str().unwrap().to_string();
+    let second = c.call("services.add", params).await.unwrap()["job_id"].as_str().unwrap().to_string();
+
+    let mut finished = std::collections::BTreeMap::new();
+    while finished.len() < 2 {
+        let e = c
+            .event_where(Duration::from_secs(20), |e| e["type"] == "job_finished")
+            .await
+            .expect("both jobs finish");
+        finished.insert(e["job_id"].as_str().unwrap().to_string(), e["error"].clone());
+    }
+    assert_eq!(finished[&first], Value::Null, "the first add wins");
+    assert_eq!(finished[&second]["code"], "SERVICE_EXISTS", "the second finds the entry: {finished:?}");
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok(), "the first instance is untouched");
+    assert!(served(port));
+    assert_eq!(port_of(&d, "mysql-8.4"), Some((port, PortMode::Pinned)), "and so are its ports");
+    assert!(d.fx.paths.service_data("mysql-8.4").join("ibdata1").exists(), "and its data");
+    assert_eq!(list(&mut c).await.len(), 1);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_minio_needs_trust() {
+    let d = prepared("").await;
+    write_formulae(&d, &[formula("minio", "minio/stable/minio", "minio/stable", "2025-09-06")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let e = c.call("services.add", json!({"engine": "minio"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::FormulaUntrusted);
+    assert_eq!(e.hint.as_deref(), Some("yard source trust minio/stable/minio"));
+    assert!(!brew_log(&d).contains("install"), "brew was never asked to install");
+    assert_gone(&d, "minio");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_minio_installs_from_its_tap_once_trusted() {
+    let d = prepared("").await;
+    write_formulae(&d, &[formula("minio", "minio/stable/minio", "minio/stable", "2025-09-06")]);
+    let trusted = r#"{"taps":["minio/stable"],"formulae":[],"casks":[],"commands":[]}"#;
+    std::fs::write(d.fx.brew.path().join("fake-trust.json"), trusted).unwrap();
+    let (api, console) = (usual(&d, "minio"), usual(&d, "minio-console"));
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "minio", None).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("brew install minio/stable/minio")), "{lines:?}");
+    assert_eq!(port_of(&d, "minio"), Some((api, PortMode::Pinned)));
+    assert_eq!(port_of(&d, "minio-console"), Some((console, PortMode::Pinned)));
+    assert!(served(api) && served(console));
+    assert_eq!(load_services(&d.fx.paths).unwrap().services["minio"].formula, "minio/stable/minio");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_uses_an_installed_core_minio() {
+    let d = prepared("").await;
+    // homebrew/core's minio, already installed, deprecated and due to be disabled.
+    d.fx.add_formula("minio");
+    write_formulae(&d, &[deprecated(core("minio", "2025.9.7"), "2027-02-17")]);
+    let (api, console) = (usual(&d, "minio"), usual(&d, "minio-console"));
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "minio", None).await;
+    assert_eq!(error, None, "{lines:?}");
+    let log = brew_log(&d);
+    assert!(!log.contains("install"), "it is used as it is: {log}");
+    assert!(!log.contains("trust"), "no trust check for a core formula: {log}");
+    assert!(log.contains("info --json=v2 minio"), "brew said which tap the keg is from: {log}");
+    assert!(lines.iter().any(|l| l.contains("2027-02-17")), "brew's disable date: {lines:?}");
+    assert_eq!(load_services(&d.fx.paths).unwrap().services["minio"].formula, "minio");
+    assert!(served(api) && served(console));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_with_a_port_pins_that_port() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("redis", "8.0.1")]);
+    let port = free_port();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = run_job(&mut c, "services.add", json!({"engine": "redis", "port": port})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert_eq!(port_of(&d, "redis"), Some((port, PortMode::Pinned)));
+    assert!(served(port));
+    assert!(d.fx.paths.service_data("redis").is_dir(), "reconcile made redis's data directory");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_busy_port_names_its_holder_and_hints_at_another_port() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("redis", "8.0.1")]);
+    let held = support::held_listener();
+    let port = held.local_addr().unwrap().port();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = run_job(&mut c, "services.add", json!({"engine": "redis", "port": port})).await;
+    let e = error.unwrap_or_else(|| panic!("the busy port refuses the add: {lines:?}"));
+    assert_eq!(e.code, ErrorCode::PortInUse);
+    assert!(e.message.contains(&port.to_string()) && e.message.contains("is held by"), "{}", e.message);
+    let hint = e.hint.unwrap_or_default();
+    assert!(hint.contains("--port"), "{hint}");
+    assert!(!hint.contains("yard ports set") && !hint.contains("auto_fallback"), "{hint}");
+    assert_gone(&d, "redis");
+    drop(held);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_add_leaves_nothing_behind() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    std::fs::write(d.fx.brew.path().join("fake-init-delay"), "5000").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("subscribe", json!({"topics": ["jobs"]})).await.unwrap();
+    let started = c.call("services.add", json!({"engine": "mysql", "version": "8.4"})).await.unwrap();
+    let id = started["job_id"].as_str().unwrap().to_string();
+
+    let initializing = c
+        .event_where(Duration::from_secs(10), |e| {
+            e["job_id"] == id.as_str() && e["line"].as_str().is_some_and(|l| l.contains("initializing"))
+        })
+        .await;
+    assert!(initializing.is_some(), "the job says it is initializing");
+    c.call("jobs.cancel", json!({"job_id": id})).await.unwrap();
+    let done = c
+        .event_where(Duration::from_secs(15), |e| e["job_id"] == id.as_str() && e["type"] == "job_finished")
+        .await
+        .expect("the job finishes");
+    assert_eq!(done["error"]["code"], "JOB_CANCELLED");
+    assert_gone(&d, "mysql-8.4");
+
+    std::fs::remove_file(d.fx.brew.path().join("fake-init-delay")).unwrap();
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "a second add succeeds: {lines:?}");
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_init_rolls_back() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("postgresql@17", "17.2")]);
+    std::fs::write(d.fx.brew.path().join("fake-init-fail"), "").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "postgres", Some("17")).await;
+    let e = error.unwrap_or_else(|| panic!("initdb failed, so the add fails: {lines:?}"));
+    assert_eq!(e.code, ErrorCode::JobFailed);
+    assert_gone(&d, "postgres-17");
+    assert!(list(&mut c).await.is_empty());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_instance_that_fails_to_start_rolls_back() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    // The user's overrides file exists first, as for a user who prepared it; mysqld rejects it.
+    let overrides = d.fx.paths.service_overrides("mysql-8.4");
+    std::fs::create_dir_all(overrides.parent().unwrap()).unwrap();
+    std::fs::write(&overrides, "bad\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    let e = error.unwrap_or_else(|| panic!("mysqld exits, so the add fails: {lines:?}"));
+    assert_eq!(e.code, ErrorCode::JobFailed);
+    assert!(e.message.contains("unknown variable") || e.to_string().contains("unknown variable"), "{e:?}");
+    assert!(!has_entry(&d, "mysql-8.4"));
+    assert_eq!(port_of(&d, "mysql-8.4"), None);
+    assert!(!d.fx.paths.service_data("mysql-8.4").exists(), "the data this add created is gone");
+    assert_eq!(std::fs::read_to_string(&overrides).unwrap(), "bad\n", "the user's file stays");
+    assert!(!d.fx.paths.service_conf("mysql-8.4", "my.cnf").exists(), "what Yard generated goes");
+    assert!(unit(&mut c, "mysql-8.4").await.is_none(), "and the unit is stopped and gone");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_refuses_in_use() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    let dir = d.project("blog");
+    write_yard(&dir, "[services]\nmysql = \"8.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+
+    let e = c.call("services.remove", json!({"name": "mysql-8.4"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceInUse);
+    assert!(e.message.contains("blog"), "{}", e.message);
+    assert_eq!(e.data.as_ref().unwrap()["sites"], json!(["blog"]));
+    let file = dir.join(".yard");
+    assert_eq!(e.hint, Some(format!("edit {}", file.display())), "{e:?}");
+    assert!(has_entry(&d, "mysql-8.4"), "nothing was removed");
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_of_an_unknown_instance_is_not_found() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let e = c.call("services.remove", json!({"name": "mysql-8.4"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceNotFound);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_deletes_data() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13"), core("redis", "8.0.1")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    for (engine, version) in [("mysql", Some("8.4")), ("redis", None)] {
+        let (lines, error) = add(&mut c, engine, version).await;
+        assert_eq!(error, None, "{lines:?}");
+    }
+    let port = port_of(&d, "mysql-8.4").unwrap().0;
+    assert!(served(port));
+
+    c.call("services.remove", json!({"name": "mysql-8.4"})).await.unwrap();
+    assert_gone(&d, "mysql-8.4");
+    assert!(unit(&mut c, "mysql-8.4").await.is_none(), "the unit is gone");
+    assert!(!served(port), "mysqld stopped before its directory went");
+    assert!(wait_until(|| list_names(&d).contains(&"redis".to_string()), Duration::from_secs(5)).await);
+    assert_eq!(list(&mut c).await.len(), 1, "redis is untouched");
+    assert!(reaches(&mut c, "redis", "running").await.is_ok());
+    assert!(!brew_log(&d).contains("uninstall"), "the keg is the user's");
+    d.shutdown().await.unwrap();
+}
+
+fn list_names(d: &Daemon) -> Vec<String> {
+    load_services(&d.fx.paths).unwrap().services.keys().cloned().collect()
+}
+
+#[tokio::test]
+async fn remove_keep_data_then_add_reuses() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    let data = d.fx.paths.service_data("mysql-8.4");
+    std::fs::write(data.join("marker"), "kept").unwrap();
+
+    c.call("services.remove", json!({"name": "mysql-8.4", "keep_data": true})).await.unwrap();
+    assert!(!has_entry(&d, "mysql-8.4"));
+    assert_eq!(port_of(&d, "mysql-8.4"), None);
+    assert_eq!(std::fs::read_to_string(data.join("marker")).unwrap(), "kept", "the data stays");
+    let kept: Vec<_> = std::fs::read_dir(d.fx.paths.service_dir("mysql-8.4"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(kept, ["data"], "and nothing else does");
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("reusing the data in")), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("initializing")), "no second init: {lines:?}");
+    assert_eq!(std::fs::read_to_string(data.join("marker")).unwrap(), "kept");
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_add_never_deletes_data_it_reused() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("mysql@8.4", "8.4.13")]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    let data = d.fx.paths.service_data("mysql-8.4");
+    std::fs::write(data.join("marker"), "kept").unwrap();
+    c.call("services.remove", json!({"name": "mysql-8.4", "keep_data": true})).await.unwrap();
+
+    // The add reuses the data, then mysqld refuses the user's overrides.
+    let overrides = d.fx.paths.service_overrides("mysql-8.4");
+    std::fs::write(&overrides, "bad\n").unwrap();
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    let e = error.unwrap_or_else(|| panic!("mysqld exits, so the add fails: {lines:?}"));
+    assert_eq!(e.code, ErrorCode::JobFailed);
+    assert!(lines.iter().any(|l| l.contains("reusing the data in")), "{lines:?}");
+    assert_eq!(std::fs::read_to_string(data.join("marker")).unwrap(), "kept", "the earlier data stays");
+    assert!(data.join("ibdata1").exists());
+    assert!(!has_entry(&d, "mysql-8.4"));
+    assert_eq!(port_of(&d, "mysql-8.4"), None);
+    assert_eq!(std::fs::read_to_string(&overrides).unwrap(), "bad\n", "the user's file stays");
     d.shutdown().await.unwrap();
 }
