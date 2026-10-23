@@ -63,32 +63,33 @@ pub fn brew_major(version_output: &str) -> Option<u32> {
     rest.split(['.', '-']).next()?.trim().parse().ok()
 }
 
-/// The `brew search --formula` argument that finds `formula` in either of the forms brew
-/// prints: `tap/repo/name` or the bare `name`. A search lists a formula without loading
-/// it, so it works while the formula's tap is not trusted.
-pub fn search_pattern(formula: &str) -> String {
-    let short = formula.rsplit('/').next().unwrap_or(formula);
-    let tap = &formula[..formula.len() - short.len()];
-    let escape = |s: &str| {
-        s.chars().fold(String::new(), |mut out, c| {
-            if ".+*?()[]{}|^$\\/".contains(c) {
-                out.push('\\');
-            }
-            out.push(c);
-            out
-        })
-    };
-    if tap.is_empty() {
-        format!("/^{}$/", escape(short))
-    } else {
-        format!("/^({})?{}$/", escape(tap), escape(short))
-    }
+/// Where a tap lives under `<prefix>/Library/Taps`: `owner/homebrew-repo` for the
+/// formula's `owner/repo/name`. `None` for a bare name or one in `homebrew/*`.
+pub fn tap_dir(formula: &str) -> Option<String> {
+    let (owner, repo) = tap_of(formula)?.split_once('/')?;
+    Some(format!("{owner}/homebrew-{repo}"))
 }
 
-/// Whether the output of `brew search --formula` names `formula`, by full or bare name.
-pub fn search_names(output: &str, formula: &str) -> bool {
-    let short = formula.rsplit('/').next().unwrap_or(formula);
-    output.lines().map(str::trim).any(|line| line == formula || line == short)
+/// The bare name of `formula`: `redis@8.4` for `shivammathur/extensions/redis@8.4`.
+pub fn short_name(formula: &str) -> &str {
+    formula.rsplit('/').next().unwrap_or(formula)
+}
+
+/// Where, relative to the tap's directory, a tap that lists `name` has a file for it: the
+/// formula in `Formula/` or at the tap's root, or an alias. (A formula in a sharded
+/// `Formula/<x>/` directory is the caller's to look for.)
+pub fn listing_paths(name: &str) -> [String; 3] {
+    [format!("Formula/{name}.rb"), format!("{name}.rb"), format!("Aliases/{name}")]
+}
+
+/// Whether the tap's `formula_renames.json` renames `name`, which brew then resolves to
+/// the new formula as it does a formula of that name. Text that is not a JSON object
+/// counts as renaming it: a tap Yard cannot read is not one to let past the gate.
+pub fn renames_name(renames_json: &str, name: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(renames_json) {
+        Ok(serde_json::Value::Object(map)) => map.contains_key(name),
+        _ => true,
+    }
 }
 
 /// The rows of `sources.list`: each Yard tap, with whether it is tapped and trusted as a
@@ -153,22 +154,29 @@ mod tests {
     }
 
     #[test]
-    fn search_pattern_matches_the_full_or_the_bare_name() {
-        assert_eq!(
-            search_pattern("shivammathur/extensions/redis@8.4"),
-            r"/^(shivammathur\/extensions\/)?redis@8\.4$/"
-        );
-        assert_eq!(search_pattern("mysql@8.4"), r"/^mysql@8\.4$/");
+    fn tap_dir_and_short_name() {
+        let formula = "shivammathur/extensions/redis@8.4";
+        assert_eq!(tap_dir(formula).as_deref(), Some("shivammathur/homebrew-extensions"));
+        assert_eq!(short_name(formula), "redis@8.4");
+        assert_eq!((tap_dir("mysql@8.4"), tap_dir("homebrew/core/redis")), (None, None));
+        assert_eq!(short_name("mysql@8.4"), "mysql@8.4");
     }
 
     #[test]
-    fn search_names_finds_the_formula_in_brews_listing() {
-        let formula = "shivammathur/extensions/redis@8.4";
-        assert!(search_names("shivammathur/extensions/redis@8.4\n", formula));
-        assert!(search_names("redis@8.4\n", formula));
-        assert!(!search_names("", formula));
-        assert!(!search_names("shivammathur/extensions/redis@8.3\nredis@8.5\n", formula));
-        assert!(!search_names("Error: No formulae found\n", formula));
+    fn listing_paths_name_the_formula_its_root_copy_and_its_alias() {
+        assert_eq!(listing_paths("redis@8.4"), ["Formula/redis@8.4.rb", "redis@8.4.rb", "Aliases/redis@8.4"]);
+    }
+
+    #[test]
+    fn renames_name_reads_the_keys_and_fails_closed() {
+        let json = r#"{"redis@8.4": "phpredis@8.4", "apcu@8.4": "phpapcu@8.4"}"#;
+        assert!(renames_name(json, "redis@8.4"));
+        assert!(!renames_name(json, "phpredis@8.4"), "a value is a formula, not a rename");
+        assert!(!renames_name(json, "mongodb@8.4"));
+        assert!(!renames_name("{}", "redis@8.4"));
+        for unreadable in ["", "{not json", "[]", "\"redis@8.4\""] {
+            assert!(renames_name(unreadable, "mongodb@8.4"), "{unreadable:?}");
+        }
     }
 
     #[test]

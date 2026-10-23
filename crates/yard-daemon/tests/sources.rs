@@ -21,6 +21,14 @@ fn set_trust(d: &Daemon, taps: &[&str], formulae: &[&str]) {
     std::fs::write(d.fx.brew.path().join("fake-trust.json"), doc.to_string()).unwrap();
 }
 
+/// The extensions tap as brew lays it out in the fixture's prefix, so `ext add` can tell
+/// from its files whether brew lists a formula. Returns the tap's directory.
+fn ext_tap(d: &Daemon) -> std::path::PathBuf {
+    let tap = d.fx.brew.path().join("Library/Taps/shivammathur/homebrew-extensions");
+    std::fs::create_dir_all(tap.join("Formula")).unwrap();
+    tap
+}
+
 fn contains(list: &Value, wanted: &str) -> bool {
     list.as_array().unwrap().iter().any(|v| v == wanted)
 }
@@ -127,16 +135,87 @@ async fn ext_add_refuses_untrusted_formula() {
 async fn ext_add_of_a_pecl_only_extension_is_not_gated() {
     let d = prepared("").await.start().await;
     set_trust(&d, &[], &[]);
-    // No fake-ext-formulas entry: brew has no formula for mongodb, so the job builds it
-    // with pecl and nothing is installed from the untrusted tap.
+    // The tap is there and none of its files name mongodb: brew has no formula for it, so
+    // the job builds it with pecl and nothing is installed from the untrusted tap.
+    let tap = ext_tap(&d);
+    std::fs::write(tap.join("Formula/phpredis@8.4.rb"), "").unwrap();
+    std::fs::write(tap.join("formula_renames.json"), r#"{"redis@8.4": "phpredis@8.4"}"#).unwrap();
+    std::fs::create_dir_all(tap.join("Aliases")).unwrap();
+    std::fs::write(tap.join("Aliases/pecl_redis@8.4"), "").unwrap();
     let mut c = d.client().await;
     let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "mongodb", "php": "8.4"})).await;
     assert_eq!(error, None, "{lines:?}");
     assert!(lines.iter().any(|l| l.contains("fake pecl") && l.contains("install mongodb")), "{lines:?}");
-    let log = brew_log(&d);
-    assert!(log.contains("search --formula"), "brew was asked whether the formula exists: {log}");
-    assert!(!log.contains("install"), "{log}");
+    assert!(!brew_log(&d).contains("install"), "{}", brew_log(&d));
     d.shutdown().await.unwrap();
+}
+
+/// `ext add` of `name` on PHP 8.4 with the extensions tap untrusted, after `lay` has put
+/// files in the tap.
+async fn untrusted_ext_add(name: &str, lay: impl FnOnce(&std::path::Path)) -> yard_proto::YardError {
+    let d = prepared("").await.start().await;
+    set_trust(&d, &[], &[]);
+    lay(&ext_tap(&d));
+    let mut c = d.client().await;
+    let err = c.call("ext.add", json!({"name": name, "php": "8.4"})).await.unwrap_err();
+    assert!(!brew_log(&d).contains("install"), "{}", brew_log(&d));
+    d.shutdown().await.unwrap();
+    err
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_tap_lists_the_formula_as_a_rename() {
+    // phpredis@8.4 is the real formula; `redis@8.4` is a rename brew resolves to it.
+    let err = untrusted_ext_add("redis", |tap| {
+        std::fs::write(tap.join("Formula/phpredis@8.4.rb"), "").unwrap();
+        std::fs::write(tap.join("formula_renames.json"), r#"{"redis@8.4": "phpredis@8.4"}"#).unwrap();
+    })
+    .await;
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+    assert_eq!(err.hint.as_deref(), Some("yard source trust shivammathur/extensions/redis@8.4"));
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_tap_lists_the_formula_as_an_alias() {
+    let err = untrusted_ext_add("redis", |tap| {
+        std::fs::create_dir_all(tap.join("Aliases")).unwrap();
+        std::fs::write(tap.join("Aliases/redis@8.4"), "").unwrap();
+    })
+    .await;
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_tap_has_the_formula_file() {
+    for file in ["Formula/redis@8.4.rb", "Formula/r/redis@8.4.rb", "redis@8.4.rb"] {
+        let err = untrusted_ext_add("redis", |tap| {
+            let path = tap.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        })
+        .await;
+        assert_eq!(err.code, ErrorCode::FormulaUntrusted, "{file}");
+    }
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_tap_is_not_there_to_ask() {
+    let d = prepared("").await.start().await;
+    set_trust(&d, &[], &[]);
+    assert!(!d.fx.brew.path().join("Library/Taps/shivammathur").exists());
+    let mut c = d.client().await;
+    let err = c.call("ext.add", json!({"name": "mongodb", "php": "8.4"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ext_add_is_gated_when_the_renames_file_cannot_be_read() {
+    let err = untrusted_ext_add("mongodb", |tap| {
+        std::fs::write(tap.join("formula_renames.json"), "{not json").unwrap();
+    })
+    .await;
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
 }
 
 #[tokio::test]
@@ -311,12 +390,6 @@ async fn fake_brew_describes_and_installs_service_formulae() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "postgresql@17");
     let out = brew(&["search", "--formula", "/^mysql(@|$)/"]);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "mysql@8.4");
-    std::fs::write(prefix.join("fake-ext-formulas"), "redis\n").unwrap();
-    for (name, listed) in [("redis@8\\.4", true), ("mongodb@8\\.4", false), ("mysql@8\\.4", true)] {
-        let pattern = format!("/^(shivammathur\\/extensions\\/)?{name}$/");
-        let out = brew(&["search", "--formula", &pattern]);
-        assert_eq!(!String::from_utf8_lossy(&out.stdout).trim().is_empty(), listed, "{name}");
-    }
     let out = brew(&["info", "--json=v2", "mysql@8.4"]);
     let info: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(info["formulae"][0]["versions"]["stable"], "8.4.13");

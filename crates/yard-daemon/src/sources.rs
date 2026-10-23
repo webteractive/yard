@@ -79,19 +79,43 @@ pub async fn require_trusted(brew: &Brew, formula: &str) -> Result<(), YardError
     .with_data(serde_json::json!({ "formula": formula, "tap": tap })))
 }
 
+/// Whether the tap that `formula` names lists it, by what is in the tap's directory
+/// under brew's prefix: a formula file (in `Formula/`, a sharded `Formula/<x>/`, or the
+/// tap's root), an alias, or a rename in `formula_renames.json`. brew's `search` finds
+/// real names only, so it cannot say that `redis@8.4` is `phpredis@8.4`. A tap that is
+/// not there, or a file Yard cannot read, counts as listing it: the gate holds.
+fn tap_lists(brew: &Brew, formula: &str) -> bool {
+    let Some(dir) = sources::tap_dir(formula) else { return true };
+    let root = brew.prefix.join("Library/Taps").join(dir);
+    if !root.is_dir() {
+        return true;
+    }
+    let name = sources::short_name(formula);
+    if sources::listing_paths(name).iter().any(|path| root.join(path).exists()) {
+        return true;
+    }
+    let sharded = std::fs::read_dir(root.join("Formula"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|shard| shard.path().join(format!("{name}.rb")).exists());
+    if sharded {
+        return true;
+    }
+    match std::fs::read_to_string(root.join("formula_renames.json")) {
+        Ok(text) => sources::renames_name(&text, name),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 /// `require_trusted` for a formula the install job installs only when brew has it (an
 /// extension: with no formula the job builds it with pecl, which needs no tap). An
-/// untrusted formula brew does not list is let through; one it lists is refused. The
-/// search runs only when the gate would refuse, and lists a formula without loading it, so
-/// it works while the tap is untrusted.
+/// untrusted formula the tap does not list is let through; one it lists is refused.
 pub async fn require_trusted_if_listed(brew: &Brew, formula: &str) -> Result<(), YardError> {
-    let Err(refusal) = require_trusted(brew, formula).await else { return Ok(()) };
-    if refusal.code != ErrorCode::FormulaUntrusted {
-        return Err(refusal);
+    match require_trusted(brew, formula).await {
+        Err(refusal) if refusal.code == ErrorCode::FormulaUntrusted && !tap_lists(brew, formula) => Ok(()),
+        other => other,
     }
-    let pattern = sources::search_pattern(formula);
-    let (_, listing, _) = brew_stdout(brew, &["search", "--formula", &pattern]).await?;
-    if sources::search_names(&listing, formula) { Err(refusal) } else { Ok(()) }
 }
 
 /// The formulae from Yard's taps that Yard knows are installed: the PHP versions' kegs,

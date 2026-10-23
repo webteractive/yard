@@ -63,9 +63,13 @@ triggers:
   `brew trust --json=v1`; an untrusted formula is `FORMULA_UNTRUSTED` with the hint
   `yard source trust <formula>`, and brew is never asked to install. `yard_core::sources`
   parses brew's answer. A formula that is already installed, a `.so` and a pinned pecl
-  release are not gated, and neither is an extension brew has no formula for (the job
-  builds it with pecl): `require_trusted_if_listed` asks `brew search --formula` only when
-  the gate would refuse, which lists a formula without loading it.
+  release are not gated, and neither is an extension the tap does
+  not list (the job builds it with pecl). When the gate would refuse an `ext.add`,
+  `require_trusted_if_listed` looks in `<prefix>/Library/Taps/<owner>/homebrew-<repo>`: the
+  formula is listed by `Formula/<name>.rb` (also one shard down), a root `<name>.rb`,
+  `Aliases/<name>`, or a key of `formula_renames.json`. Never ask `brew search`: it finds
+  real names only, so `redis@8.4` (a rename of `phpredis@8.4`) is invisible to it. A tap
+  that is missing, or a renames file that is unreadable, counts as listing it.
 - **Trust is brew's, never Yard's.** Read it only with `brew trust --json=v1`; change it
   only with `brew trust` / `brew untrust` (`sources.trust|untrust` jobs, or the CLI's y/N
   prompt). Never read or write brew's `trust.json`, keep a list of Yard's own, or let

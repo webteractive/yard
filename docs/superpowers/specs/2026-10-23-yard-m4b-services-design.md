@@ -383,8 +383,11 @@ which is what those silent grants look like. M4b closes that.
 - **The gate.** Before any `brew install` of a formula from a tap other than
   homebrew/core — `yard php install`, `yard ext add` (brew extensions), `yard service add
   minio` — Yard checks that the formula or its tap is trusted. An extension brew has no
-  formula for is built with pecl, which needs no tap, so `ext add` asks `brew search
-  --formula` before refusing and lets that one through. If not trusted:
+  formula for is built with pecl, which needs no tap, so before refusing `ext add` looks
+  in the tap's files under brew's prefix and lets it through only when they do not list
+  the formula, renames and aliases included (`brew search` finds real names only, so it
+  would miss `redis@8.4`, a rename of `phpredis@8.4`); a tap that is not there, or a file
+  it cannot read, keeps the gate. If not trusted:
   - on a terminal the CLI asks `Trust shivammathur/php/php@8.3 (from the
     shivammathur/php tap)? [y/N]`; yes runs `yard source trust` for that formula and
     retries; **(builder's call)**
