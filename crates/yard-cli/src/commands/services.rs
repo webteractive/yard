@@ -11,7 +11,9 @@ use yard_proto::methods::{
     self, EnvParams, ServiceAddParams, ServiceLogsParams, ServiceParams, ServicePortParams,
     ServiceRemoveParams,
 };
-use yard_proto::{Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceState, Topic, YardError};
+use yard_proto::{
+    Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceState, SiteInfo, Topic, YardError,
+};
 
 /// How long `start` and `restart` wait for an instance to come up: the daemon gives a new
 /// instance 60 s to pass its health check, and so does this.
@@ -122,8 +124,47 @@ pub async fn add_instance(
     Ok(())
 }
 
-/// The question, then the delete. Without a terminal and without `--yes` it deletes nothing.
+/// What the daemon's `services.remove` would refuse, found before anything is asked: an
+/// instance that is not there, or one a linked site's `.yard` lists (`SERVICE_IN_USE`,
+/// worded as the daemon words it, with the `.yard` files named in the hint). The daemon
+/// still checks again when the delete arrives.
+async fn check_removable(ctx: &Ctx, instance: &str) -> Result<(), CliError> {
+    let found = instances(ctx).await?.into_iter().find(|s| s.name == instance);
+    let Some(found) = found else {
+        return Err(YardError::new(
+            ErrorCode::ServiceNotFound,
+            format!("no service instance named {instance:?}"),
+        )
+        .with_hint("yard services lists the instances")
+        .into());
+    };
+    if found.used_by.is_empty() {
+        return Ok(());
+    }
+    // The files are for the hint only: a failed lookup leaves the sites to name it.
+    let sites: Vec<SiteInfo> = match ctx.client().await {
+        Ok(mut client) => client.call(methods::SITES_LIST, Value::Null).await.unwrap_or_default(),
+        Err(_) => vec![],
+    };
+    let files: Vec<String> = sites
+        .into_iter()
+        .filter(|site| found.used_by.contains(&site.name))
+        .filter_map(|site| site.project_file)
+        .collect();
+    let message = format!("{instance} is used by {}, from its .yard", found.used_by.join(", "));
+    let mut refused = YardError::new(ErrorCode::ServiceInUse, message)
+        .with_data(serde_json::json!({ "sites": found.used_by, "files": files }));
+    refused = match files.first() {
+        Some(file) => refused.with_hint(format!("edit {file}")),
+        None => refused.with_hint(format!("yard info {}", found.used_by[0])),
+    };
+    Err(refused.into())
+}
+
+/// Checks the instance can be removed, then asks, then deletes. Without a terminal and
+/// without `--yes` it deletes nothing.
 pub async fn remove(ctx: &Ctx, instance: String, keep_data: bool, yes: bool) -> Outcome {
+    check_removable(ctx, &instance).await?;
     let dir = ctx.paths.service_data(&instance).display().to_string();
     if !yes {
         let question = if keep_data {
@@ -237,18 +278,18 @@ async fn wait_up(ctx: &Ctx, mut info: ServiceInfo) -> Result<ServiceInfo, CliErr
 /// It subscribes before it asks for the tail, so no line falls between the two.
 pub async fn logs(ctx: &Ctx, instance: String, follow: bool, lines: Option<usize>) -> Outcome {
     let mut client = ctx.client().await?;
-    // Registered before any output, so a Ctrl-C is never the default kill.
-    let mut interrupt = signal(SignalKind::interrupt())
-        .map_err(|e| YardError::internal(format!("cannot listen for Ctrl-C: {e}")))?;
-    if follow {
-        client.subscribe(&[Topic::Logs]).await?;
-    }
-    let tail: Vec<String> =
-        client.call(methods::SERVICES_LOGS, ServiceLogsParams { name: instance.clone(), lines }).await?;
+    let params = ServiceLogsParams { name: instance.clone(), lines };
     if !follow {
+        // No handler here: a plain Ctrl-C must still kill a command stuck on a slow daemon.
+        let tail: Vec<String> = client.call(methods::SERVICES_LOGS, params).await?;
         ctx.emit(&tail, || tail.iter().map(|l| format!("{l}\n")).collect());
         return Ok(0);
     }
+    // Registered before any output, so a Ctrl-C ends the follow cleanly, never as a kill.
+    let mut interrupt = signal(SignalKind::interrupt())
+        .map_err(|e| YardError::internal(format!("cannot listen for Ctrl-C: {e}")))?;
+    client.subscribe(&[Topic::Logs]).await?;
+    let tail: Vec<String> = client.call(methods::SERVICES_LOGS, params).await?;
     let show = |line: &str| {
         if ctx.json {
             print_json_line(&Event::LogLine { unit: instance.clone(), line: line.to_string() });

@@ -25,7 +25,10 @@ pub async fn env(ctx: &Ctx, site: Option<String>, service: Option<String>) -> Ou
                     "No service instances yet. Add one with yard service add <engine>: mysql, postgres, redis or minio."
                 );
             }
-            Err(_) => {}
+            Err(e) => eprintln!(
+                "There are no lines to print, and yardd could not say why: {}. yard info shows the site.",
+                e.message
+            ),
         }
         return Ok(0);
     }
@@ -41,7 +44,7 @@ fn nothing_for(detail: &SiteDetail) -> String {
         None => format!("{name} has no .yard, so it asks for no services and there is nothing to print."),
     };
     format!(
-        "{why}\nyard env --service <instance> prints one instance (yard services lists them); outside a project, yard env prints every instance."
+        "{why} yard env --service <instance> prints one instance (yard services lists them); outside a project, yard env prints every instance."
     )
 }
 

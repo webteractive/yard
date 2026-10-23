@@ -334,10 +334,14 @@ Settled in M4b task 13 (`yard-cli` `commands/services.rs`) **(builder's calls)**
   since the daemon picks the default line). With `--json` it prints only the job's events,
   as `php install` does. `--yes` is accepted and does nothing: `add` asks nothing but the
   trust question, which `--yes` never answers.
-- `remove` asks before it calls the daemon, so a `SERVICE_IN_USE` refusal comes after the
-  answer. Declining is `NEEDS_CONFIRMATION` too, as declining `Install these?` is
-  `NEEDS_INSTALL`. With `--keep-data` the hint keeps the flag, so it never turns into a
-  delete of the data.
+- `remove` checks the instance before it asks anything (the maintainer's ruling): it reads `services.list`,
+  and an unknown instance is `SERVICE_NOT_FOUND`, one a linked site's `.yard` lists is
+  `SERVICE_IN_USE` (`<i> is used by blog, shop, from its .yard`, hint `edit <file>` from the
+  site's `project_file`, with `data.sites` and `data.files` as the daemon gives them). That
+  holds with or without `--yes` and without a terminal, and nothing is asked. Only then does
+  it ask, or fail `NEEDS_CONFIRMATION`; the daemon checks again when the delete arrives.
+  Declining is `NEEDS_CONFIRMATION` too, as declining `Install these?` is `NEEDS_INSTALL`.
+  With `--keep-data` the hint keeps the flag, so it never turns into a delete of the data.
 - `start`, `restart` and `port` answer while the instance is `starting`, so the CLI polls
   `services.list` every 200 ms for up to 60 s. `failed` prints the last 10 log lines the
   daemon gave, then `error: <i> failed to start: <last line>` with hint `yard service logs
@@ -381,9 +385,9 @@ Settled in M4b task 11 (`env.print`, `rpc/info.rs`) **(builder's calls)**:
   `--service` with an unknown instance is `SERVICE_NOT_FOUND`.
 - The CLI prints a block as `# <instance>`, then its `# note`, then its lines, with a blank
   line between blocks. A block with a note and no lines is just `# <note>`, which already
-  names the instance. With no blocks it prints nothing on stdout, and says why on stderr:
-  the site's `.yard` lists no services (it asks `sites.info` which), or there are no
-  instances yet. The spec has no flag for "every instance": `yard env` run outside a linked
+  names the instance. With no blocks it prints nothing on stdout, and says why in one line on
+  stderr: the site's `.yard` lists no services (it asks `sites.info` which), there are no
+  instances yet, or the lookup failed and the line says so. The spec has no flag for "every instance": `yard env` run outside a linked
   project prints them all, and `--service` prints one. It sends the canonicalized
   absolute directory, never a relative path.
 - The `both set DB_*` comment goes on the second block whenever two printed blocks both

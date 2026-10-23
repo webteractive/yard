@@ -46,15 +46,17 @@ triggers:
   runs the `sources.trust` job and repeats the call. `--yes` never answers it, and neither
   does `init` or `link`: with no terminal it is the error, hint `yard source trust <formula>`.
   `php install`, `ext add`, `service add` and `settle` all call through it.
-- A command that deletes data (`yard service remove`) asks `Delete <i> and its data? [y/N] `
-  (`--yes` skips). With no terminal and no `--yes` it deletes nothing and fails with
+- A command that deletes data (`yard service remove`) first checks what the daemon would
+  refuse (unknown instance, or one a `.yard` lists: `SERVICE_NOT_FOUND`, `SERVICE_IN_USE`) and
+  fails with that before asking anything, with or without `--yes`. Then it asks
+  `Delete <i> and its data? [y/N] ` (`--yes` skips). With no terminal and no `--yes` it deletes nothing and fails with
   `NEEDS_CONFIRMATION`; the hint is the exact command with `--yes`, keeping `--keep-data`.
 - A command whose method answers before the work is done (`yard service start`, `restart`,
   `port`) polls `services.list` until the instance is `running` (60 s). A `failed` one prints
   its last log lines on stderr, then the error (`JOB_FAILED`, hint `yard service logs <i>`).
 - A command that follows a stream (`yard service logs -f`) subscribes before it fetches the
   tail, registers its SIGINT handler before printing, and exits 0 on Ctrl-C.
-- Output meant to be pasted (`yard env`) has no `For agents and scripts` footer and no
-  blank lines of its own: notes are `# …` comments, and what to do about an empty result
+- Output meant to be pasted (`yard env`) has no header or footer lines (no `For agents and
+  scripts` footer), only a blank line between blocks: notes are `# …` comments, and what to do about an empty result
   goes to stderr. A request the daemon resolves against a directory (`env`, `info`) sends
   the canonicalized absolute path, since yardd's working directory is not the CLI's.

@@ -1322,7 +1322,10 @@ fn init_yes_adds_missing_services() {
 
 #[test]
 fn service_remove_needs_confirmation_without_tty() {
-    let d = MockDaemon::start(&[("services.remove", Ok(json!(null)))]);
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([mysql(json!("running"))]))),
+        ("services.remove", Ok(json!(null))),
+    ]);
     let out = d.yard().args(["service", "remove", "mysql-8.4"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
@@ -1340,7 +1343,10 @@ fn service_remove_needs_confirmation_without_tty() {
 
 #[test]
 fn service_remove_yes_calls_remove() {
-    let d = MockDaemon::start(&[("services.remove", Ok(json!(null)))]);
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([mysql(json!("running"))]))),
+        ("services.remove", Ok(json!(null))),
+    ]);
     let out = d.yard().args(["service", "remove", "mysql-8.4", "--yes"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "Removed mysql-8.4.\n");
@@ -1355,10 +1361,62 @@ fn service_remove_yes_calls_remove() {
 }
 
 #[test]
+fn service_remove_in_use_refuses_without_asking() {
+    let mut used = mysql(json!("running"));
+    used["used_by"] = json!(["blog", "shop"]);
+    let blog = project_site(json!([]));
+    let mut shop = project_site(json!([]));
+    shop["name"] = json!("shop");
+    shop["project_file"] = json!("/Users/me/code/shop/.yard");
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([used]))),
+        ("sites.list", Ok(json!([blog, shop]))),
+        ("services.remove", Ok(json!(null))),
+    ]);
+    // Without a terminal and without --yes it is still the in-use refusal, not a request for a yes.
+    for extra in [vec![], vec!["--yes"]] {
+        let mut args = vec!["service", "remove", "mysql-8.4"];
+        args.extend(extra);
+        let out = d.yard().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        let err = stderr(&out);
+        assert!(err.contains("error: mysql-8.4 is used by blog, shop, from its .yard"), "{err}");
+        assert!(err.contains("  hint: edit /Users/me/code/blog/.yard\n"), "{err}");
+        assert_eq!(stdout(&out), "", "no question was printed");
+    }
+    assert!(d.params("services.remove").is_empty(), "the delete is never sent");
+    let out = d.yard().args(["service", "remove", "mysql-8.4", "--json"]).output().unwrap();
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["error"]["code"], "SERVICE_IN_USE");
+    assert_eq!(printed["error"]["data"]["sites"], json!(["blog", "shop"]));
+    assert_eq!(
+        printed["error"]["data"]["files"],
+        json!(["/Users/me/code/blog/.yard", "/Users/me/code/shop/.yard"])
+    );
+}
+
+#[test]
+fn service_remove_unknown_instance_is_not_found_before_asking() {
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([mysql(json!("running"))]))),
+        ("services.remove", Ok(json!(null))),
+    ]);
+    let out = d.yard().args(["service", "remove", "redis"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("error: no service instance named \"redis\""), "{err}");
+    assert!(err.contains("  hint: yard services lists the instances"), "{err}");
+    assert!(d.params("services.remove").is_empty());
+}
+
+#[test]
 fn service_remove_refused_by_the_daemon_shows_its_error() {
     let in_use = YardError::new(ErrorCode::ServiceInUse, "mysql-8.4 is used by blog, from its .yard")
         .with_hint("edit /Users/me/code/blog/.yard");
-    let d = MockDaemon::start(&[("services.remove", Err(in_use))]);
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([mysql(json!("running"))]))),
+        ("services.remove", Err(in_use)),
+    ]);
     let out = d.yard().args(["service", "remove", "mysql-8.4", "--yes"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("hint: edit /Users/me/code/blog/.yard"), "{}", stderr(&out));
@@ -1546,6 +1604,7 @@ fn env_for_a_project_with_no_services_says_so_on_stderr() {
     let err = stderr(&out);
     assert!(err.contains("blog's .yard lists no services"), "{err}");
     assert!(err.contains("yard env --service <instance>"), "{err}");
+    assert_eq!(err.trim_end().lines().count(), 1, "one line: {err}");
     assert_eq!(d.params("sites.info").len(), 1);
     assert!(d.params("sites.info")[0]["path"].is_string());
 }
@@ -1760,4 +1819,76 @@ fn the_new_commands_have_help_and_json() {
         assert!(text.lines().next().is_some_and(|l| !l.trim().is_empty()), "{args:?}: {text}");
         assert!(text.contains("--json"), "{args:?}: {text}");
     }
+}
+
+#[test]
+fn env_with_no_blocks_and_a_failed_lookup_says_why() {
+    let broken = YardError::new(ErrorCode::Internal, "the registry is unreadable");
+    let d = MockDaemon::start(&[("env.print", Ok(json!([]))), ("sites.info", Err(broken))]);
+    let out = d.yard().arg("env").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    let err = stderr(&out);
+    assert_eq!(err.trim_end().lines().count(), 1, "{err}");
+    assert!(err.contains("could not say why: the registry is unreadable"), "{err}");
+}
+
+/// A daemon that answers `hello` and then never answers anything, so a command waits on it.
+fn silent_daemon() -> TempDir {
+    use std::io::{BufRead, BufReader, Write};
+    let root = short_root();
+    let listener = std::os::unix::net::UnixListener::bind(root.path().join("yardd.sock")).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut write = stream.try_clone().unwrap();
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { return };
+                    let request: yard_proto::rpc::Request = serde_json::from_str(&line).unwrap();
+                    if request.method == "hello" {
+                        let hello = json!({"protocol": yard_proto::PROTOCOL_VERSION, "daemon_version": MOCK_VERSION, "commit": "mock"});
+                        let response = yard_proto::rpc::Response::ok(request.id.unwrap_or_default(), hello);
+                        let _ = write.write_all(&yard_proto::rpc::encode_line(&response));
+                    }
+                }
+            });
+        }
+    });
+    root
+}
+
+#[test]
+fn a_plain_logs_command_does_not_swallow_ctrl_c() {
+    let root = silent_daemon();
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_yard"));
+    // A test run started from a background job inherits an ignored SIGINT; this one needs the default.
+    // SAFETY: `signal` is async-signal-safe and the closure touches nothing else.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    let mut child = cmd
+        .env_remove("YARD_ROOT")
+        .arg("--root")
+        .arg(root.path())
+        .args(["service", "logs", "redis"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id() as libc::pid_t;
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(child.try_wait().unwrap().is_none(), "the command is waiting on the daemon");
+    // SAFETY: signalling our own child process.
+    unsafe { libc::kill(pid, libc::SIGINT) };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        // SAFETY: signalling our own child process.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    });
+    let status = child.wait().unwrap();
+    assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGINT), "{status:?}");
 }

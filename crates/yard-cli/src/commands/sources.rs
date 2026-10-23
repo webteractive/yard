@@ -57,26 +57,45 @@ fn question(formula: &str, tap: &str) -> String {
     format!("Trust {formula} (from the {tap} tap)? [y/N] ")
 }
 
-/// Runs `call`. When yardd refuses it with `FORMULA_UNTRUSTED` and a person can answer,
-/// asks `Trust <formula> (from the <tap> tap)? [y/N]`; yes runs the `sources.trust` job
-/// and calls again. Otherwise (no terminal, `--json`, or no) the error is the result.
-/// `--yes` never answers this question: trust is granted only by `yard source trust` or
-/// by a person saying yes here.
+/// Runs `call`; a person who can answer is asked about an untrusted formula (`trust_core`).
+/// With no terminal, or `--json`, the error is the result. `--yes` never answers this
+/// question: trust is granted only by `yard source trust` or by a person saying yes here.
 pub async fn with_trust<T, F, Fut>(ctx: &Ctx, call: F) -> Result<T, CliError>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T, CliError>>,
 {
+    if !interactive(ctx) {
+        return call().await;
+    }
+    let run_trust = |formula: String| async move {
+        let params = SourceParams { target: formula.clone(), tap: false };
+        let done = format!("Trusted {formula}.\n");
+        finished(run_job(ctx, methods::SOURCES_TRUST, params, || done).await)
+    };
+    trust_core(call, confirm, run_trust).await
+}
+
+/// The decision logic of `with_trust`: when `call` fails with `FORMULA_UNTRUSTED`, `ask`
+/// the question; yes runs `run_trust` for the formula and calls once more, and that second
+/// answer is the result whatever it is (no second question). No returns the original
+/// error. The question names the formula and tap, so nothing else is printed first and the
+/// error is shown once, by the caller.
+async fn trust_core<T, F, Fut, A, R, RFut>(call: F, ask: A, run_trust: R) -> Result<T, CliError>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T, CliError>>,
+    A: Fn(&str) -> bool,
+    R: Fn(String) -> RFut,
+    RFut: Future<Output = Result<(), CliError>>,
+{
     match call().await {
-        Err(CliError::Yard(e)) if interactive(ctx) => {
+        Err(CliError::Yard(e)) => {
             let Some((formula, tap)) = untrusted(&e) else { return Err(e.into()) };
-            println!("{}.", e.message);
-            if !confirm(&question(&formula, &tap)) {
+            if !ask(&question(&formula, &tap)) {
                 return Err(e.into());
             }
-            let params = SourceParams { target: formula.clone(), tap: false };
-            let done = format!("Trusted {formula}.\n");
-            finished(run_job(ctx, methods::SOURCES_TRUST, params, || done).await)?;
+            run_trust(formula).await?;
             call().await
         }
         other => other,
@@ -108,5 +127,89 @@ mod tests {
         let other =
             YardError::new(ErrorCode::JobFailed, "x").with_data(json!({"formula": "a/b/c", "tap": "a/b"}));
         assert!(untrusted(&other).is_none());
+    }
+
+    fn untrusted_error() -> CliError {
+        let e = YardError::new(ErrorCode::FormulaUntrusted, "php@8.3 is not trusted")
+            .with_data(json!({"formula": "shivammathur/php/php@8.3", "tap": "shivammathur/php"}));
+        e.into()
+    }
+
+    /// Counters for a `trust_core` run: calls, questions, trust runs, and the answers.
+    struct Run {
+        calls: std::cell::Cell<u32>,
+        asked: std::cell::RefCell<Vec<String>>,
+        trusted: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Run {
+        fn new() -> Self {
+            Run { calls: 0.into(), asked: vec![].into(), trusted: vec![].into() }
+        }
+
+        /// `calls_failing` calls fail untrusted, the rest succeed.
+        async fn go(&self, answer: bool, calls_failing: u32) -> Result<u32, CliError> {
+            trust_core(
+                || async {
+                    self.calls.set(self.calls.get() + 1);
+                    if self.calls.get() <= calls_failing {
+                        Err(untrusted_error())
+                    } else {
+                        Ok(self.calls.get())
+                    }
+                },
+                |q| {
+                    self.asked.borrow_mut().push(q.to_string());
+                    answer
+                },
+                |formula| async move {
+                    self.trusted.borrow_mut().push(formula);
+                    Ok(())
+                },
+            )
+            .await
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn yes_trusts_the_formula_and_retries_once() {
+        let run = Run::new();
+        assert_eq!(run.go(true, 1).await.unwrap(), 2);
+        assert_eq!(run.calls.get(), 2);
+        assert_eq!(*run.trusted.borrow(), ["shivammathur/php/php@8.3"]);
+        assert_eq!(run.asked.borrow().len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn no_returns_the_original_error_without_trusting() {
+        let run = Run::new();
+        let Err(CliError::Yard(e)) = run.go(false, 1).await else { panic!("expected the error") };
+        assert_eq!(e.code, ErrorCode::FormulaUntrusted);
+        assert_eq!(e.message, "php@8.3 is not trusted");
+        assert_eq!((run.calls.get(), run.trusted.borrow().len()), (1, 0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn still_untrusted_after_yes_is_not_asked_again() {
+        let run = Run::new();
+        let Err(CliError::Yard(e)) = run.go(true, 5).await else { panic!("expected the error") };
+        assert_eq!(e.code, ErrorCode::FormulaUntrusted);
+        assert_eq!(run.calls.get(), 2, "one retry, no more");
+        assert_eq!(run.asked.borrow().len(), 1, "no second question");
+        assert_eq!(run.trusted.borrow().len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn other_errors_and_successes_are_not_asked_about() {
+        let run = Run::new();
+        assert_eq!(run.go(true, 0).await.unwrap(), 1);
+        assert!(run.asked.borrow().is_empty());
+        let other = trust_core(
+            || async { Err::<(), _>(CliError::Yard(YardError::new(ErrorCode::JobFailed, "x"))) },
+            |_| panic!("asked"),
+            |_| async { Ok(()) },
+        )
+        .await;
+        assert!(matches!(other, Err(CliError::Yard(e)) if e.code == ErrorCode::JobFailed));
     }
 }
