@@ -1,7 +1,7 @@
 //! One function per method. Mutations edit a TOML through `TomlFile`, then reconcile;
 //! they never write generated files themselves.
 
-use super::{ext, php, project};
+use super::{ext, php, project, sources};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
@@ -75,19 +75,22 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
             let p: ProfileParams = parse(params)?;
             json(profile(ctx, p.profile).await)
         }
-        methods::EXT_ADD => json(ext::add(ctx, parse(params)?)),
+        methods::EXT_ADD => json(ext::add(ctx, parse(params)?).await),
         methods::EXT_LIST => json(ext::list(ctx, parse(params)?)),
         methods::EXT_ENABLE => json(ext::toggle(ctx, parse(params)?, true).await),
         methods::EXT_DISABLE => json(ext::toggle(ctx, parse(params)?, false).await),
         methods::EXT_REMOVE => json(ext::remove(ctx, parse(params)?)),
         methods::XDEBUG_SET => json(ext::xdebug(ctx, parse(params)?).await),
         methods::PHP_LIST => json(php::list(ctx).await),
-        methods::PHP_INSTALL => json(php::install(ctx, parse(params)?)),
+        methods::PHP_INSTALL => json(php::install(ctx, parse(params)?).await),
         methods::PHP_UNINSTALL => json(php::uninstall(ctx, parse(params)?).await),
         methods::PHP_DEFAULT => json(php::set_default(ctx, parse(params)?).await),
         methods::PHP_CONFIG_GET => json(php::config_get(ctx, parse(params)?)),
         methods::PHP_CONFIG_SET => json(php::config_edit(ctx, parse(params)?, true).await.map(|_| ())),
         methods::PHP_CONFIG_UNSET => json(php::config_edit(ctx, parse(params)?, false).await),
+        methods::SOURCES_LIST => json(sources::list(ctx).await),
+        methods::SOURCES_TRUST => json(sources::change(ctx, parse(params)?, true)),
+        methods::SOURCES_UNTRUST => json(sources::change(ctx, parse(params)?, false)),
         methods::JOBS_CANCEL => {
             let p: JobParams = parse(params)?;
             json(ctx.jobs.cancel(&p.job_id))

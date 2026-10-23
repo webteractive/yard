@@ -6,6 +6,7 @@ use super::php::config_version;
 use crate::daemon::Context;
 use crate::ext::{Add, Remove};
 use crate::reconcile::brew_conf_d;
+use crate::sources::{ext_formula, require_trusted};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{InlineTable, value};
@@ -20,7 +21,7 @@ fn bad(message: String) -> YardError {
     YardError::new(ErrorCode::InvalidArgument, message)
 }
 
-pub(super) fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardError> {
+pub(super) async fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardError> {
     let v = config_version(ctx, p.php.as_deref())?;
     let (module, so) = match p.name.strip_suffix(".so") {
         Some(_) => {
@@ -53,6 +54,11 @@ pub(super) fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, YardErro
     let exists = |p: &Path| p.exists();
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let opt = ctx.brew.php_opt(v, &exists, &read_link)?;
+    // The job tries brew's formula first unless the extension is a file or a pinned pecl
+    // release, so that is the install the gate stands in front of.
+    if so.is_none() && release.is_none() {
+        require_trusted(&ctx.brew, &ext_formula(&module, v)).await?;
+    }
     let add = Add {
         paths: ctx.paths.clone(),
         brew: ctx.brew.clone(),

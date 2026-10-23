@@ -38,6 +38,12 @@ triggers:
   it does, which stalls stops and flakes tests. Its `signals <port>` mode logs which of
   SIGQUIT and SIGTERM stopped it, and `stubborn <port>` ignores both, so only SIGKILL (a stop
   timeout) ends it.
+- The fake `brew` (`<prefix>/bin/brew`) logs each call to `fake-brew.log` and the `HOMEBREW_*`
+  keys it saw to `fake-brew-env.log`. `Fixture::new` seeds `fake-trust.json` with the
+  `shivammathur/php` and `shivammathur/extensions` taps (what `brew trust --json=v1`
+  prints; `brew trust|untrust` edit it); `fake-brew-version` sets `--version` (default
+  7.0.10). Service formulae come from `fake-formulae.json` (`brew info --json=v2` objects)
+  for `search`, `info --json=v2` and `install`.
 - Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
 - A test that reconciles, probes or runs doctor writes a `ports.toml` first

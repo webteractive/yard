@@ -48,6 +48,10 @@ impl Fixture {
             place(&file, |dst| std::fs::write(dst, ""));
         }
         std::fs::create_dir_all(brew.php_conf_d(PhpVersion::DEFAULT)).unwrap();
+        // What `brew trust --json=v1` reports: the two taps Yard's PHP and extension installs
+        // come from, trusted as on a machine that ran `yard source trust --tap` for each.
+        let trusted = r#"{"taps":["shivammathur/php","shivammathur/extensions"],"formulae":[],"casks":[],"commands":[]}"#;
+        std::fs::write(brew_dir.path().join("fake-trust.json"), trusted).unwrap();
         for dir in [
             paths.nginx_sites_dir(),
             paths.nginx_dir().join("overrides"),

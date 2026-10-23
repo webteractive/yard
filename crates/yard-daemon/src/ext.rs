@@ -73,7 +73,7 @@ impl Add {
             }
             None => {
                 let brew = self.brew.brew_bin();
-                let formula = format!("shivammathur/extensions/{module}@{v}");
+                let formula = crate::sources::ext_formula(module, v);
                 let found = match &self.release {
                     Some(_) => false,
                     None => job.capture(&brew, &["info", "--formula", &formula], &Brew::job_env()).await?.0,

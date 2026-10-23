@@ -149,19 +149,39 @@ fn php_fpm(args: &[String]) -> ExitCode {
 /// extension formulas exist when listed in `<prefix>/fake-ext-formulas`; installing one
 /// puts its `.so` in its keg and writes the ini brew's formula would, and uninstalling it
 /// removes the keg and leaves the ini, as brew does.
+///
+/// Service formulae (M4b) come from `<prefix>/fake-formulae.json`, an array of the objects
+/// `brew info --json=v2` has under `formulae`: `search --formula "/^<base>(@|$)/"` prints
+/// the matching names, `info --json=v2 <name>` prints `{"formulae":[<entry>],"casks":[]}`
+/// (or fails as brew does), and `install <name>` makes `opt/<name>/bin/<binaries>` for the
+/// engine (`mysqld`; `postgres` and `initdb`; `redis-server`; `minio`), each this fake.
+/// `--version` prints `Homebrew ` and the contents of `fake-brew-version` (default `7.0.10`); `trust --json=v1`
+/// prints `fake-trust.json` (default: nothing trusted), and `trust`/`untrust --formula|--tap
+/// <x>` edit it. Each call appends the `HOMEBREW_*` keys of its environment to
+/// `fake-brew-env.log`, so a test can see what Yard set.
 fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     let Some(prefix) = argv0.parent().and_then(Path::parent) else {
         return fail(format!("brew at {} has no prefix", argv0.display()));
     };
     let line = args.join(" ");
+    let log = prefix.join("fake-brew.log");
+    let logged = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::write(&log, format!("{logged}{line}\n"));
+    let mut keys: Vec<String> =
+        std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("HOMEBREW_")).collect();
+    keys.sort();
+    let env_log = prefix.join("fake-brew-env.log");
+    let logged = std::fs::read_to_string(&env_log).unwrap_or_default();
+    let _ = std::fs::write(&env_log, format!("{logged}{}\n", keys.join(" ")));
+    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
+    // Questions and trust answer with no banner: their stdout is parsed.
+    if let Some(code) = brew_query(prefix, args) {
+        return code;
+    }
     println!("==> fake brew {line}");
     if std::env::var_os("HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK").is_some_and(|v| v == "1") {
         println!("==> fake brew: dependents check off");
     }
-    let log = prefix.join("fake-brew.log");
-    let logged = std::fs::read_to_string(&log).unwrap_or_default();
-    let _ = std::fs::write(&log, format!("{logged}{line}\n"));
-    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
     // `<prefix>/fake-brew-delay` holds milliseconds every install waits, so a job stays busy.
     if arg(0) == "install"
         && let Some(ms) =
@@ -180,7 +200,19 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
         verb => (verb, arg(1)),
     };
     let me = std::env::current_exe().unwrap_or_default();
-    let result = if let Some(v) = formula.strip_prefix("shivammathur/php/php@") {
+    let service = (verb == "install").then(|| fake_formula(prefix, formula)).flatten();
+    let result = if let Some(entry) = service {
+        let name = entry["name"].as_str().unwrap_or_default();
+        (|| {
+            for bin in engine_bins(name) {
+                let dst = prefix.join("opt").join(name).join("bin").join(bin);
+                std::fs::create_dir_all(dst.parent().unwrap_or(prefix))?;
+                let _ = std::fs::remove_file(&dst);
+                std::os::unix::fs::symlink(&me, &dst)?;
+            }
+            Ok(())
+        })()
+    } else if let Some(v) = formula.strip_prefix("shivammathur/php/php@") {
         let opt = prefix.join(format!("opt/php@{v}"));
         match verb {
             "install" => (|| {
@@ -221,6 +253,102 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(format!("fake brew {line}: {e}")),
+    }
+}
+
+/// The entry of `<prefix>/fake-formulae.json` that `name` (a name, full name or alias) means.
+fn fake_formula(prefix: &Path, name: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(prefix.join("fake-formulae.json")).ok()?;
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&text).ok()?;
+    entries.into_iter().find(|e| {
+        e["name"] == name
+            || e["full_name"] == name
+            || e["aliases"].as_array().is_some_and(|a| a.iter().any(|alias| alias == name))
+    })
+}
+
+/// The binaries the engine's keg holds, by formula name.
+fn engine_bins(name: &str) -> &'static [&'static str] {
+    if name.starts_with("mysql") {
+        &["mysqld"]
+    } else if name.starts_with("postgresql@") {
+        &["postgres", "initdb"]
+    } else if name == "redis" {
+        &["redis-server"]
+    } else if name == "minio" {
+        &["minio"]
+    } else {
+        &[]
+    }
+}
+
+/// The brew commands that print something Yard parses, or change what brew trusts. `None`
+/// for any other, which `brew` handles with its banner.
+fn brew_query(prefix: &Path, args: &[String]) -> Option<ExitCode> {
+    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
+    let trust_file = prefix.join("fake-trust.json");
+    let trust = || -> serde_json::Value {
+        std::fs::read_to_string(&trust_file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_else(|| serde_json::json!({"taps": [], "formulae": [], "casks": [], "commands": []}))
+    };
+    let failing = std::fs::read_to_string(prefix.join("fake-brew-fail")).unwrap_or_default();
+    if args.iter().any(|a| !failing.trim().is_empty() && a == failing.trim()) {
+        eprintln!("Error: fake failure for {}", failing.trim());
+        return Some(ExitCode::from(1));
+    }
+    match (arg(0), arg(1)) {
+        ("--version", _) => {
+            let version = std::fs::read_to_string(prefix.join("fake-brew-version")).unwrap_or_default();
+            let version = version.trim();
+            println!("Homebrew {}", if version.is_empty() { "7.0.10" } else { version });
+            Some(ExitCode::SUCCESS)
+        }
+        ("trust", "--json=v1") => {
+            println!("{}", serde_json::to_string_pretty(&trust()).unwrap_or_default());
+            Some(ExitCode::SUCCESS)
+        }
+        (verb @ ("trust" | "untrust"), kind @ ("--formula" | "--tap")) => {
+            let key = if kind == "--tap" { "taps" } else { "formulae" };
+            let target = arg(2);
+            let mut doc = trust();
+            let mut list: Vec<serde_json::Value> = doc[key].as_array().cloned().unwrap_or_default();
+            list.retain(|v| v != target);
+            if verb == "trust" {
+                list.push(target.into());
+            }
+            doc[key] = list.into();
+            if let Err(e) = std::fs::write(&trust_file, doc.to_string()) {
+                return Some(fail(format!("fake brew {verb}: {e}")));
+            }
+            let what = if kind == "--tap" { "tap" } else { "formula" };
+            println!("{} {what}: {target}", if verb == "trust" { "Trusted" } else { "Untrusted" });
+            Some(ExitCode::SUCCESS)
+        }
+        ("search", _) => {
+            // `--formula "/^<base>(@|$)/"`
+            let base = args.iter().find_map(|a| a.strip_prefix("/^")?.strip_suffix("(@|$)/"))?;
+            let text = std::fs::read_to_string(prefix.join("fake-formulae.json")).unwrap_or_default();
+            let entries: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+            for name in entries.iter().filter_map(|e| e["name"].as_str()) {
+                if name == base || name.strip_prefix(base).is_some_and(|rest| rest.starts_with('@')) {
+                    println!("{name}");
+                }
+            }
+            Some(ExitCode::SUCCESS)
+        }
+        ("info", "--json=v2") => match fake_formula(prefix, arg(2)) {
+            Some(entry) => {
+                println!("{}", serde_json::json!({"formulae": [entry], "casks": []}));
+                Some(ExitCode::SUCCESS)
+            }
+            None => {
+                eprintln!("Error: No available formula or cask with the name \"{}\".", arg(2));
+                Some(ExitCode::from(1))
+            }
+        },
+        _ => None,
     }
 }
 

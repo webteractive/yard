@@ -3,11 +3,15 @@ paths:
   - "crates/yard-core/src/brew.rs"
   - "crates/yard-core/src/php.rs"
   - "crates/yard-core/src/render/php.rs"
+  - "crates/yard-core/src/sources.rs"
+  - "crates/yard-daemon/src/sources.rs"
+  - "crates/yard-daemon/src/rpc/sources.rs"
 commands:
   - "brew "
 triggers:
   - installing or locating a PHP version, extension, nginx or dnsmasq
   - launching a brew-installed binary
+  - gating an install on brew's trust, or trusting a tap or formula
 ---
 
 # Homebrew is a package source, never a source of truth
@@ -52,5 +56,20 @@ triggers:
   PHP's `extension_dir`, so Yard records the absolute `so` from `pecl config-get ext_dir`.
 - `decorate_workers_output` exists only in PHP ≥ 7.3. Version-gate any FPM or ini
   directive that is newer than 7.0.
+- **Trust gate** (`yardd/src/sources.rs`, spec M4b §8). Homebrew 6+ loads a formula from a
+  non-official tap only when it or its tap is trusted. Before `php.install` and a brew
+  `ext.add` start their job (not inside it, so the CLI gets an ordinary error), the handler
+  calls `sources::require_trusted`: `brew --version` (below 6 there is no gate), then
+  `brew trust --json=v1`; an untrusted formula is `FORMULA_UNTRUSTED` with the hint
+  `yard source trust <formula>`, and brew is never asked to install. `yard_core::sources`
+  parses brew's answer. A formula that is already installed, a `.so` and a pinned pecl
+  release are not gated.
+- **Trust is brew's, never Yard's.** Read it only with `brew trust --json=v1`; change it
+  only with `brew trust` / `brew untrust` (`sources.trust|untrust` jobs, or the CLI's y/N
+  prompt). Never read or write brew's `trust.json`, keep a list of Yard's own, or let
+  `--yes`, `init`, `link` or an install grant trust. Never set `HOMEBREW_NO_*` (not
+  `HOMEBREW_NO_REQUIRE_TAP_TRUST` or any other security variable): `Brew::job_env()`
+  (`HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`) is the only variable Yard sets, and the gate's
+  reads set none.
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)
   gets the hint `brew reinstall <formula>`, not `brew install`.

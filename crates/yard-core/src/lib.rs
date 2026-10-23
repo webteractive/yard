@@ -13,6 +13,7 @@ pub mod render;
 pub mod services;
 pub mod shim;
 pub mod sites;
+pub mod sources;
 pub mod supervise;
 pub mod tls;
 

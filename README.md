@@ -110,13 +110,13 @@ error, 3 `yardd` is not running.
 | `yard secure [site]` / `unsecure [site]` | yes | Serves a site over HTTPS with a certificate from Yard's CA, its http URL redirecting there, or plain HTTP again. The site defaults to the one containing the current directory. Refused for a site with a `.yard`: edit its `secure`. |
 | `yard trust` / `untrust` | yes | Adds Yard's CA to your login keychain as trusted, or removes it; macOS asks for your password. |
 | `yard php [list]` | yes | Installed PHP versions, the default, the sites on each and its pool. |
-| `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels it. `uninstall` is refused while the version is the default, a site is isolated to it or names it in its `.yard`, or it has extensions you added. |
+| `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels it. Homebrew 6+ must trust the formula or its tap (`brew trust`): Yard asks `brew trust --json=v1` first and refuses with `FORMULA_UNTRUSTED` instead of installing. `uninstall` is refused while the version is the default, a site is isolated to it or names it in its `.yard`, or it has extensions you added. |
 | `yard php default <ver>` | yes | Makes an installed version the default. |
 | `yard php config get\|set\|unset <key> [value] [--php <ver>]` | yes | Reads or changes your php.ini overrides (`99-overrides.ini`) and reloads that version's pool. |
 | `yard ports` | yes | Registered ports with their mode, status and holder. |
 | `yard ports check` | optional | Reads `ports.toml` as it is now and probes every port in it; exits 1 on a conflict or a file that does not parse. |
 | `yard ports set <unit> <port>`, `pin`, `unpin`, `range <a-b>`, `profile <standard\|privileged>` | yes | Changes the port registry. `privileged` puts nginx on 80/443. |
-| `yard ext add <name\|name-version\|path.so> [--php <ver>]` | yes | Installs a PHP extension from brew's `shivammathur/extensions`, else pecl (`xdebug-2.9.8` pins a pecl release for legacy PHP), or copies a built `.so`, then checks it loads with `php -m`. Ctrl-C cancels it and undoes what it recorded. |
+| `yard ext add <name\|name-version\|path.so> [--php <ver>]` | yes | Installs a PHP extension from brew's `shivammathur/extensions` (the same trust check as `php install`), else pecl (`xdebug-2.9.8` pins a pecl release for legacy PHP), or copies a built `.so`, then checks it loads with `php -m`. Ctrl-C cancels it and undoes what it recorded. |
 | `yard ext list` / `enable <name>` / `disable <name>` / `remove <name>` `[--php <ver>]` | yes | Lists extensions, turns one on or off without uninstalling it (PHP's bundled ones too), or uninstalls one. |
 | `yard xdebug on\|off [--php <ver>]` | yes | Turns an added Xdebug on or off. |
 | `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize` and `php-config` first; they follow the nearest `.yard`, then the site's isolated version, then `.yard-php`, then the default. Warns when Herd's `php` would still win. |

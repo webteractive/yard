@@ -5,6 +5,7 @@ use super::handlers::{not_found, reconcile, refuse_project_file, site, snapshot}
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::reconcile::{USER_OWNED_INI, fpm_unit};
+use crate::sources::require_trusted;
 use std::path::{Path, PathBuf};
 use toml_edit::value;
 use yard_core::brew::Brew;
@@ -54,9 +55,13 @@ pub(super) async fn list(ctx: &Context) -> Result<Vec<PhpInfo>, YardError> {
         .collect())
 }
 
-pub(super) fn install(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardError> {
+pub(super) async fn install(ctx: &Context, p: PhpParams) -> Result<JobStarted, YardError> {
     let v: PhpVersion = p.php.parse()?;
     let already = installed(&ctx.brew).contains(&v);
+    // Nothing is asked of brew for a version that is already there.
+    if !already {
+        require_trusted(&ctx.brew, &formula(v)).await?;
+    }
     let brew = ctx.brew.brew_bin();
     let reconciler = ctx.reconciler.clone();
     Ok(ctx.jobs.start("php-install", move |job: JobCtx| async move {
