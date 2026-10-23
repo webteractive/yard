@@ -44,7 +44,7 @@ triggers:
   `shivammathur/php` and `shivammathur/extensions` taps (what `brew trust --json=v1`
   prints; `brew trust|untrust` edit it); `fake-brew-version` sets `--version` (default
   7.0.10). Service formulae come from `fake-formulae.json` (`brew info --json=v2` objects)
-  for `search`, `info --json=v2` and `install`.
+  for `search`, `info --json=v2` (one or several names: it fails when any is unknown, as brew does) and `install`.
 - The fake engines (`redis-server` exits 1 with `Can't chdir to` when its conf's `dir` is missing, as
   real redis does): `mysqld --defaults-file=F` listens on the `port` in `F` and exits 1 with
   `unknown variable` when the overrides file `F` includes contains `bad`; `postgres -c port=N`,

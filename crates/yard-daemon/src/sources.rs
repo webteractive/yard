@@ -9,7 +9,9 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 use yard_core::brew::Brew;
+use yard_core::config::ServicesConfig;
 use yard_core::config::yard::{ExtSource, YardConfig};
+use yard_core::services::{Engine, brew_info};
 use yard_core::shim::child_path;
 use yard_core::sources::{self, TRUST_SINCE, TrustStore, YARD_TAPS};
 use yard_proto::{ErrorCode, SourceInfo, YardError};
@@ -47,19 +49,37 @@ pub(crate) async fn brew_stdout(brew: &Brew, args: &[&str]) -> Result<(bool, Str
     ))
 }
 
-/// What brew trusts, or `None` when brew predates tap trust (before 6.0), which has
-/// nothing to read and nothing to gate.
-pub async fn read_trust(brew: &Brew) -> Result<Option<TrustStore>, YardError> {
+/// What `brew --version` and `brew trust --json=v1` say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrustRead {
+    /// Brew's major version is below `TRUST_SINCE`: no `brew trust`, nothing to gate.
+    Predates {
+        major: u32,
+    },
+    Store(TrustStore),
+}
+
+/// Asks brew its version and, from 6.0, what it trusts.
+pub async fn read_trust_state(brew: &Brew) -> Result<TrustRead, YardError> {
     let (_, version, _) = brew_stdout(brew, &["--version"]).await?;
-    if sources::brew_major(&version).is_some_and(|major| major < TRUST_SINCE) {
-        return Ok(None);
+    if let Some(major) = sources::brew_major(&version).filter(|major| *major < TRUST_SINCE) {
+        return Ok(TrustRead::Predates { major });
     }
     let (ok, out, err) = brew_stdout(brew, &["trust", "--json=v1"]).await?;
     if !ok {
         let tail = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output");
         return Err(YardError::new(ErrorCode::JobFailed, format!("brew trust --json=v1 failed: {tail}")));
     }
-    sources::parse_trust(&out).map(Some).map_err(YardError::internal)
+    sources::parse_trust(&out).map(TrustRead::Store).map_err(YardError::internal)
+}
+
+/// What brew trusts, or `None` when brew predates tap trust (before 6.0), which has
+/// nothing to read and nothing to gate.
+pub async fn read_trust(brew: &Brew) -> Result<Option<TrustStore>, YardError> {
+    Ok(match read_trust_state(brew).await? {
+        TrustRead::Predates { .. } => None,
+        TrustRead::Store(store) => Some(store),
+    })
 }
 
 /// `FORMULA_UNTRUSTED` unless brew would load `formula`: homebrew/core, or it or its tap
@@ -136,9 +156,41 @@ pub async fn require_trusted_if_listed(brew: &Brew, formula: &str) -> Result<(),
     if listed { Err(refusal) } else { Ok(()) }
 }
 
+/// MinIO's formula in the `minio/stable` tap. homebrew/core's `minio` shares its keg
+/// (`opt/minio`), so the keg alone does not say which one is installed.
+pub const MINIO_TAP_FORMULA: &str = "minio/stable/minio";
+
+/// Whether the MinIO keg at `opt/minio` is the tap's: when `services.toml` has a MinIO
+/// instance, the formula it records says; with none, brew is asked (`brew info --json=v2
+/// minio`, which describes the formula of the installed keg) and anything it does not
+/// say is the tap's is not. The tap's formula is never reported for a core MinIO.
+async fn minio_from_tap(brew: &Brew, services: Option<&ServicesConfig>) -> bool {
+    if !brew.prefix.join("opt/minio").exists() {
+        return false;
+    }
+    let recorded: Vec<&str> = services
+        .into_iter()
+        .flat_map(|s| s.services.values())
+        .filter(|entry| entry.engine == Engine::Minio)
+        .map(|entry| entry.formula.as_str())
+        .collect();
+    if !recorded.is_empty() {
+        return recorded.contains(&MINIO_TAP_FORMULA);
+    }
+    let Ok((true, out, _)) = brew_stdout(brew, &["info", "--json=v2", "minio"]).await else { return false };
+    brew_info::parse(&out)
+        .ok()
+        .and_then(|formulae| formulae.into_iter().next())
+        .is_some_and(|f| sources::tap_of(&f.full_name) == sources::tap_of(MINIO_TAP_FORMULA))
+}
+
 /// The formulae from Yard's taps that Yard knows are installed: the PHP versions' kegs,
-/// the extensions `yard.toml` records from brew, and MinIO's keg.
-fn installed(brew: &Brew, yard: &YardConfig) -> BTreeSet<String> {
+/// the extensions `yard.toml` records from brew, and MinIO's when it is the tap's.
+pub async fn installed(
+    brew: &Brew,
+    yard: &YardConfig,
+    services: Option<&ServicesConfig>,
+) -> BTreeSet<String> {
     let exists = |p: &Path| p.exists();
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let mut found: BTreeSet<String> =
@@ -148,20 +200,25 @@ fn installed(brew: &Brew, yard: &YardConfig) -> BTreeSet<String> {
             exts.iter().filter(|(_, e)| e.source == ExtSource::Brew).map(|(m, _)| ext_formula(m, *v)),
         );
     }
-    if brew.prefix.join("opt/minio").exists() {
-        found.insert("minio/stable/minio".to_string());
+    if minio_from_tap(brew, services).await {
+        found.insert(MINIO_TAP_FORMULA.to_string());
     }
     found
 }
 
 /// The rows of `sources.list`.
-pub async fn list(brew: &Brew, yard: &YardConfig) -> Result<Vec<SourceInfo>, YardError> {
+pub async fn list(
+    brew: &Brew,
+    yard: &YardConfig,
+    services: Option<&ServicesConfig>,
+) -> Result<Vec<SourceInfo>, YardError> {
     let trust = read_trust(brew).await?;
+    let installed = installed(brew, yard, services).await;
     let tapped = |tap: &str| {
         let dir = tap.split_once('/').map(|(owner, repo)| format!("{owner}/homebrew-{repo}"));
         dir.is_some_and(|d| brew.prefix.join("Library/Taps").join(d).is_dir())
     };
-    Ok(sources::rows(trust.as_ref(), &tapped, &installed(brew, yard)))
+    Ok(sources::rows(trust.as_ref(), &tapped, &installed))
 }
 
 /// A target `brew trust` takes as a name: not empty, not a flag, no spaces.

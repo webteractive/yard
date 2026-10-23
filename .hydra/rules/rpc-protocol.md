@@ -25,3 +25,5 @@ triggers:
   handler, the CLI command, the CLI tests' `MockDaemon`, and the method list in spec §6.2.
 - Mutations go through `TomlFile` and then `reconcile`. Handlers never write generated
   files directly.
+- A method that gained params after clients shipped accepts `null` (what a client with none sends) as
+  the defaults: `doctor` reads `DoctorParams { client_env }`, empty for `null`, `{}` or an older CLI.

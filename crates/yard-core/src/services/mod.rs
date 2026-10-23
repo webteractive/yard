@@ -17,8 +17,9 @@ fn line_key(line: &str) -> Vec<u64> {
     line.split('.').filter_map(|part| part.parse().ok()).collect()
 }
 
-/// The line a formula's `version` is on: `8.4.13` is MySQL `8.4`, `18.1` is PostgreSQL `18`.
-fn plain_line(engine: Engine, version: &str) -> Option<String> {
+/// The line a formula's `version` is on: `8.4.13` is MySQL `8.4`, `18.1` is PostgreSQL `18`
+/// (a keg's `9.7.1_1` is `9.7`).
+pub fn plain_line(engine: Engine, version: &str) -> Option<String> {
     let mut parts = version.split('.');
     let major = parts.next()?;
     let line = match engine {

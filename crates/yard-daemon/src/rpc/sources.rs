@@ -5,13 +5,16 @@
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::sources;
-use yard_core::config::load_yard;
+use yard_core::config::{load_services, load_yard};
 use yard_proto::methods::SourceParams;
 use yard_proto::{JobStarted, SourceInfo, YardError};
 
 pub(super) async fn list(ctx: &Context) -> Result<Vec<SourceInfo>, YardError> {
     let (yard, _) = load_yard(&ctx.paths)?;
-    sources::list(&ctx.brew, &yard).await
+    // A services.toml that does not parse is the config check's to say: MinIO's keg is then
+    // told apart by asking brew.
+    let services = load_services(&ctx.paths).ok();
+    sources::list(&ctx.brew, &yard, services.as_ref()).await
 }
 
 /// `sources.trust` (`grant`) and `sources.untrust`, as jobs. The target is checked

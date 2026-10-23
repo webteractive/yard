@@ -19,8 +19,8 @@ use yard_core::project::FILE as PROJECT_FILE;
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
 use yard_proto::methods::{
-    self, DocrootParams, JobParams, LinkParams, NameParams, PortSetParams, ProfileParams, ProxyParams,
-    RangeParams, SiteParams, UnitParams,
+    self, DocrootParams, DoctorParams, JobParams, LinkParams, NameParams, PortSetParams, ProfileParams,
+    ProxyParams, RangeParams, SiteParams, UnitParams,
 };
 use yard_proto::{
     DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
@@ -30,7 +30,7 @@ use yard_proto::{
 pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value, YardError> {
     match method {
         methods::STATUS => json(status(ctx).await),
-        methods::DOCTOR => json(Ok(doctor(ctx).await)),
+        methods::DOCTOR => json(Ok(doctor(ctx, doctor_params(params)?).await)),
         methods::SITES_LIST => json(Ok(snapshot(ctx).await?.resolution.sites)),
         methods::SITES_LINK => json(link(ctx, parse(params)?).await),
         methods::SITES_INFO => json(info::site_detail(ctx, parse(params)?).await),
@@ -299,7 +299,12 @@ async fn restart(ctx: &Context, unit: &str) -> Result<(), YardError> {
     ctx.supervisor().restart(unit).await
 }
 
-async fn doctor(ctx: &Context) -> DoctorReport {
+/// `doctor`'s params: older clients send none (`null`) and get an empty `client_env`.
+fn doctor_params(params: Value) -> Result<DoctorParams, YardError> {
+    if params.is_null() { Ok(DoctorParams::default()) } else { parse(params) }
+}
+
+async fn doctor(ctx: &Context, params: DoctorParams) -> DoctorReport {
     let state = ctx.reconciler.state().await;
     doctor::run(DoctorInput {
         paths: &ctx.paths,
@@ -310,6 +315,7 @@ async fn doctor(ctx: &Context) -> DoctorReport {
         daemon_running: true,
         resolver_dir: &ctx.resolver_dir,
         security: &ctx.security,
+        client_env: params.client_env,
     })
     .await
 }

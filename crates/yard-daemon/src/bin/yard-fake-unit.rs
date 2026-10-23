@@ -158,8 +158,8 @@ fn php_fpm(args: &[String]) -> ExitCode {
 ///
 /// Service formulae (M4b) come from `<prefix>/fake-formulae.json`, an array of the objects
 /// `brew info --json=v2` has under `formulae`: `search --formula "/^<base>(@|$)/"` prints
-/// the matching names, `info --json=v2 <name>` prints `{"formulae":[<entry>],"casks":[]}`
-/// (or fails as brew does), and `install <name>` makes `opt/<name>/bin/<binaries>` for the
+/// the matching names, `info --json=v2 <name>...` prints `{"formulae":[<entry>...],"casks":[]}`
+/// (or fails as brew does, when any name is unknown), and `install <name>` makes `opt/<name>/bin/<binaries>` for the
 /// engine (`mysqld`; `postgres` and `initdb`; `redis-server`; `minio`), each this fake.
 /// `--version` prints `Homebrew ` and the contents of `fake-brew-version` (default `7.0.10`); `trust --json=v1`
 /// prints `fake-trust.json` (default: nothing trusted), and `trust`/`untrust --formula|--tap
@@ -344,16 +344,21 @@ fn brew_query(prefix: &Path, args: &[String]) -> Option<ExitCode> {
             }
             Some(ExitCode::SUCCESS)
         }
-        ("info", "--json=v2") => match fake_formula(prefix, arg(2)) {
-            Some(entry) => {
-                println!("{}", serde_json::json!({"formulae": [entry], "casks": []}));
-                Some(ExitCode::SUCCESS)
+        ("info", "--json=v2") => {
+            // Several names answer together, and one brew does not know fails the whole call.
+            let mut entries = vec![];
+            for name in args.iter().skip(2) {
+                match fake_formula(prefix, name) {
+                    Some(entry) => entries.push(entry),
+                    None => {
+                        eprintln!("Error: No available formula or cask with the name \"{name}\".");
+                        return Some(ExitCode::from(1));
+                    }
+                }
             }
-            None => {
-                eprintln!("Error: No available formula or cask with the name \"{}\".", arg(2));
-                Some(ExitCode::from(1))
-            }
-        },
+            println!("{}", serde_json::json!({"formulae": entries, "casks": []}));
+            Some(ExitCode::SUCCESS)
+        }
         _ => None,
     }
 }

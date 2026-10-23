@@ -463,3 +463,75 @@ async fn fake_brew_describes_and_installs_service_formulae() {
     }
     d.shutdown().await.unwrap();
 }
+
+/// The formulae `sources.list` shows for the `minio/stable` tap.
+async fn minio_rows(d: &Daemon) -> Vec<String> {
+    let mut c = d.client().await;
+    let rows = c.call("sources.list", Value::Null).await.unwrap();
+    let minio = rows.as_array().unwrap().iter().find(|r| r["tap"] == "minio/stable").unwrap().clone();
+    minio["formulae"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect()
+}
+
+fn describe_minio(d: &Daemon, full_name: &str, tap: &str) {
+    let minio =
+        json!([{"name": "minio", "full_name": full_name, "tap": tap, "versions": {"stable": "2025.9.7"}}]);
+    std::fs::write(d.fx.brew.path().join("fake-formulae.json"), minio.to_string()).unwrap();
+}
+
+#[tokio::test]
+async fn a_core_minio_is_not_an_installed_formula_of_the_minio_tap() {
+    // homebrew/core's minio and the tap's share the keg `opt/minio`.
+    let d = prepared("").await;
+    d.fx.add_formula("minio");
+    describe_minio(&d, "minio", "homebrew/core");
+    let d = d.start().await;
+
+    // No instance says which: brew does, and it names core.
+    assert_eq!(minio_rows(&d).await, Vec::<String>::new());
+    assert!(brew_log(&d).contains("info --json=v2 minio"), "{}", brew_log(&d));
+    d.shutdown().await.unwrap();
+
+    // An instance that records the core formula says so without asking brew.
+    let d = prepared("").await;
+    d.fx.add_formula("minio");
+    d.fx.add_service("minio", "minio", true);
+    describe_minio(&d, "minio/stable/minio", "minio/stable");
+    let d = d.start().await;
+    assert_eq!(minio_rows(&d).await, Vec::<String>::new());
+    assert!(!brew_log(&d).contains("info --json=v2"), "{}", brew_log(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_minio_tap_formula_is_listed_when_an_instance_or_brew_says_the_keg_is_its() {
+    // An instance records the tap's formula.
+    let d = prepared("").await;
+    d.fx.add_formula("minio");
+    d.fx.add_service("minio", "minio/stable/minio", true);
+    let d = d.start().await;
+    assert_eq!(minio_rows(&d).await, ["minio/stable/minio"]);
+    assert!(!brew_log(&d).contains("info --json=v2"), "{}", brew_log(&d));
+    d.shutdown().await.unwrap();
+
+    // No instance, and brew says the installed keg came from the tap.
+    let d = prepared("").await;
+    d.fx.add_formula("minio");
+    describe_minio(&d, "minio/stable/minio", "minio/stable");
+    let d = d.start().await;
+    assert_eq!(minio_rows(&d).await, ["minio/stable/minio"]);
+    d.shutdown().await.unwrap();
+
+    // No instance, and brew cannot say: nothing is claimed.
+    let d = prepared("").await;
+    d.fx.add_formula("minio");
+    let d = d.start().await;
+    assert_eq!(minio_rows(&d).await, Vec::<String>::new());
+    d.shutdown().await.unwrap();
+
+    // No keg at all, whatever an instance records.
+    let d = prepared("").await;
+    d.fx.add_service("minio", "minio/stable/minio", true);
+    let d = d.start().await;
+    assert_eq!(minio_rows(&d).await, Vec::<String>::new());
+    d.shutdown().await.unwrap();
+}

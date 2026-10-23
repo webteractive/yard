@@ -92,5 +92,12 @@ triggers:
   `HOMEBREW_NO_REQUIRE_TAP_TRUST` or any other security variable): `Brew::job_env()`
   (`HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`) is the only variable Yard sets, and the gate's
   reads set none.
+- **Doctor only asks** (`doctor.rs`, spec M4b §10): `brew --version`, `brew trust --json=v1` and one
+  `brew info --json=v2 <every instance's formula>`, each with a 30 s timeout, and a brew that cannot
+  answer is a `warn`, never a doctor error. It never installs, trusts or runs `brew services`.
+  `sources::installed(brew, yard, services)` is what `sources.list` and `sources:trust` both read:
+  MinIO's `minio/stable/minio` counts as installed only when `opt/minio` exists and a MinIO instance
+  in `services.toml` records that formula, or, with no instance, `brew info --json=v2 minio` says the
+  keg is the tap's. `opt/minio` alone is not enough: homebrew/core's `minio` shares it.
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)
   gets the hint `brew reinstall <formula>`, not `brew install`.

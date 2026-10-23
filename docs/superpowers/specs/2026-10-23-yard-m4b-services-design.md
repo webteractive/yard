@@ -527,19 +527,50 @@ minio = true
 
 ## 10. Doctor
 
-New checks, one group per instance (`service:<instance>`), and one for sources:
+New checks, by id. A check with nothing to say is left out (as `php-constraint:<site>` is),
+except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instance.
 
-- an instance `failed`: its last log lines and `yard service restart <i>`;
-- an instance's port held by something else: the holder (`portscan::infos`, as today);
-- `services/<i>/data/` missing or empty for an existing entry: `yard service remove <i>`
-  then `add` (Yard never re-initializes data on its own);
-- a generated `my.cnf`/`redis.conf` edited by hand: the existing generated-file check,
-  naming `overrides.conf`;
-- a `.yard` asking for a stopped or missing instance, naming the site;
-- an instance on the plain `mysql` formula that now runs a newer line than its name (§5);
-- a deprecated formula in use, with brew's disable date;
-- an installed formula from a third-party tap that is no longer trusted (§8);
-- brew older than 6.0 (§8).
+- `service:<i>`, one per instance. `fail` for a failed instance: its last lines, hint `yard
+  service restart <i>`. `warn` for one yardd has no unit for, one that is not running, or one in
+  backoff. `ok` when running, starting, or stopped by the user. With no daemon (the offline
+  doctor) only "stopped by the user" is known, so the rest are skipped, as unit state is today.
+- An instance's port held by something else: the existing `ports` check (`portscan::infos`),
+  which names the instance's pinned entry and the holder (`mysqld (pid 77034, DBngin)`).
+- `service-data:<i>`, MySQL and PostgreSQL only, the engines whose init makes `data/`: `fail`
+  when `services/<i>/data/` is missing or empty, hint `yard service remove <i> && yard service
+  add <engine> --version <line>` (Yard never re-initializes data on its own). Redis's directory is
+  made by reconcile and may be empty, and MinIO makes its own, so neither is checked.
+- A generated `my.cnf`/`redis.conf` edited by hand: the existing `generated` check, naming
+  `overrides.conf`.
+- `service-need:<site>`: `warn` for a site whose `.yard` asks for an instance that is stopped
+  (hint `yard service start <i>`), failed (hint `yard service restart <i>`; the daemon must be
+  running to know) or not added (hint `yard service add <engine> [--version <line>]`; the site's
+  `project-file:<site>` check fails for the same thing, with `yard init`). The message names the
+  site and the instance: `eepower's .yard asks for mysql-8.4, which is stopped`.
+- `service-line:<i>`: `warn` for an instance on the plain `mysql` formula whose keg
+  (`opt/<formula>`'s Cellar version, `9.7.1_1` being line `9.7`) is on a different line than the
+  instance's name (§5), hint `yard service add mysql --version 8.4`, a line that does not move.
+- `service-deprecated:<i>`: `warn` for an instance whose formula brew has deprecated (with its
+  disable date) or disabled. One `brew info --json=v2` names every instance's formula. A brew
+  that cannot answer (an unknown or untrusted formula fails the whole call, as does a timeout of
+  30 s) is one `warn` with id `service-deprecated`, never an error. A core MinIO is noted here, with
+  brew's disable date (§15).
+- `sources:trust`: `warn`, one per installed formula from a Yard tap that brew does not trust (§8),
+  hint `yard source trust <formula>`. "Installed" is `sources::installed`: the PHP kegs, the brew
+  extensions in `yard.toml`, and MinIO's tap formula only when `services.toml` records
+  `minio/stable/minio` for the instance or, with no MinIO instance, `brew info --json=v2 minio`
+  says the keg is the tap's: a core MinIO (`formula = "minio"`) is never reported as an untrusted
+  `minio/stable/minio`. A brew that cannot be asked is a `warn` with the same id.
+- `sources:brew`: `warn` for a brew older than 6.0 (§8); the trust check then has nothing to read.
+- `sources:env`: `warn` when `client_env` (the CLI's `XDG_CONFIG_HOME` and `HOMEBREW_FORBIDDEN_*`,
+  sent as `DoctorParams`, which an older client leaves out) has a key that yardd's environment lacks
+  or sets differently, hint `put it in ~/.homebrew/brew.env`. Only the key names are printed, never
+  a value. The in-process doctor (no daemon) has the CLI's own environment and skips it.
+- `php7.0-mysql:<site>`: `warn` for a PHP 7.0 site whose `.yard` asks for MySQL, naming
+  "authentication method unknown" (§16).
+
+Doctor never runs `brew install`, `brew trust` or `brew services`: it only asks. A
+`services.toml` that does not parse is the `config` check's to report, and adds no service check.
 
 ## 11. Pre-existing fix
 

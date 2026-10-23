@@ -31,6 +31,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     the engines' usual ones, and restarts the instance when its config file changed. It creates
     `services/<i>/data` for Redis only (redis-server exits at config load without its `dir`); the
     databases' init needs theirs absent or empty, and MinIO makes its own.
+  - Yard never re-initializes a database's data: `yard doctor` fails `service-data:<i>` for a MySQL or
+    PostgreSQL instance whose `data/` is missing or empty and names `yard service remove <i> && yard
+    service add …`; it reads Redis's and MinIO's directories not at all.
   - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`,
     `services/<instance>/overrides.conf`)
     are created empty once with `ensure_user_file` and never written again, except

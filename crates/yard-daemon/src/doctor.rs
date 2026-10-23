@@ -5,22 +5,31 @@
 
 use crate::daemon::VERSION;
 use crate::helper_client::HelperClient;
+use crate::sources::{self, TrustRead};
 use crate::state::State;
-use crate::{holder, portscan, tls};
+use crate::{holder, portscan, services, tls};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use yard_core::brew::Brew;
-use yard_core::config::{YardConfig, load_services, load_sites, load_yard};
+use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
-use yard_core::project::Projects;
+use yard_core::project::{Projects, ServiceWant};
 use yard_core::render::overrides_for;
+use yard_core::services::brew_info;
+use yard_core::services::render::init_command;
+use yard_core::services::{Engine, instance_name, plain_line};
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
     Check, CheckStatus, DoctorReport, Holder, HolderKind, Need, PortInfo, PortMode, PortStatus, SiteInfo,
     SiteKind, UnitInfo, UnitState, YardError,
 };
+
+/// How long doctor waits for brew to answer one question before it says brew did not.
+const BREW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many of a failed unit's last log lines the `units` check quotes.
 const UNIT_LINES: usize = 5;
@@ -37,6 +46,9 @@ pub struct DoctorInput<'a> {
     pub resolver_dir: &'a Path,
     /// `/usr/bin/security` outside tests.
     pub security: &'a Path,
+    /// What the CLI's shell sets that brew reads (`DoctorParams::client_env`). Empty when
+    /// doctor runs in the CLI itself: its environment is then yardd's too.
+    pub client_env: BTreeMap<String, String>,
 }
 
 /// What the config-dependent checks read: yardd's last good snapshot, or the files.
@@ -51,6 +63,8 @@ struct View {
     /// The `yard.toml` the sites were resolved with, and their projects' `.yard`.
     yard: Option<YardConfig>,
     projects: Projects,
+    /// The service instances; `None` when `services.toml` does not parse.
+    services: Option<ServicesConfig>,
     hashes: Result<Hashes, YardError>,
 }
 
@@ -65,6 +79,7 @@ impl View {
             sites: Some((snap.resolution.warnings.clone(), snap.resolution.sites.clone())),
             yard: Some(snap.yard.clone()),
             projects: snap.projects.clone(),
+            services: Some(snap.services.clone()),
             hashes: Ok(state.hashes.clone()),
         })
     }
@@ -113,6 +128,7 @@ impl View {
             sites,
             yard: yard.ok(),
             projects,
+            services: services.ok(),
             hashes: Hashes::load(&paths.hashes()),
         }
     }
@@ -224,6 +240,14 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             checks.extend(project_checks(site, view.yard.as_ref(), &view.projects));
         }
     }
+    let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
+    checks.extend(legacy_php_mysql(sites, &view.projects));
+    if let Some(services) = &view.services {
+        let ask =
+            ServiceView { paths, brew, services, units: &input.units, daemon_running: input.daemon_running };
+        checks.extend(service_checks(&ask, sites, &view.projects).await);
+    }
+    checks.extend(sources_checks(brew, view.yard.as_ref(), view.services.as_ref(), &input.client_env).await);
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
 }
@@ -332,6 +356,342 @@ fn project_checks(site: &SiteInfo, yard: Option<&YardConfig>, projects: &Project
         ));
     }
     checks
+}
+
+// ---- Service instances (spec M4b §10) ----
+
+/// What the service checks read.
+struct ServiceView<'a> {
+    paths: &'a Paths,
+    brew: &'a Brew,
+    services: &'a ServicesConfig,
+    units: &'a [UnitInfo],
+    daemon_running: bool,
+}
+
+/// One group per instance (`service:<i>`, `service-data:<i>`, `service-line:<i>`), one
+/// `service-need:<site>` for each site whose `.yard` asks for an instance that is not
+/// running, and `service-deprecated:<i>` from one `brew info` for every instance's formula.
+/// A check with nothing to say is left out, as `php-constraint` is.
+async fn service_checks(view: &ServiceView<'_>, sites: &[SiteInfo], projects: &Projects) -> Vec<Check> {
+    let mut checks = vec![];
+    for (instance, entry) in &view.services.services {
+        checks.extend(instance_state(view, instance, entry));
+        checks.extend(instance_data(view.paths, instance, entry));
+        checks.extend(instance_line(view.brew, instance, entry));
+    }
+    for site in sites {
+        checks.extend(site_needs(view, site, projects));
+    }
+    checks.extend(deprecated(view.brew, view.services).await);
+    checks
+}
+
+/// Whether the instance runs, from yardd's units. Without yardd only what the file says
+/// is known: that the user stopped it.
+fn instance_state(view: &ServiceView<'_>, instance: &str, entry: &ServiceEntry) -> Option<Check> {
+    let id = format!("service:{instance}");
+    if entry.stopped {
+        return Some(ok(&id, format!("{instance} is stopped; you stopped it")));
+    }
+    if !view.daemon_running {
+        return None;
+    }
+    let unit = view.units.iter().find(|u| u.name == instance);
+    Some(match unit.map(|u| &u.state) {
+        Some(UnitState::Running) => ok(&id, format!("{instance} is running")),
+        Some(UnitState::Starting) => ok(&id, format!("{instance} is starting")),
+        Some(UnitState::Backoff { .. }) => warn(
+            &id,
+            format!("{instance} stopped and yardd is about to start it again"),
+            format!("yard service logs {instance}"),
+        ),
+        Some(UnitState::Failed { last_lines }) => {
+            let unit = unit?;
+            fail(&id, failure(unit, last_lines), format!("yard service restart {instance}"))
+        }
+        Some(UnitState::Stopped) => {
+            warn(&id, format!("{instance} is not running"), format!("yard service restart {instance}"))
+        }
+        None => warn(
+            &id,
+            format!("yardd runs no {instance}: reconcile left it out"),
+            "yard ports check shows a port it could not have",
+        ),
+    })
+}
+
+/// `services/<i>/data/` for the engines whose init makes it. Yard never re-initializes
+/// data on its own. Redis's directory is made by reconcile and may be empty, and MinIO
+/// makes its own, so neither is checked.
+fn instance_data(paths: &Paths, instance: &str, entry: &ServiceEntry) -> Option<Check> {
+    init_command(entry.engine, instance, Path::new(""), paths, "")?;
+    let id = format!("service-data:{instance}");
+    let data = paths.service_data(instance);
+    let problem = match std::fs::read_dir(&data) {
+        Ok(mut files) => files.next().is_none().then(|| format!("{} is empty", data.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(format!("{} is missing", data.display())),
+        Err(e) => Some(format!("cannot read {}: {e}", data.display())),
+    };
+    Some(match problem {
+        None => ok(&id, format!("{instance} has its data")),
+        Some(problem) => {
+            let add = Need::Service { engine: entry.engine.key().into(), version: entry.version.clone() };
+            fail(
+                &id,
+                format!("{instance} has no data: {problem}, and Yard never re-initializes it on its own"),
+                format!("yard service remove {instance} && {}", add.command()),
+            )
+        }
+    })
+}
+
+/// An instance on the plain formula (`mysql-9.7` on `mysql`) whose keg has moved to a
+/// newer line than its name says (spec §5): `brew upgrade mysql` did it, and the engine
+/// upgrades the instance's data in place.
+fn instance_line(brew: &Brew, instance: &str, entry: &ServiceEntry) -> Option<Check> {
+    let engine = entry.engine;
+    if !engine.versioned() || entry.formula != engine.base_formula() {
+        return None;
+    }
+    let line = entry.version.as_deref()?;
+    let keg = std::fs::read_link(brew.prefix.join("opt").join(&entry.formula)).ok()?;
+    let now = plain_line(engine, &keg.file_name()?.to_string_lossy())?;
+    if now == line {
+        return None;
+    }
+    let hint = match engine.default_line() {
+        Some(default) => format!("yard service add {} --version {default}", engine.key()),
+        None => format!("brew info {}", entry.formula),
+    };
+    Some(warn(
+        &format!("service-line:{instance}"),
+        format!(
+            "{instance} now runs {} {now}: brew upgrade moved {} past {line}, and {} upgrades an instance's data in place and cannot go back",
+            engine.display(),
+            entry.formula,
+            engine.display(),
+        ),
+        hint,
+    ))
+}
+
+/// The `.yard` `[services]` entries of a site, whose instance is stopped, failed or not
+/// added. A missing instance already fails the site's `project-file` check; this says
+/// which one and how to add it.
+fn site_needs(view: &ServiceView<'_>, site: &SiteInfo, projects: &Projects) -> Vec<Check> {
+    let Some(Ok(project)) = projects.get(&site.name) else { return vec![] };
+    let id = format!("service-need:{}", site.name);
+    let mut checks = vec![];
+    for (engine, want) in &project.services {
+        let (instance, entry) = match want {
+            ServiceWant::Line(line) => {
+                let name = instance_name(*engine, Some(line));
+                let entry = view.services.services.get(&name);
+                (name, entry)
+            }
+            ServiceWant::Default => match services::default_instance(view.services, *engine) {
+                Some(name) => (name.to_string(), view.services.services.get(name)),
+                None => (instance_name(*engine, None), None),
+            },
+        };
+        let asks = format!("{}'s .yard asks for {instance}", site.name);
+        let failed = view.daemon_running
+            && view.units.iter().any(|u| u.name == instance && matches!(u.state, UnitState::Failed { .. }));
+        match entry {
+            None => {
+                let version = match want {
+                    ServiceWant::Line(line) => Some(line.clone()),
+                    ServiceWant::Default => None,
+                };
+                let add = Need::Service { engine: engine.key().into(), version };
+                checks.push(warn(&id, format!("{asks}, which is not added"), add.command()));
+            }
+            Some(entry) if entry.stopped => checks.push(warn(
+                &id,
+                format!("{asks}, which is stopped"),
+                format!("yard service start {instance}"),
+            )),
+            Some(_) if failed => checks.push(warn(
+                &id,
+                format!("{asks}, which has failed"),
+                format!("yard service restart {instance}"),
+            )),
+            Some(_) => {}
+        }
+    }
+    checks
+}
+
+/// `php7.0-mysql:<site>`: PHP 7.0's mysqlnd knows neither MySQL 8's `caching_sha2_password`
+/// nor its default charset (spec §16), so a PHP 7.0 site whose `.yard` asks for MySQL will
+/// fail to connect.
+fn legacy_php_mysql(sites: &[SiteInfo], projects: &Projects) -> Vec<Check> {
+    sites
+        .iter()
+        .filter_map(|site| {
+            let SiteKind::Php { php, .. } = &site.kind else { return None };
+            let Some(Ok(project)) = projects.get(&site.name) else { return None };
+            if php != "7.0" || !project.services.contains_key(&Engine::Mysql) {
+                return None;
+            }
+            let file = site.project_file.as_deref().unwrap_or(".yard");
+            Some(warn(
+                &format!("php7.0-mysql:{}", site.name),
+                format!(
+                    "{} runs PHP 7.0 and its .yard asks for MySQL, which PHP 7.0 cannot log in to \
+                     (\"authentication method unknown\", or \"charset (255) unknown\")",
+                    site.name
+                ),
+                format!("use PHP 7.1.16 or newer: edit {file}"),
+            ))
+        })
+        .collect()
+}
+
+/// `service-deprecated:<i>` for each instance whose formula brew has deprecated or
+/// disabled, from one `brew info --json=v2` for all of them. A brew that cannot answer is a
+/// warning, never an error.
+async fn deprecated(brew: &Brew, services: &ServicesConfig) -> Vec<Check> {
+    let mut formulae: Vec<&str> = vec![];
+    for entry in services.services.values() {
+        if !formulae.contains(&entry.formula.as_str()) {
+            formulae.push(&entry.formula);
+        }
+    }
+    if formulae.is_empty() || !brew.brew_bin().exists() {
+        return vec![];
+    }
+    let mut args = vec!["info", "--json=v2"];
+    args.extend(&formulae);
+    let cannot = |why: String| {
+        vec![warn(
+            "service-deprecated",
+            format!("cannot ask brew whether the service formulae are deprecated: {why}"),
+            format!("brew info {}", formulae.join(" ")),
+        )]
+    };
+    let answer = match tokio::time::timeout(BREW_TIMEOUT, sources::brew_stdout(brew, &args)).await {
+        Err(_) => return cannot(format!("brew did not answer within {} s", BREW_TIMEOUT.as_secs())),
+        Ok(Err(e)) => return cannot(e.message),
+        Ok(Ok(answer)) => answer,
+    };
+    let (true, out, _) = answer else {
+        let tail = answer.2.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("it printed nothing");
+        return cannot(tail.trim().to_string());
+    };
+    let Ok(described) = brew_info::parse(&out) else { return cannot("its answer did not parse".into()) };
+    services
+        .services
+        .iter()
+        .filter_map(|(instance, entry)| {
+            let f = described.iter().find(|f| {
+                f.full_name == entry.formula || f.name == entry.formula || f.aliases.contains(&entry.formula)
+            })?;
+            let what = if f.disabled {
+                match &f.disable_date {
+                    Some(date) => format!("which brew has disabled (since {date})"),
+                    None => "which brew has disabled".to_string(),
+                }
+            } else if f.deprecated || f.disable_date.is_some() {
+                match &f.disable_date {
+                    Some(date) => format!("which brew has deprecated and disables on {date}"),
+                    None => "which brew has deprecated, with no date set to disable it".to_string(),
+                }
+            } else {
+                return None;
+            };
+            let hint = match entry.engine.default_line() {
+                Some(line) => format!("yard service add {} --version {line}", entry.engine.key()),
+                None => format!("brew info {}", entry.formula),
+            };
+            Some(warn(
+                &format!("service-deprecated:{instance}"),
+                format!("{instance} runs {}, {what}", entry.formula),
+                hint,
+            ))
+        })
+        .collect()
+}
+
+// ---- Brew sources (spec M4b §8) ----
+
+/// `sources:brew` (brew older than 6.0, with no tap trust), `sources:trust` (an installed
+/// formula from a Yard tap that brew does not trust) and `sources:env` (settings of the
+/// CLI's shell that brew reads and yardd's environment lacks). Brew is only ever asked
+/// questions: doctor never installs, trusts or runs `brew services`.
+async fn sources_checks(
+    brew: &Brew,
+    yard: Option<&YardConfig>,
+    services: Option<&ServicesConfig>,
+    client_env: &BTreeMap<String, String>,
+) -> Vec<Check> {
+    let mut checks = vec![];
+    if brew.brew_bin().exists() {
+        match tokio::time::timeout(BREW_TIMEOUT, sources::read_trust_state(brew)).await {
+            Ok(Ok(TrustRead::Predates { major })) => checks.push(warn(
+                "sources:brew",
+                format!(
+                    "Homebrew {major} predates tap trust (6.0), so Yard cannot gate installs from third-party taps"
+                ),
+                "brew update",
+            )),
+            Ok(Ok(TrustRead::Store(store))) => {
+                // Without a readable yard.toml the extensions brew installed are not known:
+                // the config check says so.
+                if let Some(yard) = yard {
+                    for formula in sources::installed(brew, yard, services).await {
+                        if !store.trusts(&formula) {
+                            checks.push(warn(
+                                "sources:trust",
+                                format!(
+                                    "{formula} is installed but brew does not trust it, so brew will refuse to install, upgrade or remove it"
+                                ),
+                                format!("yard source trust {formula}"),
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(Err(e)) => checks.push(cannot_ask_trust(&e.message)),
+            Err(_) => checks.push(cannot_ask_trust(&format!(
+                "brew did not answer within {} s",
+                BREW_TIMEOUT.as_secs()
+            ))),
+        }
+    }
+    let own = |key: &str| std::env::var(key).ok();
+    let differing = env_differences(client_env, &own);
+    if !differing.is_empty() {
+        checks.push(warn(
+            "sources:env",
+            format!(
+                "your shell sets {}, which yardd's environment lacks or sets differently, so the brew Yard runs does not see it",
+                differing.join(", ")
+            ),
+            "put it in ~/.homebrew/brew.env",
+        ));
+    }
+    checks
+}
+
+fn cannot_ask_trust(why: &str) -> Check {
+    warn("sources:trust", format!("cannot ask brew what it trusts: {why}"), "brew trust --json=v1 shows why")
+}
+
+/// The brew settings in `client_env` (`XDG_CONFIG_HOME`, which moves brew's trust file, and
+/// the `HOMEBREW_FORBIDDEN_*` policies) that `own` does not have, or has differently.
+/// Names only: a value is never printed.
+fn env_differences<'a>(
+    client_env: &'a BTreeMap<String, String>,
+    own: &dyn Fn(&str) -> Option<String>,
+) -> Vec<&'a str> {
+    client_env
+        .iter()
+        .filter(|(key, _)| *key == "XDG_CONFIG_HOME" || key.starts_with("HOMEBREW_FORBIDDEN_"))
+        .filter(|(key, value)| own(key).as_deref() != Some(value.as_str()))
+        .map(|(key, _)| key.as_str())
+        .collect()
 }
 
 /// 1 when any check failed; warnings alone still exit 0.
@@ -464,6 +824,13 @@ fn generated(paths: &Paths, hashes: &Hashes) -> Check {
     )
 }
 
+/// What a failed unit's check says: why it stopped and its last lines.
+fn failure(u: &UnitInfo, last_lines: &[String]) -> String {
+    let tail = &last_lines[last_lines.len().saturating_sub(UNIT_LINES)..];
+    let error = u.last_error.as_deref().unwrap_or("it stopped restarting");
+    format!("{} failed: {error}\n{}", u.name, tail.join("\n"))
+}
+
 fn units(units: &[UnitInfo], daemon_running: bool) -> Vec<Check> {
     if daemon_running && units.is_empty() {
         return vec![fail(
@@ -476,13 +843,7 @@ fn units(units: &[UnitInfo], daemon_running: bool) -> Vec<Check> {
         .iter()
         .filter_map(|u| {
             let UnitState::Failed { last_lines } = &u.state else { return None };
-            let tail = &last_lines[last_lines.len().saturating_sub(UNIT_LINES)..];
-            let error = u.last_error.as_deref().unwrap_or("it stopped restarting");
-            Some(fail(
-                "units",
-                format!("{} failed: {error}\n{}", u.name, tail.join("\n")),
-                format!("yard restart {}", u.name),
-            ))
+            Some(fail("units", failure(u, last_lines), format!("yard restart {}", u.name)))
         })
         .collect();
     if checks.is_empty() {
@@ -506,4 +867,37 @@ fn fail(id: &str, message: impl Into<String>, hint: impl Into<String>) -> Check 
 fn from_error(id: &str, e: &YardError) -> Check {
     let hint = e.hint.clone().unwrap_or_else(|| "yard doctor --json shows the details".into());
     fail(id, e.message.clone(), hint)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn only_the_brew_settings_that_differ_are_named() {
+        let own = |key: &str| match key {
+            "XDG_CONFIG_HOME" => Some("/same".to_string()),
+            "HOMEBREW_FORBIDDEN_FORMULAE" => Some("yardd's own".to_string()),
+            _ => None,
+        };
+        let client = env(&[
+            ("XDG_CONFIG_HOME", "/same"),
+            ("HOMEBREW_FORBIDDEN_FORMULAE", "the shell's"),
+            ("HOMEBREW_FORBIDDEN_CASKS", "x"),
+            ("HOMEBREW_NO_AUTO_UPDATE", "1"),
+            ("PATH", "/shell"),
+        ]);
+        // The same value is nothing to say; only the two policies differ, and the rest is
+        // not a setting doctor compares at all.
+        assert_eq!(
+            env_differences(&client, &own),
+            ["HOMEBREW_FORBIDDEN_CASKS", "HOMEBREW_FORBIDDEN_FORMULAE"]
+        );
+        assert!(env_differences(&env(&[("XDG_CONFIG_HOME", "/same")]), &own).is_empty());
+        assert!(env_differences(&BTreeMap::new(), &own).is_empty());
+    }
 }

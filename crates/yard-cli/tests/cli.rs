@@ -220,7 +220,10 @@ fn doctor_offline_runs_local_checks() {
     let root = short_root();
     write_free_ports(root.path(), free_port());
 
-    let out = yard_at(root.path()).arg("doctor").output().unwrap();
+    // No brew here: doctor asks brew about trust and service formulae, and this test must
+    // not run the machine's own.
+    let brew = root.path().join("no-brew");
+    let out = yard_at(root.path()).env("YARD_BREW_PREFIX", &brew).arg("doctor").output().unwrap();
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let text = stdout(&out);
     for id in ["brew", "formula.nginx", "config", "daemon", "ports"] {
@@ -228,7 +231,8 @@ fn doctor_offline_runs_local_checks() {
     }
     assert!(text.contains("yardd is not running") && text.contains("→ yard start"), "{text}");
 
-    let out = yard_at(root.path()).args(["doctor", "--json"]).output().unwrap();
+    let out =
+        yard_at(root.path()).env("YARD_BREW_PREFIX", &brew).args(["doctor", "--json"]).output().unwrap();
     let report: yard_proto::DoctorReport = serde_json::from_slice(&out.stdout).unwrap();
     let daemon = report.checks.iter().find(|c| c.id == "daemon").unwrap();
     assert_eq!(daemon.status, yard_proto::CheckStatus::Fail);

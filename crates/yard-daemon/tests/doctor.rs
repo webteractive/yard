@@ -2,8 +2,10 @@
 
 mod support;
 
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
+use support::daemon::prepared;
 use support::{Fixture, fast, free_port, held_listener, ports_toml, spawn_helper, wait_until};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
@@ -67,6 +69,7 @@ impl Env {
             daemon_running: false,
             resolver_dir: self.resolver.path(),
             security: &self.fx.security,
+            client_env: Default::default(),
         })
         .await
     }
@@ -135,6 +138,7 @@ async fn all_ok_on_healthy_fixture() {
         daemon_running: true,
         resolver_dir: e.resolver.path(),
         security: &e.fx.security,
+        client_env: Default::default(),
     })
     .await;
     sup.shutdown().await;
@@ -243,6 +247,7 @@ async fn failed_unit_reports_last_lines() {
         daemon_running: true,
         resolver_dir: e.resolver.path(),
         security: &e.fx.security,
+        client_env: Default::default(),
     })
     .await;
 
@@ -311,6 +316,7 @@ async fn failed_reconcile_fails_config_and_units() {
         daemon_running: true,
         resolver_dir: e.resolver.path(),
         security: &e.fx.security,
+        client_env: Default::default(),
     })
     .await;
 
@@ -518,4 +524,463 @@ async fn an_unreadable_services_toml_makes_no_site_a_service_need() {
     let c = only(&report, "project-file:blog");
     assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
     assert_eq!(only(&report, "config").status, CheckStatus::Fail);
+}
+
+// ---- Service instances and brew sources (M4b spec §10) ----
+
+fn unit(name: &str, state: UnitState) -> UnitInfo {
+    UnitInfo { name: name.into(), state, pid: None, restarts: 0, last_error: None }
+}
+
+fn failed(name: &str) -> UnitInfo {
+    let last_lines = (1..=8).map(|n| format!("line {n}")).collect();
+    UnitInfo {
+        last_error: Some("exited with status 1".into()),
+        ..unit(name, UnitState::Failed { last_lines })
+    }
+}
+
+fn running(name: &str) -> UnitInfo {
+    unit(name, UnitState::Running)
+}
+
+impl Env {
+    /// Doctor as yardd runs it, with its units and what the CLI's shell sets.
+    async fn with(&self, units: Vec<UnitInfo>, client_env: &[(&str, &str)]) -> DoctorReport {
+        let brew = self.brew();
+        doctor::run(DoctorInput {
+            paths: &self.fx.paths,
+            brew: &brew,
+            helper: &self.helper,
+            state: None,
+            units,
+            daemon_running: true,
+            resolver_dir: self.resolver.path(),
+            security: &self.fx.security,
+            client_env: client_env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        })
+        .await
+    }
+
+    /// An instance as `yard service add` leaves it: its keg and its `services.toml` entry.
+    fn instance(&self, instance: &str, formula: &str, stopped: bool) {
+        self.fx.add_formula(formula.rsplit('/').next().unwrap());
+        self.fx.add_service(instance, formula, stopped);
+    }
+
+    /// A data directory the engine's init made.
+    fn data(&self, instance: &str) {
+        let data = self.fx.paths.service_data(instance);
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("ibdata1"), "x").unwrap();
+    }
+
+    /// What the fake brew knows of formulae (`brew info --json=v2`'s `formulae`).
+    fn formulae(&self, formulae: Value) {
+        std::fs::write(self.fx.brew.path().join("fake-formulae.json"), formulae.to_string()).unwrap();
+    }
+
+    fn trust(&self, taps: &[&str], formulae: &[&str]) {
+        let doc = json!({"taps": taps, "formulae": formulae, "casks": [], "commands": []});
+        std::fs::write(self.fx.brew.path().join("fake-trust.json"), doc.to_string()).unwrap();
+    }
+
+    fn brew_log(&self) -> String {
+        std::fs::read_to_string(self.fx.brew.path().join("fake-brew.log")).unwrap_or_default()
+    }
+}
+
+fn formula(name: &str, version: &str) -> Value {
+    json!({"name": name, "full_name": name, "tap": "homebrew/core", "versions": {"stable": version}})
+}
+
+fn not_present(report: &DoctorReport, prefix: &str) {
+    assert!(!report.checks.iter().any(|c| c.id.starts_with(prefix)), "no {prefix}* check in {report:#?}");
+}
+
+#[tokio::test]
+async fn a_failed_service_fails_with_its_last_lines_and_the_restart_hint() {
+    let e = env().await;
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.data("mysql-8.4");
+    e.instance("redis", "redis", false);
+    e.formulae(json!([formula("mysql@8.4", "8.4.13"), formula("redis", "8.0.1")]));
+
+    let report = e.with(vec![failed("mysql-8.4"), running("redis")], &[]).await;
+
+    let c = only(&report, "service:mysql-8.4");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert!(c.message.contains("mysql-8.4 failed: exited with status 1"), "{c:?}");
+    assert!(c.message.contains("line 8") && c.message.contains("line 4"), "{c:?}");
+    assert!(!c.message.contains("line 3"), "the last 5 lines: {c:?}");
+    assert_eq!(c.hint.as_deref(), Some("yard service restart mysql-8.4"));
+    assert_eq!(only(&report, "service:redis").status, CheckStatus::Ok);
+}
+
+#[tokio::test]
+async fn a_service_port_held_by_something_else_fails_the_port_check() {
+    let e = env().await;
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.data("mysql-8.4");
+    let listener = held_listener();
+    let held = listener.local_addr().unwrap().port();
+    let mut ports = ports_toml(free_port(), free_port(), e.dns);
+    ports.push_str(&format!("\"mysql-8.4\" = {{ port = {held}, mode = \"pinned\" }}\n"));
+    std::fs::write(e.fx.paths.ports_toml(), ports).unwrap();
+
+    let report = e.with(vec![], &[]).await;
+
+    let c = only(&report, "ports");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert!(c.message.contains("mysql-8.4") && c.message.contains(&held.to_string()), "{c:?}");
+    assert!(c.message.contains(&format!("pid {}", std::process::id())), "{c:?}");
+    assert!(c.hint.as_deref().unwrap().contains("yard ports set mysql-8.4"), "{c:?}");
+    drop(listener);
+}
+
+#[tokio::test]
+async fn a_database_with_no_data_fails_with_the_commands_to_start_over() {
+    let e = env().await;
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.instance("postgres-17", "postgresql@17", false);
+    e.instance("redis", "redis", false);
+    e.instance("minio", "minio/stable/minio", false);
+    e.trust(&["shivammathur/php", "minio/stable"], &[]);
+
+    // No `data/` at all.
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "service-data:mysql-8.4");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert_eq!(
+        c.hint.as_deref(),
+        Some("yard service remove mysql-8.4 && yard service add mysql --version 8.4")
+    );
+    let c = only(&report, "service-data:postgres-17");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert_eq!(
+        c.hint.as_deref(),
+        Some("yard service remove postgres-17 && yard service add postgres --version 17")
+    );
+
+    // An empty one is as bad; one that holds something is fine.
+    std::fs::create_dir_all(e.fx.paths.service_data("mysql-8.4")).unwrap();
+    e.data("postgres-17");
+    let report = e.offline(&e.helper).await;
+    assert_eq!(only(&report, "service-data:mysql-8.4").status, CheckStatus::Fail);
+    assert_eq!(only(&report, "service-data:postgres-17").status, CheckStatus::Ok);
+
+    // Redis's directory is made by reconcile and MinIO makes its own: neither is checked.
+    for engine in ["redis", "minio"] {
+        assert!(!report.checks.iter().any(|c| c.id == format!("service-data:{engine}")), "{engine}");
+    }
+}
+
+#[tokio::test]
+async fn a_site_asking_for_a_stopped_failed_or_missing_instance_warns() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.instance("mysql-8.4", "mysql@8.4", true);
+    e.data("mysql-8.4");
+    e.instance("redis", "redis", false);
+    e.instance("postgres-17", "postgresql@17", false);
+    e.data("postgres-17");
+    e.formulae(json!([
+        formula("mysql@8.4", "8.4.13"),
+        formula("redis", "8.0.1"),
+        formula("postgresql@17", "17.2")
+    ]));
+    e.yard_site("stopped", "[services]\nmysql = \"8.4\"\n", &dir);
+    e.yard_site("broken", "[services]\nredis = true\n", &dir);
+    e.yard_site("missing", "[services]\npostgres = \"16\"\n", &dir);
+    e.yard_site("fine", "[services]\npostgres = \"17\"\n", &dir);
+
+    let report = e.with(vec![failed("redis"), running("postgres-17")], &[]).await;
+
+    let c = only(&report, "service-need:stopped");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "stopped's .yard asks for mysql-8.4, which is stopped");
+    assert_eq!(c.hint.as_deref(), Some("yard service start mysql-8.4"));
+    let c = only(&report, "service-need:broken");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "broken's .yard asks for redis, which has failed");
+    assert_eq!(c.hint.as_deref(), Some("yard service restart redis"));
+    let c = only(&report, "service-need:missing");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "missing's .yard asks for postgres-16, which is not added");
+    assert_eq!(c.hint.as_deref(), Some("yard service add postgres --version 16"));
+    assert!(!report.checks.iter().any(|c| c.id == "service-need:fine"), "{report:#?}");
+
+    // With no daemon only what the files say is known: the instance is stopped, not failed.
+    let report = e.offline(&e.helper).await;
+    assert_eq!(only(&report, "service-need:stopped").status, CheckStatus::Warn);
+    assert!(!report.checks.iter().any(|c| c.id == "service-need:broken"), "{report:#?}");
+}
+
+#[tokio::test]
+async fn a_plain_formula_instance_on_a_newer_line_than_its_name_warns() {
+    let e = env().await;
+    e.fx.add_service("mysql-9.7", "mysql", false);
+    e.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    e.fx.add_formula("mysql@8.4");
+    e.data("mysql-9.7");
+    e.data("mysql-8.4");
+    e.formulae(json!([formula("mysql", "26.10.0"), formula("mysql@8.4", "8.4.13")]));
+    // `brew upgrade mysql` moved the plain formula's keg from 9.7 to 26.10.
+    let keg = |version: &str| {
+        let cellar = e.fx.brew.path().join("Cellar/mysql").join(version);
+        std::fs::create_dir_all(cellar.join("bin")).unwrap();
+        std::fs::write(cellar.join("bin/mysqld"), "").unwrap();
+        let opt = e.fx.brew.path().join("opt/mysql");
+        let _ = std::fs::remove_file(&opt);
+        std::os::unix::fs::symlink(format!("../Cellar/mysql/{version}"), opt).unwrap();
+    };
+    keg("26.10.0_1");
+
+    let report = e.with(vec![running("mysql-9.7"), running("mysql-8.4")], &[]).await;
+
+    let c = only(&report, "service-line:mysql-9.7");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("26.10") && c.message.contains("mysql-9.7"), "{c:?}");
+    assert!(c.hint.as_deref().unwrap().contains("yard service add mysql --version 8.4"), "{c:?}");
+    assert!(
+        !report.checks.iter().any(|c| c.id == "service-line:mysql-8.4"),
+        "a versioned formula never moves"
+    );
+
+    // The keg is still on the line its name says: nothing to say.
+    keg("9.7.1");
+    let report = e.with(vec![running("mysql-9.7"), running("mysql-8.4")], &[]).await;
+    not_present(&report, "service-line");
+}
+
+#[tokio::test]
+async fn a_deprecated_formula_warns_with_its_disable_date_from_one_brew_call() {
+    let e = env().await;
+    e.instance("mysql-8.0", "mysql@8.0", false);
+    e.data("mysql-8.0");
+    e.instance("redis", "redis", false);
+    let old = json!({
+        "name": "mysql@8.0", "full_name": "mysql@8.0", "tap": "homebrew/core", "versions": {"stable": "8.0.46"},
+        "deprecated": true, "deprecation_date": "2026-04-30", "disabled": false, "disable_date": "2027-04-30"
+    });
+    e.formulae(json!([old, formula("redis", "8.0.1")]));
+
+    let report = e.with(vec![running("mysql-8.0"), running("redis")], &[]).await;
+
+    let c = only(&report, "service-deprecated:mysql-8.0");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("mysql@8.0") && c.message.contains("2027-04-30"), "{c:?}");
+    assert!(c.hint.is_some(), "{c:?}");
+    assert!(!report.checks.iter().any(|c| c.id == "service-deprecated:redis"), "{report:#?}");
+    let calls: Vec<String> =
+        e.brew_log().lines().filter(|l| l.starts_with("info --json=v2")).map(String::from).collect();
+    assert_eq!(calls, ["info --json=v2 mysql@8.0 redis"], "one call for every instance's formula");
+}
+
+#[tokio::test]
+async fn brew_failing_to_describe_the_formulae_is_a_warning_not_an_error() {
+    let e = env().await;
+    e.instance("redis", "redis", false);
+    // brew does not know redis here, so `info` fails as it does for an unknown formula.
+    e.formulae(json!([]));
+
+    let report = e.with(vec![running("redis")], &[]).await;
+
+    let c = only(&report, "service-deprecated");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("brew"), "{c:?}");
+    let broken = |c: &Check| c.status == CheckStatus::Fail && c.id.starts_with("service");
+    assert!(!report.checks.iter().any(broken), "never a doctor error: {report:#?}");
+}
+
+#[tokio::test]
+async fn an_installed_formula_from_an_untrusted_tap_warns_with_the_trust_command() {
+    let e = env().await;
+    e.fx.add_php("7.1");
+    e.instance("minio", "minio/stable/minio", false);
+    // php@8.4 (the fixture's) and minio are untrusted; php@7.1 is trusted by itself.
+    e.trust(&[], &["shivammathur/php/php@7.1"]);
+
+    let report = e.offline(&e.helper).await;
+
+    let trust: Vec<&Check> = report.checks.iter().filter(|c| c.id == "sources:trust").collect();
+    let hints: Vec<&str> = trust.iter().filter_map(|c| c.hint.as_deref()).collect();
+    assert_eq!(hints, ["yard source trust minio/stable/minio", "yard source trust shivammathur/php/php@8.4"]);
+    assert!(trust.iter().all(|c| c.status == CheckStatus::Warn), "{trust:?}");
+    let message = &trust[1].message;
+    assert!(message.contains("shivammathur/php/php@8.4") && message.contains("trust"), "{message}");
+
+    // Trusted, nothing is said.
+    e.trust(&["shivammathur/php", "minio/stable"], &[]);
+    let report = e.offline(&e.helper).await;
+    not_present(&report, "sources:trust");
+}
+
+#[tokio::test]
+async fn core_minio_is_never_reported_as_an_untrusted_tap_formula() {
+    let e = env().await;
+    let core = json!({
+        "name": "minio", "full_name": "minio", "tap": "homebrew/core", "versions": {"stable": "2025.9.7"},
+        "deprecated": true, "disable_date": "2027-02-17"
+    });
+    e.formulae(json!([core]));
+    e.trust(&["shivammathur/php"], &[]);
+    // homebrew/core's minio shares the keg `minio/stable/minio` would use.
+    e.instance("minio", "minio", false);
+
+    let report = e.with(vec![running("minio")], &[]).await;
+
+    not_present(&report, "sources:trust");
+    let c = only(&report, "service-deprecated:minio");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("2027-02-17"), "{c:?}");
+}
+
+#[tokio::test]
+async fn brew_older_than_six_warns_that_it_predates_tap_trust() {
+    let e = env().await;
+    std::fs::write(e.fx.brew.path().join("fake-brew-version"), "5.9.0\n").unwrap();
+    e.trust(&[], &[]);
+
+    let report = e.offline(&e.helper).await;
+
+    let c = only(&report, "sources:brew");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("Homebrew 5") && c.message.contains("6.0"), "{c:?}");
+    assert!(c.hint.is_some());
+    not_present(&report, "sources:trust");
+
+    std::fs::write(e.fx.brew.path().join("fake-brew-version"), "6.0.0\n").unwrap();
+    let report = e.offline(&e.helper).await;
+    not_present(&report, "sources:brew");
+}
+
+#[tokio::test]
+async fn a_shell_setting_brew_reads_that_yardd_lacks_warns_with_key_names_only() {
+    let e = env().await;
+    let id = std::process::id();
+    let (xdg, forbidden) = (format!("/xdg-value-{id}"), format!("secret-value-{id}"));
+    let env = [
+        ("XDG_CONFIG_HOME", xdg.as_str()),
+        ("HOMEBREW_FORBIDDEN_FORMULAE", forbidden.as_str()),
+        ("HOMEBREW_GITHUB_API_TOKEN", "token-value"),
+        ("PATH", "/shell/path"),
+    ];
+
+    let report = e.with(vec![], &env).await;
+
+    let c = only(&report, "sources:env");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(
+        c.message.contains("XDG_CONFIG_HOME") && c.message.contains("HOMEBREW_FORBIDDEN_FORMULAE"),
+        "{c:?}"
+    );
+    for private in [&xdg, &forbidden, "token-value", "HOMEBREW_GITHUB_API_TOKEN", "PATH", "/shell/path"] {
+        assert!(
+            !c.message.contains(private) && !c.hint.as_deref().unwrap().contains(private),
+            "{private}: {c:?}"
+        );
+    }
+    assert_eq!(c.hint.as_deref(), Some("put it in ~/.homebrew/brew.env"));
+
+    // Nothing the CLI sets that brew reads: nothing to say.
+    let report = e.with(vec![], &[("PATH", "/shell/path")]).await;
+    not_present(&report, "sources:env");
+}
+
+#[tokio::test]
+async fn a_php_70_site_asking_for_mysql_warns_about_authentication() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.fx.add_php("7.0");
+    e.fx.add_php("7.3");
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.data("mysql-8.4");
+    e.formulae(json!([formula("mysql@8.4", "8.4.13")]));
+    e.yard_site("legacy", "php = \"7.0\"\n[services]\nmysql = \"8.4\"\n", &dir);
+    e.yard_site("newer", "php = \"7.3\"\n[services]\nmysql = \"8.4\"\n", &dir);
+    e.yard_site("cache", "php = \"7.0\"\n[services]\nredis = true\n", &dir);
+
+    let report = e.offline(&e.helper).await;
+
+    let c = only(&report, "php7.0-mysql:legacy");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("authentication method unknown"), "{c:?}");
+    assert!(c.message.contains("legacy"), "{c:?}");
+    assert!(c.hint.is_some());
+    assert!(!report.checks.iter().any(|c| c.id == "php7.0-mysql:newer" || c.id == "php7.0-mysql:cache"));
+}
+
+#[tokio::test]
+async fn an_unreadable_services_toml_adds_no_service_checks() {
+    let e = env().await;
+    e.instance("redis", "redis", false);
+    std::fs::write(e.fx.paths.services_toml(), "bogus = 1\n").unwrap();
+
+    let report = e.with(vec![running("redis")], &[]).await;
+
+    assert_eq!(only(&report, "config").status, CheckStatus::Fail);
+    not_present(&report, "service");
+    assert!(!e.brew_log().contains("info --json=v2"), "brew is not asked about instances nobody can list");
+}
+
+#[tokio::test]
+async fn healthy_services_are_ok() {
+    let (mysql, redis) = (free_port(), free_port());
+    let pins = |unit: &str, port: u16| format!("\"{unit}\" = {{ port = {port}, mode = \"pinned\" }}\n");
+    let d = prepared(&(pins("mysql-8.4", mysql) + &pins("redis", redis))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("redis");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    d.fx.add_service("redis", "redis", false);
+    let data = d.fx.paths.service_data("mysql-8.4");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("ibdata1"), "x").unwrap();
+    let formulae = json!([formula("mysql@8.4", "8.4.13"), formula("redis", "8.0.1")]);
+    std::fs::write(d.fx.brew.path().join("fake-formulae.json"), formulae.to_string()).unwrap();
+    let project = d.project("blog");
+    std::fs::write(project.join(".yard"), "[services]\nmysql = \"8.4\"\nredis = true\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let up = |units: &Value, name: &str| {
+        units.as_array().unwrap().iter().any(|u| u["name"] == name && u["state"] == "running")
+    };
+    for _ in 0..200 {
+        let status = c.call("status", Value::Null).await.unwrap();
+        if up(&status["units"], "mysql-8.4") && up(&status["units"], "redis") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let report: DoctorReport = serde_json::from_value(c.call("doctor", Value::Null).await.unwrap()).unwrap();
+
+    for id in ["service:mysql-8.4", "service:redis", "service-data:mysql-8.4"] {
+        assert_eq!(only(&report, id).status, CheckStatus::Ok, "{id}: {report:#?}");
+    }
+    let problems: Vec<&Check> =
+        report.checks.iter().filter(|c| c.id.starts_with("service") || c.id.starts_with("sources")).collect();
+    assert!(problems.iter().all(|c| c.status == CheckStatus::Ok), "{problems:#?}");
+    not_present(&report, "service-need");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn doctor_takes_null_absent_and_filled_in_params() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let id = std::process::id();
+
+    // Older clients send no params at all.
+    for params in [Value::Null, json!({}), json!({"client_env": {}})] {
+        let report: DoctorReport = serde_json::from_value(c.call("doctor", params).await.unwrap()).unwrap();
+        assert_eq!(only(&report, "daemon").status, CheckStatus::Ok);
+        not_present(&report, "sources:env");
+    }
+    let params = json!({"client_env": {"HOMEBREW_FORBIDDEN_FORMULAE": format!("rpc-value-{id}")}});
+    let report: DoctorReport = serde_json::from_value(c.call("doctor", params).await.unwrap()).unwrap();
+    let env = only(&report, "sources:env");
+    assert_eq!(env.status, CheckStatus::Warn, "{env:?}");
+    assert!(!env.message.contains(&format!("rpc-value-{id}")), "{env:?}");
+    d.shutdown().await.unwrap();
 }
