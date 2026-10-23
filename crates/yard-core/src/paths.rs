@@ -53,6 +53,10 @@ impl Paths {
         self.root.join("ports.toml")
     }
 
+    pub fn services_toml(&self) -> PathBuf {
+        self.root.join("services.toml")
+    }
+
     pub fn hashes(&self) -> PathBuf {
         self.root.join("state/hashes.json")
     }
@@ -75,6 +79,15 @@ impl Paths {
 
     pub fn nginx_override(&self, name: &str) -> PathBuf {
         self.root.join(format!("nginx/overrides/{name}.conf"))
+    }
+
+    /// Generated nginx blocks for services that have a web console (`minio.<tld>`).
+    pub fn nginx_services_dir(&self) -> PathBuf {
+        self.root.join("nginx/services")
+    }
+
+    pub fn nginx_service(&self, name: &str) -> PathBuf {
+        self.nginx_services_dir().join(format!("{name}.conf"))
     }
 
     pub fn nginx_default_dir(&self) -> PathBuf {
@@ -102,6 +115,33 @@ impl Paths {
     /// The shims: `php`, `composer`, … linked to `yard-shim`.
     pub fn bin_dir(&self) -> PathBuf {
         self.root.join("bin")
+    }
+
+    /// One directory per service instance: `data/`, the generated config, `overrides.conf`.
+    pub fn services_dir(&self) -> PathBuf {
+        self.root.join("services")
+    }
+
+    pub fn service_dir(&self, instance: &str) -> PathBuf {
+        self.services_dir().join(instance)
+    }
+
+    pub fn service_data(&self, instance: &str) -> PathBuf {
+        self.service_dir(instance).join("data")
+    }
+
+    /// A generated file in the instance's directory (`my.cnf`, `redis.conf`).
+    pub fn service_conf(&self, instance: &str, file: &str) -> PathBuf {
+        self.service_dir(instance).join(file)
+    }
+
+    /// User-owned, created empty once and never written.
+    pub fn service_overrides(&self, instance: &str) -> PathBuf {
+        self.service_dir(instance).join("overrides.conf")
+    }
+
+    pub fn service_pid(&self, instance: &str) -> PathBuf {
+        self.run_dir().join(format!("{instance}.pid"))
     }
 
     pub fn php_dir(&self, v: PhpVersion) -> PathBuf {
@@ -168,6 +208,11 @@ impl Paths {
         self.root.join("certs")
     }
 
+    /// Certificates for service hostnames, apart from the sites'.
+    pub fn services_certs_dir(&self) -> PathBuf {
+        self.root.join("certs/services")
+    }
+
     pub fn cert(&self, site: &str) -> PathBuf {
         self.certs_dir().join(format!("{site}.pem"))
     }
@@ -210,6 +255,21 @@ mod tests {
         assert_eq!(p.ca_key(), Path::new("/r/ca/yard-ca.key"));
         assert_eq!(p.cert("blog"), Path::new("/r/certs/blog.pem"));
         assert_eq!(p.cert_key("blog"), Path::new("/r/certs/blog.key"));
+    }
+
+    #[test]
+    fn service_paths_follow_the_m4b_layout() {
+        let p = Paths::new("/r");
+        assert_eq!(p.services_toml(), Path::new("/r/services.toml"));
+        assert_eq!(p.services_dir(), Path::new("/r/services"));
+        assert_eq!(p.service_dir("mysql-8.4"), Path::new("/r/services/mysql-8.4"));
+        assert_eq!(p.service_data("mysql-8.4"), Path::new("/r/services/mysql-8.4/data"));
+        assert_eq!(p.service_conf("mysql-8.4", "my.cnf"), Path::new("/r/services/mysql-8.4/my.cnf"));
+        assert_eq!(p.service_overrides("redis"), Path::new("/r/services/redis/overrides.conf"));
+        assert_eq!(p.service_pid("redis"), Path::new("/r/run/redis.pid"));
+        assert_eq!(p.nginx_services_dir(), Path::new("/r/nginx/services"));
+        assert_eq!(p.nginx_service("minio"), Path::new("/r/nginx/services/minio.conf"));
+        assert_eq!(p.services_certs_dir(), Path::new("/r/certs/services"));
     }
 
     #[test]

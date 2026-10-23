@@ -1,10 +1,12 @@
-//! The three user-owned TOML files: `yard.toml`, `sites.toml`, `ports.toml`.
+//! The user-owned TOML files: `yard.toml`, `sites.toml`, `ports.toml`, `services.toml`.
 
 pub mod edit;
+pub mod services;
 pub mod sites;
 pub mod yard;
 
 pub use edit::TomlFile;
+pub use services::{ServiceEntry, ServicesConfig, load_services};
 pub use sites::{SiteEntry, SitesConfig, load_sites};
 pub use yard::{YardConfig, load_yard};
 

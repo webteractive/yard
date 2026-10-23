@@ -3,8 +3,9 @@
 use crate::PhpVersion;
 use crate::config::located_error;
 use crate::config::yard::{ExtName, parse_ext_name};
-use crate::config::{SiteEntry, SitesConfig};
+use crate::config::{ServicesConfig, SiteEntry, SitesConfig};
 use crate::constraint::best_version;
+use crate::services::{Engine, instance_name};
 use crate::sites::detect_docroot;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -22,6 +23,17 @@ pub struct ProjectFile {
     pub docroot: Option<PathBuf>,
     pub secure: Option<bool>,
     pub extensions: Vec<ExtName>,
+    /// `[services]`: the engines the project needs, shared with every other project.
+    pub services: BTreeMap<Engine, ServiceWant>,
+}
+
+/// What a `[services]` value asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceWant {
+    /// A release line (`"8.4"`, `"17"`).
+    Line(String),
+    /// `true`: any instance of the engine.
+    Default,
 }
 
 /// Each linked site's `.yard`, by site name; a site without one has no entry.
@@ -35,11 +47,14 @@ struct Raw {
     secure: Option<bool>,
     #[serde(default)]
     extensions: Vec<Spanned<String>>,
+    #[serde(default)]
+    services: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
 }
 
 /// `PROJECT_FILE_INVALID` at the line at fault for a file that does not parse, has an
-/// unknown key, a docroot outside the project or with a `$` nginx would expand, or an
-/// extension that is not a name.
+/// unknown key, a docroot outside the project or with a `$` nginx would expand, an
+/// extension that is not a name, or a `[services]` entry that is not an engine with one of
+/// its lines or `true`.
 pub fn parse(text: &str, file: &Path) -> Result<ProjectFile, YardError> {
     let invalid = |span, message: &str| {
         located_error(
@@ -74,7 +89,49 @@ pub fn parse(text: &str, file: &Path) -> Result<ProjectFile, YardError> {
                 .map_err(|e| invalid(Some(name.span()), &format!("extensions: {}", e.message)))
         })
         .collect::<Result<_, _>>()?;
-    Ok(ProjectFile { php: raw.php, docroot, secure: raw.secure, extensions })
+    let services = parse_services(raw.services, &invalid)?;
+    Ok(ProjectFile { php: raw.php, docroot, secure: raw.secure, extensions, services })
+}
+
+/// `[services]`: keys are engines, values a release line of that engine or `true`.
+fn parse_services(
+    raw: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
+    invalid: &dyn Fn(Option<std::ops::Range<usize>>, &str) -> YardError,
+) -> Result<BTreeMap<Engine, ServiceWant>, YardError> {
+    let mut services = BTreeMap::new();
+    for (key, value) in raw {
+        let name = key.get_ref();
+        let Some(engine) = Engine::from_key(name) else {
+            let known: Vec<&str> = Engine::ALL.iter().map(|e| e.key()).collect();
+            return Err(invalid(
+                Some(key.span()),
+                &format!("[services]: unknown service {name:?}; the services are {}", known.join(", ")),
+            ));
+        };
+        let want = match value.get_ref() {
+            toml::Value::Boolean(true) => ServiceWant::Default,
+            toml::Value::String(line) if engine.valid_line(line) => ServiceWant::Line(line.clone()),
+            other => {
+                let expected = match engine.default_line() {
+                    Some(line) => format!("a release line such as \"{line}\", or true"),
+                    None => "true".to_string(),
+                };
+                let written = match other {
+                    toml::Value::String(s) => format!("{s:?}"),
+                    toml::Value::Integer(n) => n.to_string(),
+                    toml::Value::Float(n) => n.to_string(),
+                    toml::Value::Boolean(b) => b.to_string(),
+                    _ => "that".to_string(),
+                };
+                return Err(invalid(
+                    Some(value.span()),
+                    &format!("[services]: {name} must be {expected}, not {written}"),
+                ));
+            }
+        };
+        services.insert(engine, want);
+    }
+    Ok(services)
 }
 
 fn inside(path: &Path) -> bool {
@@ -98,6 +155,23 @@ pub fn needs(
         .filter(|e| !has_ext(&e.module))
         .map(|e| Need::Extension { name: e.written.clone(), php: php.clone() });
     missing_php.into_iter().chain(missing_exts).collect()
+}
+
+/// The `[services]` entries of `file` with no instance in `services`. A line is met by
+/// that exact instance, `true` by any instance of the engine.
+pub fn service_needs(file: &ProjectFile, services: &ServicesConfig) -> Vec<Need> {
+    file.services
+        .iter()
+        .filter_map(|(&engine, want)| {
+            let (met, version) = match want {
+                ServiceWant::Line(line) => {
+                    (services.services.contains_key(&instance_name(engine, Some(line))), Some(line.clone()))
+                }
+                ServiceWant::Default => (services.services.values().any(|s| s.engine == engine), None),
+            };
+            (!met).then(|| Need::Service { engine: engine.key().to_string(), version })
+        })
+        .collect()
 }
 
 /// The first line `yard init` writes.
@@ -154,6 +228,11 @@ pub fn detect(
     Ok(Detected { php, docroot, secure })
 }
 
+/// What `yard init` writes for `[services]`: one commented line per engine, since Yard does
+/// not read `.env` to guess them (M4b spec §9). The user uncomments what the project needs.
+const SERVICES_BLOCK: &str =
+    "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
+
 /// A new `.yard`. `secure` is written only when detected: absent, HTTPS follows each
 /// teammate's `secure_by_default`.
 pub fn render(d: &Detected) -> String {
@@ -165,6 +244,7 @@ pub fn render(d: &Detected) -> String {
     if let Some(on) = d.secure {
         out.push_str(&format!("secure = {on}\n"));
     }
+    out.push_str(SERVICES_BLOCK);
     out
 }
 
@@ -206,7 +286,7 @@ mod tests {
     use crate::config::sites::parse_sites;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
-    use yard_proto::{ErrorCode, Need};
+    use yard_proto::{ErrorCode, Need, YardError};
 
     const FILE: &str = "/code/eepower/.yard";
 
@@ -305,21 +385,129 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn service_err(text: &str) -> YardError {
+        parse(text, Path::new(FILE)).unwrap_err()
+    }
+
+    #[test]
+    fn project_services_parse() {
+        let f = parse_ok(
+            "php = \"8.4\"\n\n[services]\nmysql = \"8.4\"\nredis = true\npostgres = \"17\"\nminio = true\n",
+        );
+        assert_eq!(
+            f.services,
+            BTreeMap::from([
+                (Engine::Mysql, ServiceWant::Line("8.4".into())),
+                (Engine::Postgres, ServiceWant::Line("17".into())),
+                (Engine::Redis, ServiceWant::Default),
+                (Engine::Minio, ServiceWant::Default),
+            ])
+        );
+        assert_eq!(parse_ok("[services]\n").services, BTreeMap::new());
+        assert_eq!(parse_ok("").services, BTreeMap::new());
+        assert_eq!(parse_ok("[services]\nmysql = true\n").services[&Engine::Mysql], ServiceWant::Default);
+    }
+
+    #[test]
+    fn project_services_reject_what_the_spec_rejects() {
+        let cases = [
+            ("redis = \"8\"", "redis"),
+            ("mysql = \"latest\"", "mysql"),
+            ("mysql = \"8.4.13\"", "mysql"),
+            ("postgres = \"17.2\"", "postgres"),
+            ("mysql = 8.4", "mysql"),
+            ("postgres = 17", "postgres"),
+            ("minio = false", "minio"),
+            ("mysql = false", "mysql"),
+            ("mysql = { version = \"8.4\" }", "mysql"),
+            ("mongo = true", "mongo"),
+        ];
+        for (line, key) in cases {
+            let e = service_err(&format!("php = \"8.4\"\n\n[services]\n{line}\n"));
+            assert_eq!(e.code, ErrorCode::ProjectFileInvalid, "{line}");
+            assert_eq!(e.data.as_ref().unwrap()["line"], 4, "{line}: {}", e.message);
+            assert!(e.message.contains(key) && e.message.contains(FILE), "{line}: {}", e.message);
+            assert_eq!(e.hint.as_deref(), Some(format!("edit {FILE}").as_str()), "{line}");
+        }
+        // The line at fault is the entry's, not the table's.
+        let e = service_err("[services]\nmysql = \"8.4\"\nredis = \"8\"\n");
+        assert_eq!(e.data.as_ref().unwrap()["line"], 3);
+        // A scalar where the table goes.
+        assert_eq!(service_err("services = \"mysql\"\n").code, ErrorCode::ProjectFileInvalid);
+    }
+
+    #[test]
+    fn service_needs_table() {
+        let services = |text: &str| {
+            crate::config::services::parse_services(Some(text), Path::new("/r/services.toml")).unwrap()
+        };
+        let mysql_80 = services(
+            "[services.\"mysql-8.0\"]\nengine = \"mysql\"\nversion = \"8.0\"\nformula = \"mysql@8.0\"\n",
+        );
+        let none = ServicesConfig::default();
+        let want = |text: &str| parse_ok(text);
+        let need = |engine: &str, version: Option<&str>| Need::Service {
+            engine: engine.into(),
+            version: version.map(Into::into),
+        };
+        assert_eq!(
+            service_needs(&want("[services]\nmysql = \"8.4\"\n"), &mysql_80),
+            [need("mysql", Some("8.4"))]
+        );
+        assert_eq!(service_needs(&want("[services]\nmysql = \"8.0\"\n"), &mysql_80), []);
+        assert_eq!(service_needs(&want("[services]\nmysql = true\n"), &mysql_80), []);
+        assert_eq!(service_needs(&want("[services]\nredis = true\n"), &none), [need("redis", None)]);
+        assert_eq!(
+            service_needs(&want("[services]\npostgres = true\n"), &mysql_80),
+            [need("postgres", None)]
+        );
+        // A stopped instance still meets the need (spec 9).
+        let stopped = services("[services.redis]\nengine = \"redis\"\nformula = \"redis\"\nstopped = true\n");
+        assert_eq!(service_needs(&want("[services]\nredis = true\n"), &stopped), []);
+        // Several at once come out in engine order.
+        assert_eq!(
+            service_needs(&want("[services]\nminio = true\nredis = true\nmysql = \"8.4\"\n"), &none),
+            [need("mysql", Some("8.4")), need("redis", None), need("minio", None)]
+        );
+        assert_eq!(service_needs(&ProjectFile::default(), &none), []);
+    }
+
+    /// Spec §9's last bullet: one commented line per engine, since Yard does not read `.env`.
+    const BLOCK: &str =
+        "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
+
     #[test]
     fn render_for_eepower() {
         let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None };
         assert_eq!(
             render(&d),
-            "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n"
+            format!(
+                "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n{BLOCK}"
+            )
         );
         let off = Detected { php: None, docroot: ".".into(), secure: Some(false) };
-        assert!(render(&off).ends_with("docroot = \".\"\nsecure = false\n"), "{}", render(&off));
+        assert!(
+            render(&off).ends_with(&format!("docroot = \".\"\nsecure = false\n{BLOCK}")),
+            "{}",
+            render(&off)
+        );
         let d = Detected { php: None, docroot: ".".into(), secure: Some(true) };
         assert_eq!(
             render(&d),
-            "# .yard: how Yard serves this project. Commit it.\ndocroot = \".\"\nsecure = true\n"
+            format!(
+                "# .yard: how Yard serves this project. Commit it.\ndocroot = \".\"\nsecure = true\n{BLOCK}"
+            )
         );
-        assert!(parse(&render(&d), Path::new(FILE)).is_ok());
+        // The block is all comments: it parses and asks for nothing.
+        assert_eq!(parse(&render(&d), Path::new(FILE)).unwrap().services, BTreeMap::new());
+        // Uncommenting it is what the user does next.
+        let on = render(&d)
+            .replace("# [services]", "[services]")
+            .replace("# mysql", "mysql")
+            .replace("# redis", "redis");
+        let f = parse(&on, Path::new(FILE)).unwrap();
+        assert_eq!(f.services[&Engine::Mysql], ServiceWant::Line("8.4".into()));
+        assert_eq!(f.services[&Engine::Redis], ServiceWant::Default);
     }
 
     #[test]

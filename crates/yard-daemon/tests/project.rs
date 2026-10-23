@@ -224,6 +224,10 @@ async fn a_newly_linked_project_is_watched() {
     d.shutdown().await.unwrap();
 }
 
+/// What `yard init` appends: one commented line per service engine (M4b spec §9).
+const SERVICES_BLOCK: &str =
+    "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
+
 async fn init(c: &mut Client, dir: &Path, extra: Value) -> Result<Value, yard_proto::YardError> {
     let mut params = json!({"path": dir.display().to_string()});
     params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
@@ -246,7 +250,9 @@ async fn init_writes_links_and_moves_settings() {
     assert_eq!(r["written"], true);
     assert_eq!(
         r["text"],
-        "# .yard: how Yard serves this project. Commit it.\nphp = \"7.1\"\ndocroot = \"web\"\nsecure = true\n"
+        format!(
+            "# .yard: how Yard serves this project. Commit it.\nphp = \"7.1\"\ndocroot = \"web\"\nsecure = true\n{SERVICES_BLOCK}"
+        )
     );
     assert_eq!(std::fs::read_to_string(dir.join(".yard")).unwrap(), r["text"].as_str().unwrap());
     let sites = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
@@ -267,7 +273,10 @@ async fn init_links_an_unlinked_project() {
     std::fs::create_dir_all(dir.join("public")).unwrap();
     let r = init(&mut c, &dir, json!({})).await.unwrap();
     assert_eq!(r["site"]["name"], "fresh-app");
-    assert_eq!(r["text"], "# .yard: how Yard serves this project. Commit it.\ndocroot = \"public\"\n");
+    assert_eq!(
+        r["text"],
+        format!("# .yard: how Yard serves this project. Commit it.\ndocroot = \"public\"\n{SERVICES_BLOCK}")
+    );
     let named = d.projects.path().join("other");
     std::fs::create_dir_all(&named).unwrap();
     assert_eq!(init(&mut c, &named, json!({"name": "mine"})).await.unwrap()["site"]["name"], "mine");
@@ -416,7 +425,9 @@ async fn init_moves_a_site_to_a_directory_without_a_file() {
     assert_eq!(r["moved_from"], root.join("site").display().to_string(), "as sites.toml spelled it");
     assert_eq!(
         r["text"],
-        "# .yard: how Yard serves this project. Commit it.\nphp = \"7.1\"\ndocroot = \"site/public\"\n"
+        format!(
+            "# .yard: how Yard serves this project. Commit it.\nphp = \"7.1\"\ndocroot = \"site/public\"\n{SERVICES_BLOCK}"
+        )
     );
     let sites = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
     assert!(

@@ -24,12 +24,13 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     (`<!-- … -->` in HTML) and have their sha256 recorded in `state/hashes.json`.
     The `conf.d` inis (`10-brew-*.ini`, `50-<ext>.ini`) are generated and name
     `yard.toml` as the file to edit; `overrides_for` maps them.
-  - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`)
+  - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`,
+    `services/<instance>/overrides.conf`)
     are created empty once with `ensure_user_file` and never written again, except
     `99-overrides.ini` through `yard php config set|unset` (`rpc/php.rs`
     `config_edit`, via `yard_core::ini`, which keeps every other line as written,
     and `generated::write_preserving`, which writes through a symlink and keeps the mode).
-  - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`) are edited only through
+  - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`, `services.toml`) are edited only through
     `config::edit::TomlFile` (`toml_edit`), so comments and key order survive. Every
     read-modify-write in the daemon is one `TomlFile::edit(path, |file| …)`, which holds
     a process-wide lock from load to save, so an RPC and a job never lose each other's
@@ -61,5 +62,6 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   (`toml_edit`, keeping every other key and comment) with `--force`, never through a
   symlink. Reconcile, doctor and the shims only read it. Settings it owns
   (`php`, `docroot`, `secure`) are refused by `isolate`, `secure` and `docroot` with
-  `SITE_HAS_PROJECT_FILE`, whose hint is the edit to make in the file.
+  `SITE_HAS_PROJECT_FILE`, whose hint is the edit to make in the file. `[services]` is the
+  user's to uncomment: `project::render` writes it as comments only, and `rewrite` keeps it.
 - Yard never writes project `.env` files (spec non-goal).

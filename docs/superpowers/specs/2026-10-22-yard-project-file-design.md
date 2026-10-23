@@ -3,8 +3,8 @@
 Date: 2026-10-22
 Status: approved by the maintainer on 2026-10-22. It extends `2026-10-19-yard-design.md` (the main
 spec). M4a built `php`, `docroot`, `secure`, `extensions` and `yard init`
-(`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, §8); `node` and
-`[services]` follow in M4c and M4b.
+(`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, §8); M4b builds
+`[services]` (`2026-10-23-yard-m4b-services-design.md` §9); `node` follows in M4c.
 
 Decisions marked **(maintainer)** are the maintainer's, from 2026-10-22. Decisions marked
 **(builder's call)** were made while writing this and can be reversed on their own.
@@ -78,9 +78,10 @@ extensions = ["redis", "imagick"]
 node = "20"
 
 [services]
-mysql = "8.0"
+mysql = "8.4"
+postgres = "17"
 redis = true
-emailulator = true
+minio = true
 ```
 
 | Key | Type | Meaning | Today's equivalent |
@@ -90,7 +91,7 @@ emailulator = true
 | `secure` | bool | HTTPS | `yard secure` / `unsecure` |
 | `extensions` | list of names | must be installed and enabled for the site's PHP version | `yard ext add --php` |
 | `node` | major version (M4) | the Node the site's shims use | none yet |
-| `[services]` | name → version or `true` (M4) | services that must be running | `yard service add` (M4) |
+| `[services]` | engine → release line or `true` (M4b) | service instances that must exist | `yard service add` |
 
 - Unknown keys are an error naming the file and the key, as in `sites.toml`
   (`deny_unknown_fields`). A file that does not parse puts only that site on the setup page (§5).
@@ -108,14 +109,23 @@ emailulator = true
   `brew upgrade`), never on every reconcile **(builder's call)**. An extension the user turned off in `yard.toml` (`enabled = false`,
   e.g. `yard xdebug off`) stays off; doctor notes that the file lists it
   **(builder's call)**.
-- **Services are shared too.** `mysql = "8.0"` means "the mysql 8.0 instance must run".
-  Two projects asking for it share one instance. Yard does not stop a service when a
-  `.yard` stops asking for it. Services are added and started when `init` or `link` is
-  confirmed; reconcile never restarts one the user stopped with `yard service stop`.
-  `true` means M4's default version. `emailulator = true` is met by any emailulator Yard
-  can reach, its own LaunchAgent included, and since Yard never installs it, a missing
-  one is a need whose hint is emailulator's installer **(builder's calls; M4's design
-  may refine them)**.
+- **Services are shared too.** `mysql = "8.4"` means "the `mysql-8.4` instance must
+  exist". Two projects asking for it share one instance. Yard does not stop or remove an
+  instance when a `.yard` stops asking for it. Services are added and started when `init`
+  or `link` is confirmed; reconcile never restarts one the user stopped with
+  `yard service stop`. The rules (M4b spec §9):
+  - Keys are `mysql`, `postgres`, `redis` and `minio`. Any other key is
+    `PROJECT_FILE_INVALID`, naming the file, the line and the key.
+  - A value is a release line of that engine (MySQL `major.minor`, such as `"8.4"`;
+    PostgreSQL a major, such as `"17"`) or `true`. Redis and MinIO take only `true`.
+    `"latest"`, a patch release (`"8.4.13"`), `false`, a number and a table are
+    `PROJECT_FILE_INVALID` at their line. A line brew does not have is not a parse error:
+    it is a need whose install fails with `SERVICE_VERSION_UNSUPPORTED`.
+  - A line is met when that exact instance (`mysql-8.4`) is in `services.toml`; `true` is
+    met by any instance of the engine, and a need for it adds the engine's default line
+    (MySQL 8.4, PostgreSQL 17). A missing instance is `Need::Service { engine, version }`
+    and puts the site on the setup page; a stopped or failed instance is not a need, the
+    site is served and `yard doctor` warns.
 
 ## 5. How it changes serving
 
@@ -176,9 +186,9 @@ Run in a project directory.
      when `secure_by_default` is on, else left out so each teammate's
      `secure_by_default` decides **(builder's call)**. Serving on this machine never
      changes.
-   - `[services]` (from M4b): written commented out, since Yard does not read `.env`
-     (maintainer). The user uncomments what the project needs and runs `yard init` again, which
-     applies it. M4a writes no `[services]` lines.
+   - `[services]` (from M4b): one commented line per engine after a blank line, since
+     Yard does not read `.env` (maintainer). The user uncomments what the project needs and runs
+     `yard init` again, which applies it.
    When a `.yard` already exists, `init` writes nothing and goes on with steps 2–4, so
    it is also the command that applies a cloned project's file. `--force` rewrites the
    keys detection produces and keeps the ones it cannot (`extensions`, `node`,
@@ -204,7 +214,7 @@ Run in a project directory.
 `yard link` in a project that already has a `.yard` does steps 3 and 4: it links, reads
 the file, and asks before installing.
 
-For eepower today, `yard init` writes (the `[services]` lines from M4b):
+For eepower today, `yard init` writes:
 
 ```toml
 # .yard: how Yard serves this project. Commit it.
@@ -212,7 +222,10 @@ php = "7.3"
 docroot = "public"
 
 # [services]
-# mysql = "8.0"
+# mysql = "8.4"
+# postgres = "17"
+# redis = true
+# minio = true
 ```
 
 ## 7. RPC and errors
@@ -234,8 +247,8 @@ docroot = "public"
 Part of **M4 Node and services (builder's call)**. M4 was split on 2026-10-22: **M4a**
 landed `.yard` with `php`, `docroot`, `secure` and `extensions`, the setup page, the
 shims following the file, and `yard init`; **M4b** adds `[services]` with the services
-themselves, and **M4c** adds `node` with the fnm wrapper. Until then `node` and
-`[services]` are unknown keys, so a file that has them is `PROJECT_FILE_INVALID`.
+themselves, and **M4c** adds `node` with the fnm wrapper. Until M4c, `node` is an unknown
+key, so a file that has it is `PROJECT_FILE_INVALID`.
 
 When built, the same change updates the main spec (§4.5 resolution, §5.1 sites, the
 "nothing is written into the project" decision, which gains the `yard init` exception,
