@@ -43,6 +43,18 @@ pub fn overrides_for(paths: &Paths, file: &Path) -> Option<PathBuf> {
         return Some(paths.yard_toml());
     }
     let dir = file.parent()?;
+    if dir == paths.nginx_services_dir() {
+        // The block for a service's web console, named for the instance (`minio`).
+        return Some(paths.service_overrides(file.file_stem()?.to_str()?));
+    }
+    if dir.parent() == Some(paths.services_dir().as_path()) {
+        // `services/<instance>/my.cnf`, `redis.conf`: the generated configs, not `overrides.conf`.
+        let name = file.file_name()?.to_str()?;
+        if !matches!(name, "my.cnf" | "redis.conf") {
+            return None;
+        }
+        return Some(paths.service_overrides(dir.file_name()?.to_str()?));
+    }
     if dir.file_name()? == "conf.d" {
         // Mirrored brew inis and extension inis come from yard.toml's extensions.
         let v: PhpVersion = dir.parent()?.file_name()?.to_str()?.parse().ok()?;
@@ -68,6 +80,7 @@ mod tests {
     use super::*;
     use crate::brew::Brew;
     use crate::config::yard::{ExtEntry, ExtSource};
+    use crate::services::Engine;
     use crate::{Paths, PhpVersion};
     use insta::assert_snapshot;
     use std::path::Path;
@@ -227,6 +240,45 @@ mod tests {
     }
 
     #[test]
+    fn nginx_service_minio() {
+        let (p, b) = ctx_parts();
+        assert_snapshot!(nginx::service_site(&ctx(&p, &b), "minio", 9001, false));
+    }
+
+    #[test]
+    fn nginx_service_minio_secure() {
+        let (p, b) = ctx_parts();
+        assert_snapshot!(nginx::service_site(&ctx(&p, &b), "minio", 9001, true));
+    }
+
+    #[test]
+    fn a_service_block_sends_the_upstream_as_host_and_keeps_the_port_forwarded() {
+        let (p, b) = ctx_parts();
+        let conf = nginx::service_site(&ctx(&p, &b), "minio", 9101, false);
+        for line in [
+            "server_name minio.yard;",
+            "proxy_pass \"http://127.0.0.1:9101\";",
+            "proxy_set_header Host 127.0.0.1:9101;",
+            "proxy_set_header X-Forwarded-Host $http_host;",
+            "proxy_set_header X-Forwarded-Proto $scheme;",
+            "proxy_set_header Upgrade $http_upgrade;",
+            "proxy_set_header Connection $connection_upgrade;",
+        ] {
+            assert!(conf.lines().any(|l| l.trim() == line), "{line}\n{conf}");
+        }
+        assert!(!conf.contains("$host;"), "{conf}");
+        let site = nginx::nginx_site(&ctx(&p, &b), &proxy_site());
+        assert!(site.lines().any(|l| l.trim() == "proxy_set_header X-Forwarded-Host $http_host;"), "{site}");
+    }
+
+    #[test]
+    fn nginx_main_includes_the_service_blocks() {
+        let (p, b) = ctx_parts();
+        let conf = nginx::nginx_main(&ctx(&p, &b));
+        assert!(conf.contains(&format!("include \"{}/nginx/services/*.conf\";", ROOT)), "{conf}");
+    }
+
+    #[test]
     fn nginx_site_secure_on_443_redirects_without_a_port() {
         let (p, b) = ctx_parts();
         let c = RenderCtx { http_port: 80, https_port: 443, ..ctx(&p, &b) };
@@ -318,6 +370,8 @@ mod tests {
             nginx::nginx_main(&c),
             nginx::nginx_site(&c, &php_site("my-app", "/Users/me/Herd/my app")),
             nginx::nginx_site(&c, &secure(php_site("my-app", "/Users/me/Herd/my app"))),
+            nginx::service_site(&c, "minio", 9001, false),
+            nginx::service_site(&c, "minio", 9001, true),
             php::fpm_conf(&c, v("8.4")),
             php::php_ini(&c, v("8.4")),
         ];
@@ -363,6 +417,7 @@ mod tests {
             (p.nginx_conf(), nginx::nginx_main(&c)),
             (p.nginx_site(&site.name), nginx::nginx_site(&c, &site)),
             (p.nginx_default_index(), nginx::default_index(&c, &[])),
+            (p.nginx_service("minio"), nginx::service_site(&c, "minio", 9001, true)),
             (p.dnsmasq_conf(), dnsmasq::dnsmasq_conf(&c, 53535)),
             (p.nginx_setup_page("ee"), nginx::setup_page(&c, &needs_php("ee", "/code/ee"))),
             (p.php_ini(v("8.4")), php::php_ini(&c, v("8.4"))),
@@ -388,6 +443,18 @@ mod tests {
             let first = out.lines().next().unwrap();
             assert!(first.contains(&format!("edit {} instead", named.display())), "{first}");
         }
+        for (instance, engine, file) in
+            [("mysql-8.4", Engine::Mysql, "my.cnf"), ("redis", Engine::Redis, "redis.conf")]
+        {
+            let (path, text) = crate::services::render::config_file(engine, instance, &p, &[]).unwrap();
+            assert_eq!(path, p.service_conf(instance, file));
+            let named = overrides_for(&p, &path).unwrap_or_else(|| panic!("{}", path.display()));
+            assert_eq!(named, p.service_overrides(instance));
+            let first = text.lines().next().unwrap();
+            assert!(first.contains(&format!("edit {} instead", named.display())), "{first}");
+        }
+        assert_eq!(overrides_for(&p, &p.service_overrides("redis")), None);
+        assert_eq!(overrides_for(&p, &p.service_conf("redis", "other.conf")), None);
         assert_eq!(overrides_for(&p, &p.yard_toml()), None);
         assert_eq!(overrides_for(&p, &p.php_overrides(v("8.4"))), None);
     }

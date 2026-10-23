@@ -56,6 +56,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   and `doctor` report until a reconcile succeeds.
 - **Quote every path** in rendered output. The data root is
   `~/Library/Application Support/Yard`, and that space breaks unquoted nginx, fpm and ini values.
+  The one exception is `!include <path>` in a service's `my.cnf`: mysqld treats a quote there as
+  part of the path, so it is written bare, and the rest of the line is the path.
 - **A project's `.yard` is the project's file**, committed with it (project-file spec).
   Yard reads it at most 64 KiB and only as a regular file, and writes it only in
   `yard init` (`rpc/project.rs`): `project::render` for a new one, `project::rewrite`

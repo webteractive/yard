@@ -4,7 +4,7 @@ use super::quote::{html, nginx_str};
 use super::{RenderCtx, header};
 use crate::PhpVersion;
 use std::fmt::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use yard_proto::{Need, SiteInfo, SiteKind};
 
 fn q(p: &Path) -> String {
@@ -66,6 +66,7 @@ http {{
     }}
 
     include {sites};
+    include {services};
 }}
 ",
         header = header(&paths.nginx_dir().join("overrides")),
@@ -80,12 +81,12 @@ http {{
         default_root = q(&paths.nginx_default_dir()),
         https = ctx.https_port,
         sites = q(&paths.nginx_sites_dir().join("*.conf")),
+        services = q(&paths.nginx_services_dir().join("*.conf")),
     )
 }
 
 pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
     let override_file = ctx.paths.nginx_override(&site.name);
-    let http = ctx.http_port;
     let host = &site.host;
     let body = match &site.kind {
         // Every request gets the page naming what the `.yard` needs, with a 503.
@@ -137,53 +138,74 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
                 params = q(&ctx.brew.nginx_fastcgi_params()),
             )
         }
-        SiteKind::Proxy { target } => format!(
-            "    location / {{
+        SiteKind::Proxy { target } => proxy_location(target, "$host"),
+    };
+    let tls = site.secure.then(|| (ctx.paths.cert(&site.name), ctx.paths.cert_key(&site.name)));
+    server_blocks(ctx, &format!("{host} *.{host}"), &body, &override_file, tls)
+}
+
+/// The `location /` of a reverse proxy to `target`, which sends `host` as `Host` and keeps the
+/// port the browser used in `X-Forwarded-Host` (`$http_host`; `$host` would drop it).
+fn proxy_location(target: &str, host: &str) -> String {
+    format!(
+        "    location / {{
         proxy_pass {target};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
+        proxy_set_header Host {host};
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host $http_host;
         proxy_read_timeout 3600;
     }}
 ",
-            target = nginx_str(target),
-        ),
-    };
-    if !site.secure {
+        target = nginx_str(target),
+    )
+}
+
+/// The http server block, or with `tls` (certificate and key) the redirect to https plus the
+/// https block, each ending with the user's `override_file`.
+fn server_blocks(
+    ctx: &RenderCtx,
+    server_name: &str,
+    body: &str,
+    override_file: &Path,
+    tls: Option<(PathBuf, PathBuf)>,
+) -> String {
+    let http = ctx.http_port;
+    let header = header(override_file);
+    let override_file = q(override_file);
+    let Some((cert, key)) = tls else {
         return format!(
             "{header}server {{
     listen 127.0.0.1:{http};
     listen [::1]:{http};
-    server_name {host} *.{host};
+    server_name {server_name};
     client_max_body_size 1G;
 
 {body}
     include {override_file};
 }}
-",
-            header = header(&override_file),
-            override_file = q(&override_file),
+"
         );
-    }
-    // A secured site answers http with a redirect to the same path over https.
+    };
+    // A secured host answers http with a redirect to the same path over https.
     let https = ctx.https_port;
     let port = if https == 443 { String::new() } else { format!(":{https}") };
+    let (cert, key) = (q(&cert), q(&key));
     format!(
         "{header}server {{
     listen 127.0.0.1:{http};
     listen [::1]:{http};
-    server_name {host} *.{host};
+    server_name {server_name};
     return 301 https://$host{port}$request_uri;
 }}
 
 server {{
     listen 127.0.0.1:{https} ssl;
     listen [::1]:{https} ssl;
-    server_name {host} *.{host};
+    server_name {server_name};
     client_max_body_size 1G;
     ssl_certificate {cert};
     ssl_certificate_key {key};
@@ -192,12 +214,21 @@ server {{
 {body}
     include {override_file};
 }}
-",
-        header = header(&override_file),
-        override_file = q(&override_file),
-        cert = q(&ctx.paths.cert(&site.name)),
-        key = q(&ctx.paths.cert_key(&site.name)),
+"
     )
+}
+
+/// `nginx/services/<name>.conf`: `<name>.<tld>` proxied to a service's web console on
+/// `upstream_port` (MinIO's, spec 5.4). It is not a site. `Host` is the upstream's own
+/// address, which the console may check; the browser's host and port go in `X-Forwarded-Host`.
+/// A secured block's certificate is `certs/services/<name>.pem`. The block ends with the
+/// instance's `overrides.conf`.
+pub fn service_site(ctx: &RenderCtx, name: &str, upstream_port: u16, secure: bool) -> String {
+    let upstream = format!("127.0.0.1:{upstream_port}");
+    let body = proxy_location(&format!("http://{upstream}"), &upstream);
+    let certs = ctx.paths.services_certs_dir();
+    let tls = secure.then(|| (certs.join(format!("{name}.pem")), certs.join(format!("{name}.key"))));
+    server_blocks(ctx, &format!("{name}.{}", ctx.tld), &body, &ctx.paths.service_overrides(name), tls)
 }
 
 /// What a site whose `.yard` is not met says instead of serving the project.

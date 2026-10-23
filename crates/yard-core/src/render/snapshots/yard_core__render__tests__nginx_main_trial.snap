@@ -52,4 +52,5 @@ http {
     }
 
     include "/Users/me/Library/Application Support/Yard/nginx/sites/*.conf";
+    include "/Users/me/Library/Application Support/Yard/nginx/services/*.conf";
 }

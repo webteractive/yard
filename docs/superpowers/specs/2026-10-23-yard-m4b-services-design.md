@@ -176,6 +176,8 @@ Projects that need a stable MySQL use a versioned line.
   `port`, `bind-address = 127.0.0.1`, `socket = <root>/run/<i>.sock`, `datadir`,
   `mysqlx = OFF` (the X Protocol would otherwise take 33060 for every instance), and
   ends with `!include <root>/services/<i>/overrides.conf`, created empty once.
+  The include path is the one unquoted path in Yard's output: mysqld takes the rest of the
+  line and keeps a quote as part of the path (checked against mysqld 8.0.33, 2026-10-24).
 - Health: TCP connect. Stop: SIGTERM (mysqld shuts down cleanly).
 - Legacy PHP: MySQL keeps its defaults; PHP 7.1.16+ connects to it (§16).
 
