@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod logsink;
 pub mod modules;
 pub mod nginx;
+pub mod orphans;
 pub mod portscan;
 pub mod privileged;
 pub mod probe;

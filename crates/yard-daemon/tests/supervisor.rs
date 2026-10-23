@@ -12,6 +12,7 @@ use tokio::sync::broadcast::Receiver;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
 use yard_daemon::logsink::LogSink;
+use yard_daemon::orphans;
 use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::probe::Proto;
 use yard_daemon::supervisor::{Health, Reload, Supervisor, SupervisorConfig, UnitSpec};
@@ -37,10 +38,12 @@ fn process(name: &str, program: &str, args: &[&str], health: Health) -> UnitSpec
         args: args.iter().map(OsString::from).collect(),
         env: vec![],
         health,
-        port: None,
+        ports: vec![],
         reload: Reload::Restart,
         stop: libc::SIGTERM,
         inherit: vec![],
+        stop_timeout: None,
+        pid_file: None,
     }
 }
 
@@ -107,7 +110,7 @@ async fn healthy_unit_reaches_running() {
     let h = harness(fast());
     let p = free_port();
     let mut spec = listener("web", p);
-    spec.port = Some((p, Proto::Tcp));
+    spec.ports = vec![(p, Proto::Tcp)];
     h.sup.apply(vec![spec]).await;
 
     let u = wait_for(&h.sup, "web", running).await;
@@ -220,7 +223,7 @@ async fn foreign_listener_blocks_start_without_backoff() {
     let p = held.local_addr().unwrap().port();
     let mut rx = h.bus.subscribe();
     let mut spec = listener("web", p);
-    spec.port = Some((p, Proto::Tcp));
+    spec.ports = vec![(p, Proto::Tcp)];
     h.sup.apply(vec![spec]).await;
 
     let u = wait_for(&h.sup, "web", failed).await;
@@ -414,4 +417,206 @@ async fn fake_nginx_serves_every_inherited_socket() {
         assert!(support::wait_until(served, Duration::from_secs(5)).await, "nothing serves {port}");
     }
     child.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn every_port_is_probed_before_start() {
+    let h = harness(fast());
+    let (free, held) = (free_port(), held_listener());
+    let held_port = held.local_addr().unwrap().port();
+    let mut rx = h.bus.subscribe();
+    let mut spec = listener("two", free);
+    spec.ports = vec![(free, Proto::Tcp), (held_port, Proto::Tcp)];
+    h.sup.apply(vec![spec]).await;
+
+    let u = wait_for(&h.sup, "two", failed).await;
+    let error = u.last_error.unwrap_or_default();
+    assert!(error.contains("PORT_IN_USE"), "{error}");
+    assert!(error.contains(&held_port.to_string()), "names the second port: {error}");
+    assert!(error.contains(&std::process::id().to_string()), "names the holder: {error}");
+    assert_eq!(u.restarts, 0);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (mut conflicts, mut starts) = (0, 0);
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            Event::PortConflict { port, .. } => {
+                assert_eq!(port, held_port);
+                conflicts += 1;
+            }
+            Event::UnitStateChanged { state: UnitState::Starting | UnitState::Backoff { .. }, .. } => {
+                starts += 1
+            }
+            _ => {}
+        }
+    }
+    assert_eq!((conflicts, starts), (1, 0), "one check, no spawn, no backoff");
+    assert!(!support::served(free), "the free port was never bound: nothing started");
+    h.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn unit_stop_timeout_overrides_default() {
+    // The config would wait 10 s; the unit's own 300 ms is what applies.
+    let h = harness(SupervisorConfig { stop_timeout: Duration::from_secs(10), ..fast() });
+    let port = free_port();
+    let stubborn = UnitSpec {
+        stop_timeout: Some(Duration::from_millis(300)),
+        ..process("stubborn", FAKE, &["stubborn", &port.to_string()], Health::Tcp(port))
+    };
+    h.sup.apply(vec![stubborn]).await;
+    let pid = wait_for(&h.sup, "stubborn", running).await.pid.unwrap();
+
+    let started = Instant::now();
+    h.sup.shutdown().await;
+    let took = started.elapsed();
+    assert!(!alive(pid), "SIGKILL ended the process that ignores SIGTERM");
+    assert!(took >= Duration::from_millis(300), "SIGTERM got its full timeout first: {took:?}");
+    assert!(took < Duration::from_secs(5), "the unit's timeout applied, not the config's: {took:?}");
+}
+
+#[tokio::test]
+async fn pid_file_follows_the_process() {
+    let h = harness(fast());
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("run/svc.pid");
+    let port = free_port();
+    let svc = UnitSpec { pid_file: Some(pid_file.clone()), ..listener("svc", port) };
+    h.sup.apply(vec![svc]).await;
+
+    let pid = wait_for(&h.sup, "svc", running).await.pid.unwrap();
+    let written = std::fs::read_to_string(&pid_file).unwrap();
+    assert_eq!(written.trim(), pid.to_string());
+
+    h.sup.shutdown().await;
+    assert!(!pid_file.exists(), "the file goes with the process");
+}
+
+#[tokio::test]
+async fn pid_file_is_removed_when_the_unit_crashes() {
+    let h = harness(fast());
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("boom.pid");
+    let boom = UnitSpec { pid_file: Some(pid_file.clone()), ..crasher("boom") };
+    h.sup.apply(vec![boom]).await;
+    wait_for(&h.sup, "boom", failed).await;
+    assert!(!pid_file.exists(), "a failed unit has no process, so no pid file");
+    h.sup.shutdown().await;
+}
+
+/// Starts `listen-tcp` detached, so launchd is its parent, and returns its pid.
+async fn orphaned_listener(port: u16) -> u32 {
+    let out = std::process::Command::new("/bin/sh")
+        .args(["-c", "\"$0\" listen-tcp \"$1\" >/dev/null 2>&1 & echo $!", FAKE, &port.to_string()])
+        .output()
+        .unwrap();
+    let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    assert!(
+        support::wait_until(|| support::ppid(pid) == 1, Duration::from_secs(5)).await,
+        "parent is launchd"
+    );
+    assert!(support::wait_until(|| support::served(port), Duration::from_secs(5)).await, "it listens");
+    pid
+}
+
+fn kill(pid: u32) {
+    // SAFETY: kill(2) on a process this test started.
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+}
+
+#[tokio::test]
+async fn orphan_service_is_stopped_on_start() {
+    let port = free_port();
+    let pid = orphaned_listener(port).await;
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("svc.pid");
+    std::fs::write(&pid_file, format!("{pid}\n")).unwrap();
+
+    let stopped = orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_secs(2));
+    assert_eq!(stopped, Some(pid));
+    assert!(support::wait_until(|| !alive(pid), Duration::from_secs(5)).await, "the orphan exited");
+    assert!(
+        support::wait_until(|| yard_daemon::probe::is_free(port, Proto::Tcp), Duration::from_secs(2)).await,
+        "its port is free again"
+    );
+    assert!(!pid_file.exists());
+    kill(pid);
+}
+
+#[tokio::test]
+async fn orphan_that_ignores_sigterm_is_killed_after_the_grace() {
+    let port = free_port();
+    let out = std::process::Command::new("/bin/sh")
+        .args(["-c", "\"$0\" stubborn \"$1\" >/dev/null 2>&1 & echo $!", FAKE, &port.to_string()])
+        .output()
+        .unwrap();
+    let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    assert!(support::wait_until(|| support::ppid(pid) == 1, Duration::from_secs(5)).await);
+    assert!(support::wait_until(|| support::served(port), Duration::from_secs(5)).await);
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("svc.pid");
+    std::fs::write(&pid_file, pid.to_string()).unwrap();
+
+    let started = Instant::now();
+    let stopped = orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_millis(300));
+    assert_eq!(stopped, Some(pid));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(support::wait_until(|| !alive(pid), Duration::from_secs(5)).await, "SIGKILL after the grace");
+    kill(pid);
+}
+
+#[tokio::test]
+async fn orphan_ignores_other_programs() {
+    // A live process that is not the unit's program, even one whose parent is launchd.
+    let port = free_port();
+    let pid = orphaned_listener(port).await;
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("svc.pid");
+    std::fs::write(&pid_file, pid.to_string()).unwrap();
+
+    let stopped = orphans::stop(&pid_file, std::path::Path::new("/bin/sh"), Duration::from_millis(200));
+    assert_eq!(stopped, None);
+    assert!(alive(pid), "an unrelated process is left running");
+    assert!(support::served(port));
+    assert!(!pid_file.exists(), "a file that names someone else's process is stale");
+    kill(pid);
+}
+
+#[tokio::test]
+async fn orphan_that_still_has_a_parent_is_left_alone() {
+    // Same program, but a live parent that is not launchd: a unit some yardd still supervises.
+    let h = harness(fast());
+    let port = free_port();
+    h.sup.apply(vec![listener("svc", port)]).await;
+    let pid = wait_for(&h.sup, "svc", running).await.pid.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("svc.pid");
+    std::fs::write(&pid_file, pid.to_string()).unwrap();
+
+    assert_eq!(orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_millis(200)), None);
+    assert!(alive(pid));
+    h.sup.shutdown().await;
+}
+
+#[test]
+fn stale_pid_files_are_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = std::path::Path::new(FAKE);
+    let grace = Duration::from_millis(100);
+
+    let missing = dir.path().join("missing.pid");
+    assert_eq!(orphans::stop(&missing, program, grace), None, "no file, nothing to do");
+
+    let dead = dir.path().join("dead.pid");
+    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let gone = child.id();
+    child.wait().unwrap();
+    std::fs::write(&dead, gone.to_string()).unwrap();
+    assert_eq!(orphans::stop(&dead, program, grace), None);
+    assert!(!dead.exists(), "a dead pid is stale");
+
+    let junk = dir.path().join("junk.pid");
+    std::fs::write(&junk, "not a pid").unwrap();
+    assert_eq!(orphans::stop(&junk, program, grace), None);
+    assert!(!junk.exists());
 }

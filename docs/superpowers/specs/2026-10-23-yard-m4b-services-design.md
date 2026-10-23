@@ -247,8 +247,11 @@ Projects that need a stable MySQL use a versioned line.
   restarts the instance. Once DBngin is gone, `yard service port mysql-8.4 3306` puts
   MySQL back on 3306. Yard never does this by itself.
 - `yard service remove` drops the instance's registry entries.
-- A unit with two ports (MinIO) probes both before it starts, so `UnitSpec.port` becomes a
-  list. M4d needs the same for emailulator.
+- A unit with two ports (MinIO) probes both before it starts, so `UnitSpec.port` became
+  `UnitSpec.ports: Vec<(u16, Proto)>`; the first one held fails the unit, without backoff,
+  and the conflict names that port and its holder. `minio-console` belongs to the `minio`
+  unit (`reconcile::port_owner`), so it shows as `yard` while MinIO runs. M4d needs the same
+  for emailulator.
 
 ## 7. CLI
 
@@ -530,6 +533,12 @@ checklists say. The M4d plan is re-checked against the M4b plan before M4d is bu
   ports and data directories. On start, before the first reconcile, yardd stops a
   process recorded in `run/<instance>.pid` when it is the instance's own binary under
   `launchd`, the way `NginxCommand::stop_orphan` does for nginx **(builder's call)**.
+  `orphans::stop(pid_file, program, grace)` does it: SIGTERM, SIGKILL after `grace`, then it
+  removes the file. A file that is unreadable, names a dead process or a different program is
+  stale and removed too; a live process of that program whose parent is not launchd belongs to a
+  running yardd, so it and its file stay. The supervisor writes the file on every spawn
+  (`UnitSpec.pid_file`) and removes it when the process is gone, and a unit's own timeout is
+  `UnitSpec.stop_timeout` (`None` = the supervisor's 5 s).
 - **Which MinIO is installed.** homebrew/core's `minio` and `minio/stable/minio` share
   the `opt/minio` keg, so Yard checks the installed keg's tap (`brew info --json=v2`),
   not only that `opt/minio` exists. A core `minio` already installed is used as it is,

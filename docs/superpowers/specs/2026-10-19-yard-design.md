@@ -463,8 +463,11 @@ profile; Yard does not edit dotfiles.
   connect succeeds into their backlog even with no nginx serving. An HTTP check closed
   it but flaked the suite (unexplained resets on the inherited sockets), so it waits
   for a check that does not depend on them.
-- Stop: SIGTERM, then SIGKILL after 5 s. A running nginx gets SIGQUIT instead, its
-  graceful shutdown; a unit that has not passed a health check yet always gets SIGTERM.
+- Stop: SIGTERM, then SIGKILL after 5 s, or after the unit's own `stop_timeout` (service
+  units get 30 s). A running nginx gets SIGQUIT instead, its graceful shutdown; a unit that
+  has not passed a health check yet always gets SIGTERM.
+- A unit whose spec has a `pid_file` has it written on every spawn and removed when the
+  process is gone; `orphans::stop` reads it to stop what a killed `yardd` left behind.
 - Crash → restart with exponential backoff (1 s → 30 s). Five failures within
   60 s → `failed` state, retains the last 50 log lines, emits an event; no further
   restarts until `yard restart <unit>`.
@@ -589,7 +592,8 @@ and `privileged`.
 1. **Allocation:** the registry rejects two units on the same port; a
    `ports.toml` with two non-`external` entries on one port is
    `CONFIG_INVALID` at the later entry's line.
-2. **Pre-start:** a real bind probe on `127.0.0.1` and `::1`; for 80 and 443,
+2. **Pre-start:** a real bind probe on `127.0.0.1` and `::1` of every port the unit has
+   (`UnitSpec.ports`; the first one held fails the unit); for 80 and 443,
    which a user may not bind on loopback, a connect (free when nothing answers),
    and in the `privileged` profile the helper's `ports.bind` is the check. Before
    the first nginx start, `yardd` stops an nginx an earlier, killed `yardd` left

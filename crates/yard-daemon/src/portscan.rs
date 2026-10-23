@@ -116,4 +116,28 @@ mod tests {
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].status, PortStatus::Yard, "{infos:?}");
     }
+
+    #[test]
+    fn a_running_minio_owns_its_console_port() {
+        let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (api, console) =
+            (TcpListener::bind("127.0.0.1:0").unwrap(), TcpListener::bind("127.0.0.1:0").unwrap());
+        let text = format!(
+            "[ports]\nminio = {{ port = {}, mode = \"pinned\" }}\nminio-console = {{ port = {}, mode = \"pinned\" }}\n",
+            api.local_addr().unwrap().port(),
+            console.local_addr().unwrap().port()
+        );
+        let registry = Registry::parse(Some(&text), Path::new("/r/ports.toml")).unwrap();
+        let units = [UnitInfo {
+            name: "minio".into(),
+            state: UnitState::Running,
+            pid: Some(1),
+            restarts: 0,
+            last_error: None,
+        }];
+
+        let infos = infos(&registry, &own_units(&units));
+        assert_eq!(infos.len(), 2);
+        assert!(infos.iter().all(|i| i.status == PortStatus::Yard), "{infos:?}");
+    }
 }

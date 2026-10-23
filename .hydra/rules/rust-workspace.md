@@ -36,7 +36,8 @@ triggers:
   serves every inherited socket and reads a request before answering. Like nginx, the fake exits 0 on SIGQUIT: dying of the signal makes
   macOS write a crash report, and ReportCrash holds the process (and its sockets) while
   it does, which stalls stops and flakes tests. Its `signals <port>` mode logs which of
-  SIGQUIT and SIGTERM stopped it.
+  SIGQUIT and SIGTERM stopped it, and `stubborn <port>` ignores both, so only SIGKILL (a stop
+  timeout) ends it.
 - Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
 - A test that reconciles, probes or runs doctor writes a `ports.toml` first

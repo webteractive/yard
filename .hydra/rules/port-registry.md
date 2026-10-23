@@ -16,8 +16,9 @@ triggers:
   entry `proxy:<name>`.
 - Checks happen at three points: allocation (`Registry::parse` rejects two non-external
   entries on one port as `CONFIG_INVALID` at the later line), pre-start
-  (a bind probe, which on failure goes straight to `Failed` with the holder and does not
-  back off, since retrying cannot free a foreign port), and runtime (health probes plus
+  (a bind probe of every port in `UnitSpec.ports`, which on the first held one goes straight
+  to `Failed` with that port's holder and does not back off, since retrying cannot free a
+  foreign port), and runtime (health probes plus
   a 30 s scan of idle registered ports that emits `port.conflict`).
 - Probe without `SO_REUSEADDR` first (use `socket2`; std sets it on unix and hides wildcard
   listeners). If that bind is refused, the port still counts as free when a reuse bind
@@ -33,6 +34,11 @@ triggers:
 - Before the first nginx start, `NginxCommand::stop_orphan` stops the master in
   `run/nginx.pid` if it is brew's nginx and launchd is its parent (a yardd that was
   killed left it running); it would otherwise hold the port the new nginx needs.
+- Service units (`UnitSpec.pid_file`) are found after a killed yardd the same way, by
+  `orphans::stop(pid_file, program, grace)`: the process in `run/<instance>.pid` is stopped when
+  it is the unit's own binary (`proc_pidpath`, canonicalized) and launchd is its parent. Anything
+  else is left running, and a stale file is removed. A unit with two ports registers both
+  (`minio`, `minio-console`), and `reconcile::port_owner` maps each to its unit.
 - Every `PORT_IN_USE` names the holder with `holder::label` (`nginx-arm (pid 4534, Herd)`);
   a refused profile switch also lists them in `data.holders`.
 - `portscan::infos` is the one place a registered port gets a status and a holder;

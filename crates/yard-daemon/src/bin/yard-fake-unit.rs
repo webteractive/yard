@@ -30,6 +30,7 @@ fn mode(args: &[String]) -> ExitCode {
     match arg(0) {
         Some("listen-tcp") => listen_tcp(arg(1).and_then(|p| p.parse().ok())),
         Some("signals") => signals(arg(1).and_then(|p| p.parse().ok())),
+        Some("stubborn") => stubborn(arg(1).and_then(|p| p.parse().ok())),
         Some("listen-unix") => listen_unix(arg(1).map(PathBuf::from)),
         Some("exit") => {
             let code = arg(1).and_then(|c| c.parse::<u8>().ok()).unwrap_or(1);
@@ -367,6 +368,17 @@ fn signals(port: Option<u16>) -> ExitCode {
     unsafe {
         libc::signal(libc::SIGQUIT, quit as libc::sighandler_t);
         libc::signal(libc::SIGTERM, term as libc::sighandler_t);
+    }
+    listen_tcp(port)
+}
+
+/// Like `listen-tcp`, but ignores SIGTERM and SIGQUIT, so only SIGKILL stops it: a service
+/// that outlasts a stop timeout.
+fn stubborn(port: Option<u16>) -> ExitCode {
+    // SAFETY: installing SIG_IGN.
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
     }
     listen_tcp(port)
 }

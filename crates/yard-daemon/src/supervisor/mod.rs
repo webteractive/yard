@@ -40,8 +40,10 @@ pub struct UnitSpec {
     pub args: Vec<OsString>,
     pub env: Vec<(String, String)>,
     pub health: Health,
-    /// Checked with a bind probe before every start (spec §7, check 2).
-    pub port: Option<(u16, Proto)>,
+    /// Every one is checked with a bind probe before each start (spec §7, check 2); the
+    /// first one held fails the unit. Empty when nothing can be probed: nginx in the
+    /// privileged profile (the helper's bind stands in) and php-fpm (a unix socket).
+    pub ports: Vec<(u16, Proto)>,
     pub reload: Reload,
     /// Sent to stop a running unit; SIGKILL follows after `stop_timeout`. nginx gets
     /// SIGQUIT, its graceful shutdown, so requests in flight finish. A unit that has not
@@ -51,6 +53,12 @@ pub struct UnitSpec {
     /// the helper. Only nginx in the privileged profile has any; the helper's bind then
     /// stands in for the probe.
     pub inherit: Vec<u16>,
+    /// How long SIGKILL waits after the stop signal; `None` uses `SupervisorConfig.stop_timeout`.
+    /// A database gets longer, so it can finish a checkpoint.
+    pub stop_timeout: Option<Duration>,
+    /// Written with the process id on every spawn and removed when the process is gone, so
+    /// a yardd that was killed leaves a record of what to stop (`orphans::stop`).
+    pub pid_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

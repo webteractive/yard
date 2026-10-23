@@ -366,10 +366,12 @@ impl Reconciler {
                 ],
                 env: vec![],
                 health: Health::Tcp(dns),
-                port: Some((dns, Proto::TcpUdp)),
+                ports: vec![(dns, Proto::TcpUdp)],
                 reload: Reload::Restart,
                 stop: libc::SIGTERM,
                 inherit: vec![],
+                stop_timeout: None,
+                pid_file: None,
             },
             UnitSpec {
                 name: "nginx".into(),
@@ -377,10 +379,12 @@ impl Reconciler {
                 args: self.nginx.args(),
                 env: vec![],
                 health: Health::Tcp(http),
-                port: (!privileged).then_some((http, Proto::Tcp)),
+                ports: if privileged { vec![] } else { vec![(http, Proto::Tcp)] },
                 reload: Reload::Signal(libc::SIGHUP),
                 stop: libc::SIGQUIT,
                 inherit: inherit.clone(),
+                stop_timeout: None,
+                pid_file: None,
             },
         ];
         let mut restart = vec![];
@@ -415,10 +419,12 @@ impl Reconciler {
                 ],
                 env: php_fpm_env(&ctx, *v),
                 health: Health::Unix(paths.fpm_socket(*v)),
-                port: None,
+                ports: vec![],
                 reload: Reload::Signal(libc::SIGUSR2),
                 stop: libc::SIGTERM,
                 inherit: vec![],
+                stop_timeout: None,
+                pid_file: None,
             });
         }
         if !existing.contains("nginx")
@@ -504,9 +510,14 @@ impl Reconciler {
     }
 }
 
-/// The supervised unit behind a registry entry: nginx owns both nginx ports.
+/// The supervised unit behind a registry entry: nginx owns both nginx ports, and MinIO's
+/// console port belongs to the `minio` unit that also holds its API port.
 pub fn port_owner(entry: &str) -> &str {
-    if entry == NGINX_HTTP || entry == NGINX_HTTPS { "nginx" } else { entry }
+    match entry {
+        NGINX_HTTP | NGINX_HTTPS => "nginx",
+        "minio-console" => "minio",
+        _ => entry,
+    }
 }
 
 pub fn fpm_unit(v: PhpVersion) -> String {

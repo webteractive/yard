@@ -62,9 +62,7 @@ impl Runner {
 
     pub async fn run(mut self) {
         let ack = loop {
-            if let Some((port, proto)) = self.spec.port
-                && !probe::is_free(port, proto)
-            {
+            if let Some(port) = self.busy_port() {
                 match self.conflict(port).await {
                     Control::Restart => self.policy.reset(),
                     Control::Stop(ack) => break ack,
@@ -115,7 +113,14 @@ impl Runner {
         let _ = ack.send(());
     }
 
+    /// The first of the unit's ports that someone holds. Every port is probed, since a
+    /// unit with two (MinIO) cannot start when either is taken.
+    fn busy_port(&self) -> Option<u16> {
+        self.spec.ports.iter().find(|(port, proto)| !probe::is_free(*port, *proto)).map(|(port, _)| *port)
+    }
+
     /// One start, then supervision until the unit fails or is told to stop or restart.
+    /// The pid file lives exactly as long as the process.
     async fn attempt(&mut self) -> Ended {
         self.set_state(UnitState::Starting);
         let mut process = match self.start().await {
@@ -123,6 +128,35 @@ impl Runner {
             Err(ended) => return ended,
         };
         self.update(|u| u.pid = process.pid());
+        self.write_pid_file(process.pid());
+        let ended = self.supervise(&mut process).await;
+        self.remove_pid_file();
+        ended
+    }
+
+    fn write_pid_file(&self, pid: Option<u32>) {
+        let (Some(path), Some(pid)) = (&self.spec.pid_file, pid) else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(path, format!("{pid}\n")) {
+            tracing::warn!(
+                "cannot write {}: {e}; a killed yardd could not find {}",
+                path.display(),
+                self.spec.name
+            );
+        }
+    }
+
+    fn remove_pid_file(&self) {
+        if let Some(path) = &self.spec.pid_file {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Supervision of a started process until it fails or is told to stop or restart.
+    async fn supervise(&mut self, process: &mut Process) -> Ended {
+        let stop_timeout = self.spec.stop_timeout.unwrap_or(self.cfg.stop_timeout);
 
         let interval = self.cfg.health_interval;
         let deadline = tokio::time::Instant::now() + self.cfg.start_grace;
@@ -130,14 +164,14 @@ impl Runner {
         // handle its graceful signal yet, so it gets SIGTERM.
         while !self.healthy().await {
             if tokio::time::Instant::now() >= deadline {
-                process.stop(libc::SIGTERM, self.cfg.stop_timeout).await;
+                process.stop(libc::SIGTERM, stop_timeout).await;
                 let grace = self.cfg.start_grace.as_secs_f32();
                 return Ended::Failure(format!("not healthy within {grace} s of starting"));
             }
             tokio::select! {
                 status = process.wait() => return Ended::Failure(status),
                 control = self.next_control() => {
-                    process.stop(libc::SIGTERM, self.cfg.stop_timeout).await;
+                    process.stop(libc::SIGTERM, stop_timeout).await;
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {}
@@ -150,13 +184,13 @@ impl Runner {
             tokio::select! {
                 status = process.wait() => return Ended::Failure(status),
                 control = self.next_control() => {
-                    process.stop(self.spec.stop, self.cfg.stop_timeout).await;
+                    process.stop(self.spec.stop, stop_timeout).await;
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {
                     misses = if self.healthy().await { 0 } else { misses + 1 };
                     if misses >= 2 {
-                        process.stop(self.spec.stop, self.cfg.stop_timeout).await;
+                        process.stop(self.spec.stop, stop_timeout).await;
                         return Ended::Failure("failed two health checks in a row".into());
                     }
                 }
