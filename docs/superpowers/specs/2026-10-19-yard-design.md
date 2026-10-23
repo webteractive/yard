@@ -666,6 +666,19 @@ As built (daemon methods; the CLI is M4b Task 13):
   it removes the entry and port entries, reconciles, waits until the unit is gone, and only
   then deletes `services/<i>/`, keeping `data/` with `keep_data`. It never runs `brew
   uninstall`. Confirmation is the CLI's.
+- `services.stop` and `services.start { name }` set `stopped = true` on the entry, or remove the
+  key (never `stopped = false`, so the user's file is clean again), through `TomlFile`, then
+  reconcile; both answer a `ServiceInfo`, and a start answers once the unit is spawned
+  (`starting` until its health check passes). `services.restart { name }` is `units.restart` for
+  the instance and refuses a stopped one with `INVALID_ARGUMENT`, hint `yard service start <i>`;
+  it never clears `stopped`. `services.logs { name, lines? }` answers the last `lines` (default
+  100) of `logs/<i>.log`, read from the end of the file, and an empty list while there is no file.
+  `services.port { name, port }` pins the instance's first port (MinIO's API port) with
+  `allocate_exact` and reconciles, which restarts a running instance on it; a stopped one moves
+  too and stays stopped. A port that is registered to another unit (MinIO's console included) or
+  busy is `PORT_IN_USE` naming the holder, hint `yard service port <i> <port>`; its own port is
+  not a move, and port 0 is `INVALID_ARGUMENT`. Each of the five answers an unknown name with
+  `SERVICE_NOT_FOUND`.
 
 **emailulator** replaced Mailpit on 2026-10-21 (maintainer): it is our own mail catcher, with a
 web UI, a REST API and an MCP server, so agents can read the mail a site sent.

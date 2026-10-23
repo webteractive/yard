@@ -187,9 +187,12 @@ pub fn reserved(app_dirs: &[PathBuf], usual_ports: Option<&BTreeMap<String, u16>
         .collect()
 }
 
-/// `PORT_IN_USE` for `--port <port>`, naming who has it and hinting at the flag. The
-/// registry's own message and hint are about `yard ports set`, which does not fit a flag.
-fn refuse_port(e: YardError, port: u16, registered_to: Option<String>) -> YardError {
+const ADD_PORT_HINT: &str = "pass a different --port, or leave --port out and Yard picks the next free port";
+
+/// `PORT_IN_USE` for a port asked for by name (`--port`, `yard service port`), naming who
+/// has it and hinting at asking again. The registry's own message and hint are about
+/// `yard ports set`, which does not fit either.
+fn refuse_port(e: YardError, port: u16, registered_to: Option<String>, hint: String) -> YardError {
     if e.code != ErrorCode::PortInUse {
         return e;
     }
@@ -197,8 +200,7 @@ fn refuse_port(e: YardError, port: u16, registered_to: Option<String>) -> YardEr
         Some(other) => format!("port {port} is already registered to {other}"),
         None => format!("port {port} is held by {}", holder::label(holder::find_holder(port).as_ref())),
     };
-    let mut refused = YardError::new(ErrorCode::PortInUse, message)
-        .with_hint("pass a different --port, or leave --port out and Yard picks the next free port");
+    let mut refused = YardError::new(ErrorCode::PortInUse, message).with_hint(hint);
     if let Some(data) = e.data {
         refused = refused.with_data(data);
     }
@@ -465,7 +467,7 @@ impl Add {
                             let registered_to = registry.holder_of(port, &name).map(str::to_string);
                             registry
                                 .allocate_exact(&name, port, &is_free)
-                                .map_err(|e| refuse_port(e, port, registered_to))?
+                                .map_err(|e| refuse_port(e, port, registered_to, ADD_PORT_HINT.into()))?
                         }
                         _ => {
                             let usual = usual_port(usual_ports.as_ref(), &key, usual);
@@ -672,6 +674,78 @@ pub async fn remove(
     forget(paths, engine, instance, true, true)?;
     stop_and_wait(reconciler, instance).await?;
     delete_dir(paths, instance, keep_data).await
+}
+
+// ---- Start, stop, port, logs ----
+
+/// `services.stop` and `services.start`: sets `stopped` on the instance's entry, or removes
+/// the key (not `stopped = false`), so the user's file is as it was before the stop. The
+/// caller has checked that the entry exists, and reconciles afterwards.
+pub fn set_stopped(paths: &Paths, instance: &str, stopped: bool) -> Result<(), YardError> {
+    TomlFile::edit(&paths.services_toml(), |file| {
+        if stopped {
+            file.set(&["services", instance, "stopped"], value(true));
+        } else {
+            file.remove(&["services", instance, "stopped"]);
+        }
+        Ok(())
+    })
+}
+
+/// `services.port`: pins the instance's first port (MinIO's API port) to `port`, which must
+/// be unregistered or the instance's own, and free. A refusal names the holder and hints at
+/// asking again. The port is probed and the holder looked up with lsof, so this blocks.
+pub fn move_port(paths: &Paths, engine: Engine, instance: &str, port: u16) -> Result<(), YardError> {
+    let Some((name, ..)) = port_entries(engine, instance).into_iter().next() else {
+        return Err(YardError::internal(format!("{instance} has no port")));
+    };
+    TomlFile::edit(&paths.ports_toml(), |file| {
+        let mut registry = Registry::load(paths)?;
+        // Its own port is busy with its own process, and moving there is not a move.
+        if registry.entries.get(&name).is_some_and(|e| e.port == port) {
+            return Ok(());
+        }
+        let registered_to = registry.holder_of(port, &name).map(str::to_string);
+        let hint = format!("pass a different port: yard service port {instance} <port>");
+        registry
+            .allocate_exact(&name, port, &|p| probe::is_free(p, Proto::Tcp))
+            .map_err(|e| refuse_port(e, port, registered_to, hint))?;
+        registry.save(file);
+        Ok(())
+    })
+}
+
+/// How far back from the end of a log the tail reads each time.
+const TAIL_BLOCK: u64 = 8 * 1024;
+
+/// The last `lines` lines of the file at `path`, read from its end in blocks, so a large
+/// log is never read whole. A file that is not there is no lines.
+pub fn tail(path: &std::path::Path, lines: usize) -> Result<Vec<String>, YardError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let unreadable = |e: std::io::Error| YardError::internal(format!("cannot read {}: {e}", path.display()));
+    if lines == 0 {
+        return Ok(vec![]);
+    }
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(unreadable(e)),
+    };
+    let mut at = file.metadata().map_err(unreadable)?.len();
+    let mut bytes: Vec<u8> = Vec::new();
+    // One newline more than `lines` means the first line kept is a whole one.
+    while at > 0 && bytes.iter().filter(|b| **b == b'\n').count() <= lines {
+        let block = at.min(TAIL_BLOCK);
+        at -= block;
+        file.seek(SeekFrom::Start(at)).map_err(unreadable)?;
+        let mut chunk = vec![0; block as usize];
+        file.read_exact(&mut chunk).map_err(unreadable)?;
+        chunk.extend_from_slice(&bytes);
+        bytes = chunk;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let all: Vec<&str> = text.lines().collect();
+    Ok(all[all.len().saturating_sub(lines)..].iter().map(|l| l.to_string()).collect())
 }
 
 #[cfg(test)]

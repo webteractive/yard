@@ -1053,3 +1053,323 @@ async fn a_failed_add_never_deletes_data_it_reused() {
     assert_eq!(std::fs::read_to_string(&overrides).unwrap(), "bad\n", "the user's file stays");
     d.shutdown().await.unwrap();
 }
+
+// ---- start, stop, restart, logs, port ----
+
+fn services_text(d: &Daemon) -> String {
+    std::fs::read_to_string(d.fx.paths.services_toml()).unwrap()
+}
+
+/// Every method that takes an instance name refuses an unknown one the same way.
+#[tokio::test]
+async fn an_unknown_instance_is_not_found_by_every_method() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    for (method, params) in [
+        ("services.start", json!({"name": "redis"})),
+        ("services.stop", json!({"name": "redis"})),
+        ("services.restart", json!({"name": "redis"})),
+        ("services.logs", json!({"name": "redis"})),
+        ("services.port", json!({"name": "redis", "port": free_port()})),
+    ] {
+        let e = c.call(method, params).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::ServiceNotFound, "{method}: {e:?}");
+    }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_stops_the_unit_and_start_clears_stopped() {
+    let port = free_port();
+    let d = prepared(&pin("redis", port)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    assert!(served(port));
+
+    let info = c.call("services.stop", json!({"name": "redis"})).await.unwrap();
+    assert_eq!((info["state"].clone(), info["stopped_by_user"].clone()), (json!("stopped"), json!(true)));
+    assert!(services_text(&d).contains("stopped = true"), "{}", services_text(&d));
+    assert!(unit(&mut c, "redis").await.is_none(), "reconcile dropped the unit");
+    assert!(wait_until(|| !served(port), Duration::from_secs(10)).await, "the port is free again");
+    assert!(state_is(&mut c, "nginx", "running").await, "everything else runs");
+
+    let info = c.call("services.start", json!({"name": "redis"})).await.unwrap();
+    assert_eq!(info["stopped_by_user"], json!(false));
+    assert_ne!(info["state"], json!("stopped"), "a unit that is starting is not reported stopped: {info}");
+    // The user's file is clean again: the key is gone, not `stopped = false`.
+    assert!(!services_text(&d).contains("stopped"), "{}", services_text(&d));
+    reaches(&mut c, "redis", "running").await.expect("redis runs again");
+    assert!(served(port));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn start_clears_stopped() {
+    let port = free_port();
+    let d = prepared(&pin("redis", port)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reconcile(&mut c).await;
+    assert!(unit(&mut c, "redis").await.is_none());
+
+    c.call("services.start", json!({"name": "redis"})).await.unwrap();
+    assert!(!services_text(&d).contains("stopped"), "{}", services_text(&d));
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    assert!(served(port));
+    // Starting one that runs changes nothing.
+    let info = c.call("services.start", json!({"name": "redis"})).await.unwrap();
+    assert_eq!(info["stopped_by_user"], json!(false));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_survives_restart_of_yardd() {
+    let port = free_port();
+    let d = prepared(&pin("redis", port)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let mut d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    c.call("services.stop", json!({"name": "redis"})).await.unwrap();
+    drop(c);
+
+    d.stop().await.unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reconcile(&mut c).await;
+    assert!(unit(&mut c, "redis").await.is_none(), "still stopped under a new yardd");
+    assert!(!served(port));
+    let list = list(&mut c).await;
+    assert_eq!(
+        (list[0]["state"].clone(), list[0]["stopped_by_user"].clone()),
+        (json!("stopped"), json!(true))
+    );
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_restarts_a_running_instance() {
+    let (mysql, redis) = (free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("redis", redis))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("redis");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "mysql-8.4", "running").await.expect("mysql-8.4 runs");
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    let (mysql_pid, redis_pid) = (pid_of(&mut c, "mysql-8.4").await, pid_of(&mut c, "redis").await);
+
+    let info = c.call("services.restart", json!({"name": "mysql-8.4"})).await.unwrap();
+    assert_eq!(info["name"], json!("mysql-8.4"));
+    assert!(
+        wait_until(|| served(mysql), Duration::from_secs(10)).await
+            && reaches(&mut c, "mysql-8.4", "running").await.is_ok()
+    );
+    assert_ne!(pid_of(&mut c, "mysql-8.4").await, mysql_pid, "the instance was restarted");
+    assert_eq!(pid_of(&mut c, "redis").await, redis_pid, "another instance is left alone");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_refuses_a_stopped_instance() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let e = c.call("services.restart", json!({"name": "redis"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument, "{e:?}");
+    assert!(e.message.contains("redis") && e.message.contains("stopped"), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("yard service start redis"));
+    assert!(services_text(&d).contains("stopped = true"), "restart never clears stopped");
+    reconcile(&mut c).await;
+    assert!(unit(&mut c, "redis").await.is_none(), "and starts nothing");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn port_moves_and_restarts() {
+    let (old, new) = (free_port(), free_port());
+    let d = prepared(&pin("redis", old)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    let pid = pid_of(&mut c, "redis").await;
+    assert!(served(old));
+
+    let info = c.call("services.port", json!({"name": "redis", "port": new})).await.unwrap();
+    assert_eq!(info["ports"], json!([{"name": "redis", "port": new}]));
+    assert_eq!(port_of(&d, "redis"), Some((new, PortMode::Pinned)));
+    assert!(wait_until(|| served(new), Duration::from_secs(10)).await, "redis listens on the new port");
+    assert!(wait_until(|| !served(old), Duration::from_secs(10)).await, "and no longer on the old one");
+    assert_ne!(pid_of(&mut c, "redis").await, pid, "reconcile restarted it");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn port_to_its_own_port_changes_nothing() {
+    let port = free_port();
+    let d = prepared(&pin("redis", port)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    let pid = pid_of(&mut c, "redis").await;
+
+    let info = c.call("services.port", json!({"name": "redis", "port": port})).await.unwrap();
+    assert_eq!(info["ports"], json!([{"name": "redis", "port": port}]));
+    assert_eq!(pid_of(&mut c, "redis").await, pid, "it keeps running where it is");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn port_moves_a_stopped_instance_and_it_stays_stopped() {
+    let (old, new) = (free_port(), free_port());
+    let d = prepared(&pin("redis", old)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let info = c.call("services.port", json!({"name": "redis", "port": new})).await.unwrap();
+    assert_eq!((info["state"].clone(), info["stopped_by_user"].clone()), (json!("stopped"), json!(true)));
+    assert_eq!(port_of(&d, "redis"), Some((new, PortMode::Pinned)));
+    reconcile(&mut c).await;
+    assert!(unit(&mut c, "redis").await.is_none(), "it stays stopped");
+    assert!(!served(new));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn port_moves_only_minios_api_port() {
+    let (api, console, new) = (free_port(), free_port(), free_port());
+    let d = prepared(&(pin("minio", api) + &pin("minio-console", console))).await;
+    d.fx.add_formula("minio");
+    d.fx.add_service("minio", "minio", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let info = c.call("services.port", json!({"name": "minio", "port": new})).await.unwrap();
+    assert_eq!(
+        info["ports"],
+        json!([{"name": "minio", "port": new}, {"name": "minio-console", "port": console}])
+    );
+    // The console is the other entry's: it is not a port this method moves onto.
+    let e = c.call("services.port", json!({"name": "minio", "port": console})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::PortInUse);
+    assert!(e.message.contains("minio-console"), "{}", e.message);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn port_refuses_busy() {
+    let port = free_port();
+    let d = prepared(&pin("redis", port)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let held = support::held_listener();
+    let busy = held.local_addr().unwrap().port();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    let pid = pid_of(&mut c, "redis").await;
+
+    let e = c.call("services.port", json!({"name": "redis", "port": busy})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::PortInUse);
+    assert!(e.message.contains(&busy.to_string()) && e.message.contains("is held by"), "{}", e.message);
+    let hint = e.hint.unwrap_or_default();
+    assert_eq!(hint, "pass a different port: yard service port redis <port>");
+    assert!(!hint.contains("yard ports set") && !hint.contains("auto_fallback"), "{hint}");
+    assert_eq!(port_of(&d, "redis"), Some((port, PortMode::Pinned)), "nothing moved");
+    assert_eq!(pid_of(&mut c, "redis").await, pid, "and nothing restarted");
+    drop(held);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn port_refuses_a_port_another_unit_has() {
+    let (redis, mysql) = (free_port(), free_port());
+    let d = prepared(&(pin("redis", redis) + &pin("mysql-8.4", mysql))).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let e = c.call("services.port", json!({"name": "redis", "port": mysql})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::PortInUse);
+    assert!(e.message.contains("already registered to mysql-8.4"), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("pass a different port: yard service port redis <port>"));
+    assert_eq!(port_of(&d, "redis"), Some((redis, PortMode::Pinned)));
+    let e = c.call("services.port", json!({"name": "redis", "port": 0})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    d.shutdown().await.unwrap();
+}
+
+/// A stopped instance has no unit, so nothing else writes its log.
+fn write_log(d: &Daemon, instance: &str, text: &str) {
+    std::fs::create_dir_all(d.fx.paths.logs_dir()).unwrap();
+    std::fs::write(d.fx.paths.log(instance), text).unwrap();
+}
+
+#[tokio::test]
+async fn logs_tail() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    write_log(&d, "redis", "one\ntwo\nthree\nfour\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let last = c.call("services.logs", json!({"name": "redis", "lines": 2})).await.unwrap();
+    assert_eq!(last, json!(["three", "four"]));
+    let all = c.call("services.logs", json!({"name": "redis"})).await.unwrap();
+    assert_eq!(all, json!(["one", "two", "three", "four"]), "the default is 100 lines");
+    let none = c.call("services.logs", json!({"name": "redis", "lines": 0})).await.unwrap();
+    assert_eq!(none, json!([]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn logs_default_to_the_last_hundred_lines_of_a_large_file() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    // Longer than the tail's read block, with no newline at the end and a line cut in two.
+    let text: String = (1..=5000).map(|i| format!("line {i} {}\n", "x".repeat(40))).collect();
+    write_log(&d, "redis", text.trim_end());
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let got = c.call("services.logs", json!({"name": "redis"})).await.unwrap();
+    let got: Vec<&str> = got.as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect();
+    assert_eq!(got.len(), 100);
+    assert!(got[0].starts_with("line 4901 "), "{}", got[0]);
+    assert!(got[99].starts_with("line 5000 "), "{}", got[99]);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn logs_of_a_missing_file_is_empty() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert!(!d.fx.paths.log("redis").exists());
+
+    let got = c.call("services.logs", json!({"name": "redis"})).await.unwrap();
+    assert_eq!(got, json!([]));
+    d.shutdown().await.unwrap();
+}

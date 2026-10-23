@@ -83,6 +83,12 @@ triggers:
   holder (`port N is held by mysqld (pid …, DBngin)`) and to hint at a different `--port`, since the
   registry's own hint (`yard ports set`, `auto_fallback`) is about something else. A failed or
   cancelled add removes the entries it wrote; `services.remove` removes them with the instance.
+- `services.port` (`services::move_port`) moves an instance's first port only (MinIO's API port; the
+  console is `yard ports set minio-console`), with `allocate_exact` under one `TomlFile::edit` of
+  `ports.toml`, in `spawn_blocking`. Its own current port is not a move (its process holds it, so the
+  probe would refuse), and a refusal goes through the same `refuse_port` as `--port` with a hint at
+  another `yard service port <i> <port>`. Reconcile then restarts the instance on the new port; a
+  stopped one stays stopped.
 - While DBngin.app is installed, 3306, 5432 and 6379 are reserved, and while Postgres.app is
   installed, 5432 (`services::reserved::reserved_ports`, which looks for the app bundle in
   `/Applications` and `~/Applications` and reads none of their files). A probe only sees live

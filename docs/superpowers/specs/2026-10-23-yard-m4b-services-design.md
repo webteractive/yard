@@ -254,9 +254,12 @@ Projects that need a stable MySQL use a versioned line.
   registry function is the "next free at or above" search; no new mode
   **(builder's call)**. This supersedes the `preferred` entries in main spec §7's example.
 - **Moving an instance:** `yard service port <instance> <port>` (for MinIO, the API port;
-  `yard ports set minio-console <port>` moves the console). It refuses a busy port, then
-  restarts the instance. Once DBngin is gone, `yard service port mysql-8.4 3306` puts
-  MySQL back on 3306. Yard never does this by itself.
+  `yard ports set minio-console <port>` moves the console). It refuses a busy port, or one
+  registered to another unit (the console's included), with `PORT_IN_USE` naming the holder
+  and a hint at another `yard service port`; then restarts the instance. A stopped instance's
+  port moves too and it stays stopped, and asking for its own port changes nothing
+  **(builder's call)**. Once DBngin is gone, `yard service port mysql-8.4 3306` puts MySQL
+  back on 3306. Yard never does this by itself.
 - If a user deletes an instance's entry from `ports.toml`, reconcile pins it again the same
   way (usual port, or the next free one, around the reserved ports) and the instance
   keeps running; an instance whose port cannot be had is a reconcile warning with no unit.
@@ -314,9 +317,13 @@ follows the cli-output rule.
   `NEEDS_CONFIRMATION` **(builder's call)**. It refuses with `SERVICE_IN_USE` when a
   linked site's `.yard` asks for it, naming the sites, the way `yard php uninstall`
   refuses a PHP a `.yard` runs. It never runs `brew uninstall`: the keg may be the user's.
-- **`stop`/`start`** write or clear `stopped` and reconcile. **`restart`** is
-  `units.restart` for the instance.
-- **`logs`** prints `logs/<instance>.log`; `-f` follows it through `log_line` events.
+- **`stop`/`start`** write or clear `stopped` and reconcile. `start` removes the key rather
+  than writing `stopped = false`, so the file is clean again. **`restart`** is
+  `units.restart` for the instance; on a stopped instance it refuses (`INVALID_ARGUMENT`, hint
+  `yard service start <instance>`) and never clears `stopped` **(builder's call)**.
+- **`logs`** prints the last 100 lines of `logs/<instance>.log` (`lines` sets the count), read
+  from the end of the file, and nothing while there is no file; `-f` follows it through
+  `log_line` events.
 - **`port`** is §6.
 
 ### 7.3 `yard env`

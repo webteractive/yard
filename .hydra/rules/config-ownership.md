@@ -43,6 +43,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     user's `overrides.conf`, or data left by `remove --keep-data`) stays, and so does `data/` when the
     add reused it. `remove` deletes the whole directory, or all but `data/` with `keep_data`, and only
     once the unit is gone.
+  - `services.stop` sets `stopped = true` on an instance's `services.toml` entry and `services.start`
+    removes the key (never `stopped = false`), both through `TomlFile` (`services::set_stopped`)
+    and then reconcile. Nothing else, `services.restart` included, ever clears it.
   - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`, `services.toml`) are edited only through
     `config::edit::TomlFile` (`toml_edit`), so comments and key order survive. Every
     read-modify-write in the daemon is one `TomlFile::edit(path, |file| …)`, which holds
