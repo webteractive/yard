@@ -29,11 +29,16 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   done: `docs/superpowers/plans/2026-10-20-yard-m3-https.md`, verified on this machine on
   2026-10-21 (`scripts/e2e-m1.sh`, `e2e-m2.sh` and `e2e-m3.sh` passing). The maintainer ran
   `yard trust` on 2026-10-21, so the login keychain trusts this machine's CA. There is no `yard takeover`
-  (dropped 2026-10-20). M4 is split into three plans: M4a, the `.yard` project file
+  (dropped 2026-10-20). M4 is split into four plans: M4a, the `.yard` project file
   and `yard init` (`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`,
   approved 2026-10-22; built on branch `m4a-project-file` and verified on this machine
-  on 2026-10-22 with `scripts/e2e-m1.sh` and `e2e-m4a.sh` passing), then M4b services and
-  `yard env`, and M4c Node, which still need plans.
+  on 2026-10-22 with `scripts/e2e-m1.sh` and `e2e-m4a.sh` passing), then M4b services,
+  `yard env`, `yard info` and brew sources (`yard source trust`), designed in
+  `docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md` (approved 2026-10-23,
+  plan next), and M4c Node, which still needs a plan. The maintainer moved emailulator out of M4b into
+  M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
+  and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
+  approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
@@ -44,7 +49,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Goals (decided — do not re-litigate)
 
-1. Replace Herd on the maintainer's machine (~30 sites in `~/Herd`), then uninstall Herd.
+1. Replace Herd on the maintainer's machine (~30 sites in `~/Herd`), then uninstall Herd. Herd is
+   retired only once Yard is ready for production (maintainer, 2026-10-23); until then both run
+   side by side and Yard never disturbs Herd.
 2. Fix Herd's pain points: PHP versions for legacy projects (7.0–7.3),
    arbitrary extensions, config the user owns and Yard never overwrites, and no
    paywall on services or Node.
