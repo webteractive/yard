@@ -159,7 +159,8 @@ fn php_fpm(args: &[String]) -> ExitCode {
 /// Service formulae (M4b) come from `<prefix>/fake-formulae.json`, an array of the objects
 /// `brew info --json=v2` has under `formulae`: `search --formula "/^<base>(@|$)/"` prints
 /// the matching names, `info --json=v2 <name>...` prints `{"formulae":[<entry>...],"casks":[]}`
-/// (or fails as brew does, when any name is unknown), and `install <name>` makes `opt/<name>/bin/<binaries>` for the
+/// (or fails as brew does, when any name is unknown or from a tap `fake-trust.json` does not
+/// trust; `fake-brew-info-delay` holds each `info` for that many milliseconds), and `install <name>` makes `opt/<name>/bin/<binaries>` for the
 /// engine (`mysqld`; `postgres` and `initdb`; `redis-server`; `minio`), each this fake.
 /// `--version` prints `Homebrew ` and the contents of `fake-brew-version` (default `7.0.10`); `trust --json=v1`
 /// prints `fake-trust.json` (default: nothing trusted), and `trust`/`untrust --formula|--tap
@@ -347,14 +348,29 @@ fn brew_query(prefix: &Path, args: &[String]) -> Option<ExitCode> {
         ("info", "--json=v2") => {
             // Several names answer together, and one brew does not know fails the whole call.
             let mut entries = vec![];
+            // `<prefix>/fake-brew-info-delay` holds milliseconds `info` waits, for a hung brew.
+            if let Some(ms) = std::fs::read_to_string(prefix.join("fake-brew-info-delay"))
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+            {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             for name in args.iter().skip(2) {
-                match fake_formula(prefix, name) {
-                    Some(entry) => entries.push(entry),
-                    None => {
-                        eprintln!("Error: No available formula or cask with the name \"{name}\".");
-                        return Some(ExitCode::from(1));
-                    }
+                let Some(entry) = fake_formula(prefix, name) else {
+                    eprintln!("Error: No available formula or cask with the name \"{name}\".");
+                    return Some(ExitCode::from(1));
+                };
+                // As brew 6 does: a formula of a tap that is not trusted is not loaded.
+                let (tap, full) = (entry["tap"].as_str().unwrap_or_default(), entry["full_name"].as_str());
+                let official = tap.is_empty() || tap.starts_with("homebrew/");
+                let listed = |key: &str, want: &str| {
+                    trust()[key].as_array().is_some_and(|l| l.iter().any(|v| v == want))
+                };
+                if !official && !listed("taps", tap) && !full.is_some_and(|f| listed("formulae", f)) {
+                    eprintln!("Error: {} is from the untrusted tap {tap}.", full.unwrap_or(name));
+                    return Some(ExitCode::from(1));
                 }
+                entries.push(entry);
             }
             println!("{}", serde_json::json!({"formulae": entries, "casks": []}));
             Some(ExitCode::SUCCESS)

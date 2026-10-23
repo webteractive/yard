@@ -7,6 +7,7 @@ use crate::jobs::JobCtx;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
 use yard_core::brew::Brew;
 use yard_core::config::ServicesConfig;
@@ -48,6 +49,9 @@ pub(crate) async fn brew_stdout(brew: &Brew, args: &[&str]) -> Result<(bool, Str
         String::from_utf8_lossy(&out.stderr).into_owned(),
     ))
 }
+
+/// How long doctor and the MinIO keg check wait for brew to answer one question.
+pub const BREW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What `brew --version` and `brew trust --json=v1` say.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,9 +166,10 @@ pub const MINIO_TAP_FORMULA: &str = "minio/stable/minio";
 
 /// Whether the MinIO keg at `opt/minio` is the tap's: when `services.toml` has a MinIO
 /// instance, the formula it records says; with none, brew is asked (`brew info --json=v2
-/// minio`, which describes the formula of the installed keg) and anything it does not
-/// say is the tap's is not. The tap's formula is never reported for a core MinIO.
-async fn minio_from_tap(brew: &Brew, services: Option<&ServicesConfig>) -> bool {
+/// minio`, which describes the formula of the installed keg, within `limit`) and anything it
+/// does not say is the tap's is not: a brew that fails or does not answer in time included.
+/// The tap's formula is never reported for a core MinIO.
+async fn minio_from_tap(brew: &Brew, services: Option<&ServicesConfig>, limit: Duration) -> bool {
     if !brew.prefix.join("opt/minio").exists() {
         return false;
     }
@@ -177,7 +182,8 @@ async fn minio_from_tap(brew: &Brew, services: Option<&ServicesConfig>) -> bool 
     if !recorded.is_empty() {
         return recorded.contains(&MINIO_TAP_FORMULA);
     }
-    let Ok((true, out, _)) = brew_stdout(brew, &["info", "--json=v2", "minio"]).await else { return false };
+    let asked = tokio::time::timeout(limit, brew_stdout(brew, &["info", "--json=v2", "minio"])).await;
+    let Ok(Ok((true, out, _))) = asked else { return false };
     brew_info::parse(&out)
         .ok()
         .and_then(|formulae| formulae.into_iter().next())
@@ -191,6 +197,16 @@ pub async fn installed(
     yard: &YardConfig,
     services: Option<&ServicesConfig>,
 ) -> BTreeSet<String> {
+    installed_within(brew, yard, services, BREW_TIMEOUT).await
+}
+
+/// `installed`, with `limit` as the time brew gets to say whose MinIO keg it is.
+pub async fn installed_within(
+    brew: &Brew,
+    yard: &YardConfig,
+    services: Option<&ServicesConfig>,
+    limit: Duration,
+) -> BTreeSet<String> {
     let exists = |p: &Path| p.exists();
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let mut found: BTreeSet<String> =
@@ -200,7 +216,7 @@ pub async fn installed(
             exts.iter().filter(|(_, e)| e.source == ExtSource::Brew).map(|(m, _)| ext_formula(m, *v)),
         );
     }
-    if minio_from_tap(brew, services).await {
+    if minio_from_tap(brew, services, limit).await {
         found.insert(MINIO_TAP_FORMULA.to_string());
     }
     found

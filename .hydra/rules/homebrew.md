@@ -92,9 +92,15 @@ triggers:
   `HOMEBREW_NO_REQUIRE_TAP_TRUST` or any other security variable): `Brew::job_env()`
   (`HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`) is the only variable Yard sets, and the gate's
   reads set none.
-- **Doctor only asks** (`doctor.rs`, spec M4b §10): `brew --version`, `brew trust --json=v1` and one
-  `brew info --json=v2 <every instance's formula>`, each with a 30 s timeout, and a brew that cannot
-  answer is a `warn`, never a doctor error. It never installs, trusts or runs `brew services`.
+- **Doctor only asks** (`doctor.rs`, spec M4b §10): `brew --version` and `brew trust --json=v1` (read once
+  per run, shared by every check, under one 30 s bound), one `brew info --json=v2` for the instances'
+  formulae (30 s) and, with no MinIO instance, `brew info --json=v2 minio` (30 s, in
+  `sources::installed`, so `sources.list` has it too; a timeout means "not the tap's"). The calls run one
+  after the other, so a hung brew costs up to the sum. A brew that cannot answer is a `warn`, never a doctor
+  error. It never installs, trusts or runs `brew services`. The `info` call names only formulae brew would
+  answer for: homebrew/core's, or a third-party tap's that is already tapped and (brew 6+) trusted. Brew 6
+  refuses the whole call over one untrusted formula, and `info <tap>/<formula>` may tap the tap, which a
+  read-only doctor must never do.
   `sources::installed(brew, yard, services)` is what `sources.list` and `sources:trust` both read:
   MinIO's `minio/stable/minio` counts as installed only when `opt/minio` exists and a MinIO instance
   in `services.toml` records that formula, or, with no instance, `brew info --json=v2 minio` says the

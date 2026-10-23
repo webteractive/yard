@@ -551,15 +551,19 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
   (`opt/<formula>`'s Cellar version, `9.7.1_1` being line `9.7`) is on a different line than the
   instance's name (§5), hint `yard service add mysql --version 8.4`, a line that does not move.
 - `service-deprecated:<i>`: `warn` for an instance whose formula brew has deprecated (with its
-  disable date) or disabled. One `brew info --json=v2` names every instance's formula. A brew
-  that cannot answer (an unknown or untrusted formula fails the whole call, as does a timeout of
+  disable date) or disabled. One `brew info --json=v2` names the instances' formulae, leaving out
+  any brew would refuse: real brew 6 fails the whole call over one formula from an untrusted tap, and
+  `info <tap>/<formula>` may tap a tap, which a read-only doctor must not do. So a formula is named only
+  when it is homebrew/core's, or its tap is already tapped and trusted (or brew predates trust); when trust
+  cannot be read, only homebrew/core's. An untrusted `minio/stable` is `sources:trust`'s to report, and it
+  costs the other instances nothing. A brew that cannot answer the call (an unknown formula, a timeout of
   30 s) is one `warn` with id `service-deprecated`, never an error. A core MinIO is noted here, with
   brew's disable date (§15).
 - `sources:trust`: `warn`, one per installed formula from a Yard tap that brew does not trust (§8),
   hint `yard source trust <formula>`. "Installed" is `sources::installed`: the PHP kegs, the brew
   extensions in `yard.toml`, and MinIO's tap formula only when `services.toml` records
   `minio/stable/minio` for the instance or, with no MinIO instance, `brew info --json=v2 minio`
-  says the keg is the tap's: a core MinIO (`formula = "minio"`) is never reported as an untrusted
+  (30 s; a timeout, like any failure, means not the tap's) says the keg is the tap's: a core MinIO (`formula = "minio"`) is never reported as an untrusted
   `minio/stable/minio`. A brew that cannot be asked is a `warn` with the same id.
 - `sources:brew`: `warn` for a brew older than 6.0 (§8); the trust check then has nothing to read.
 - `sources:env`: `warn` when `client_env` (the CLI's `XDG_CONFIG_HOME` and `HOMEBREW_FORBIDDEN_*`,
@@ -569,7 +573,9 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
 - `php7.0-mysql:<site>`: `warn` for a PHP 7.0 site whose `.yard` asks for MySQL, naming
   "authentication method unknown" (§16).
 
-Doctor never runs `brew install`, `brew trust` or `brew services`: it only asks. A
+Doctor never runs `brew install`, `brew trust` or `brew services`: it only asks. Trust is read once per run
+(`brew --version`, `brew trust --json=v1`, under one 30 s bound) and shared by the checks; each `brew info`
+has its own 30 s, and the calls are sequential, so a hung brew costs up to the sum. A
 `services.toml` that does not parse is the `config` check's to report, and adds no service check.
 
 ## 11. Pre-existing fix

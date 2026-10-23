@@ -5,12 +5,11 @@
 
 use crate::daemon::VERSION;
 use crate::helper_client::HelperClient;
-use crate::sources::{self, TrustRead};
+use crate::sources::{self, BREW_TIMEOUT, TrustRead};
 use crate::state::State;
 use crate::{holder, portscan, services, tls};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use yard_core::brew::Brew;
 use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
@@ -22,14 +21,12 @@ use yard_core::render::overrides_for;
 use yard_core::services::brew_info;
 use yard_core::services::render::init_command;
 use yard_core::services::{Engine, instance_name, plain_line};
+use yard_core::sources::{tap_dir, tap_of};
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
     Check, CheckStatus, DoctorReport, Holder, HolderKind, Need, PortInfo, PortMode, PortStatus, SiteInfo,
     SiteKind, UnitInfo, UnitState, YardError,
 };
-
-/// How long doctor waits for brew to answer one question before it says brew did not.
-const BREW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many of a failed unit's last log lines the `units` check quotes.
 const UNIT_LINES: usize = 5;
@@ -242,12 +239,21 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     }
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
     checks.extend(legacy_php_mysql(sites, &view.projects));
+    let trust = ask_trust(brew).await;
     if let Some(services) = &view.services {
-        let ask =
-            ServiceView { paths, brew, services, units: &input.units, daemon_running: input.daemon_running };
+        let ask = ServiceView {
+            paths,
+            brew,
+            services,
+            trust: &trust,
+            units: &input.units,
+            daemon_running: input.daemon_running,
+        };
         checks.extend(service_checks(&ask, sites, &view.projects).await);
     }
-    checks.extend(sources_checks(brew, view.yard.as_ref(), view.services.as_ref(), &input.client_env).await);
+    checks.extend(
+        sources_checks(brew, &trust, view.yard.as_ref(), view.services.as_ref(), &input.client_env).await,
+    );
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
 }
@@ -365,6 +371,7 @@ struct ServiceView<'a> {
     paths: &'a Paths,
     brew: &'a Brew,
     services: &'a ServicesConfig,
+    trust: &'a Trust,
     units: &'a [UnitInfo],
     daemon_running: bool,
 }
@@ -383,7 +390,7 @@ async fn service_checks(view: &ServiceView<'_>, sites: &[SiteInfo], projects: &P
     for site in sites {
         checks.extend(site_needs(view, site, projects));
     }
-    checks.extend(deprecated(view.brew, view.services).await);
+    checks.extend(deprecated(view.brew, view.services, view.trust).await);
     checks
 }
 
@@ -550,15 +557,16 @@ fn legacy_php_mysql(sites: &[SiteInfo], projects: &Projects) -> Vec<Check> {
 }
 
 /// `service-deprecated:<i>` for each instance whose formula brew has deprecated or
-/// disabled, from one `brew info --json=v2` for all of them. A brew that cannot answer is a
-/// warning, never an error.
-async fn deprecated(brew: &Brew, services: &ServicesConfig) -> Vec<Check> {
+/// disabled, from one `brew info --json=v2` for the formulae it would answer for (`askable`).
+/// A brew that cannot answer is a warning, never an error.
+async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Vec<Check> {
     let mut formulae: Vec<&str> = vec![];
     for entry in services.services.values() {
-        if !formulae.contains(&entry.formula.as_str()) {
+        if !formulae.contains(&entry.formula.as_str()) && askable(brew, trust, &entry.formula) {
             formulae.push(&entry.formula);
         }
     }
+    // With no brew the `brew` check already fails; a formula brew would refuse is left out.
     if formulae.is_empty() || !brew.brew_bin().exists() {
         return vec![];
     }
@@ -616,49 +624,81 @@ async fn deprecated(brew: &Brew, services: &ServicesConfig) -> Vec<Check> {
 
 // ---- Brew sources (spec M4b §8) ----
 
+/// What brew said about trust, asked once per doctor run and shared by the checks.
+enum Trust {
+    /// There is no brew to ask.
+    NoBrew,
+    Read(TrustRead),
+    /// Why brew could not be asked.
+    Unreadable(String),
+}
+
+async fn ask_trust(brew: &Brew) -> Trust {
+    if !brew.brew_bin().exists() {
+        return Trust::NoBrew;
+    }
+    match tokio::time::timeout(BREW_TIMEOUT, sources::read_trust_state(brew)).await {
+        Ok(Ok(read)) => Trust::Read(read),
+        Ok(Err(e)) => Trust::Unreadable(e.message),
+        Err(_) => Trust::Unreadable(format!("brew did not answer within {} s", BREW_TIMEOUT.as_secs())),
+    }
+}
+
+/// Whether `brew info` may name `formula`. Brew 6 refuses the whole call when any formula is
+/// from a tap it does not trust, and `info <tap>/<formula>` may tap the tap, which a
+/// read-only doctor must not do. So a formula is named only when it is homebrew/core's, or its
+/// tap is already tapped and brew would load it (it is trusted, or brew predates trust).
+/// When trust could not be read only homebrew/core's are named.
+fn askable(brew: &Brew, trust: &Trust, formula: &str) -> bool {
+    if tap_of(formula).is_none() {
+        return true;
+    }
+    let loads = match trust {
+        Trust::Read(TrustRead::Store(store)) => store.trusts(formula),
+        Trust::Read(TrustRead::Predates { .. }) => true,
+        Trust::NoBrew | Trust::Unreadable(_) => false,
+    };
+    let tapped = tap_dir(formula).is_some_and(|dir| brew.prefix.join("Library/Taps").join(dir).is_dir());
+    loads && tapped
+}
+
 /// `sources:brew` (brew older than 6.0, with no tap trust), `sources:trust` (an installed
 /// formula from a Yard tap that brew does not trust) and `sources:env` (settings of the
 /// CLI's shell that brew reads and yardd's environment lacks). Brew is only ever asked
 /// questions: doctor never installs, trusts or runs `brew services`.
 async fn sources_checks(
     brew: &Brew,
+    trust: &Trust,
     yard: Option<&YardConfig>,
     services: Option<&ServicesConfig>,
     client_env: &BTreeMap<String, String>,
 ) -> Vec<Check> {
     let mut checks = vec![];
-    if brew.brew_bin().exists() {
-        match tokio::time::timeout(BREW_TIMEOUT, sources::read_trust_state(brew)).await {
-            Ok(Ok(TrustRead::Predates { major })) => checks.push(warn(
-                "sources:brew",
-                format!(
-                    "Homebrew {major} predates tap trust (6.0), so Yard cannot gate installs from third-party taps"
-                ),
-                "brew update",
-            )),
-            Ok(Ok(TrustRead::Store(store))) => {
-                // Without a readable yard.toml the extensions brew installed are not known:
-                // the config check says so.
-                if let Some(yard) = yard {
-                    for formula in sources::installed(brew, yard, services).await {
-                        if !store.trusts(&formula) {
-                            checks.push(warn(
-                                "sources:trust",
-                                format!(
-                                    "{formula} is installed but brew does not trust it, so brew will refuse to install, upgrade or remove it"
-                                ),
-                                format!("yard source trust {formula}"),
-                            ));
-                        }
+    match trust {
+        Trust::NoBrew => {}
+        Trust::Read(TrustRead::Predates { major }) => checks.push(warn(
+            "sources:brew",
+            format!("Homebrew {major} predates tap trust (6.0), so Yard cannot gate installs from third-party taps"),
+            "brew update",
+        )),
+        Trust::Read(TrustRead::Store(store)) => {
+            // Without a readable yard.toml the extensions brew installed are not known: the
+            // config check says so.
+            if let Some(yard) = yard {
+                for formula in sources::installed(brew, yard, services).await {
+                    if !store.trusts(&formula) {
+                        checks.push(warn(
+                            "sources:trust",
+                            format!(
+                                "{formula} is installed but brew does not trust it, so brew will refuse to install, upgrade or remove it"
+                            ),
+                            format!("yard source trust {formula}"),
+                        ));
                     }
                 }
             }
-            Ok(Err(e)) => checks.push(cannot_ask_trust(&e.message)),
-            Err(_) => checks.push(cannot_ask_trust(&format!(
-                "brew did not answer within {} s",
-                BREW_TIMEOUT.as_secs()
-            ))),
         }
+        Trust::Unreadable(why) => checks.push(cannot_ask_trust(why)),
     }
     let own = |key: &str| std::env::var(key).ok();
     let differing = env_differences(client_env, &own);

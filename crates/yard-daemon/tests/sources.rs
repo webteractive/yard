@@ -517,6 +517,8 @@ async fn the_minio_tap_formula_is_listed_when_an_instance_or_brew_says_the_keg_i
     let d = prepared("").await;
     d.fx.add_formula("minio");
     describe_minio(&d, "minio/stable/minio", "minio/stable");
+    // brew describes a tap's formula only while it trusts the tap.
+    set_trust(&d, &["minio/stable"], &[]);
     let d = d.start().await;
     assert_eq!(minio_rows(&d).await, ["minio/stable/minio"]);
     d.shutdown().await.unwrap();
@@ -534,4 +536,29 @@ async fn the_minio_tap_formula_is_listed_when_an_instance_or_brew_says_the_keg_i
     let d = d.start().await;
     assert_eq!(minio_rows(&d).await, Vec::<String>::new());
     d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn asking_brew_whether_minio_is_the_taps_is_bounded() {
+    use std::time::{Duration, Instant};
+    use yard_core::brew::Brew;
+    use yard_core::config::load_yard;
+
+    let d = prepared("").await;
+    d.fx.add_formula("minio");
+    describe_minio(&d, "minio/stable/minio", "minio/stable");
+    set_trust(&d, &["minio/stable"], &[]);
+    let brew = Brew::new(d.fx.brew.path());
+    let (yard, _) = load_yard(&d.fx.paths).unwrap();
+
+    // brew answers: the keg is the tap's.
+    let found = yard_daemon::sources::installed_within(&brew, &yard, None, Duration::from_secs(10)).await;
+    assert!(found.contains("minio/stable/minio"), "{found:?}");
+
+    // brew hangs: the answer is "not the tap's", and the call returns when the bound does.
+    std::fs::write(d.fx.brew.path().join("fake-brew-info-delay"), "20000").unwrap();
+    let started = Instant::now();
+    let found = yard_daemon::sources::installed_within(&brew, &yard, None, Duration::from_millis(300)).await;
+    assert!(!found.contains("minio/stable/minio"), "{found:?}");
+    assert!(started.elapsed() < Duration::from_secs(5), "waited {:?}", started.elapsed());
 }

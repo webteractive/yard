@@ -984,3 +984,66 @@ async fn doctor_takes_null_absent_and_filled_in_params() {
     assert!(!env.message.contains(&format!("rpc-value-{id}")), "{env:?}");
     d.shutdown().await.unwrap();
 }
+
+fn minio_tap(deprecated_mysql: bool) -> Value {
+    let mysql = json!({
+        "name": "mysql@8.0", "full_name": "mysql@8.0", "tap": "homebrew/core", "versions": {"stable": "8.0.46"},
+        "deprecated": deprecated_mysql, "disable_date": "2027-04-30"
+    });
+    let minio = json!({
+        "name": "minio", "full_name": "minio/stable/minio", "tap": "minio/stable", "versions": {"stable": "2025.9.7"}
+    });
+    json!([mysql, formula("redis", "8.0.1"), minio])
+}
+
+fn info_calls(e: &Env) -> Vec<String> {
+    e.brew_log().lines().filter(|l| l.starts_with("info --json=v2")).map(String::from).collect()
+}
+
+#[tokio::test]
+async fn the_one_brew_info_call_leaves_out_formulae_brew_would_refuse() {
+    let e = env().await;
+    e.instance("mysql-8.0", "mysql@8.0", false);
+    e.data("mysql-8.0");
+    e.instance("redis", "redis", false);
+    e.instance("minio", "minio/stable/minio", false);
+    e.formulae(minio_tap(true));
+    let units = || vec![running("mysql-8.0"), running("redis"), running("minio")];
+
+    // minio/stable is not trusted: brew would refuse the whole call, so it is not asked for.
+    e.trust(&["shivammathur/php"], &[]);
+    let report = e.with(units(), &[]).await;
+    let c = only(&report, "service-deprecated:mysql-8.0");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(!report.checks.iter().any(|c| c.id == "service-deprecated"), "no failure warn: {report:#?}");
+    assert_eq!(info_calls(&e), ["info --json=v2 mysql@8.0 redis"], "one call, naming no minio");
+    assert_eq!(only(&report, "sources:trust").hint.as_deref(), Some("yard source trust minio/stable/minio"));
+
+    // Trusted but not tapped: asking could make brew tap it, which a read-only doctor must not.
+    std::fs::remove_file(e.fx.brew.path().join("fake-brew.log")).unwrap();
+    e.trust(&["shivammathur/php", "minio/stable"], &[]);
+    let report = e.with(units(), &[]).await;
+    assert_eq!(info_calls(&e), ["info --json=v2 mysql@8.0 redis"], "an untapped tap is not asked about");
+    assert_eq!(only(&report, "service-deprecated:mysql-8.0").status, CheckStatus::Warn);
+
+    // Trusted and tapped: asked about with the others, still one call.
+    std::fs::remove_file(e.fx.brew.path().join("fake-brew.log")).unwrap();
+    std::fs::create_dir_all(e.fx.brew.path().join("Library/Taps/minio/homebrew-stable")).unwrap();
+    let report = e.with(units(), &[]).await;
+    assert_eq!(info_calls(&e), ["info --json=v2 minio/stable/minio mysql@8.0 redis"]);
+    assert_eq!(only(&report, "service-deprecated:mysql-8.0").status, CheckStatus::Warn);
+    not_present(&report, "sources:trust");
+}
+
+#[tokio::test]
+async fn trust_is_read_once_per_doctor_run() {
+    let e = env().await;
+    e.instance("redis", "redis", false);
+    e.formulae(json!([formula("redis", "8.0.1")]));
+
+    e.with(vec![running("redis")], &[]).await;
+
+    let log = e.brew_log();
+    let count = |call: &str| log.lines().filter(|l| *l == call).count();
+    assert_eq!((count("--version"), count("trust --json=v1")), (1, 1), "{log}");
+}
