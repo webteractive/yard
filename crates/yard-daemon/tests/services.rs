@@ -10,12 +10,13 @@ use std::time::{Duration, Instant};
 use support::daemon::{Client, prepared, run_job};
 use support::{Fixture, fast, free_port, served, spawn_helper, wait_until};
 use yard_core::brew::Brew;
+use yard_core::ports::Registry;
 use yard_daemon::events::EventBus;
 use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::services::service_info;
 use yard_daemon::supervisor::Supervisor;
-use yard_proto::{ServiceState, UnitState};
+use yard_proto::{PortMode, ServiceState, UnitState};
 
 /// A `ports.toml` line pinning `unit` to `port`.
 fn pin(unit: &str, port: u16) -> String {
@@ -351,7 +352,16 @@ async fn service_info_reports_state_ports_console_and_users() {
         resolver.path().to_path_buf(),
     )
     .unwrap()
-    .with_services(None, vec![]);
+    // Whatever were left unpinned would start at a free port, never at 3306, 6379 or 9000.
+    .with_services(
+        Some(
+            ["mysql", "postgres", "redis", "minio", "minio-console"]
+                .into_iter()
+                .map(|key| (key.to_string(), free_port()))
+                .collect(),
+        ),
+        vec![],
+    );
     let report = rec.reconcile().await.unwrap();
     // The entries are pinned, so nothing is allocated and nothing binds an engine's usual port.
     assert!(report.warnings.iter().all(|w| !w.contains("is missing")), "{:?}", report.warnings);
@@ -407,4 +417,92 @@ async fn service_info_reports_state_ports_console_and_users() {
     assert_eq!(service_info(&snapshot, &sup, "minio").unwrap().console, None);
     sup.shutdown().await;
     assert!(sup.list().iter().all(|u| u.state == UnitState::Stopped));
+}
+
+#[tokio::test]
+async fn redis_gets_its_data_directory_and_the_databases_do_not() {
+    // Real redis-server exits at config load when `dir` is missing; the databases' own init
+    // wants an empty or absent data directory, and MinIO makes its own.
+    let (redis, mysql) = (free_port(), free_port());
+    let d = prepared(&(pin("redis", redis) + &pin("mysql-8.4", mysql))).await;
+    d.fx.add_formula("redis");
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_service("redis", "redis", false);
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    assert!(reaches(&mut c, "redis", "running").await.is_ok(), "redis runs only with its dir");
+    assert!(d.fx.paths.service_data("redis").is_dir());
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    assert!(!d.fx.paths.service_data("mysql-8.4").exists(), "mysqld --initialize wants it absent");
+    d.shutdown().await.unwrap();
+}
+
+async fn pid_of(c: &mut Client, name: &str) -> u64 {
+    unit(c, name).await.and_then(|u| u["pid"].as_u64()).unwrap_or_else(|| panic!("{name} has a pid"))
+}
+
+#[tokio::test]
+async fn a_moved_port_restarts_only_its_instance() {
+    let (mysql, moved, redis) = (free_port(), free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("redis", redis))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("redis");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "mysql-8.4", "running").await.expect("mysql-8.4 runs");
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    let (mysql_pid, redis_pid) = (pid_of(&mut c, "mysql-8.4").await, pid_of(&mut c, "redis").await);
+
+    // `yard service port` edits ports.toml like this; the rendered my.cnf changes with it.
+    let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    let was = format!("\"mysql-8.4\" = {{ port = {mysql},");
+    assert!(ports.contains(&was), "{ports}");
+    std::fs::write(
+        d.fx.paths.ports_toml(),
+        ports.replace(&was, &format!("\"mysql-8.4\" = {{ port = {moved},")),
+    )
+    .unwrap();
+
+    assert!(wait_until(|| served(moved), Duration::from_secs(10)).await, "mysql-8.4 listens on the new port");
+    let conf = std::fs::read_to_string(d.fx.paths.service_conf("mysql-8.4", "my.cnf")).unwrap();
+    assert!(conf.contains(&format!("port = {moved}")), "{conf}");
+    assert_ne!(pid_of(&mut c, "mysql-8.4").await, mysql_pid, "the instance was restarted");
+    assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    assert_eq!(pid_of(&mut c, "redis").await, redis_pid, "another instance is left alone");
+    assert!(served(redis));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_deleted_port_entry_is_pinned_again() {
+    let (mysql, redis) = (free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("redis", redis))).await;
+    let usual = d.opts.usual_ports.as_ref().unwrap()["mysql"];
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    d.fx.add_service("redis", "redis", true);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "mysql-8.4", "running").await.expect("mysql-8.4 runs");
+
+    let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    let kept: String =
+        ports.lines().filter(|l| !l.starts_with("\"mysql-8.4\"")).map(|l| format!("{l}\n")).collect();
+    assert_ne!(kept, ports);
+    std::fs::write(d.fx.paths.ports_toml(), kept).unwrap();
+
+    // Reconcile pinned it from the engine's usual port (a free port in tests) and saved it.
+    let pinned = || {
+        Registry::load(&d.fx.paths)
+            .ok()
+            .and_then(|r| r.entries.get("mysql-8.4").copied())
+            .is_some_and(|e| e.port == usual && e.mode == PortMode::Pinned)
+    };
+    assert!(wait_until(pinned, Duration::from_secs(10)).await, "{:?}", Registry::load(&d.fx.paths));
+    assert!(wait_until(|| served(usual), Duration::from_secs(10)).await, "mysql-8.4 runs on the new pin");
+    d.shutdown().await.unwrap();
 }

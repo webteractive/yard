@@ -29,6 +29,7 @@ use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site, service_site, setup_page};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
+use yard_core::services::Engine;
 use yard_core::services::render::config_file;
 use yard_core::services::reserved::reserved_ports;
 use yard_core::shim::SHIMS;
@@ -194,7 +195,7 @@ impl Reconciler {
     pub async fn ca_info(&self, security: &Path) -> Result<CaInfo, YardError> {
         let paths = {
             let state = self.state.lock().await;
-            tls::ensure_ca(&state.paths, &ca_user(), OffsetDateTime::now_utc())?;
+            tls::ensure_ca(&state.paths, &services::macos_user(), OffsetDateTime::now_utc())?;
             state.paths.clone()
         };
         let cert = paths.ca_cert();
@@ -277,7 +278,7 @@ impl Reconciler {
             &mut resolution.sites,
             &projects,
             &yard,
-            &services_cfg,
+            Some(&services_cfg),
             &state.brew,
             &state.paths,
         );
@@ -349,7 +350,7 @@ impl Reconciler {
             let secure = yard.secure_by_default;
             rendered.insert(paths.nginx_service("minio"), service_site(&ctx, "minio", console.port, secure));
         }
-        prepare_dirs(&paths, &resolution.sites, &inis, services_cfg.services.keys()).map_err(io_error)?;
+        prepare_dirs(&paths, &resolution.sites, &inis, &services_cfg).map_err(io_error)?;
 
         // 6. Write.
         let mut hashes = state.hashes.clone();
@@ -673,7 +674,7 @@ fn issue_certs(
         return Ok(false);
     }
     let now = OffsetDateTime::now_utc();
-    tls::ensure_ca(paths, &ca_user(), now)?;
+    tls::ensure_ca(paths, &services::macos_user(), now)?;
     let ca = std::fs::read(paths.ca_cert()).ok();
     let mut issued = false;
     for site in secure {
@@ -723,11 +724,6 @@ fn missing_keg(brew: &Brew, instance: &str, formula: &str, program: &Path) -> Op
     } else {
         format!("{instance}: {} is missing (brew install {formula})", keg.display())
     })
-}
-
-/// Who the CA's name says it belongs to: `Yard CA (<user>)`.
-fn ca_user() -> String {
-    std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "user".into())
 }
 
 /// Removes every `certs/<name>.{pem,key}` whose site is not secure, and any `.yard-tmp`
@@ -814,11 +810,11 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
 
 /// Directories nginx and the units write into, and the user-owned files the generated
 /// configs include, which must exist before `nginx -t` or a unit starts.
-fn prepare_dirs<'a>(
+fn prepare_dirs(
     paths: &Paths,
     sites: &[SiteInfo],
     versions: &BTreeSet<PhpVersion>,
-    instances: impl Iterator<Item = &'a String>,
+    services: &ServicesConfig,
 ) -> std::io::Result<()> {
     for dir in [
         paths.logs_dir(),
@@ -836,9 +832,14 @@ fn prepare_dirs<'a>(
     for v in versions {
         generated::ensure_user_file(&paths.php_overrides(*v), USER_OWNED_INI)?;
     }
-    // Empty, so mysqld and redis have a file to include and the user's first line is theirs.
-    for instance in instances {
+    for (instance, entry) in &services.services {
+        // Empty, so mysqld and redis have a file to include and the user's first line is theirs.
         generated::ensure_user_file(&paths.service_overrides(instance), "")?;
+        // redis-server exits at config load when its `dir` is missing. MySQL's and PostgreSQL's
+        // init needs the data directory empty or absent, and MinIO makes its own.
+        if entry.engine == Engine::Redis {
+            std::fs::create_dir_all(paths.service_data(instance))?;
+        }
     }
     Ok(())
 }

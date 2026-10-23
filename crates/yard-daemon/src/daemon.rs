@@ -141,7 +141,9 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| YardError::internal(format!("cannot set the mode of {}: {e}", socket.display())))?;
 
-    // A service a killed yardd left running holds its port and data directory.
+    // A service a killed yardd left running holds its port and data directory. This runs one
+    // instance after another, up to the stop timeout (30 s) for each orphan that ignores its
+    // stop signal, before the watchers start; the socket is bound, so clients wait meanwhile.
     for (instance, pid) in services::stop_orphans(&opts.paths, &ctx.brew).await {
         tracing::warn!("stopped {instance} (pid {pid}), which an earlier yardd left running");
     }

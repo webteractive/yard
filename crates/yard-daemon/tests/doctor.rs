@@ -499,3 +499,23 @@ async fn doctor_reports_project_files() {
     assert_eq!(c.hint.as_deref(), Some("yard ext enable xdebug --php 8.4"));
     assert!(!report.checks.iter().any(|c| c.id == "yard-php-ignored:met"));
 }
+
+#[tokio::test]
+async fn an_unreadable_services_toml_makes_no_site_a_service_need() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.yard_site("blog", "[services]\nmysql = \"8.4\"\n", &dir);
+
+    // Readable and empty, there is no instance, so the site needs one.
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "project-file:blog");
+    assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
+    assert_eq!(c.message, "blog needs MySQL 8.4");
+
+    // Unreadable, the instance may be in the file: that is the config check's to say.
+    std::fs::write(e.fx.paths.services_toml(), "bogus = 1\n").unwrap();
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "project-file:blog");
+    assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+    assert_eq!(only(&report, "config").status, CheckStatus::Fail);
+}

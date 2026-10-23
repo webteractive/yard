@@ -28,7 +28,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     (`minio.<tld>`, left out when a site has the name), which name the instance's
     `overrides.conf`; `nginx/services` is a managed directory, so a block nothing renders any more
     is removed. Reconcile renders them with the instance's pinned ports from the registry, never
-    the engines' usual ones, and restarts the instance when its config file changed.
+    the engines' usual ones, and restarts the instance when its config file changed. It creates
+    `services/<i>/data` for Redis only (redis-server exits at config load without its `dir`); the
+    databases' init needs theirs absent or empty, and MinIO makes its own.
   - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`,
     `services/<instance>/overrides.conf`)
     are created empty once with `ensure_user_file` and never written again, except

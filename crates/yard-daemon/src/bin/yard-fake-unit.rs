@@ -492,10 +492,18 @@ fn postgres(args: &[String]) -> ExitCode {
     listen_tcp(port)
 }
 
-/// `redis-server <conf>`; listens on the `port` in the conf.
+/// `redis-server <conf>`; listens on the `port` in the conf. Like real redis it exits 1 at
+/// config load when the conf's `dir` is not a directory.
 fn redis_server(args: &[String]) -> ExitCode {
     let Some(conf) = args.first() else { return fail("redis-server needs a config file".into()) };
     let text = std::fs::read_to_string(conf).unwrap_or_default();
+    let dir = text.lines().find_map(|l| Some(l.trim().strip_prefix("dir ")?.trim().trim_matches('"')));
+    if let Some(dir) = dir
+        && !Path::new(dir).is_dir()
+    {
+        eprintln!("Can't chdir to '{dir}': No such file or directory");
+        return ExitCode::from(1);
+    }
     listen_tcp(text.lines().find_map(|l| l.trim().strip_prefix("port ")?.trim().parse().ok()))
 }
 

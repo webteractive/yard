@@ -83,7 +83,6 @@ impl View {
                 .flatten()
                 .next()
                 .cloned();
-        let services = services.unwrap_or_default();
         let tld = match (&yard, &registry) {
             (Ok(y), Ok(_)) => Some(y.effective_tld().to_string()),
             _ => None,
@@ -97,7 +96,10 @@ impl View {
                 projects = crate::project::read_projects(s);
                 let mut resolution =
                     sites::resolve(y, s, &projects, tld, http, https, &|p: &Path| p.is_dir());
-                crate::project::fill_needs(&mut resolution.sites, &projects, y, &services, brew, paths);
+                // A services.toml that does not parse is `config_error`'s to report: reading it as
+                // empty would call every `[services]` entry a missing instance.
+                let services = services.as_ref().ok();
+                crate::project::fill_needs(&mut resolution.sites, &projects, y, services, brew, paths);
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }

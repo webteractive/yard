@@ -193,7 +193,9 @@ Projects that need a stable MySQL use a versioned line.
 
 ### 5.3 Redis
 
-- No initialization. Run: `redis-server <root>/services/<i>/redis.conf`, generated with
+- No initialization, but reconcile creates `services/<i>/data` (redis-server exits at config
+  load when `dir` is missing; MySQL and PostgreSQL need theirs absent or empty for init, and
+  MinIO makes its own). Run: `redis-server <root>/services/<i>/redis.conf`, generated with
   `bind 127.0.0.1`, `port`, `dir <data>`, `daemonize no`, and a last line
   `include <root>/services/<i>/overrides.conf`.
 - Health: TCP connect. Stop: SIGTERM.

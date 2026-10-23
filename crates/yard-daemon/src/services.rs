@@ -72,7 +72,8 @@ pub async fn stop_orphans(paths: &Paths, brew: &Brew) -> Vec<(String, u32)> {
     stopped
 }
 
-/// The macOS user, PostgreSQL's superuser.
+/// The macOS user: PostgreSQL's superuser, and who the CA's name (`Yard CA (<user>)`) says
+/// it belongs to.
 pub fn macos_user() -> String {
     std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "user".into())
 }

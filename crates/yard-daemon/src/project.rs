@@ -52,12 +52,14 @@ pub fn read_projects(sites: &SitesConfig) -> Projects {
 /// Sets `needs` on each site served from a `.yard`. An extension is present when
 /// `yard.toml` manages it for the version (on or off), brew's `conf.d` loads it, or the
 /// version's PHP has it compiled in. A `[services]` entry is met by an instance in
-/// `services.toml`, running or not: a stopped or failed instance is not a need.
+/// `services.toml`, running or not: a stopped or failed instance is not a need. `services`
+/// is `None` when `services.toml` does not parse, and then no service is a need, since an
+/// instance may well exist in the file nobody could read.
 pub fn fill_needs(
     sites: &mut [SiteInfo],
     projects: &Projects,
     yard: &YardConfig,
-    services: &ServicesConfig,
+    services: Option<&ServicesConfig>,
     brew: &Brew,
     paths: &Paths,
 ) {
@@ -85,6 +87,6 @@ pub fn fill_needs(
                 || loaded.contains(&m.to_lowercase())
         };
         site.needs = project::needs(file, v, &installed, &has);
-        site.needs.extend(project::service_needs(file, services));
+        site.needs.extend(services.into_iter().flat_map(|s| project::service_needs(file, s)));
     }
 }
