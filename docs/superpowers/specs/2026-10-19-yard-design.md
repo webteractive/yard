@@ -134,6 +134,7 @@ Root: `~/Library/Application Support/Yard/`
 yard.toml                     # global: default php, tld override, secure_by_default, [php."<ver>".extensions]
 sites.toml                    # links, per-site php, secure flag, docroot overrides, proxies
 ports.toml                    # port registry and active profile (§7)
+services.toml                 # the service instances (§8.2), one [services."<instance>"] table each
 state/hashes.json             # hash of every generated file as Yard last wrote it
 state/php-modules.json        # each PHP keg's compiled-in modules (`php -n -m`), keyed by its canonical path
 dnsmasq/dnsmasq.conf          # generated
@@ -145,13 +146,17 @@ php/<ver>/pecl.conf           # generated before each pecl run: a PEAR user conf
 nginx/nginx.conf              # generated
 nginx/sites/<site>.conf       # generated
 nginx/overrides/<site>.conf   # USER-OWNED, included inside the site's server block
+nginx/services/<name>.conf    # generated: minio.<tld>, the console proxied (a managed directory)
 nginx/default/index.html      # generated site list served for unknown hosts
 nginx/setup/<site>.html       # generated setup page for a site whose .yard is not met (503)
 ca/yard-ca.pem, ca/yard-ca.key
 certs/<site>.pem, certs/<site>.key
-services/<name>/data/         # service data dirs
+certs/services/<name>.pem, .key    # certificates for service hostnames (minio.<tld> once secured)
+services/<instance>/data/     # the engine's data dir; never re-initialized or deleted by Yard except `service remove`
+services/<instance>/my.cnf    # generated (MySQL), or redis.conf (Redis); PostgreSQL and MinIO have none
+services/<instance>/overrides.conf  # USER-OWNED, created empty once, included by my.cnf / redis.conf / nginx's minio block
 logs/                         # rotated logs per unit
-run/                          # sockets, pid files
+run/                          # sockets, pid files (run/<instance>.pid for a service)
 bin/                          # shims: php, composer, pecl, phpize, php-config, node, npm, npx
 yardd.sock
 ```
@@ -537,9 +542,10 @@ the app shows them inline with an action button when the hint maps to a command.
 - `yard --version` and `yard version --json` report CLI, daemon, helper and
   protocol versions plus build commit.
 - A command that would install something (`yard init`, and `yard link` for a project
-  whose `.yard` needs a PHP or extension) lists what it would install and asks on a
+  whose `.yard` needs a PHP, extension or service) lists what it would install and asks on a
   terminal; `--yes` skips the question, and without a terminal it installs nothing and
-  exits 1 with `NEEDS_INSTALL` (project-file spec §6).
+  exits 1 with `NEEDS_INSTALL` (project-file spec §6). Trust is a separate question
+  (`FORMULA_UNTRUSTED`, M4b spec §8): `--yes` never answers it.
 
 ## 7. Port registry
 
@@ -643,7 +649,7 @@ The lines are brew's: `add` runs `brew search --formula "/^<base>(@|$)/"` and `b
 --json=v2` for each name found, once per add. A formula brew reports as disabled is not a
 line; a deprecated one is, with a job line naming brew's disable date.
 
-As built (daemon methods; the CLI is M4b Task 13):
+As built (daemon methods, and the CLI commands that call them):
 
 - `services.list` answers a `ServiceInfo` per instance in `services.toml`.
 - `services.add { engine, version?, port? }` is a job. Before it starts: an unknown engine,
@@ -697,9 +703,12 @@ web UI, a REST API and an MCP server, so agents can read the mail a site sent.
   is serving mail.
 - `yard env` prints `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1` and `MAIL_PORT=<smtp>`.
 
-Commands: `yard service add <engine> [--version] [--port]`,
-`yard service remove <instance> [--keep-data]`, `yard service start|stop|restart|logs <instance>`,
-`yard services` (list).
+Commands: `yard services` (list), `yard service add <engine> [--version] [--port] [--yes]`,
+`yard service remove <instance> [--keep-data] [--yes]`,
+`yard service start|stop|restart <instance>`, `yard service logs <instance> [-f] [-n]`,
+`yard service port <instance> <port>`, `yard env [--site] [--service]`, `yard info [site]`,
+`yard sources` and `yard source trust|untrust <formula|tap> [--tap]`. The M4b design spec
+(§7 and §8) has each command's output and confirmation rules.
 
 Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 (`DB_*`, `REDIS_*`, `MAIL_*`) using actual ports; it never writes files.
@@ -752,6 +761,14 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   `scripts/e2e-m4a.sh` adds the `.yard`: a scratch project's file picks its PHP, an edit
   to it is served within seconds, a PHP that is not installed gives the 503 setup page
   naming `yard init`, and `yard isolate` is refused. It installs nothing.
+  `scripts/e2e-m4b.sh` adds services: `mysql-8.4`, `postgres-17`, `redis` and `minio` are
+  added (brew-installing what is missing, so it is asked for first), each answers with its
+  own client by absolute keg path, `yard env` prints the ports `yard services` reports,
+  `minio.<tld>` answers 200, brew's installed minio is the formula `services.toml` records,
+  a scratch project's `[services]` entry shows met in `yard info`, and every instance it
+  added is removed. It stops before changing anything if one of those instances already
+  exists, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails if
+  the listeners on 3306, 5432 and 6379 (DBngin, Postgres.app) or Herd's resolver changed.
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 
@@ -789,7 +806,9 @@ Each milestone is usable on its own and gets its own implementation plan.
      file's `[services]`, and installs from third-party taps gated on brew's own trust
      (`yard sources`, `yard source trust|untrust`). Designed in
      `docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md`, which refines §7
-     and §8.2 for services.
+     and §8.2 for services, and planned in
+     `docs/superpowers/plans/2026-10-23-yard-m4b-services.md`. Built on branch
+     `m4b-services` (2026-10-24); `scripts/e2e-m4b.sh` has yet to run on the maintainer's machine.
    - **M4c Node:** the fnm wrapper and the file's `node`.
    - **M4d emailulator** (moved out of M4b by the maintainer on 2026-10-23): emailulator as a
      service, `mail.<tld>`, its `MAIL_*` lines and `emailulator = true` in the file.

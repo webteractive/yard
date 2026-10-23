@@ -397,6 +397,7 @@ Reported, not changed here:
 - Main spec §8.2 says Yard finds emailulator "on the user's PATH"; yardd does not have the
   user's PATH (§5.1).
 - The tunnels spec §11 still says `mailpit-http`.
-- Yard's proxy block sends `X-Forwarded-Host $host`, which drops the port. An app that
-  compares `Origin` with it, as emailulator does, refuses state-changing requests through
-  any `yard proxy` on 8080/8443.
+- Yard's proxy block used to send `X-Forwarded-Host $host`, which drops the port, so an app
+  that compares `Origin` with it, as emailulator does, refused state-changing requests through
+  any `yard proxy` on 8080/8443. Fixed in M4b (2026-10-24): `proxy_location` sends
+  `X-Forwarded-Host $http_host` for every proxy block, sites and services alike.

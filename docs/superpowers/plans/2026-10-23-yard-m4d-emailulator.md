@@ -9,6 +9,43 @@
 > Interfaces block is an assumption (spec §14). Re-check each one against the approved
 > M4b plan and rename here before Task 1 starts.
 
+> **M4b re-check (2026-10-24, M4b built on branch `m4b-services`).** The names below were
+> assumptions; M4b built these, so rename them in the Interfaces blocks before Task 1:
+>
+> - `Need::Service { service, version }` is `Need::Service { engine: String, version: Option<String> }`
+>   (`None` is `true`). `ServiceInfo` is `{ name, engine, version, formula, ports, state,
+>   stopped_by_user, account, console, used_by }`; M4d's `managed_by` and `web_url` are added to
+>   that (`console` already holds MinIO's URL, so `web_url` may be that field renamed or reused).
+> - The engine table is the `yard_core::services::Engine` enum (`ALL`, `key()`, `usual_ports()`,
+>   `account()`, `default_line()`, plus the free functions `env_lines` and `instance_name` in
+>   `services/engine.rs` and `command` in `services/render.rs`); `Engine` derives serde as its key, so a fifth engine
+>   changes `ALL`, `yard_proto::engine_display`, the reserved-port tables and the tests that
+>   pass free ports through the table's override. `ServiceEntry` is `{ engine, version, formula,
+>   stopped }` with `deny_unknown_fields`, so M4d's `path` field is a new key there and in the parser.
+> - `Registry::ensure_usual` does not exist. Ports are allocated once at `add` with
+>   `Registry::allocate_from(unit, usual, reserved, is_free)` (the first free port at or above
+>   the usual one) or `allocate_exact` (`--port`, never moves on), and recorded `pinned`;
+>   `reserved_ports` names what DBngin and Postgres.app hold. Use these, or add an `external`
+>   path beside them for the agent's ports.
+> - `UnitSpec.ports: Vec<(u16, Proto)>`, `stop_timeout` and `pid_file` already exist (M4b Task 6);
+>   nothing to change in the supervisor. `services.port` moves an instance's **first** port only
+>   (`allocate_exact`); a second port moves with `yard ports set`.
+> - `env.print { path?, site?, service? }` answers `Vec<EnvBlock { instance, lines, note }>`;
+>   M4d's "warnings in the result" is `note` on the block (the CLI prints notes as `# ...`), and
+>   `yard env` has no stderr warning channel beyond what `commands/env.rs` prints.
+> - **Service nginx files map to the instance's own override.** `render::overrides_for` sends
+>   `nginx/services/<name>.conf` to `services/<name>/overrides.conf` (created empty once, included
+>   by `service_site`), not to `nginx_override("mail")`. Either keep that for emailulator, so its
+>   file names `services/emailulator/overrides.conf`, or special-case `mail` and change this plan's
+>   Task 3 interface and header test.
+> - `X-Forwarded-Host $http_host` is already fixed in M4b: `proxy_location` in
+>   `crates/yard-core/src/render/nginx.rs` sends it for every proxy block, `yard proxy` sites
+>   included (spec §16's last item is stale and is corrected there).
+> - `nginx::service_site(ctx, name, upstream_port, secure)` always sends `Host 127.0.0.1:<port>`
+>   (the upstream) and proxies to `http://` only. `mail.<tld>` wants that same `Host`, so it can
+>   reuse it; M4d needs a toggle on the function (or a sibling) if mail must send another `Host`,
+>   and a `proxy_ssl_verify off` variant for `MailHost.upstream_tls`.
+
 **Goal:** A project on Yard reaches emailulator without looking up a port: `yard env` prints the `MAIL_*` lines, `mail.<tld>` opens the web UI, doctor says who serves mail, and `emailulator = true` in `.yard` is met on `yard init`.
 
 **Architecture:** `yard-core` gains a pure `emailulator` module (find the binary, parse `--version` and `service status --json`, decide who owns mail, the env lines) and an emailulator engine for M4b's engine table. yardd asks the binary about its LaunchAgent on each reconcile and port scan, records the ports as `external` registry entries while the agent owns mail, and renders `nginx/services/emailulator.conf` for `mail.<tld>` with `Host` rewritten to emailulator's loopback address. Under option A, yardd also runs `emailulator run` as an M4b service unit whenever no agent is loaded.

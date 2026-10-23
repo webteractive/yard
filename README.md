@@ -67,7 +67,9 @@ exit, and removes the two files that nginx left owned by root (`logs/nginx-error
 `yard restart nginx` when yardd is already running.
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
 proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
-`scripts/e2e-m2.sh` checks multi-PHP and extensions, and `scripts/e2e-m3.sh` HTTPS.
+`scripts/e2e-m2.sh` checks multi-PHP and extensions, `scripts/e2e-m3.sh` HTTPS, `scripts/e2e-m4a.sh`
+the `.yard` file, and `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
+(installing what is missing with brew), asks each one a question, and removes what it added.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in

@@ -34,8 +34,11 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   approved 2026-10-22; built on branch `m4a-project-file` and verified on this machine
   on 2026-10-22 with `scripts/e2e-m1.sh` and `e2e-m4a.sh` passing), then M4b services,
   `yard env`, `yard info` and brew sources (`yard source trust`), designed in
-  `docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md` (approved 2026-10-23,
-  plan next), and M4c Node, which still needs a plan. The maintainer moved emailulator out of M4b into
+  `docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md` (approved 2026-10-23),
+  planned in `docs/superpowers/plans/2026-10-23-yard-m4b-services.md` (approved 2026-10-24).
+  M4b is built on branch `m4b-services` and its gates pass; `scripts/e2e-m4b.sh` is written
+  but has not run on this machine, so M4b is not verified until the maintainer approves the run and it
+  passes. M4c Node still needs a plan. The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
@@ -81,6 +84,15 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `secure` and `docroot` are refused for it. Herd-style parking, which M1
   shipped, was removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
   each project moves from Herd by `yard link` run in it.
+- **Services** (M4b, spec `2026-10-23-yard-m4b-services-design.md`): MySQL, PostgreSQL, Redis
+  and MinIO run from brew's kegs as supervised units listening on 127.0.0.1 only, listed in
+  `services.toml` and named `<engine>-<line>` (`mysql-8.4`, `redis`). Their ports are
+  allocated once at `yard service add`, recorded `pinned` and never moved by Yard, and skip
+  the ports DBngin and Postgres.app reserve while installed. Yard never runs `brew services`
+  or `brew uninstall` for one, never re-initializes or deletes data except `service remove`,
+  and creates no databases, roles or buckets. A formula from a third-party tap installs only
+  once brew itself trusts it (`brew trust`, read with `brew trust --json=v1`); `--yes`, `init`
+  and `link` never grant trust, and Yard sets no `HOMEBREW_NO_*` variable.
 - **Never Herd's PHP** (maintainer, 2026-10-20): every PHP command Yard runs or a shim
   `exec`s is an absolute brew keg path, and its PATH comes from `shim::child_path`
   (the keg's `bin` first, every `Herd` directory removed).
@@ -113,6 +125,22 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - On 2026-10-22 brew also had `php@7.3` and `php@7.4` installed (and the plain `php`
   formula), so `scripts/e2e-m4a.sh` uses 7.2 as the version that is not installed.
 - Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
+- For M4b (checked 2026-10-23 and 2026-10-24): Homebrew is 7.0.10. Since 6.0 it loads a
+  formula from a non-official tap only when the formula or its tap is trusted; brew's own
+  store holds that, `brew trust --json=v1` reads it and `brew trust`/`brew untrust` change
+  it (Yard never touches `trust.json`). `minio/stable` is tapped and trusted on this machine,
+  so `yard service add minio` is not refused with `FORMULA_UNTRUSTED` here.
+- `brew search --formula "/^<base>(@|$)/"` finds `mysql`, `mysql@8.0`, `mysql@8.4`, `mysql@9.7`,
+  `postgresql@12` to `@18`, `redis`, `redis@6.2`, `redis@8.2` and `minio`. `postgresql@12` and
+  `@13` are disabled, so they are not offered as lines; `@14` is deprecated with a disable date
+  of 2026-11-12, so it is a line until then, with a job line naming the date.
+- DBngin holds 3306 (MySQL) and 6379 (Redis) and Postgres.app holds 5432 here, so new
+  instances land on the next free ports, 3307, 5433 and 6380 (read them from
+  `yard services`, never assume them). `scripts/e2e-m4b.sh` records those three listeners and
+  fails if one changes.
+- The extensions tap's `formula_renames.json` maps `redis@8.4` to `phpredis@8.4`, which
+  `brew search` cannot see (it matches real formula names only) but `brew info` resolves, so
+  the trust gate looks in the tap's files instead of asking `brew search`.
 
 ## Build & test
 
@@ -139,6 +167,16 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `.yard` picks PHP 7.1, then 8.4 after an edit, then a missing 7.2 serves the setup
   page, and `yard isolate` is refused. It needs php@7.1 (from `e2e-m2.sh`) and installs
   nothing; ask the maintainer first.
+- `scripts/e2e-m4b.sh` — real-machine M4b check after `e2e-m1.sh`: adds `mysql-8.4`,
+  `postgres-17`, `redis` and `minio`, asks each one a question with its own client by
+  absolute keg path, checks `yard env` against `yard services`, checks that brew's installed
+  `minio` is the formula `services.toml` records, links a scratch project whose `.yard`
+  lists MySQL 8.4 and checks `yard info` shows it met, then removes what it added. It needs
+  yardd running, jq and `minio/stable` trusted; it brew-installs `mysql@8.4`, `postgresql@17`,
+  `redis` and `minio/stable/minio` when missing, so ask the maintainer first. It stops before changing
+  anything if one of the four instances already exists, backs up and restores `services.toml`,
+  `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and 6379 or Herd's
+  resolver changed. `shellcheck scripts/e2e-m4b.sh` stays clean.
 
 ## Verifying a change on this machine
 
@@ -148,7 +186,7 @@ change to serving, the helper or reconcile is only observable there, through `ya
 - `cargo build --release`, then `./target/release/yard stop && ./target/release/yard start`;
   `yard --version` must show the new commit for yardd. A changed helper needs the maintainer to run
   `sudo ./target/release/yard helper install` in a real terminal first.
-- Back up what you will touch (`yard.toml`, `sites.toml`, `ports.toml`, an
+- Back up what you will touch (`yard.toml`, `sites.toml`, `ports.toml`, `services.toml`, an
   `nginx/overrides/<site>.conf`) into the scratchpad, and restore it with `cp -p` and a
   `cmp` at the end. Restore permissions with a `trap`.
 - Drive it with `yard status`, `yard doctor`, `yard ports [check]`, `yard sites`, and
@@ -157,6 +195,9 @@ change to serving, the helper or reconcile is only observable there, through `ya
 - For a scratch site, `yard link <name>` run inside a scratch dir and `yard unlink <name>`
   afterwards, then delete the `nginx/overrides/<name>.conf` Yard created for it.
 - Never create directories in `~/Herd` (Herd parks it), and never touch Herd's files.
+- Never touch DBngin or Postgres.app, and use a service's own client by absolute keg path
+  (`$(brew --prefix)/opt/mysql@8.4/bin/mysql`): a bare `mysql` or `psql` can be theirs.
+  Remove only the service instances you added (`yard service remove <i> --yes`).
 
 ## Layout (planned, spec §3.2)
 

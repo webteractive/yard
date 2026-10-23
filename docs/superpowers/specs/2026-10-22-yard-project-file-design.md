@@ -3,8 +3,9 @@
 Date: 2026-10-22
 Status: approved by the maintainer on 2026-10-22. It extends `2026-10-19-yard-design.md` (the main
 spec). M4a built `php`, `docroot`, `secure`, `extensions` and `yard init`
-(`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, §8); M4b builds
-`[services]` (`2026-10-23-yard-m4b-services-design.md` §9); `node` follows in M4c.
+(`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, §8); M4b built
+`[services]` (`2026-10-23-yard-m4b-services-design.md` §9, on branch `m4b-services`); `node`
+follows in M4c.
 
 Decisions marked **(maintainer)** are the maintainer's, from 2026-10-22. Decisions marked
 **(builder's call)** were made while writing this and can be reversed on their own.
@@ -233,7 +234,8 @@ docroot = "public"
 - `sites.init { path, name?, force?, replace? }` returns the written file's text, a
   `SiteInfo` and `moved_from` when it moved a site whose name was taken;
   the CLI does the confirmation and then runs the installs as the existing jobs
-  (`php.install`, `ext.add`, from M4 `service.add`).
+  (`php.install`, `ext.add`, and from M4b `services.add`, which asks about trust
+  when the formula's tap needs it).
 - `SiteInfo` gains `project_file: Option<String>` (the path) and `needs: Vec<Need>`
   (what the file asks for that is not installed). Additive; protocol minor bump.
 - New codes: `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN` (`data { name,

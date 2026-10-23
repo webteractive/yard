@@ -1,6 +1,8 @@
 # Yard M4b: services, `yard env`, and brew sources — design
 
-Status: draft for the maintainer's review, 2026-10-23. Part of M4 (main spec §12). It refines the
+Status: approved by the maintainer 2026-10-23; built on branch `m4b-services` (plan
+`docs/superpowers/plans/2026-10-23-yard-m4b-services.md`, approved 2026-10-24); the real-machine
+check `scripts/e2e-m4b.sh` has yet to run. Part of M4 (main spec §12). It refines the
 main spec's §7 and §8.2 (`docs/superpowers/specs/2026-10-19-yard-design.md`) and fills in
 `[services]` in the project-file spec §4
 (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`). emailulator moved out
