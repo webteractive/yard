@@ -73,10 +73,37 @@ pub fn system_timezone(localtime_link: Option<&std::path::Path>) -> String {
         .unwrap_or_else(|| "UTC".to_string())
 }
 
+/// The full version a keg runs, from its Cellar directory name or the path a keg's `opt`
+/// link resolves to (`../Cellar/php@7.3/7.3.33_8`): `7.3.33`, without brew's `_N` revision.
+/// `None` for a name that is not a dotted version.
+pub fn full_version(cellar: &str) -> Option<String> {
+    let name = cellar.trim_end_matches('/').rsplit('/').next()?;
+    let version = match name.rsplit_once('_') {
+        Some((version, revision)) if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) => {
+            version
+        }
+        _ => name,
+    };
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    (version.split('.').count() >= 2 && version.split('.').all(numeric)).then(|| version.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use yard_proto::ErrorCode;
+
+    #[test]
+    fn full_version_strips_revision() {
+        assert_eq!(full_version("7.3.33_8").as_deref(), Some("7.3.33"));
+        assert_eq!(full_version("8.4.3").as_deref(), Some("8.4.3"));
+        assert_eq!(full_version("../Cellar/php@7.3/7.3.33_8").as_deref(), Some("7.3.33"));
+        assert_eq!(full_version("/opt/homebrew/Cellar/php/8.5.0_1/").as_deref(), Some("8.5.0"));
+        assert_eq!(full_version("8.4.3_12").as_deref(), Some("8.4.3"), "a revision of two digits");
+        for bad in ["", "HEAD-abc123", "php@7.3", "7", "7.3.x", "_8", "../Cellar/php@7.3/"] {
+            assert_eq!(full_version(bad), None, "{bad:?}");
+        }
+    }
 
     #[test]
     fn supported_php_range_is_7_0_to_8_5() {

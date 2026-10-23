@@ -2,6 +2,7 @@
 
 mod ext;
 mod handlers;
+mod info;
 mod php;
 mod project;
 pub mod server;

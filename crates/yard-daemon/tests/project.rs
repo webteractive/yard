@@ -474,3 +474,93 @@ async fn init_asks_before_replacing_a_proxy() {
     assert!(!dir.join(".yard").exists());
     d.shutdown().await.unwrap();
 }
+
+// ---- sites.info ----
+
+/// Makes `opt/php@<v>` what brew leaves: a link to `Cellar/php@<v>/<full>`, the directory
+/// `Fixture::add_php` made.
+fn cellar_php(d: &support::daemon::Daemon, v: &str, full: &str) {
+    let prefix = d.fx.brew.path();
+    let cellar = prefix.join(format!("Cellar/php@{v}/{full}"));
+    std::fs::create_dir_all(cellar.parent().unwrap()).unwrap();
+    let opt = prefix.join(format!("opt/php@{v}"));
+    std::fs::rename(&opt, &cellar).unwrap();
+    std::os::unix::fs::symlink(format!("../Cellar/php@{v}/{full}"), &opt).unwrap();
+}
+
+#[tokio::test]
+async fn info_by_path_and_name() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    cellar_php(&d, "7.3", "7.3.33_8");
+    let dir = d.project("ee");
+    write_yard(&dir, "php = \"7.3\"\n");
+    let inside = dir.join("app/Http");
+    std::fs::create_dir_all(&inside).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let by_name = c.call("sites.info", json!({"site": "ee"})).await.unwrap();
+    let by_path = c.call("sites.info", json!({"path": inside.display().to_string()})).await.unwrap();
+    assert_eq!(by_name, by_path);
+    assert_eq!(by_name["site"]["name"], "ee");
+    assert_eq!(by_name["site"]["php"], "7.3");
+    assert_eq!(by_name["php_full"], "7.3.33");
+    assert_eq!(
+        by_name["sources"],
+        json!({"php": "project_file", "docroot": "default", "secure": "default"}),
+        "{by_name}"
+    );
+    assert_eq!(by_name["services"], json!([]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn info_names_sites_toml_as_the_source_and_a_proxy_has_no_php() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    let dir = d.project("plain");
+    std::fs::create_dir_all(dir.join("web")).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("sites.isolate", json!({"site": "plain", "php": "7.3"})).await.unwrap();
+    c.call("sites.secure", json!({"site": "plain"})).await.unwrap();
+    c.call("sites.proxy", json!({"name": "app", "url": "http://127.0.0.1:5173"})).await.unwrap();
+
+    let detail = c.call("sites.info", json!({"site": "plain"})).await.unwrap();
+    assert_eq!(
+        detail["sources"],
+        json!({"php": "sites_toml", "docroot": "default", "secure": "sites_toml"}),
+        "{detail}"
+    );
+    // A keg that is a plain directory names no Cellar version.
+    assert_eq!(detail["php_full"], Value::Null, "{detail}");
+
+    // A proxied site shows its target, not PHP: no full version, no php or docroot source.
+    let detail = c.call("sites.info", json!({"site": "app"})).await.unwrap();
+    assert_eq!(detail["site"]["kind"], "proxy");
+    assert_eq!(detail["site"]["target"], "http://127.0.0.1:5173");
+    assert_eq!(detail["php_full"], Value::Null);
+    assert_eq!(detail["sources"], json!({"secure": "default"}), "{detail}");
+    assert_eq!(detail["services"], json!([]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn info_outside_a_project_is_site_not_found() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let outside = tempfile::tempdir().unwrap();
+    for params in [json!({"path": outside.path().display().to_string()}), json!({})] {
+        let e = c.call("sites.info", params).await.unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::SiteNotFound);
+        assert_eq!(e.hint.as_deref(), Some("yard info <site> or yard link"));
+    }
+    let e = c.call("sites.info", json!({"site": "nope"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::SiteNotFound);
+    assert!(e.message.contains("nope"), "{}", e.message);
+    d.shutdown().await.unwrap();
+}

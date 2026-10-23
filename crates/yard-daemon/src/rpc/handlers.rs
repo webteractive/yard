@@ -1,7 +1,7 @@
 //! One function per method. Mutations edit a TOML through `TomlFile`, then reconcile;
 //! they never write generated files themselves.
 
-use super::{ext, php, project, services, sources};
+use super::{ext, info, php, project, services, sources};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::state::Snapshot;
@@ -33,6 +33,8 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::DOCTOR => json(Ok(doctor(ctx).await)),
         methods::SITES_LIST => json(Ok(snapshot(ctx).await?.resolution.sites)),
         methods::SITES_LINK => json(link(ctx, parse(params)?).await),
+        methods::SITES_INFO => json(info::site_detail(ctx, parse(params)?).await),
+        methods::ENV_PRINT => json(info::env_print(ctx, parse(params)?).await),
         methods::SITES_INIT => json(project::init(ctx, parse(params)?).await),
         methods::SITES_UNLINK => json(unlink(ctx, parse(params)?, "path").await),
         methods::SITES_PROXY => json(proxy(ctx, parse(params)?).await),

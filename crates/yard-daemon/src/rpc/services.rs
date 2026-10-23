@@ -7,6 +7,8 @@ use super::handlers::{reconcile, snapshot};
 use crate::daemon::Context;
 use crate::services::{self, Add, Resolved};
 use crate::sources::require_trusted;
+use crate::state::Snapshot;
+use crate::supervisor::Supervisor;
 use yard_core::config::load_services;
 use yard_core::project::FILE as PROJECT_FILE;
 use yard_core::services::{Engine, instance_name};
@@ -116,16 +118,20 @@ const LOG_LINES: usize = 100;
 /// starting.
 async fn info(ctx: &Context, name: &str) -> Result<ServiceInfo, YardError> {
     let snap = snapshot(ctx).await?;
-    let supervisor = ctx.supervisor();
-    let mut info =
-        services::service_info(&snap, supervisor, name).ok_or_else(|| services::not_found(name))?;
+    instance_info(&snap, ctx.supervisor(), name).ok_or_else(|| services::not_found(name))
+}
+
+/// `service_info` with the state a caller can act on: see `info`. `None` for a name
+/// `services.toml` does not list.
+pub(super) fn instance_info(snap: &Snapshot, supervisor: &Supervisor, name: &str) -> Option<ServiceInfo> {
+    let mut info = services::service_info(snap, supervisor, name)?;
     if info.state == ServiceState::Stopped
         && !info.stopped_by_user
         && supervisor.list().iter().any(|u| u.name == name)
     {
         info.state = ServiceState::Starting;
     }
-    Ok(info)
+    Some(info)
 }
 
 /// The engine of the instance `services.toml` lists as `name`, read from the file as it is now.

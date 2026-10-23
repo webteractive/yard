@@ -348,6 +348,20 @@ No `DB_DATABASE` or `AWS_BUCKET`: Yard creates neither (maintainer). A project l
 MySQL and a PostgreSQL service gets both `DB_*` blocks and a comment saying the second
 one overrides the first in a `.env` **(builder's call)**.
 
+Settled in M4b task 11 (`env.print`, `rpc/info.rs`) **(builder's calls)**:
+
+- The lines carry the port the registry pinned the instance to. An instance with no
+  registry entry (it has none until reconcile allocates one) gets no lines and a note, never
+  the engine's usual port, which is not where it runs.
+- A site found by `--site` or by the directory is the innermost linked project that
+  contains it, when projects nest. A linked project with no `.yard` asks for nothing, so it
+  prints no blocks; a directory in no linked project prints every instance, like no flag.
+  `--service` with an unknown instance is `SERVICE_NOT_FOUND`.
+- The `both set DB_*` comment goes on the second block whenever two printed blocks both
+  set `DB_*` (a project cannot list two MySQL lines, but "every instance" can have two),
+  and never on a block with no lines. A missing versioned engine's fix names its line
+  even for `true`: `yard service add postgres --version 17`.
+
 ### 7.4 `yard info`
 
 The maintainer asked for one command that shows what a project runs on (2026-10-23). `yard status`
@@ -383,6 +397,22 @@ eepower   http://eepower.yard:8080          serving
 - A proxied site shows its target instead of `php`, `docroot` and `extensions`.
 - `--json` gives a `SiteDetail` object: `SiteInfo` plus the per-setting sources, the PHP
   patch version and the `ServiceInfo` of each service.
+
+Settled in M4b task 11 (`sites.info`, `rpc/info.rs`) **(builder's calls)**:
+
+- A site is found by name or by the innermost linked project containing `path`; neither
+  matching is `SITE_NOT_FOUND` with the hint `yard info <site> or yard link`.
+- The source of `php`, `docroot` and `secure` follows what the daemon serves: a project
+  with a `.yard` owns them, so each is `project_file` where the file sets it and `default`
+  where it does not (its `sites.toml` entry is not read then); a project with no `.yard` says
+  `sites_toml` where the entry sets it, else `default`. A proxied site has only `secure`.
+- `php_full` is the Cellar directory `opt/php@<v>` links to, without brew's `_N` revision
+  (`7.3.33_8` is `7.3.33`); it is empty for a proxy, a version that is not installed, or a
+  keg that is not a link into the Cellar.
+- `services` has one entry per `[services]` key, in engine order, each with the instance that
+  meets it (the default line's, else the first by name, for `true`) or none while it is
+  missing. A site with no `.yard`, or one that does not parse, has none; the broken file is
+  `project_error` on the site.
 
 ### 7.5 Accounts
 

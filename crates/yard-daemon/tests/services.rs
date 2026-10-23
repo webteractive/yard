@@ -1446,3 +1446,220 @@ async fn a_log_line_that_is_not_utf8_comes_back_lossy() {
     assert_eq!(got, json!(["ok", "bad \u{fffd}\u{fffd} bytes", "last"]));
     d.shutdown().await.unwrap();
 }
+
+// ---- env.print and sites.info ----
+
+async fn env(c: &mut Client, params: Value) -> Result<Vec<Value>, yard_proto::YardError> {
+    Ok(c.call("env.print", params).await?.as_array().unwrap().clone())
+}
+
+fn redis_lines(port: u16) -> Value {
+    json!(["REDIS_HOST=127.0.0.1", format!("REDIS_PORT={port}"), "REDIS_PASSWORD=null"])
+}
+
+fn db_lines(connection: &str, port: u16, user: &str) -> Value {
+    json!([
+        format!("DB_CONNECTION={connection}"),
+        "DB_HOST=127.0.0.1",
+        format!("DB_PORT={port}"),
+        format!("DB_USERNAME={user}"),
+        "DB_PASSWORD=",
+    ])
+}
+
+#[tokio::test]
+async fn env_for_project_lists_its_services() {
+    let (mysql, redis) = (free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("redis", redis))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("redis");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", true);
+    d.fx.add_service("redis", "redis", true);
+    let dir = d.project("blog");
+    write_yard(&dir, "[services]\nredis = true\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    // From anywhere inside the project, and by the site's name: the one block, on the real port.
+    let inside = dir.join("app");
+    std::fs::create_dir_all(&inside).unwrap();
+    let want = json!([{"instance": "redis", "lines": redis_lines(redis), "note": null}]);
+    let by_path = env(&mut c, json!({"path": inside.display().to_string()})).await.unwrap();
+    assert_eq!(Value::Array(by_path), want);
+    let by_site = env(&mut c, json!({"site": "blog"})).await.unwrap();
+    assert_eq!(Value::Array(by_site), want);
+
+    // `service` names one instance, whatever the site says.
+    let one = env(&mut c, json!({"service": "mysql-8.4", "site": "blog"})).await.unwrap();
+    let want = json!([{"instance": "mysql-8.4", "lines": db_lines("mysql", mysql, "root"), "note": null}]);
+    assert_eq!(Value::Array(one), want);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_names_a_missing_instance() {
+    let redis = free_port();
+    let d = prepared(&pin("redis", redis)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let dir = d.project("blog");
+    write_yard(&dir, "[services]\nmysql = \"8.4\"\nredis = true\nminio = true\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let blocks = env(&mut c, json!({"site": "blog"})).await.unwrap();
+    let want = json!([
+        {"instance": "mysql-8.4", "lines": [], "note": "mysql-8.4 is not added: yard service add mysql --version 8.4"},
+        {"instance": "redis", "lines": redis_lines(redis), "note": null},
+        {"instance": "minio", "lines": [], "note": "minio is not added: yard service add minio"},
+    ]);
+    assert_eq!(Value::Array(blocks), want);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_true_picks_the_default_line_else_the_first() {
+    let (a, b, c_port) = (free_port(), free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.0", a) + &pin("mysql-8.4", b) + &pin("mysql-9.0", c_port))).await;
+    for formula in ["mysql@8.0", "mysql@8.4", "mysql@9.0"] {
+        d.fx.add_formula(formula);
+    }
+    d.fx.add_service("mysql-8.0", "mysql@8.0", true);
+    d.fx.add_service("mysql-9.0", "mysql@9.0", true);
+    let dir = d.project("blog");
+    write_yard(&dir, "[services]\nmysql = true\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let first = env(&mut c, json!({"site": "blog"})).await.unwrap();
+    assert_eq!(first[0]["instance"], "mysql-8.0", "no default line yet, so the first by name");
+    assert_eq!(first[0]["lines"], db_lines("mysql", a, "root"));
+
+    d.fx.add_service("mysql-8.4", "mysql@8.4", true);
+    let mut chosen = Value::Null;
+    for _ in 0..150 {
+        chosen = env(&mut c, json!({"site": "blog"})).await.unwrap()[0].clone();
+        if chosen["instance"] == "mysql-8.4" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(chosen["instance"], "mysql-8.4", "the default line's instance wins once it exists");
+    assert_eq!(chosen["lines"], db_lines("mysql", b, "root"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_without_project_lists_all() {
+    let (redis, minio, console) = (free_port(), free_port(), free_port());
+    let d = prepared(&(pin("redis", redis) + &pin("minio", minio) + &pin("minio-console", console))).await;
+    d.fx.add_formula("redis");
+    d.fx.add_formula("minio");
+    d.fx.add_service("redis", "redis", true);
+    d.fx.add_service("minio", "minio/stable/minio", true);
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let outside = tempfile::tempdir().unwrap();
+    let want = json!([
+        {"instance": "minio", "lines": [
+            "AWS_ACCESS_KEY_ID=minioadmin",
+            "AWS_SECRET_ACCESS_KEY=minioadmin",
+            "AWS_DEFAULT_REGION=us-east-1",
+            format!("AWS_ENDPOINT=http://127.0.0.1:{minio}"),
+            "AWS_USE_PATH_STYLE_ENDPOINT=true",
+        ], "note": null},
+        {"instance": "redis", "lines": redis_lines(redis), "note": null},
+    ]);
+    let outside_dir = outside.path().display().to_string();
+    assert_eq!(Value::Array(env(&mut c, json!({"path": outside_dir})).await.unwrap()), want);
+    assert_eq!(Value::Array(env(&mut c, json!({})).await.unwrap()), want);
+
+    // A linked project with no `.yard` lists no services: there is nothing it asks for.
+    assert_eq!(env(&mut c, json!({"site": "blog"})).await.unwrap(), Vec::<Value>::new());
+
+    let e = env(&mut c, json!({"service": "mysql-8.4"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceNotFound);
+    let e = env(&mut c, json!({"site": "nope"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::SiteNotFound);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_goes_to_the_innermost_linked_project() {
+    let (mysql, redis) = (free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("redis", redis))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("redis");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", true);
+    d.fx.add_service("redis", "redis", true);
+    let outer = d.project("outer");
+    write_yard(&outer, "[services]\nredis = true\n");
+    let inner = outer.join("packages/inner");
+    std::fs::create_dir_all(&inner).unwrap();
+    let mut file = yard_core::config::TomlFile::load(&d.fx.paths.sites_toml()).unwrap();
+    file.set(&["sites", "inner", "path"], toml_edit::value(inner.display().to_string()));
+    file.save().unwrap();
+    write_yard(&inner, "[services]\nmysql = \"8.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let blocks = env(&mut c, json!({"path": inner.join("src").display().to_string()})).await.unwrap();
+    assert_eq!(blocks.iter().map(|b| b["instance"].clone()).collect::<Vec<_>>(), [json!("mysql-8.4")]);
+    let blocks = env(&mut c, json!({"path": outer.display().to_string()})).await.unwrap();
+    assert_eq!(blocks.iter().map(|b| b["instance"].clone()).collect::<Vec<_>>(), [json!("redis")]);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_two_databases_note() {
+    let (mysql, postgres) = (free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("postgres-17", postgres))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("postgresql@17");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", true);
+    d.fx.add_service("postgres-17", "postgresql@17", true);
+    let dir = d.project("blog");
+    write_yard(&dir, "[services]\nmysql = \"8.4\"\npostgres = \"17\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let blocks = env(&mut c, json!({"site": "blog"})).await.unwrap();
+    let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
+    let want = json!([
+        {"instance": "mysql-8.4", "lines": db_lines("mysql", mysql, "root"), "note": null},
+        {"instance": "postgres-17", "lines": db_lines("pgsql", postgres, &user),
+         "note": "both set DB_*; the second block wins in a .env"},
+    ]);
+    assert_eq!(Value::Array(blocks), want);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn site_info_lists_its_services() {
+    let (mysql, redis) = (free_port(), free_port());
+    let d = prepared(&(pin("mysql-8.4", mysql) + &pin("redis", redis))).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_formula("redis");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", true);
+    d.fx.add_service("redis", "redis", true);
+    let dir = d.project("blog");
+    write_yard(&dir, "[services]\nmysql = \"8.4\"\nredis = true\nminio = true\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let detail = c.call("sites.info", json!({"site": "blog"})).await.unwrap();
+    let services = detail["services"].as_array().unwrap();
+    assert_eq!(services.len(), 3, "{detail}");
+    assert_eq!((services[0]["engine"].clone(), services[0]["want"].clone()), (json!("mysql"), json!("8.4")));
+    assert_eq!(services[0]["service"]["name"], "mysql-8.4");
+    assert_eq!(services[0]["service"]["state"], "stopped");
+    assert_eq!(services[0]["service"]["ports"], json!([{"name": "mysql-8.4", "port": mysql}]));
+    assert_eq!((services[1]["engine"].clone(), services[1]["want"].clone()), (json!("redis"), Value::Null));
+    assert_eq!(services[1]["service"]["name"], "redis");
+    assert_eq!(services[2]["engine"], "minio");
+    assert_eq!(services[2]["service"], Value::Null, "a missing instance has no info");
+    assert_eq!(detail["site"]["needs"], json!([{"kind": "service", "engine": "minio"}]));
+    d.shutdown().await.unwrap();
+}
