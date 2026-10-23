@@ -551,8 +551,8 @@ profile = "standard"   # or "privileged"
 nginx-http   = { port = 8080,  mode = "pinned" }
 nginx-https  = { port = 8443,  mode = "pinned" }
 dnsmasq      = { port = 53535, mode = "pinned" }
-mysql-8-0    = { port = 3306,  mode = "preferred", preferred = 3306 }
-redis        = { port = 6379,  mode = "preferred", preferred = 6379 }
+"mysql-8.4"  = { port = 3307,  mode = "pinned" }   # a service: allocated once, at `yard service add`
+redis        = { port = 6380,  mode = "pinned" }
 emailulator-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
 emailulator-http = { port = 33001, mode = "auto" }
 "proxy:api"  = { port = 3000,  mode = "external" }
@@ -560,7 +560,11 @@ emailulator-http = { port = 33001, mode = "auto" }
 
 **Modes**
 
-- `pinned`: exactly this port. If unavailable, the unit does not start.
+- `pinned`: exactly this port. If unavailable, the unit does not start. Service instances
+  (M4b) are recorded `pinned`: `yard service add` allocates once, `--port` or else the
+  first free port at or above the engine's usual one that no other entry holds and no
+  other database app reserves (DBngin.app reserves 3306, 5432 and 6379, Postgres.app 5432,
+  while installed; m4b spec §6), and nothing moves it afterwards.
 - `preferred`: try `preferred` first. If unavailable: with `auto_fallback`,
   allocate the lowest free port in `range` and record it; otherwise fail with
   `PORT_IN_USE` and the hint to set a port or enable fallback.
@@ -592,7 +596,7 @@ and `privileged`.
    running (the master in `run/nginx.pid`, if it is brew's nginx and launchd is
    its parent). On failure, the
    holder is identified via `lsof`, which reads libproc as the user (pid, process name, parent; labelled as
-   Herd, brew services, Docker, or unknown when recognisable) and returned in
+   Herd, DBngin, Postgres.app, brew services, Docker, or unknown when recognisable) and returned in
    `PORT_IN_USE.data`.
 3. **Runtime:** health probes detect a unit losing its port; a scan every 30 s
    detects foreign listeners on registered-but-idle ports and emits

@@ -5,6 +5,7 @@
 pub mod brew_info;
 pub mod engine;
 pub mod render;
+pub mod reserved;
 
 use brew_info::Formula;
 use yard_proto::{ErrorCode, YardError};

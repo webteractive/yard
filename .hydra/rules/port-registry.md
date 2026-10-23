@@ -46,8 +46,21 @@ triggers:
   comes from the unit, not the holder.
 - Socket tests take `crate::PORT_TESTS`: macOS hands out ephemeral ports in sequence,
   so parallel tests otherwise land on each other's ports.
-- Holder classification (`ports::holder::classify`) is pure and tested: Herd, brew
-  services, Docker, Yard, or unknown. When the holder is not visible, say "unknown (not
+- Holder classification (`ports::holder::classify`) is pure and tested: Herd, DBngin
+  (`/Users/Shared/DBngin/` or a `/DBngin.app/` path), Postgres.app (`/Postgres.app/`),
+  brew services, Docker, Yard, or unknown. Herd is checked first, and the two new kinds
+  before brew services, so a conflict reads `mysqld (pid 77034, DBngin)`. When the holder is not visible, say "unknown (not
   visible to this user)", never guess.
 - `set_profile` checks every port of the new profile before changing anything, and
   reports all conflicts at once.
+- A service port is allocated once, at `services.add`, and recorded `pinned`:
+  `Registry::allocate_from(unit, usual, reserved, is_free)` takes the first port at or above
+  the engine's usual one that no other entry holds, that is not reserved and that `is_free`;
+  `allocate_exact` is `--port` (`PORT_IN_USE` if registered elsewhere or busy). Never use
+  `preferred` for a service: `ensure` moves it back to its preferred port, which would change
+  `DB_PORT` under a project's `.env`. Reconcile only re-reads pinned entries.
+- While DBngin.app is installed, 3306, 5432 and 6379 are reserved, and while Postgres.app is
+  installed, 5432 (`services::reserved::reserved_ports`, which looks for the app bundle in
+  `/Applications` and `~/Applications` and reads none of their files). A probe only sees live
+  listeners, so without the reservation a stopped DBngin's port would be pinned and DBngin
+  could no longer start. `--port` overrides a reservation.

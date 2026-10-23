@@ -6,7 +6,7 @@ pub mod holder;
 use crate::Paths;
 use crate::config::{TomlFile, config_error, read_optional};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
@@ -215,6 +215,52 @@ impl Registry {
         Ok(port)
     }
 
+    /// A service's port: the first port at or above `usual` that is not registered to
+    /// another unit, not in `reserved` and `is_free`, recorded `pinned` so nothing moves it
+    /// later (`preferred` entries move back to their preferred port, which would change a
+    /// project's `DB_PORT`). The caller passes the other apps' ports as `reserved`.
+    pub fn allocate_from(
+        &mut self,
+        unit: &str,
+        usual: u16,
+        reserved: &BTreeSet<u16>,
+        is_free: &dyn Fn(u16) -> bool,
+    ) -> Result<u16, YardError> {
+        let port = (usual..=u16::MAX)
+            .find(|p| self.holder_of(*p, unit).is_none() && !reserved.contains(p) && is_free(*p))
+            .ok_or_else(|| {
+                YardError::new(ErrorCode::PortInUse, format!("no free port at or above {usual} for {unit}"))
+                    .with_hint("yard service add <engine> --port <port> picks one yourself")
+                    .with_data(serde_json::json!({ "unit": unit, "port": usual }))
+            })?;
+        self.entries.insert(unit.to_string(), pinned(port));
+        Ok(port)
+    }
+
+    /// `--port`: exactly `port`, pinned, or `PORT_IN_USE` when another unit is registered
+    /// on it or something is listening there. Unlike `allocate_from` it never moves on, and
+    /// it ignores the reserved ports: naming one is the user's override.
+    pub fn allocate_exact(
+        &mut self,
+        unit: &str,
+        port: u16,
+        is_free: &dyn Fn(u16) -> bool,
+    ) -> Result<u16, YardError> {
+        if let Some(other) = self.holder_of(port, unit) {
+            return Err(YardError::new(
+                ErrorCode::PortInUse,
+                format!("port {port} for {unit} is already registered to {other}"),
+            )
+            .with_hint(format!("pick another port, or move {other} with yard ports set {other} <port>"))
+            .with_data(serde_json::json!({ "unit": unit, "port": port })));
+        }
+        if !is_free(port) {
+            return Err(in_use(unit, port));
+        }
+        self.entries.insert(unit.to_string(), pinned(port));
+        Ok(port)
+    }
+
     /// The unit's port, allocating on first use. An existing entry keeps its mode, so
     /// a user's edit to `ports.toml` wins; `preferred` retries its preferred port, and
     /// an `external` entry follows a changed proxy target.
@@ -404,8 +450,8 @@ profile = "standard"   # or "privileged"
 nginx-http   = { port = 8080,  mode = "pinned" }
 nginx-https  = { port = 8443,  mode = "pinned" }
 dnsmasq      = { port = 53535, mode = "pinned" }
-mysql-8-0    = { port = 3306,  mode = "preferred", preferred = 3306 }
-redis        = { port = 6379,  mode = "preferred", preferred = 6379 }
+"mysql-8.4"  = { port = 3307,  mode = "pinned" }
+redis        = { port = 6380,  mode = "pinned" }
 emailulator-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
 emailulator-http = { port = 33001, mode = "auto" }
 "proxy:api"  = { port = 3000,  mode = "external" }
@@ -434,7 +480,7 @@ emailulator-http = { port = 33001, mode = "auto" }
             PortEntry { port: 3000, mode: PortMode::External, preferred: None }
         );
         assert_eq!(r.entries["emailulator-http"].mode, PortMode::Auto);
-        assert_eq!(r.entries["mysql-8-0"].preferred, Some(3306));
+        assert_eq!(r.entries["mysql-8.4"], PortEntry { port: 3307, mode: PortMode::Pinned, preferred: None });
         assert_eq!(r.profile, Profile::Standard);
         assert!(r.validate().is_empty(), "{:?}", r.validate());
     }
@@ -528,6 +574,80 @@ emailulator-http = { port = 33001, mode = "auto" }
         let mut r = Registry::parse(None, file()).unwrap();
         let e = r.allocate("other", PortMode::Pinned, Some(53535), &all_free).unwrap_err();
         assert_eq!(e.code, ErrorCode::PortConflict);
+    }
+
+    fn reserved(ports: &[u16]) -> BTreeSet<u16> {
+        ports.iter().copied().collect()
+    }
+
+    #[test]
+    fn allocate_from_takes_usual_when_free() {
+        let mut r = small("33000-33009");
+        assert_eq!(r.allocate_from("mysql-8.4", 3306, &reserved(&[]), &all_free).unwrap(), 3306);
+        assert_eq!(r.entries["mysql-8.4"], PortEntry { port: 3306, mode: PortMode::Pinned, preferred: None });
+    }
+
+    #[test]
+    fn allocate_from_skips_busy_and_reserved() {
+        let mut r = small("33000-33009");
+        let port = r.allocate_from("mysql-8.4", 3306, &reserved(&[3307]), &|p| p != 3306).unwrap();
+        assert_eq!(port, 3308);
+        assert_eq!(r.entries["mysql-8.4"], PortEntry { port: 3308, mode: PortMode::Pinned, preferred: None });
+    }
+
+    #[test]
+    fn allocate_from_skips_a_reserved_usual_port() {
+        let mut r = small("33000-33009");
+        assert_eq!(r.allocate_from("mysql-8.4", 3306, &reserved(&[3306]), &all_free).unwrap(), 3307);
+    }
+
+    #[test]
+    fn second_instance_skips_registered_port() {
+        let mut r = small("33000-33009");
+        assert_eq!(r.allocate_from("mysql-8.0", 3306, &reserved(&[]), &all_free).unwrap(), 3306);
+        assert_eq!(r.allocate_from("mysql-8.4", 3306, &reserved(&[]), &all_free).unwrap(), 3307);
+    }
+
+    #[test]
+    fn allocate_from_with_nothing_free_above_is_port_in_use() {
+        let mut r = small("33000-33009");
+        let e = r.allocate_from("minio", 65534, &reserved(&[]), &|_| false).unwrap_err();
+        assert_eq!(e.code, ErrorCode::PortInUse);
+        assert!(e.message.contains("minio") && e.message.contains("65534"), "{}", e.message);
+        assert!(!r.entries.contains_key("minio"));
+    }
+
+    #[test]
+    fn allocate_from_reaches_the_last_port() {
+        let mut r = small("33000-33009");
+        assert_eq!(r.allocate_from("minio", 65534, &reserved(&[65534]), &all_free).unwrap(), 65535);
+    }
+
+    #[test]
+    fn allocate_exact_takes_a_free_port_pinned() {
+        let mut r = small("33000-33009");
+        assert_eq!(r.allocate_exact("redis", 6400, &all_free).unwrap(), 6400);
+        assert_eq!(r.entries["redis"], PortEntry { port: 6400, mode: PortMode::Pinned, preferred: None });
+    }
+
+    #[test]
+    fn allocate_exact_refuses_registered() {
+        let mut r = small("33000-33009");
+        r.allocate_exact("mysql-8.0", 3306, &all_free).unwrap();
+        let e = r.allocate_exact("mysql-8.4", 3306, &all_free).unwrap_err();
+        assert_eq!(e.code, ErrorCode::PortInUse);
+        assert!(e.message.contains("mysql-8.4") && e.message.contains("3306"), "{}", e.message);
+        assert!(e.message.contains("mysql-8.0"), "names the unit that holds it: {}", e.message);
+        assert!(!r.entries.contains_key("mysql-8.4"));
+    }
+
+    #[test]
+    fn allocate_exact_refuses_a_busy_port() {
+        let mut r = small("33000-33009");
+        let e = r.allocate_exact("redis", 6379, &|p| p != 6379).unwrap_err();
+        assert_eq!(e.code, ErrorCode::PortInUse);
+        assert_eq!(e.data.as_ref().unwrap()["port"], 6379);
+        assert!(!r.entries.contains_key("redis"));
     }
 
     #[test]

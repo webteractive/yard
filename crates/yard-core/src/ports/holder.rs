@@ -2,7 +2,9 @@
 
 pub use yard_proto::HolderKind;
 
-/// Rules in order: Herd, brew services, Docker, Yard, else unknown.
+/// Rules in order: Herd, DBngin, Postgres.app, brew services, Docker, Yard, else unknown.
+/// DBngin and Postgres.app come right after Herd: their servers run from their own
+/// directories, never from brew's, so the order only matters against Herd.
 pub fn classify(
     name: &str,
     path: Option<&str>,
@@ -12,6 +14,12 @@ pub fn classify(
     let path = path.unwrap_or_default();
     if path.contains("/Herd.app/") || path.contains("/Library/Application Support/Herd/") {
         return HolderKind::Herd;
+    }
+    if path.starts_with("/Users/Shared/DBngin/") || path.contains("/DBngin.app/") {
+        return HolderKind::Dbngin;
+    }
+    if path.contains("/Postgres.app/") {
+        return HolderKind::PostgresApp;
     }
     let launched_by_launchd = ppid == Some(1);
     if launchd_label.is_some_and(|l| l.starts_with("homebrew.mxcl."))
@@ -62,5 +70,23 @@ mod tests {
         );
         assert_eq!(classify("yardd", Some("/usr/local/bin/yardd"), Some(1), None), HolderKind::Yard);
         assert_eq!(classify("node", Some("/usr/local/bin/node"), Some(77), None), HolderKind::Unknown);
+    }
+
+    #[test]
+    fn classifies_dbngin_and_postgres_app() {
+        let dbngin = "/Users/Shared/DBngin/mysql/8.0.33/bin/mysqld";
+        assert_eq!(classify("mysqld", Some(dbngin), Some(1), None), HolderKind::Dbngin);
+        let app = "/Applications/DBngin.app/Contents/Resources/redis-server";
+        assert_eq!(classify("redis-server", Some(app), Some(1), None), HolderKind::Dbngin);
+        let pg = "/Applications/Postgres.app/Contents/Versions/18/bin/postgres";
+        assert_eq!(classify("postgres", Some(pg), Some(1), None), HolderKind::PostgresApp);
+        let user_pg = "/Users/me/Applications/Postgres.app/Contents/Versions/17/bin/postgres";
+        assert_eq!(classify("postgres", Some(user_pg), Some(1), None), HolderKind::PostgresApp);
+    }
+
+    #[test]
+    fn herd_wins_over_the_new_kinds() {
+        let path = "/Applications/Herd.app/Contents/Resources/Postgres.app/bin/postgres";
+        assert_eq!(classify("postgres", Some(path), Some(1), None), HolderKind::Herd);
     }
 }
