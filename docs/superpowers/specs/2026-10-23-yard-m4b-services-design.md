@@ -382,7 +382,9 @@ which is what those silent grants look like. M4b closes that.
   `trust.json` itself and keeps no list of its own.
 - **The gate.** Before any `brew install` of a formula from a tap other than
   homebrew/core — `yard php install`, `yard ext add` (brew extensions), `yard service add
-  minio` — Yard checks that the formula or its tap is trusted. If not:
+  minio` — Yard checks that the formula or its tap is trusted. An extension brew has no
+  formula for is built with pecl, which needs no tap, so `ext add` asks `brew search
+  --formula` before refusing and lets that one through. If not trusted:
   - on a terminal the CLI asks `Trust shivammathur/php/php@8.3 (from the
     shivammathur/php tap)? [y/N]`; yes runs `yard source trust` for that formula and
     retries; **(builder's call)**

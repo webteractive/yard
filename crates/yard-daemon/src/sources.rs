@@ -79,6 +79,21 @@ pub async fn require_trusted(brew: &Brew, formula: &str) -> Result<(), YardError
     .with_data(serde_json::json!({ "formula": formula, "tap": tap })))
 }
 
+/// `require_trusted` for a formula the install job installs only when brew has it (an
+/// extension: with no formula the job builds it with pecl, which needs no tap). An
+/// untrusted formula brew does not list is let through; one it lists is refused. The
+/// search runs only when the gate would refuse, and lists a formula without loading it, so
+/// it works while the tap is untrusted.
+pub async fn require_trusted_if_listed(brew: &Brew, formula: &str) -> Result<(), YardError> {
+    let Err(refusal) = require_trusted(brew, formula).await else { return Ok(()) };
+    if refusal.code != ErrorCode::FormulaUntrusted {
+        return Err(refusal);
+    }
+    let pattern = sources::search_pattern(formula);
+    let (_, listing, _) = brew_stdout(brew, &["search", "--formula", &pattern]).await?;
+    if sources::search_names(&listing, formula) { Err(refusal) } else { Ok(()) }
+}
+
 /// The formulae from Yard's taps that Yard knows are installed: the PHP versions' kegs,
 /// the extensions `yard.toml` records from brew, and MinIO's keg.
 fn installed(brew: &Brew, yard: &YardConfig) -> BTreeSet<String> {

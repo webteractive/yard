@@ -63,6 +63,34 @@ pub fn brew_major(version_output: &str) -> Option<u32> {
     rest.split(['.', '-']).next()?.trim().parse().ok()
 }
 
+/// The `brew search --formula` argument that finds `formula` in either of the forms brew
+/// prints: `tap/repo/name` or the bare `name`. A search lists a formula without loading
+/// it, so it works while the formula's tap is not trusted.
+pub fn search_pattern(formula: &str) -> String {
+    let short = formula.rsplit('/').next().unwrap_or(formula);
+    let tap = &formula[..formula.len() - short.len()];
+    let escape = |s: &str| {
+        s.chars().fold(String::new(), |mut out, c| {
+            if ".+*?()[]{}|^$\\/".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+            out
+        })
+    };
+    if tap.is_empty() {
+        format!("/^{}$/", escape(short))
+    } else {
+        format!("/^({})?{}$/", escape(tap), escape(short))
+    }
+}
+
+/// Whether the output of `brew search --formula` names `formula`, by full or bare name.
+pub fn search_names(output: &str, formula: &str) -> bool {
+    let short = formula.rsplit('/').next().unwrap_or(formula);
+    output.lines().map(str::trim).any(|line| line == formula || line == short)
+}
+
 /// The rows of `sources.list`: each Yard tap, with whether it is tapped and trusted as a
 /// whole, and the formulae in it that are trusted one by one or installed, sorted by name.
 /// `trust` is `None` for a brew that predates trust, which trusts everything.
@@ -122,6 +150,25 @@ mod tests {
         assert_eq!(tap_of("shivammathur/php/php@8.3"), Some("shivammathur/php"));
         assert_eq!(tap_of("minio/stable/minio"), Some("minio/stable"));
         assert_eq!((tap_of("mysql@8.4"), tap_of("homebrew/core/redis")), (None, None));
+    }
+
+    #[test]
+    fn search_pattern_matches_the_full_or_the_bare_name() {
+        assert_eq!(
+            search_pattern("shivammathur/extensions/redis@8.4"),
+            r"/^(shivammathur\/extensions\/)?redis@8\.4$/"
+        );
+        assert_eq!(search_pattern("mysql@8.4"), r"/^mysql@8\.4$/");
+    }
+
+    #[test]
+    fn search_names_finds_the_formula_in_brews_listing() {
+        let formula = "shivammathur/extensions/redis@8.4";
+        assert!(search_names("shivammathur/extensions/redis@8.4\n", formula));
+        assert!(search_names("redis@8.4\n", formula));
+        assert!(!search_names("", formula));
+        assert!(!search_names("shivammathur/extensions/redis@8.3\nredis@8.5\n", formula));
+        assert!(!search_names("Error: No formulae found\n", formula));
     }
 
     #[test]

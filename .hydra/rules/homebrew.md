@@ -63,7 +63,9 @@ triggers:
   `brew trust --json=v1`; an untrusted formula is `FORMULA_UNTRUSTED` with the hint
   `yard source trust <formula>`, and brew is never asked to install. `yard_core::sources`
   parses brew's answer. A formula that is already installed, a `.so` and a pinned pecl
-  release are not gated.
+  release are not gated, and neither is an extension brew has no formula for (the job
+  builds it with pecl): `require_trusted_if_listed` asks `brew search --formula` only when
+  the gate would refuse, which lists a formula without loading it.
 - **Trust is brew's, never Yard's.** Read it only with `brew trust --json=v1`; change it
   only with `brew trust` / `brew untrust` (`sources.trust|untrust` jobs, or the CLI's y/N
   prompt). Never read or write brew's `trust.json`, keep a list of Yard's own, or let

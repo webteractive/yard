@@ -6,7 +6,7 @@ use super::php::config_version;
 use crate::daemon::Context;
 use crate::ext::{Add, Remove};
 use crate::reconcile::brew_conf_d;
-use crate::sources::{ext_formula, require_trusted};
+use crate::sources::{ext_formula, require_trusted_if_listed};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{InlineTable, value};
@@ -55,9 +55,10 @@ pub(super) async fn add(ctx: &Context, p: ExtAddParams) -> Result<JobStarted, Ya
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let opt = ctx.brew.php_opt(v, &exists, &read_link)?;
     // The job tries brew's formula first unless the extension is a file or a pinned pecl
-    // release, so that is the install the gate stands in front of.
+    // release, and builds with pecl when brew has none: the gate stands in front of a
+    // formula brew has.
     if so.is_none() && release.is_none() {
-        require_trusted(&ctx.brew, &ext_formula(&module, v)).await?;
+        require_trusted_if_listed(&ctx.brew, &ext_formula(&module, v)).await?;
     }
     let add = Add {
         paths: ctx.paths.clone(),

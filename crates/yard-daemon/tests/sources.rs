@@ -83,6 +83,32 @@ async fn old_brew_skips_the_gate() {
 }
 
 #[tokio::test]
+async fn unparsable_brew_version_keeps_the_gate() {
+    let d = prepared("").await.start().await;
+    set_trust(&d, &[], &[]);
+    // `Homebrew garbage`: no major version to read, so the gate fails closed.
+    std::fs::write(d.fx.brew.path().join("fake-brew-version"), "garbage\n").unwrap();
+    let mut c = d.client().await;
+    let err = c.call("php.install", json!({"php": "7.1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+    assert!(brew_log(&d).contains("trust --json=v1"), "{}", brew_log(&d));
+    assert!(!brew_log(&d).contains("install"), "{}", brew_log(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn installing_an_installed_php_asks_brew_nothing() {
+    let d = prepared("").await.start().await;
+    // The fixture has php@8.4; an empty trust store would refuse it were it not there.
+    set_trust(&d, &[], &[]);
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "php.install", json!({"php": "8.4"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(!brew_log(&d).contains("trust"), "{}", brew_log(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn ext_add_refuses_untrusted_formula() {
     let d = prepared("").await.start().await;
     set_trust(&d, &[], &[]);
@@ -94,6 +120,36 @@ async fn ext_add_refuses_untrusted_formula() {
     assert_eq!(err.data.unwrap()["tap"], "shivammathur/extensions");
     assert!(!brew_log(&d).contains("install"), "{}", brew_log(&d));
     assert!(!d.fx.paths.yard_toml().exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ext_add_of_a_pecl_only_extension_is_not_gated() {
+    let d = prepared("").await.start().await;
+    set_trust(&d, &[], &[]);
+    // No fake-ext-formulas entry: brew has no formula for mongodb, so the job builds it
+    // with pecl and nothing is installed from the untrusted tap.
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "mongodb", "php": "8.4"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("fake pecl") && l.contains("install mongodb")), "{lines:?}");
+    let log = brew_log(&d);
+    assert!(log.contains("search --formula"), "brew was asked whether the formula exists: {log}");
+    assert!(!log.contains("install"), "{log}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ext_add_gates_the_formula_brew_has_and_lets_a_trusted_one_through() {
+    let d = prepared("").await.start().await;
+    set_trust(&d, &[], &["shivammathur/extensions/xdebug@8.4"]);
+    std::fs::write(d.fx.brew.path().join("fake-ext-formulas"), "redis\nxdebug\n").unwrap();
+    let mut c = d.client().await;
+    let err = c.call("ext.add", json!({"name": "redis", "php": "8.4"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::FormulaUntrusted);
+    // A formula trusted by name goes through.
+    let (lines, error) = run_job(&mut c, "ext.add", json!({"name": "xdebug", "php": "8.4"})).await;
+    assert_eq!(error, None, "{lines:?}");
     d.shutdown().await.unwrap();
 }
 
@@ -255,6 +311,12 @@ async fn fake_brew_describes_and_installs_service_formulae() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "postgresql@17");
     let out = brew(&["search", "--formula", "/^mysql(@|$)/"]);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "mysql@8.4");
+    std::fs::write(prefix.join("fake-ext-formulas"), "redis\n").unwrap();
+    for (name, listed) in [("redis@8\\.4", true), ("mongodb@8\\.4", false), ("mysql@8\\.4", true)] {
+        let pattern = format!("/^(shivammathur\\/extensions\\/)?{name}$/");
+        let out = brew(&["search", "--formula", &pattern]);
+        assert_eq!(!String::from_utf8_lossy(&out.stdout).trim().is_empty(), listed, "{name}");
+    }
     let out = brew(&["info", "--json=v2", "mysql@8.4"]);
     let info: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(info["formulae"][0]["versions"]["stable"], "8.4.13");

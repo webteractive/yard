@@ -152,7 +152,8 @@ fn php_fpm(args: &[String]) -> ExitCode {
 ///
 /// Service formulae (M4b) come from `<prefix>/fake-formulae.json`, an array of the objects
 /// `brew info --json=v2` has under `formulae`: `search --formula "/^<base>(@|$)/"` prints
-/// the matching names, `info --json=v2 <name>` prints `{"formulae":[<entry>],"casks":[]}`
+/// the matching names (and `search --formula "/^(<tap>\/)?<name>$/"` finds one formula, also an
+/// extension formula listed in `fake-ext-formulas`), `info --json=v2 <name>` prints `{"formulae":[<entry>],"casks":[]}`
 /// (or fails as brew does), and `install <name>` makes `opt/<name>/bin/<binaries>` for the
 /// engine (`mysqld`; `postgres` and `initdb`; `redis-server`; `minio`), each this fake.
 /// `--version` prints `Homebrew ` and the contents of `fake-brew-version` (default `7.0.10`); `trust --json=v1`
@@ -327,13 +328,33 @@ fn brew_query(prefix: &Path, args: &[String]) -> Option<ExitCode> {
             Some(ExitCode::SUCCESS)
         }
         ("search", _) => {
-            // `--formula "/^<base>(@|$)/"`
-            let base = args.iter().find_map(|a| a.strip_prefix("/^")?.strip_suffix("(@|$)/"))?;
             let text = std::fs::read_to_string(prefix.join("fake-formulae.json")).unwrap_or_default();
             let entries: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
-            for name in entries.iter().filter_map(|e| e["name"].as_str()) {
-                if name == base || name.strip_prefix(base).is_some_and(|rest| rest.starts_with('@')) {
+            let names = entries.iter().filter_map(|e| e["name"].as_str());
+            let pattern = args.iter().find_map(|a| a.strip_prefix("/^")?.strip_suffix('/'))?;
+            if let Some(base) = pattern.strip_suffix("(@|$)") {
+                // `/^<base>(@|$)/`: the base formula and its `@` lines.
+                for name in
+                    names.filter(|n| *n == base || n.strip_prefix(base).is_some_and(|r| r.starts_with('@')))
+                {
                     println!("{name}");
+                }
+            } else if let Some(exact) = pattern.strip_suffix('$') {
+                // `/^(<tap>/)?<name>$/`: one formula, by full or bare name. An extension
+                // formula exists when `fake-ext-formulas` lists its module.
+                let exact = exact.replace('\\', "");
+                let (tap, name) = match exact.strip_prefix('(').and_then(|r| r.split_once(")?")) {
+                    Some((tap, name)) => (tap.to_string(), name.to_string()),
+                    None => (String::new(), exact),
+                };
+                if names.clone().any(|n| n == name) {
+                    println!("{name}");
+                }
+                let modules = std::fs::read_to_string(prefix.join("fake-ext-formulas")).unwrap_or_default();
+                if let Some((module, _)) = name.rsplit_once('@')
+                    && modules.lines().any(|m| m.trim() == module)
+                {
+                    println!("{tap}{name}");
                 }
             }
             Some(ExitCode::SUCCESS)
