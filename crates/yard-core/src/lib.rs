@@ -10,6 +10,7 @@ pub mod php;
 pub mod ports;
 pub mod project;
 pub mod render;
+pub mod services;
 pub mod shim;
 pub mod sites;
 pub mod supervise;
