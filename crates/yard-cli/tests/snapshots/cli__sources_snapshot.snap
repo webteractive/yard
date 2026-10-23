@@ -1,0 +1,14 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+SOURCE                                TAPPED  TRUSTED  INSTALLED
+shivammathur/php                      yes     no       -
+  shivammathur/php/php@7.1            -       yes      yes
+  shivammathur/php/php@8.4            -       no       yes
+shivammathur/extensions               yes     yes      -
+  shivammathur/extensions/xdebug@8.4  -       yes      no
+minio/stable                          no      no       -
+
+Trust one formula with yard source trust <formula>, or a whole tap with --tap.
+For agents and scripts: yard sources --json

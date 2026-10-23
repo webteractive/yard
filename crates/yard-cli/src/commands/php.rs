@@ -1,5 +1,6 @@
 //! `yard php`: list, install, uninstall and default.
 
+use super::sources::with_trust;
 use super::{Ctx, Outcome, run_job};
 use crate::cli::ConfigAction;
 use crate::output::{for_agents, table};
@@ -31,7 +32,8 @@ fn row(php: &PhpInfo) -> Vec<String> {
 
 pub async fn install(ctx: &Ctx, version: String) -> Outcome {
     let done = format!("Installed PHP {version}.\n");
-    run_job(ctx, methods::PHP_INSTALL, PhpParams { php: version }, || done).await
+    let params = PhpParams { php: version };
+    with_trust(ctx, || run_job(ctx, methods::PHP_INSTALL, params.clone(), || done.clone())).await
 }
 
 pub async fn uninstall(ctx: &Ctx, version: String) -> Outcome {

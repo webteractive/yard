@@ -30,7 +30,7 @@ triggers:
 - Offline commands (no daemon needed): `start`, `stop`, `version`, `doctor`,
   `ports check`, `install-shims`, `helper install|uninstall`. Everything else talks to `yardd`.
 - A command that would install something asks first (`yard init`, and `yard link` for a
-  project whose `.yard` needs a PHP or extension): it lists each need as
+  project whose `.yard` needs a PHP, extension or service): it lists each need as
   `  <what>  (<command>)` and asks `Install these? [y/N] ` only when stdin and stdout are
   terminals and `--json` is off. `--yes` skips the question. Otherwise it installs
   nothing and fails with `NEEDS_INSTALL`, hint `yard init --yes`, and the needs in
@@ -40,3 +40,21 @@ triggers:
   is no `.yard` yet, since codifying the running site is what init is for.
 - Yard never edits dotfiles. Shell setup is printed for the user to paste
   (`yard install-shims`, M2).
+- A command that asks about **trust** goes through `commands/sources.rs` `with_trust`: when
+  yardd answers an install with `FORMULA_UNTRUSTED` and stdin and stdout are terminals
+  (and `--json` is off), it asks `Trust <formula> (from the <tap> tap)? [y/N] `, and yes
+  runs the `sources.trust` job and repeats the call. `--yes` never answers it, and neither
+  does `init` or `link`: with no terminal it is the error, hint `yard source trust <formula>`.
+  `php install`, `ext add`, `service add` and `settle` all call through it.
+- A command that deletes data (`yard service remove`) asks `Delete <i> and its data? [y/N] `
+  (`--yes` skips). With no terminal and no `--yes` it deletes nothing and fails with
+  `NEEDS_CONFIRMATION`; the hint is the exact command with `--yes`, keeping `--keep-data`.
+- A command whose method answers before the work is done (`yard service start`, `restart`,
+  `port`) polls `services.list` until the instance is `running` (60 s). A `failed` one prints
+  its last log lines on stderr, then the error (`JOB_FAILED`, hint `yard service logs <i>`).
+- A command that follows a stream (`yard service logs -f`) subscribes before it fetches the
+  tail, registers its SIGINT handler before printing, and exits 0 on Ctrl-C.
+- Output meant to be pasted (`yard env`) has no `For agents and scripts` footer and no
+  blank lines of its own: notes are `# …` comments, and what to do about an empty result
+  goes to stderr. A request the daemon resolves against a directory (`env`, `info`) sends
+  the canonicalized absolute path, since yardd's working directory is not the CLI's.

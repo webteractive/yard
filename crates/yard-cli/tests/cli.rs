@@ -1052,3 +1052,712 @@ fn init_replace_is_sent() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(d.params("sites.init")[0]["replace"], true);
 }
+
+// ---- M4b: services, env, info and sources ----
+
+fn account(user: Option<&str>, password: Option<&str>) -> Value {
+    json!({"user": user, "password": password})
+}
+
+fn service(name: &str, engine: &str, version: Option<&str>, port: u16, state: Value, who: Value) -> Value {
+    json!({
+        "name": name, "engine": engine, "version": version, "formula": format!("{engine}@x"),
+        "ports": [{"name": name, "port": port}], "state": state, "stopped_by_user": state == json!("stopped"),
+        "account": who, "console": null, "used_by": [],
+    })
+}
+
+fn mysql(state: Value) -> Value {
+    service("mysql-8.4", "mysql", Some("8.4"), 3307, state, account(Some("root"), Some("")))
+}
+
+fn services_list() -> Vec<Value> {
+    let mut redis = service("redis", "redis", None, 6380, json!("running"), account(None, None));
+    redis["used_by"] = json!(["blog", "shop"]);
+    let mut mine = mysql(json!("running"));
+    mine["used_by"] = json!(["blog"]);
+    let mut minio = service(
+        "minio",
+        "minio",
+        None,
+        9000,
+        json!({"failed": {"last_lines": ["boom"]}}),
+        account(Some("minioadmin"), Some("minioadmin")),
+    );
+    minio["console"] = json!("http://127.0.0.1:9001");
+    vec![
+        mine,
+        service(
+            "postgres-17",
+            "postgres",
+            Some("17"),
+            5433,
+            json!("stopped"),
+            account(Some("dev"), Some("")),
+        ),
+        redis,
+        minio,
+    ]
+}
+
+#[test]
+fn services_table_snapshot() {
+    let d = MockDaemon::start(&[("services.list", Ok(json!(services_list())))]);
+    let out = d.yard().arg("services").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+#[test]
+fn services_json_is_proto_shape() {
+    let d = MockDaemon::start(&[("services.list", Ok(json!(services_list())))]);
+    let out = d.yard().args(["services", "--json"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed: Vec<yard_proto::ServiceInfo> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed.len(), 4);
+    assert_eq!(printed[0].name, "mysql-8.4");
+}
+
+#[test]
+fn empty_services_says_what_to_do() {
+    let d = MockDaemon::start(&[("services.list", Ok(json!([])))]);
+    let out = d.yard().arg("services").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    assert!(so.starts_with("No services yet. Add one with yard service add <engine>"), "{so}");
+    assert!(so.contains("mysql, postgres, redis or minio"), "{so}");
+}
+
+fn mysql_env() -> Value {
+    json!([{
+        "instance": "mysql-8.4",
+        "lines": ["DB_CONNECTION=mysql", "DB_HOST=127.0.0.1", "DB_PORT=3307", "DB_USERNAME=root", "DB_PASSWORD="],
+        "note": null,
+    }])
+}
+
+#[test]
+fn service_add_runs_the_job_then_prints_the_env_lines() {
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("services.list", vec![Ok(json!([])), Ok(json!([mysql(json!("running"))]))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("services.add", vec![Ok(json!({"job_id": "service-add-1"}))]),
+            ("env.print", vec![Ok(mysql_env())]),
+        ],
+        &[("services.add", job_events("service-add-1", json!(null)))],
+    );
+    let out =
+        d.yard().args(["service", "add", "mysql", "--version", "8.4", "--port", "3307"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    assert!(so.contains("==> Downloading php@7.1\n==> Pouring php@7.1\n"), "job lines: {so}");
+    assert!(so.contains("Added mysql-8.4."), "{so}");
+    assert!(so.contains("# mysql-8.4\nDB_CONNECTION=mysql\n"), "{so}");
+    assert!(so.contains("DB_PORT=3307\n"), "{so}");
+    assert_eq!(d.params("services.add"), [json!({"engine": "mysql", "version": "8.4", "port": 3307})]);
+    assert_eq!(d.params("env.print"), [json!({"service": "mysql-8.4"})]);
+}
+
+#[test]
+fn service_add_without_a_version_sends_none() {
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("services.list", vec![Ok(json!([])), Ok(json!([mysql(json!("running"))]))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("services.add", vec![Ok(json!({"job_id": "service-add-1"}))]),
+            ("env.print", vec![Ok(mysql_env())]),
+        ],
+        &[("services.add", job_events("service-add-1", json!(null)))],
+    );
+    let out = d.yard().args(["service", "add", "mysql"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("services.add"), [json!({"engine": "mysql"})]);
+    assert_eq!(d.params("env.print"), [json!({"service": "mysql-8.4"})], "the instance the add created");
+}
+
+#[test]
+fn service_add_json_prints_only_the_job_events() {
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("services.list", vec![Ok(json!([])), Ok(json!([mysql(json!("running"))]))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("services.add", vec![Ok(json!({"job_id": "service-add-1"}))]),
+        ],
+        &[("services.add", job_events("service-add-1", json!(null)))],
+    );
+    let out = d.yard().args(["service", "add", "mysql", "--json"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let events: Vec<Value> = stdout(&out).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(events.last().unwrap()["type"], "job_finished");
+}
+
+fn untrusted(formula: &str, tap: &str) -> YardError {
+    YardError::new(
+        ErrorCode::FormulaUntrusted,
+        format!("{formula} comes from the {tap} tap, which brew does not trust yet"),
+    )
+    .with_hint(format!("yard source trust {formula}"))
+    .with_data(json!({"formula": formula, "tap": tap}))
+}
+
+#[test]
+fn untrusted_install_without_tty_fails_with_hint() {
+    let formula = "shivammathur/php/php@8.3";
+    let d = MockDaemon::start(&[
+        ("subscribe", Ok(json!(null))),
+        ("php.install", Err(untrusted(formula, "shivammathur/php"))),
+        ("sources.trust", Ok(json!({"job_id": "source-trust-1"}))),
+    ]);
+    let out = d.yard().args(["php", "install", "8.3"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("comes from the shivammathur/php tap"), "{err}");
+    assert!(err.contains("  hint: yard source trust shivammathur/php/php@8.3"), "{err}");
+    assert!(d.params("sources.trust").is_empty(), "no terminal, no trust");
+    assert_eq!(d.params("php.install").len(), 1, "no retry");
+}
+
+#[test]
+fn untrusted_service_and_extension_installs_fail_the_same_way() {
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([]))),
+        ("subscribe", Ok(json!(null))),
+        ("services.add", Err(untrusted("minio/stable/minio", "minio/stable"))),
+        ("ext.add", Err(untrusted("shivammathur/extensions/xdebug@8.4", "shivammathur/extensions"))),
+    ]);
+    let out = d.yard().args(["service", "add", "minio"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("  hint: yard source trust minio/stable/minio"), "{}", stderr(&out));
+    let out = d.yard().args(["ext", "add", "xdebug"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("yard source trust shivammathur/extensions/xdebug@8.4"),
+        "{}",
+        stderr(&out)
+    );
+    let json_out = d.yard().args(["php", "install", "8.3", "--json"]).output().unwrap();
+    assert_eq!(json_out.status.code(), Some(1));
+    assert!(d.params("sources.trust").is_empty());
+}
+
+#[test]
+fn yes_does_not_grant_trust() {
+    let needs = json!([{"kind": "php", "php": "8.3"}]);
+    let d = MockDaemon::start(&[
+        ("sites.init", Ok(init_result(project_site(needs)))),
+        ("subscribe", Ok(json!(null))),
+        ("php.install", Err(untrusted("shivammathur/php/php@8.3", "shivammathur/php"))),
+        ("sources.trust", Ok(json!({"job_id": "source-trust-1"}))),
+    ]);
+    let out = d.yard().args(["init", "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("comes from the shivammathur/php tap"), "{err}");
+    assert!(err.contains("  hint: yard source trust shivammathur/php/php@8.3"), "{err}");
+    assert!(d.params("sources.trust").is_empty());
+    assert_eq!(d.params("php.install").len(), 1);
+}
+
+#[test]
+fn init_yes_adds_missing_services() {
+    let needs = json!([
+        {"kind": "php", "php": "7.3"},
+        {"kind": "extension", "name": "redis", "php": "7.3"},
+        {"kind": "service", "engine": "mysql", "version": "8.4"},
+        {"kind": "service", "engine": "redis"},
+    ]);
+    let services_needed = json!([
+        {"kind": "service", "engine": "mysql", "version": "8.4"},
+        {"kind": "service", "engine": "redis"},
+    ]);
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("sites.init", vec![Ok(init_result(project_site(needs)))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("php.install", vec![Ok(json!({"job_id": "php-install-1"}))]),
+            ("ext.add", vec![Ok(json!({"job_id": "ext-add-1"}))]),
+            ("services.add", vec![Ok(json!({"job_id": "service-add-1"}))]),
+            (
+                "services.list",
+                vec![
+                    Ok(json!([])),
+                    Ok(json!([mysql(json!("running"))])),
+                    Ok(json!([mysql(json!("running"))])),
+                    Ok(json!([
+                        mysql(json!("running")),
+                        service("redis", "redis", None, 6380, json!("running"), account(None, None))
+                    ])),
+                ],
+            ),
+            ("env.print", vec![Ok(mysql_env())]),
+            (
+                "sites.list",
+                vec![
+                    Ok(json!([project_site(json!([
+                        {"kind": "extension", "name": "redis", "php": "7.3"},
+                    ]))])),
+                    Ok(json!([project_site(services_needed)])),
+                    Ok(json!([project_site(json!([]))])),
+                ],
+            ),
+        ],
+        &[
+            ("php.install", job_events("php-install-1", json!(null))),
+            ("ext.add", job_events("ext-add-1", json!(null))),
+            ("services.add", job_events("service-add-1", json!(null))),
+        ],
+    );
+    let out = d.yard().args(["init", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("php.install"), [json!({"php": "7.3"})]);
+    assert_eq!(d.params("ext.add"), [json!({"name": "redis", "php": "7.3"})]);
+    assert_eq!(
+        d.params("services.add"),
+        [json!({"engine": "mysql", "version": "8.4"}), json!({"engine": "redis"})],
+        "each service need is added after PHP and the extensions"
+    );
+    assert!(stdout(&out).ends_with("Serving http://blog.yard:8080/\n"), "{}", stdout(&out));
+}
+
+#[test]
+fn service_remove_needs_confirmation_without_tty() {
+    let d = MockDaemon::start(&[("services.remove", Ok(json!(null)))]);
+    let out = d.yard().args(["service", "remove", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("error: "), "{err}");
+    assert!(err.contains("  hint: yard service remove mysql-8.4 --yes\n"), "{err}");
+    assert!(d.params("services.remove").is_empty(), "nothing is deleted without a yes");
+
+    let out = d.yard().args(["service", "remove", "mysql-8.4", "--keep-data", "--json"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["error"]["code"], "NEEDS_CONFIRMATION");
+    assert_eq!(printed["error"]["hint"], "yard service remove mysql-8.4 --keep-data --yes");
+    assert!(d.params("services.remove").is_empty());
+}
+
+#[test]
+fn service_remove_yes_calls_remove() {
+    let d = MockDaemon::start(&[("services.remove", Ok(json!(null)))]);
+    let out = d.yard().args(["service", "remove", "mysql-8.4", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Removed mysql-8.4.\n");
+    assert_eq!(d.params("services.remove"), [json!({"name": "mysql-8.4", "keep_data": false})]);
+
+    let out = d.yard().args(["service", "remove", "mysql-8.4", "--keep-data", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    assert!(so.starts_with("Removed mysql-8.4. Its data stays in "), "{so}");
+    assert!(so.trim_end().ends_with("services/mysql-8.4/data."), "{so}");
+    assert_eq!(d.params("services.remove")[1], json!({"name": "mysql-8.4", "keep_data": true}));
+}
+
+#[test]
+fn service_remove_refused_by_the_daemon_shows_its_error() {
+    let in_use = YardError::new(ErrorCode::ServiceInUse, "mysql-8.4 is used by blog, from its .yard")
+        .with_hint("edit /Users/me/code/blog/.yard");
+    let d = MockDaemon::start(&[("services.remove", Err(in_use))]);
+    let out = d.yard().args(["service", "remove", "mysql-8.4", "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("hint: edit /Users/me/code/blog/.yard"), "{}", stderr(&out));
+}
+
+#[test]
+fn service_start_waits_until_it_is_running() {
+    let d = MockDaemon::start_sequenced(&[
+        ("services.start", vec![Ok(mysql(json!("starting")))]),
+        ("services.list", vec![Ok(json!([mysql(json!("starting"))])), Ok(json!([mysql(json!("running"))]))]),
+    ]);
+    let out = d.yard().args(["service", "start", "mysql-8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Started mysql-8.4 on 127.0.0.1:3307.\n");
+    assert_eq!(d.params("services.start"), [json!({"name": "mysql-8.4"})]);
+    assert_eq!(d.params("services.list").len(), 2, "polled until running");
+}
+
+#[test]
+fn service_start_that_fails_shows_the_last_lines_and_exits_1() {
+    let failed = json!({"failed": {"last_lines": ["[ERROR] Can't start server", "[ERROR] Aborting"]}});
+    let d = MockDaemon::start_sequenced(&[
+        ("services.start", vec![Ok(mysql(json!("starting")))]),
+        ("services.list", vec![Ok(json!([mysql(failed)]))]),
+    ]);
+    let out = d.yard().args(["service", "start", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("  [ERROR] Aborting\n"), "last lines are shown: {err}");
+    assert!(err.contains("error: mysql-8.4 failed to start: [ERROR] Aborting"), "{err}");
+    assert!(err.contains("  hint: yard service logs mysql-8.4"), "{err}");
+    assert!(!stdout(&out).contains("Started"), "{}", stdout(&out));
+}
+
+#[test]
+fn service_stop_restart_and_port_send_their_params() {
+    let d = MockDaemon::start(&[
+        ("services.stop", Ok(mysql(json!("stopped")))),
+        ("services.restart", Ok(mysql(json!("running")))),
+        (
+            "services.port",
+            Ok(service(
+                "mysql-8.4",
+                "mysql",
+                Some("8.4"),
+                3310,
+                json!("running"),
+                account(Some("root"), Some("")),
+            )),
+        ),
+    ]);
+    let out = d.yard().args(["service", "stop", "mysql-8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Stopped mysql-8.4.\n");
+    let out = d.yard().args(["service", "restart", "mysql-8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Restarted mysql-8.4 on 127.0.0.1:3307.\n");
+    let out = d.yard().args(["service", "port", "mysql-8.4", "3310"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "mysql-8.4 now listens on 127.0.0.1:3310.\n");
+    assert_eq!(d.params("services.stop"), [json!({"name": "mysql-8.4"})]);
+    assert_eq!(d.params("services.restart"), [json!({"name": "mysql-8.4"})]);
+    assert_eq!(d.params("services.port"), [json!({"name": "mysql-8.4", "port": 3310})]);
+    let out = d.yard().args(["service", "stop", "mysql-8.4", "--json"]).output().unwrap();
+    let info: yard_proto::ServiceInfo = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(info.name, "mysql-8.4");
+}
+
+#[test]
+fn service_logs_prints_the_tail() {
+    let d = MockDaemon::start(&[("services.logs", Ok(json!(["one", "two"])))]);
+    let out = d.yard().args(["service", "logs", "redis", "-n", "50"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "one\ntwo\n");
+    assert_eq!(d.params("services.logs"), [json!({"name": "redis", "lines": 50})]);
+
+    let out = d.yard().args(["service", "logs", "redis", "--json"]).output().unwrap();
+    assert_eq!(serde_json::from_slice::<Vec<String>>(&out.stdout).unwrap(), ["one", "two"]);
+    assert_eq!(d.params("services.logs")[1], json!({"name": "redis"}));
+}
+
+#[test]
+fn service_logs_follow_prints_the_tail_then_the_units_new_lines() {
+    use std::io::{BufRead, BufReader};
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("services.logs", Ok(json!(["old one", "old two"])))],
+        &[(
+            "services.logs",
+            vec![
+                json!({"type": "log_line", "unit": "mysql-8.4", "line": "not this unit"}),
+                json!({"type": "log_line", "unit": "redis", "line": "a new line"}),
+            ],
+        )],
+    );
+    let mut child = d
+        .yard_process()
+        .args(["service", "logs", "redis", "-f"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id() as libc::pid_t;
+    // A hung follow must fail the test rather than stall the suite.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        // SAFETY: signalling our own child process.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    });
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut seen = vec![];
+    while seen.last().is_none_or(|l: &String| l != "a new line") {
+        let mut line = String::new();
+        if out.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        seen.push(line.trim_end().to_string());
+    }
+    // SAFETY: signalling our own child process.
+    unsafe { libc::kill(pid, libc::SIGINT) };
+    let status = child.wait().unwrap();
+    assert_eq!(seen, ["old one", "old two", "a new line"]);
+    assert_eq!(status.code(), Some(0), "Ctrl-C ends a follow cleanly");
+    assert_eq!(d.params("subscribe"), [json!({"topics": ["logs"]})]);
+}
+
+fn two_blocks() -> Value {
+    json!([
+        {"instance": "mysql-8.4", "lines": ["DB_CONNECTION=mysql", "DB_HOST=127.0.0.1", "DB_PORT=3307", "DB_USERNAME=root", "DB_PASSWORD="], "note": null},
+        {"instance": "postgres-17", "lines": ["DB_CONNECTION=pgsql", "DB_HOST=127.0.0.1", "DB_PORT=5433", "DB_USERNAME=dev", "DB_PASSWORD="], "note": "both set DB_*; the second block wins in a .env"},
+        {"instance": "redis-7", "lines": [], "note": "redis-7 is not added: yard service add redis"},
+        {"instance": "redis", "lines": ["REDIS_HOST=127.0.0.1", "REDIS_PORT=6380", "REDIS_PASSWORD=null"], "note": null},
+    ])
+}
+
+#[test]
+fn env_snapshot() {
+    let d = MockDaemon::start(&[("env.print", Ok(two_blocks()))]);
+    let out = d.yard().arg("env").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+#[test]
+fn env_json_is_proto_shape() {
+    let d = MockDaemon::start(&[("env.print", Ok(two_blocks()))]);
+    let out = d.yard().args(["env", "--json"]).output().unwrap();
+    let blocks: Vec<yard_proto::EnvBlock> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(blocks.len(), 4);
+}
+
+#[test]
+fn env_sends_the_canonical_working_directory() {
+    let d = MockDaemon::start(&[("env.print", Ok(mysql_env()))]);
+    let dir = tempfile::tempdir().unwrap();
+    let out = d.yard().arg("env").current_dir(dir.path()).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let params = d.params("env.print");
+    let sent = Path::new(params[0]["path"].as_str().unwrap()).to_path_buf();
+    assert!(sent.is_absolute());
+    assert_eq!(sent, dir.path().canonicalize().unwrap(), "symlinks resolved, as /var is /private/var");
+    assert!(params[0].get("site").is_none() && params[0].get("service").is_none());
+}
+
+#[test]
+fn env_site_and_service_flags_are_sent() {
+    let d = MockDaemon::start(&[("env.print", Ok(mysql_env()))]);
+    let out = d.yard().args(["env", "--site", "blog"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = d.yard().args(["env", "--service", "mysql-8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("env.print")[0], json!({"site": "blog"}));
+    assert_eq!(d.params("env.print")[1], json!({"service": "mysql-8.4"}));
+}
+
+#[test]
+fn env_for_a_project_with_no_services_says_so_on_stderr() {
+    let detail = json!({
+        "site": project_site(json!([])), "php_full": "8.4.3",
+        "sources": {"php": "project_file", "docroot": "default", "secure": "default"}, "services": [],
+    });
+    let d = MockDaemon::start(&[("env.print", Ok(json!([]))), ("sites.info", Ok(detail))]);
+    let out = d.yard().arg("env").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    let err = stderr(&out);
+    assert!(err.contains("blog's .yard lists no services"), "{err}");
+    assert!(err.contains("yard env --service <instance>"), "{err}");
+    assert_eq!(d.params("sites.info").len(), 1);
+    assert!(d.params("sites.info")[0]["path"].is_string());
+}
+
+#[test]
+fn env_with_no_blocks_outside_a_project_says_there_are_no_instances() {
+    let outside = YardError::new(ErrorCode::SiteNotFound, "x is not inside a linked project")
+        .with_hint("yard info <site> or yard link");
+    let d = MockDaemon::start(&[("env.print", Ok(json!([]))), ("sites.info", Err(outside))]);
+    let out = d.yard().arg("env").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("No service instances yet. Add one with yard service add <engine>"),
+        "{}",
+        stderr(&out)
+    );
+    let out = d.yard().args(["env", "--json"]).output().unwrap();
+    assert_eq!(stdout(&out).trim(), "[]");
+    assert_eq!(stderr(&out), "");
+}
+
+fn site_detail() -> Value {
+    let mut site = project_site(json!([
+        {"kind": "service", "engine": "postgres", "version": "17"},
+    ]));
+    site["php"] = json!("7.3");
+    site["kind"] = json!("php");
+    site["path"] = json!("/Users/me/code/blog");
+    site["docroot"] = json!("/Users/me/code/blog/public");
+    let mut mine = mysql(json!("running"));
+    mine["used_by"] = json!(["blog"]);
+    let mut minio = service(
+        "minio",
+        "minio",
+        None,
+        9000,
+        json!("running"),
+        account(Some("minioadmin"), Some("minioadmin")),
+    );
+    minio["console"] = json!("http://127.0.0.1:9001");
+    json!({
+        "site": site,
+        "php_full": "7.3.33",
+        "sources": {"php": "project_file", "docroot": "project_file", "secure": "default"},
+        "services": [
+            {"engine": "mysql", "want": "8.4", "service": mine},
+            {"engine": "postgres", "want": "17", "service": null},
+            {"engine": "redis", "want": null, "service": service("redis", "redis", None, 6380, json!("stopped"), account(None, None))},
+            {"engine": "minio", "want": null, "service": minio},
+        ],
+    })
+}
+
+fn ext_rows() -> Value {
+    json!([
+        {"name": "opcache", "source": "bundled", "enabled": true},
+        {"name": "redis", "source": "brew", "enabled": true},
+        {"name": "imagick", "source": "pecl", "enabled": true},
+        {"name": "xdebug", "source": "pecl", "enabled": false},
+    ])
+}
+
+#[test]
+fn info_snapshot() {
+    let d = MockDaemon::start(&[("sites.info", Ok(site_detail())), ("ext.list", Ok(ext_rows()))]);
+    let out = d.yard().arg("info").env("HOME", "/Users/me").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+    assert_eq!(d.params("ext.list"), [json!({"php": "7.3"})]);
+}
+
+#[test]
+fn info_for_a_proxy_shows_its_target() {
+    let mut proxy = serde_json::to_value(sites().remove(1)).unwrap();
+    proxy["secure"] = json!(true);
+    let detail =
+        json!({"site": proxy, "php_full": null, "sources": {"secure": "sites_toml"}, "services": []});
+    let d = MockDaemon::start(&[("sites.info", Ok(detail))]);
+    let out = d.yard().args(["info", "api"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+    assert!(d.params("ext.list").is_empty(), "a proxy has no PHP");
+}
+
+#[test]
+fn info_sends_the_site_or_the_canonical_directory() {
+    let d = MockDaemon::start(&[("sites.info", Ok(site_detail())), ("ext.list", Ok(ext_rows()))]);
+    let out = d.yard().args(["info", "blog"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let dir = tempfile::tempdir().unwrap();
+    let out = d.yard().arg("info").current_dir(dir.path()).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let params = d.params("sites.info");
+    assert_eq!(params[0], json!({"site": "blog"}));
+    assert_eq!(params[1], json!({"path": dir.path().canonicalize().unwrap().display().to_string()}));
+}
+
+#[test]
+fn info_json_is_the_site_detail() {
+    let d = MockDaemon::start(&[("sites.info", Ok(site_detail()))]);
+    let out = d.yard().args(["info", "--json"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let detail: yard_proto::SiteDetail = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(detail.php_full.as_deref(), Some("7.3.33"));
+    assert!(d.params("ext.list").is_empty(), "--json prints the SiteDetail and nothing else");
+}
+
+#[test]
+fn info_outside_a_project_is_the_daemons_error() {
+    let outside = YardError::new(ErrorCode::SiteNotFound, "/tmp is not inside a linked project")
+        .with_hint("yard info <site> or yard link");
+    let d = MockDaemon::start(&[("sites.info", Err(outside))]);
+    let out = d.yard().arg("info").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("hint: yard info <site> or yard link"), "{}", stderr(&out));
+}
+
+fn sources_list() -> Value {
+    json!([
+        {"tap": "shivammathur/php", "tapped": true, "trusted": false, "formulae": [
+            {"name": "shivammathur/php/php@7.1", "trusted": true, "installed": true},
+            {"name": "shivammathur/php/php@8.4", "trusted": false, "installed": true},
+        ]},
+        {"tap": "shivammathur/extensions", "tapped": true, "trusted": true, "formulae": [
+            {"name": "shivammathur/extensions/xdebug@8.4", "trusted": true, "installed": false},
+        ]},
+        {"tap": "minio/stable", "tapped": false, "trusted": false, "formulae": []},
+    ])
+}
+
+#[test]
+fn sources_snapshot() {
+    let d = MockDaemon::start(&[("sources.list", Ok(sources_list()))]);
+    let out = d.yard().arg("sources").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+    let out = d.yard().args(["sources", "--json"]).output().unwrap();
+    let rows: Vec<yard_proto::SourceInfo> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn source_trust_and_untrust_run_their_jobs() {
+    let d = MockDaemon::start_with_events(
+        &[
+            ("subscribe", Ok(json!(null))),
+            ("sources.trust", Ok(json!({"job_id": "source-trust-1"}))),
+            ("sources.untrust", Ok(json!({"job_id": "source-untrust-1"}))),
+        ],
+        &[
+            ("sources.trust", job_events("source-trust-1", json!(null))),
+            ("sources.untrust", job_events("source-untrust-1", json!(null))),
+        ],
+    );
+    let out = d.yard().args(["source", "trust", "minio/stable/minio"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).ends_with("Trusted minio/stable/minio.\n"), "{}", stdout(&out));
+    let out = d.yard().args(["source", "untrust", "shivammathur/php", "--tap"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).ends_with("Untrusted shivammathur/php.\n"), "{}", stdout(&out));
+    assert_eq!(d.params("sources.trust"), [json!({"target": "minio/stable/minio", "tap": false})]);
+    assert_eq!(d.params("sources.untrust"), [json!({"target": "shivammathur/php", "tap": true})]);
+}
+
+#[test]
+fn doctor_sends_client_env() {
+    let d = MockDaemon::start(&[("doctor", Ok(json!({"checks": []})))]);
+    let out = d
+        .yard()
+        .arg("doctor")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("HOMEBREW_FORBIDDEN_FORMULAE", "php@7.1")
+        .env("HOMEBREW_FORBIDDEN_TAPS", "bad/tap")
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .env("HOMEBREW_GITHUB_API_TOKEN", "must-not-be-sent")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        d.params("doctor"),
+        [
+            json!({"client_env": {"HOMEBREW_FORBIDDEN_FORMULAE": "php@7.1", "HOMEBREW_FORBIDDEN_TAPS": "bad/tap"}})
+        ]
+    );
+    let out = d.yard().arg("doctor").env("XDG_CONFIG_HOME", "/x/config").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("doctor")[1]["client_env"]["XDG_CONFIG_HOME"], "/x/config");
+}
+
+#[test]
+fn the_new_commands_have_help_and_json() {
+    for args in [
+        vec!["services"],
+        vec!["service", "add"],
+        vec!["service", "remove"],
+        vec!["service", "start"],
+        vec!["service", "stop"],
+        vec!["service", "restart"],
+        vec!["service", "logs"],
+        vec!["service", "port"],
+        vec!["env"],
+        vec!["info"],
+        vec!["sources"],
+        vec!["source", "trust"],
+        vec!["source", "untrust"],
+    ] {
+        let mut full = args.clone();
+        full.push("--help");
+        let (_root, out) = offline(&full);
+        assert!(out.status.success(), "{args:?}");
+        let text = stdout(&out);
+        assert!(text.lines().next().is_some_and(|l| !l.trim().is_empty()), "{args:?}: {text}");
+        assert!(text.contains("--json"), "{args:?}: {text}");
+    }
+}

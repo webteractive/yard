@@ -279,7 +279,7 @@ yard services                                     list instances
 yard service add <engine> [--version <v>] [--port <p>] [--yes]
 yard service remove <instance> [--keep-data] [--yes]
 yard service start|stop|restart <instance>
-yard service logs <instance> [-f]
+yard service logs <instance> [-f] [-n <lines>]
 yard service port <instance> <port>
 yard env [--site <name>] [--service <instance>]
 yard info [<site>]
@@ -327,6 +327,28 @@ follows the cli-output rule.
   `log_line` events.
 - **`port`** is §6.
 
+Settled in M4b task 13 (`yard-cli` `commands/services.rs`) **(builder's calls)**:
+
+- `add` prints the job's lines, then `Added <i>. For your .env:` and the `yard env` lines of
+  the instance it created (found as the one new instance of that engine in `services.list`,
+  since the daemon picks the default line). With `--json` it prints only the job's events,
+  as `php install` does. `--yes` is accepted and does nothing: `add` asks nothing but the
+  trust question, which `--yes` never answers.
+- `remove` asks before it calls the daemon, so a `SERVICE_IN_USE` refusal comes after the
+  answer. Declining is `NEEDS_CONFIRMATION` too, as declining `Install these?` is
+  `NEEDS_INSTALL`. With `--keep-data` the hint keeps the flag, so it never turns into a
+  delete of the data.
+- `start`, `restart` and `port` answer while the instance is `starting`, so the CLI polls
+  `services.list` every 200 ms for up to 60 s. `failed` prints the last 10 log lines the
+  daemon gave, then `error: <i> failed to start: <last line>` with hint `yard service logs
+  <i>` and exits 1; a timeout is the same error code with its own message.
+- `logs -n <lines>` sets the tail (the daemon's `lines`). `-f` prints the tail, then every
+  `log_line` event for that unit until Ctrl-C, which exits 0; with `--json` each line is a
+  `log_line` event on its own line.
+- ACCOUNT is `<user> (no password)`, `— (no auth)` or `<user> / <password>`, from the
+  `Account` the daemon returns (never a name hard-coded in the CLI). The PORT column is the
+  instance's first port (MinIO's API port).
+
 ### 7.3 `yard env`
 
 Prints `KEY=value` lines for `.env`, grouped under a `# <instance>` comment per service.
@@ -357,6 +379,13 @@ Settled in M4b task 11 (`env.print`, `rpc/info.rs`) **(builder's calls)**:
   contains it, when projects nest. A linked project with no `.yard` asks for nothing, so it
   prints no blocks; a directory in no linked project prints every instance, like no flag.
   `--service` with an unknown instance is `SERVICE_NOT_FOUND`.
+- The CLI prints a block as `# <instance>`, then its `# note`, then its lines, with a blank
+  line between blocks. A block with a note and no lines is just `# <note>`, which already
+  names the instance. With no blocks it prints nothing on stdout, and says why on stderr:
+  the site's `.yard` lists no services (it asks `sites.info` which), or there are no
+  instances yet. The spec has no flag for "every instance": `yard env` run outside a linked
+  project prints them all, and `--service` prints one. It sends the canonicalized
+  absolute directory, never a relative path.
 - The `both set DB_*` comment goes on the second block whenever two printed blocks both
   set `DB_*` (a project cannot list two MySQL lines, but "every instance" can have two),
   and never on a block with no lines. A missing versioned engine's fix names its line
@@ -397,6 +426,19 @@ eepower   http://eepower.yard:8080          serving
 - A proxied site shows its target instead of `php`, `docroot` and `extensions`.
 - `--json` gives a `SiteDetail` object: `SiteInfo` plus the per-setting sources, the PHP
   patch version and the `ServiceInfo` of each service.
+
+Settled in M4b task 13 (`yard-cli` `commands/info.rs`) **(builder's calls)**:
+
+- `SiteDetail` carries no extension list, so the human output asks `ext.list` for the site's
+  PHP line and shows the extensions Yard added that are enabled (not the bundled ones; `none`
+  when there are none). If that call fails the line is left out. `--json` makes no extra call.
+- `path` shows the home directory as `~`; `docroot` is relative to the path; `config` is
+  `.yard`, or `none` for a site without one. A service the `.yard` asks for that is not added
+  shows as `not added` in the table (`mysql-8.4`, `redis`), and `needs` carries the command.
+  MinIO's console URL is a `<i> console  <url>` line under the table. A `.yard` that does not
+  parse is an `error` line (with its hint) above `needs`.
+- The account column is two columns, the user and what follows it (`(no password)`,
+  `(no auth)`, `/ <password>`), so the users line up as in the layout above.
 
 Settled in M4b task 11 (`sites.info`, `rpc/info.rs`) **(builder's calls)**:
 

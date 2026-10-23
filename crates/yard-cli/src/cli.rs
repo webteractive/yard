@@ -141,12 +141,117 @@ pub enum Command {
     /// Print the PATH line that puts Yard's php, composer and pecl shims first, for your
     /// shell profile; warns when another php (Herd's) would still win. Edits nothing.
     InstallShims,
+    /// List the service instances (MySQL, PostgreSQL, Redis, MinIO), their ports and logins.
+    Services,
+    /// Add, remove, start, stop or inspect one service instance.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Print the .env lines for a project's services (or one instance). Writes no file.
+    ///
+    /// In a linked project, or with --site, it prints the services the project's .yard
+    /// lists. Outside a project, with no flag, it prints every instance.
+    Env {
+        /// The site; defaults to the linked project that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
+        /// Print only this instance, e.g. mysql-8.4 (see yard services).
+        #[arg(long)]
+        service: Option<String>,
+    },
+    /// Show what a site runs on: PHP, docroot, HTTPS, extensions, services and unmet needs.
+    Info {
+        /// The site; defaults to the linked project that contains the current directory.
+        site: Option<String>,
+    },
+    /// List the brew taps Yard installs from, and what brew trusts in them.
+    Sources,
+    /// Change what brew trusts from Yard's taps.
+    Source {
+        #[command(subcommand)]
+        action: SourceAction,
+    },
     /// Restart a unit: nginx, dnsmasq or php-fpm-<version>.
     Restart { unit: String },
     /// Install or remove the root helper; run with sudo.
     Helper {
         #[command(subcommand)]
         action: HelperAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceAction {
+    /// Add a service: install its formula with brew if needed, give it a port, initialize
+    /// its data, start it and print its .env lines. Shows brew's output; Ctrl-C cancels
+    /// and undoes what the add created.
+    Add {
+        /// mysql, postgres, redis or minio.
+        engine: String,
+        /// The release line, e.g. 8.4 for MySQL or 17 for PostgreSQL; the engine's default
+        /// when omitted. Redis and MinIO have none.
+        #[arg(long)]
+        version: Option<String>,
+        /// The port to pin; defaults to the engine's usual port, else the next free one.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Accepted for scripts. Adding asks nothing but the trust question, which --yes
+        /// never answers: trust is granted only by yard source trust or by answering it.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove an instance and its data (or keep the data), after asking.
+    ///
+    /// Refused while a linked site's .yard lists the instance. Never runs brew uninstall.
+    Remove {
+        instance: String,
+        /// Keep services/<instance>/data in place; everything else in the directory goes.
+        #[arg(long)]
+        keep_data: bool,
+        /// Skip the question; required when there is no terminal.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Start an instance (and keep it started across yardd restarts), then wait until it is up.
+    Start { instance: String },
+    /// Stop an instance; yardd leaves it stopped until yard service start.
+    Stop { instance: String },
+    /// Restart a running instance, then wait until it is up.
+    Restart { instance: String },
+    /// Print the end of an instance's log (100 lines), and with -f keep following it.
+    Logs {
+        instance: String,
+        /// Keep printing new lines until Ctrl-C.
+        #[arg(short, long)]
+        follow: bool,
+        /// How many lines of the tail to print (at most 10000).
+        #[arg(short = 'n', long, value_name = "N")]
+        lines: Option<usize>,
+    },
+    /// Move an instance to another port (a running instance restarts on it).
+    Port { instance: String, port: u16 },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SourceAction {
+    /// Have brew trust a formula (tap/repo/name), or with --tap a whole tap.
+    Trust {
+        /// A formula such as minio/stable/minio, or a tap such as minio/stable with --tap.
+        target: String,
+        /// Trust every formula in the tap.
+        #[arg(long)]
+        tap: bool,
+    },
+    /// Have brew stop trusting a formula, or with --tap a whole tap.
+    ///
+    /// What is installed keeps serving, since Yard runs kegs by path, but brew will no
+    /// longer load the formula to install, upgrade or remove it.
+    Untrust {
+        target: String,
+        /// Untrust the whole tap.
+        #[arg(long)]
+        tap: bool,
     },
 }
 

@@ -1,0 +1,22 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+blog   http://blog.yard:8080         needs setup
+  path        ~/code/blog
+  config      .yard
+  php         7.3.33       from .yard
+  docroot     public       from .yard
+  https       off          from default
+  extensions  redis, imagick
+
+  services                                account
+  mysql-8.4    running    127.0.0.1:3307  root        (no password)
+  postgres-17  not added
+  redis        stopped    127.0.0.1:6380  —           (no auth)
+  minio        running    127.0.0.1:9000  minioadmin  / minioadmin
+  minio console  http://127.0.0.1:9001
+
+  needs       PostgreSQL 17  (yard service add postgres --version 17)
+
+For agents and scripts: yard info --json

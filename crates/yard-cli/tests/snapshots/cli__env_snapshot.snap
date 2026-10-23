@@ -1,0 +1,25 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+# mysql-8.4
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3307
+DB_USERNAME=root
+DB_PASSWORD=
+
+# postgres-17
+# both set DB_*; the second block wins in a .env
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5433
+DB_USERNAME=dev
+DB_PASSWORD=
+
+# redis-7 is not added: yard service add redis
+
+# redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6380
+REDIS_PASSWORD=null

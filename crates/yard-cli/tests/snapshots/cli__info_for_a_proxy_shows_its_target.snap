@@ -1,0 +1,9 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+api   http://api.yard:8080          serving
+  target      http://127.0.0.1:3000
+  https       on           from sites.toml
+
+For agents and scripts: yard info --json

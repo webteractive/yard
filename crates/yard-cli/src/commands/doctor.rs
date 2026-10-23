@@ -3,13 +3,13 @@
 use super::{Ctx, Outcome};
 use crate::client::CliError;
 use crate::output::for_agents;
-use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 use yard_core::brew::{Brew, DEFAULT_PREFIX};
 use yard_core::paths::{HELPER_SOCKET, RESOLVER_DIR};
 use yard_daemon::doctor::{self, DoctorInput};
 use yard_daemon::helper_client::HelperClient;
-use yard_proto::methods;
+use yard_proto::methods::{self, DoctorParams};
 use yard_proto::{CheckStatus, DoctorReport};
 
 /// Status column width plus the id column width, so continuation lines line up.
@@ -17,12 +17,22 @@ const ID_WIDTH: usize = 16;
 
 pub async fn doctor(ctx: &Ctx) -> Outcome {
     let report: DoctorReport = match ctx.client().await {
-        Ok(mut client) => client.call(methods::DOCTOR, Value::Null).await?,
+        Ok(mut client) => client.call(methods::DOCTOR, DoctorParams { client_env: client_env() }).await?,
         Err(CliError::DaemonNotRunning) => offline(ctx).await,
         Err(e) => return Err(e),
     };
     ctx.emit(&report, || human(&report));
     Ok(doctor::exit_code(&report))
+}
+
+/// What this shell sets that brew reads and that yardd, started by launchd, may not have:
+/// `XDG_CONFIG_HOME` (it moves brew's trust file) and every `HOMEBREW_FORBIDDEN_*`. Nothing
+/// else leaves the shell: a forwarded variable could switch a brew check off as easily as on.
+fn client_env() -> BTreeMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .filter(|(k, _)| k == "XDG_CONFIG_HOME" || k.starts_with("HOMEBREW_FORBIDDEN_"))
+        .collect()
 }
 
 async fn offline(ctx: &Ctx) -> DoctorReport {

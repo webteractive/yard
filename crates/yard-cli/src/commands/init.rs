@@ -1,10 +1,9 @@
 //! `yard init`, and `settle`: installing what a project's `.yard` needs, after asking.
 //! `yard link` settles too, since linking a cloned project applies its file.
 
-use super::{Ctx, Outcome, cwd, run_job};
+use super::{Ctx, Outcome, confirm, cwd, finished, interactive, run_job, services, sources};
 use crate::client::CliError;
 use serde_json::{Value, json};
-use std::io::{BufRead, IsTerminal, Write};
 use yard_proto::methods::{self, ExtAddParams, InitParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
@@ -73,7 +72,8 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     }
 
     let mut site = site;
-    // Service needs are skipped here until the CLI adds them (M4b Task 13).
+    // PHP first, then extensions (they need a PHP), then services. A formula brew does not
+    // trust is the install's error: `--yes` skips the question above, never the trust one.
     let php: Vec<String> = site
         .needs
         .iter()
@@ -84,7 +84,9 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         .collect();
     for v in &php {
         let done = format!("Installed PHP {v}.\n");
-        finished(run_job(ctx, methods::PHP_INSTALL, PhpParams { php: v.clone() }, || done).await)?;
+        let params = PhpParams { php: v.clone() };
+        let install = || run_job(ctx, methods::PHP_INSTALL, params.clone(), || done.clone());
+        finished(sources::with_trust(ctx, install).await)?;
     }
     if !php.is_empty() {
         // The new PHP may have some of the extensions compiled in.
@@ -101,9 +103,24 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     for (name, php) in &exts {
         let done = format!("Added {name} to PHP {php}.\n");
         let params = ExtAddParams { name: name.clone(), php: Some(php.clone()) };
-        finished(run_job(ctx, methods::EXT_ADD, params, || done).await)?;
+        let add = || run_job(ctx, methods::EXT_ADD, params.clone(), || done.clone());
+        finished(sources::with_trust(ctx, add).await)?;
     }
     if !exts.is_empty() {
+        site = refetch(ctx, &site.name).await?;
+    }
+    let wanted: Vec<(String, Option<String>)> = site
+        .needs
+        .iter()
+        .filter_map(|n| match n {
+            Need::Service { engine, version } => Some((engine.clone(), version.clone())),
+            Need::Php { .. } | Need::Extension { .. } => None,
+        })
+        .collect();
+    for (engine, version) in &wanted {
+        services::add_instance(ctx, engine, version.as_deref(), None).await?;
+    }
+    if !wanted.is_empty() {
         site = refetch(ctx, &site.name).await?;
     }
     if let Some(e) = &site.project_error {
@@ -125,14 +142,6 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     Ok(site)
 }
 
-/// A job `run_job` stopped waiting for (Ctrl-C twice) ends the command with its code.
-fn finished(outcome: Outcome) -> Result<(), CliError> {
-    match outcome? {
-        0 => Ok(()),
-        code => std::process::exit(code),
-    }
-}
-
 async fn refetch(ctx: &Ctx, name: &str) -> Result<SiteInfo, CliError> {
     let sites: Vec<SiteInfo> = ctx.client().await?.call(methods::SITES_LIST, Value::Null).await?;
     sites.into_iter().find(|s| s.name == name).ok_or_else(|| {
@@ -140,19 +149,4 @@ async fn refetch(ctx: &Ctx, name: &str) -> Result<SiteInfo, CliError> {
             .with_hint("yard sites lists them")
             .into()
     })
-}
-
-/// A person to ask: stdin and stdout are terminals, and the output is not `--json`.
-fn interactive(ctx: &Ctx) -> bool {
-    !ctx.json && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
-}
-
-fn confirm(question: &str) -> bool {
-    print!("{question}");
-    let _ = std::io::stdout().flush();
-    let mut answer = String::new();
-    if std::io::stdin().lock().read_line(&mut answer).is_err() {
-        return false;
-    }
-    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }

@@ -1,5 +1,6 @@
 //! `yard ext` and `yard xdebug`: PHP extensions.
 
+use super::sources::with_trust;
 use super::{Ctx, Outcome, cwd, run_job};
 use crate::output::{for_agents, table};
 use std::path::Path;
@@ -58,5 +59,6 @@ pub async fn add(ctx: &Ctx, name: String, php: Option<String>) -> Outcome {
     let stem = Path::new(&name).file_stem().map_or(name.clone(), |s| s.to_string_lossy().into_owned());
     let module = stem.strip_prefix("php_").unwrap_or(&stem);
     let done = format!("Added {module} to {}.\n", shown(&php));
-    run_job(ctx, methods::EXT_ADD, ExtAddParams { name, php }, || done).await
+    let params = ExtAddParams { name, php };
+    with_trust(ctx, || run_job(ctx, methods::EXT_ADD, params.clone(), || done.clone())).await
 }

@@ -2,23 +2,30 @@
 //! exit code; `run` turns errors into exit codes 1 and 3.
 
 mod doctor;
+mod env;
 mod ext;
 mod helper;
+mod info;
 mod init;
 mod lifecycle;
 mod php;
 mod ports;
+mod services;
 mod shims;
 mod sites;
+mod sources;
 mod trust;
 mod units;
 mod version;
 
-use crate::cli::{Cli, Command, ExtAction, HelperAction, OnOff, PhpAction, PortsAction};
+use crate::cli::{
+    Cli, Command, ExtAction, HelperAction, OnOff, PhpAction, PortsAction, ServiceAction, SourceAction,
+};
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
 use clap::CommandFactory;
 use serde::Serialize;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use yard_core::Paths;
 use yard_proto::methods::{self, JobParams};
@@ -115,6 +122,31 @@ pub async fn run(cli: Cli) -> i32 {
         }
         Command::Ext { action: ExtAction::Remove { name, php } } => ext::remove(&ctx, name, php).await,
         Command::Xdebug { state, php } => ext::xdebug(&ctx, matches!(state, OnOff::On), php).await,
+        Command::Services => services::list(&ctx).await,
+        Command::Service { action } => match action {
+            ServiceAction::Add { engine, version, port, yes: _ } => {
+                services::add(&ctx, engine, version, port).await
+            }
+            ServiceAction::Remove { instance, keep_data, yes } => {
+                services::remove(&ctx, instance, keep_data, yes).await
+            }
+            ServiceAction::Start { instance } => services::start(&ctx, instance).await,
+            ServiceAction::Stop { instance } => services::stop(&ctx, instance).await,
+            ServiceAction::Restart { instance } => services::restart(&ctx, instance).await,
+            ServiceAction::Logs { instance, follow, lines } => {
+                services::logs(&ctx, instance, follow, lines).await
+            }
+            ServiceAction::Port { instance, port } => services::port(&ctx, instance, port).await,
+        },
+        Command::Env { site, service } => env::env(&ctx, site, service).await,
+        Command::Info { site } => info::info(&ctx, site).await,
+        Command::Sources => sources::list(&ctx).await,
+        Command::Source { action: SourceAction::Trust { target, tap } } => {
+            sources::change(&ctx, target, tap, true).await
+        }
+        Command::Source { action: SourceAction::Untrust { target, tap } } => {
+            sources::change(&ctx, target, tap, false).await
+        }
         Command::InstallShims => shims::install(&ctx),
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
@@ -197,6 +229,38 @@ pub async fn run_job<P: Serialize>(
             _ => {}
         }
     }
+}
+
+/// A job `run_job` stopped waiting for (Ctrl-C twice) ends the command with its code.
+pub fn finished(outcome: Outcome) -> Result<(), CliError> {
+    match outcome? {
+        0 => Ok(()),
+        code => std::process::exit(code),
+    }
+}
+
+/// A person to ask: stdin and stdout are terminals, and the output is not `--json`.
+pub fn interactive(ctx: &Ctx) -> bool {
+    !ctx.json && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Asks a y/N question on stdout and reads the answer from stdin; anything but y or yes is no.
+pub fn confirm(question: &str) -> bool {
+    print!("{question}");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    if std::io::stdin().lock().read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// The current directory, canonicalized, for a request yardd resolves against its own
+/// working directory: the daemon runs elsewhere and compares real paths.
+pub fn cwd_absolute() -> Result<String, YardError> {
+    let dir = cwd()?;
+    let real = std::fs::canonicalize(&dir).unwrap_or(dir);
+    Ok(real.display().to_string())
 }
 
 /// The current directory, as a Yard error when it is gone.
