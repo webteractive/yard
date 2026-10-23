@@ -2,7 +2,7 @@
 
 use yard_core::Paths;
 use yard_core::brew::Brew;
-use yard_core::config::{SitesConfig, YardConfig};
+use yard_core::config::{ServicesConfig, SitesConfig, YardConfig};
 use yard_core::generated::Hashes;
 use yard_core::ports::Registry;
 use yard_core::project::Projects;
@@ -14,6 +14,8 @@ use yard_proto::YardError;
 pub struct Snapshot {
     pub yard: YardConfig,
     pub sites_cfg: SitesConfig,
+    /// The service instances `services.toml` lists.
+    pub services: ServicesConfig,
     /// Each linked project's `.yard`, as last read.
     pub projects: Projects,
     pub registry: Registry,

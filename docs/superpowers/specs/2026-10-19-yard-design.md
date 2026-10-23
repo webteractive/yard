@@ -366,7 +366,7 @@ profile; Yard does not edit dotfiles.
   (Node, Vite, etc.); `yard unproxy <name>`.
 - **Docroot detection** order: `public/`, `web/`, `public_html/`, project root.
   Override: `yard docroot <path> [--site]`.
-- `yardd` watches `yard.toml`, `sites.toml` and `ports.toml` with FSEvents; an edit
+- `yardd` watches `yard.toml`, `sites.toml`, `ports.toml` and `services.toml` with FSEvents; an edit
   reconciles (debounced 500 ms), so a hand-added `[sites.<name>]` is served.
 
 ### 5.2 nginx
@@ -467,7 +467,8 @@ profile; Yard does not edit dotfiles.
   units get 30 s). A running nginx gets SIGQUIT instead, its graceful shutdown; a unit that
   has not passed a health check yet always gets SIGTERM.
 - A unit whose spec has a `pid_file` has it written on every spawn and removed when the
-  process is gone; `orphans::stop` reads it to stop what a killed `yardd` left behind.
+  process is gone; `orphans::stop` reads it to stop what a killed `yardd` left behind, which
+  yardd does at startup for every service instance, before its first reconcile.
 - Crash → restart with exponential backoff (1 s → 30 s). Five failures within
   60 s → `failed` state, retains the last 50 log lines, emits an event; no further
   restarts until `yard restart <unit>`.

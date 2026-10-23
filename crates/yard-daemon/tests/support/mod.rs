@@ -80,6 +80,46 @@ impl Fixture {
     }
 }
 
+impl Fixture {
+    /// A brew keg `opt/<name>` for a service formula (`mysql@8.4`, `postgresql@17`, `redis`,
+    /// `minio`) whose binaries are the fake, as the fake brew's `install` leaves it.
+    pub fn add_formula(&self, name: &str) {
+        let bins: &[&str] = if name.starts_with("mysql") {
+            &["mysqld"]
+        } else if name.starts_with("postgresql@") {
+            &["postgres", "initdb"]
+        } else if name == "redis" {
+            &["redis-server"]
+        } else if name == "minio" {
+            &["minio"]
+        } else {
+            panic!("add_formula: no engine binaries for {name}")
+        };
+        for bin in bins {
+            place(&self.brew.path().join("opt").join(name).join("bin").join(bin), |dst| {
+                symlink(&self.fake, dst)
+            });
+        }
+    }
+
+    /// Appends one `[services."<instance>"]` table to `services.toml`, as `yard service add`
+    /// would write it.
+    pub fn add_service(&self, instance: &str, formula: &str, stopped: bool) {
+        let (engine, line) = yard_core::services::parse_instance(instance).expect("an instance name");
+        let mut text = std::fs::read_to_string(self.paths.services_toml()).unwrap_or_default();
+        text.push_str(&format!("[services.\"{instance}\"]\nengine = \"{}\"\n", engine.key()));
+        if let Some(line) = line {
+            text.push_str(&format!("version = \"{line}\"\n"));
+        }
+        text.push_str(&format!("formula = \"{formula}\"\n"));
+        if stopped {
+            text.push_str("stopped = true\n");
+        }
+        text.push('\n');
+        std::fs::write(self.paths.services_toml(), text).unwrap();
+    }
+}
+
 fn place(dst: &Path, make: impl FnOnce(&Path) -> std::io::Result<()>) {
     std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
     make(dst).unwrap();

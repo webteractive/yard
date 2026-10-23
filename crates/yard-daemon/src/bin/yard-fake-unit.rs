@@ -1,4 +1,5 @@
-//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew and security, chosen by `argv[0]`. Each reads the
+//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, security and the service
+//! engines (mysqld, postgres, initdb, redis-server, minio), chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
 use std::io::Write;
@@ -21,6 +22,11 @@ fn main() -> ExitCode {
         Some("php") => php(&args),
         Some("pecl") => pecl(Path::new(&argv0), &args),
         Some("security") => security(Path::new(&argv0), &args),
+        Some("mysqld") => mysqld(Path::new(&argv0), &args),
+        Some("initdb") => initdb(Path::new(&argv0), &args),
+        Some("postgres") => postgres(&args),
+        Some("redis-server") => redis_server(&args),
+        Some("minio") => minio(&args),
         _ => mode(&args),
     }
 }
@@ -428,6 +434,86 @@ fn pecl(argv0: &Path, args: &[String]) -> ExitCode {
     }
 }
 
+/// `mysqld --initialize-insecure --datadir=D` creates `D/ibdata1`. `mysqld --defaults-file=F`
+/// listens on the `port` in `F`, and exits 1 with `unknown variable` when the file `F`
+/// includes (`!include <path>`, Yard's `overrides.conf`) contains `bad`, as mysqld refuses
+/// a line it does not know.
+fn mysqld(argv0: &Path, args: &[String]) -> ExitCode {
+    if args.iter().any(|a| a == "--initialize-insecure") {
+        let Some(data) = flag(args, "--datadir") else { return fail("mysqld needs --datadir".into()) };
+        return init_data(argv0, Path::new(data), "ibdata1");
+    }
+    let Some(conf) = flag(args, "--defaults-file") else {
+        return fail("mysqld needs --defaults-file".into());
+    };
+    let text = std::fs::read_to_string(conf).unwrap_or_default();
+    let included = text.lines().find_map(|l| l.trim().strip_prefix("!include ")).map(str::trim);
+    if let Some(overrides) = included
+        && std::fs::read_to_string(overrides).is_ok_and(|t| t.contains("bad"))
+    {
+        eprintln!("mysqld: [ERROR] unknown variable 'bad' in {overrides}");
+        return ExitCode::from(1);
+    }
+    let port = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("port")?.trim_start().strip_prefix('=')?.trim().parse().ok());
+    listen_tcp(port)
+}
+
+/// `initdb -D D` creates `D/PG_VERSION`.
+fn initdb(argv0: &Path, args: &[String]) -> ExitCode {
+    let Some(data) = flag(args, "-D") else { return fail("initdb needs -D".into()) };
+    init_data(argv0, Path::new(data), "PG_VERSION")
+}
+
+/// What `mysqld --initialize-insecure` and `initdb` share: wait `<prefix>/fake-init-delay`
+/// milliseconds, fail when `<prefix>/fake-init-fail` exists, else create `data/marker`.
+/// The prefix is three directories above the binary: `<prefix>/opt/<formula>/bin/<name>`.
+fn init_data(argv0: &Path, data: &Path, marker: &str) -> ExitCode {
+    let prefix = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
+    if let Some(ms) =
+        std::fs::read_to_string(prefix.join("fake-init-delay")).ok().and_then(|t| t.trim().parse().ok())
+    {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+    if prefix.join("fake-init-fail").exists() {
+        eprintln!("{}: initialization failed", argv0.display());
+        return ExitCode::from(1);
+    }
+    match std::fs::create_dir_all(data).and_then(|()| std::fs::write(data.join(marker), "")) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(format!("cannot initialize {}: {e}", data.display())),
+    }
+}
+
+/// `postgres -D D -c listen_addresses=… -c port=N …`; listens on `N`.
+fn postgres(args: &[String]) -> ExitCode {
+    let port = args.iter().find_map(|a| a.strip_prefix("port=")?.parse().ok());
+    listen_tcp(port)
+}
+
+/// `redis-server <conf>`; listens on the `port` in the conf.
+fn redis_server(args: &[String]) -> ExitCode {
+    let Some(conf) = args.first() else { return fail("redis-server needs a config file".into()) };
+    let text = std::fs::read_to_string(conf).unwrap_or_default();
+    listen_tcp(text.lines().find_map(|l| l.trim().strip_prefix("port ")?.trim().parse().ok()))
+}
+
+/// `minio server <data> --address A --console-address C`; listens on both.
+fn minio(args: &[String]) -> ExitCode {
+    let port = |name: &str| flag(args, name).and_then(|a| a.rsplit(':').next()?.parse::<u16>().ok());
+    let (Some(api), Some(console)) = (port("--address"), port("--console-address")) else {
+        return fail(format!("minio needs --address and --console-address: {args:?}"));
+    };
+    match TcpListener::bind(("127.0.0.1", console)) {
+        Ok(listener) => {
+            std::thread::spawn(move || serve(listener, false));
+        }
+        Err(e) => return fail(format!("cannot listen on {console}: {e}")),
+    }
+    listen_tcp(Some(api))
+}
+
 fn listen_tcp(port: Option<u16>) -> ExitCode {
     let Some(port) = port else { return fail("listen-tcp needs a port".into()) };
     match TcpListener::bind(("127.0.0.1", port)) {
@@ -500,13 +586,15 @@ fn signals(port: Option<u16>) -> ExitCode {
     listen_tcp(port)
 }
 
-/// Like `listen-tcp`, but ignores SIGTERM and SIGQUIT, so only SIGKILL stops it: a service
-/// that outlasts a stop timeout.
+/// Like `listen-tcp`, but ignores SIGTERM and SIGQUIT, so only SIGKILL (or SIGINT) stops it: a
+/// service that outlasts a stop timeout. SIGINT keeps its default action, which a shell's
+/// background job would otherwise have ignored.
 fn stubborn(port: Option<u16>) -> ExitCode {
-    // SAFETY: installing SIG_IGN.
+    // SAFETY: installing SIG_IGN and SIG_DFL.
     unsafe {
         libc::signal(libc::SIGTERM, libc::SIG_IGN);
         libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
     }
     listen_tcp(port)
 }

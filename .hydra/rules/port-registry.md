@@ -35,9 +35,12 @@ triggers:
   `run/nginx.pid` if it is brew's nginx and launchd is its parent (a yardd that was
   killed left it running); it would otherwise hold the port the new nginx needs.
 - Service units (`UnitSpec.pid_file`) are found after a killed yardd the same way, by
-  `orphans::stop(pid_file, program, grace)`: the process in `run/<instance>.pid` is stopped when
-  it is the unit's own binary (`proc_pidpath`, canonicalized) and launchd is its parent. Anything
-  else is left running, and a stale file is removed. A unit with two ports registers both
+  `orphans::stop(pid_file, program, grace, signal).await` (async, so it never blocks a runtime
+  thread): the process in `run/<instance>.pid` is stopped when it is the unit's own binary
+  (`proc_pidpath`, canonicalized) and launchd is its parent, with the unit's own stop signal (an
+  orphaned postgres gets SIGINT, its fast shutdown) and SIGKILL after `grace`. Anything else is left
+  running, and a stale file is removed. yardd runs it for every instance in `services.toml` at
+  startup, before the first reconcile (`services::stop_orphans`, 30 s grace). A unit with two ports registers both
   (`minio`, `minio-console`), and `reconcile::port_owner` maps each to its unit.
 - Every `PORT_IN_USE` names the holder with `holder::label` (`nginx-arm (pid 4534, Herd)`);
   a refused profile switch also lists them in `data.holders`.
@@ -64,7 +67,13 @@ triggers:
   the engine's usual one that no other entry holds, that is not reserved and that `is_free`;
   `allocate_exact` is `--port` (`PORT_IN_USE` if registered elsewhere or busy). Never use
   `preferred` for a service: `ensure` moves it back to its preferred port, which would change
-  `DB_PORT` under a project's `.env`. Reconcile only re-reads pinned entries.
+  `DB_PORT` under a project's `.env`. Reconcile only re-reads pinned entries (an entry the user
+  edited keeps its mode); one `ports.toml` lost is pinned again the same way
+  (`Reconciler::settle_service_ports`, around `reserved_ports`), and an instance whose port cannot
+  be had is a reconcile warning with no unit. `DaemonOptions.usual_ports` (keys `mysql`, `postgres`,
+  `redis`, `minio`, `minio-console`) replaces the engine's usual ports and `app_dirs` where DBngin
+  and Postgres.app are looked for; tests set the first from `free_port()` and the second to a
+  directory with neither, so no test binds 3306, 5432, 6379, 9000 or 9001.
 - While DBngin.app is installed, 3306, 5432 and 6379 are reserved, and while Postgres.app is
   installed, 5432 (`services::reserved::reserved_ports`, which looks for the app bundle in
   `/Applications` and `~/Applications` and reads none of their files). A probe only sees live

@@ -29,6 +29,7 @@ pub struct Daemon {
 const STARTUP: Duration = Duration::from_secs(60);
 
 pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Path) -> DaemonOptions {
+    let no_apps = paths.root().join("no-applications");
     DaemonOptions {
         paths,
         brew_prefix: brew.to_path_buf(),
@@ -39,6 +40,16 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         port_scan_interval: Duration::from_millis(100),
         shim: None,
         security: PathBuf::from("/nonexistent/security"),
+        // Every engine's usual port comes from the OS, so no test binds 3306, 5432, 6379,
+        // 9000 or 9001.
+        usual_ports: Some(
+            ["mysql", "postgres", "redis", "minio", "minio-console"]
+                .into_iter()
+                .map(|key| (key.to_string(), free_port()))
+                .collect(),
+        ),
+        // No DBngin.app or Postgres.app here, whatever this machine has installed.
+        app_dirs: vec![no_apps],
     }
 }
 

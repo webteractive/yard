@@ -217,7 +217,11 @@ Projects that need a stable MySQL use a versioned line.
   It is HTTPS when `secure_by_default` is on, with a certificate under
   `certs/services/`. The block sends `Host` as the upstream's address when the engine asks
   for it (MinIO's console may check it, as emailulator's does), so M4d's `mail.<tld>`
-  reuses this mechanism **(builder's calls)**.
+  reuses this mechanism **(builder's calls)**. The console URL `yard info` and `ServiceInfo`
+  show is `http(s)://minio.<tld>` with nginx's port for that scheme (`:8080`/`:8443`, left out
+  for 80/443), not the console's own port; it is `https` under `secure_by_default`, and absent
+  while a site holds the name. The certificate is `certs/services/minio.pem`, issued by
+  reconcile and renewed by the periodic scan like a site's.
 
 ## 6. Ports
 
@@ -246,6 +250,9 @@ Projects that need a stable MySQL use a versioned line.
   `yard ports set minio-console <port>` moves the console). It refuses a busy port, then
   restarts the instance. Once DBngin is gone, `yard service port mysql-8.4 3306` puts
   MySQL back on 3306. Yard never does this by itself.
+- If a user deletes an instance's entry from `ports.toml`, reconcile pins it again the same
+  way (usual port, or the next free one, around the reserved ports) and the instance
+  keeps running; an instance whose port cannot be had is a reconcile warning with no unit.
 - `yard service remove` drops the instance's registry entries.
 - A unit with two ports (MinIO) probes both before it starts, so `UnitSpec.port` became
   `UnitSpec.ports: Vec<(u16, Proto)>`; the first one held fails the unit, without backoff,
@@ -538,8 +545,10 @@ checklists say. The M4d plan is re-checked against the M4b plan before M4d is bu
   ports and data directories. On start, before the first reconcile, yardd stops a
   process recorded in `run/<instance>.pid` when it is the instance's own binary under
   `launchd`, the way `NginxCommand::stop_orphan` does for nginx **(builder's call)**.
-  `orphans::stop(pid_file, program, grace)` does it: SIGTERM, SIGKILL after `grace`, then it
-  removes the file. A file that is unreadable, names a dead process or a different program is
+  `orphans::stop(pid_file, program, grace, signal)` does it, async: the unit's own stop signal
+  (SIGINT for an orphaned postgres, its fast shutdown; SIGTERM for the others), SIGKILL after
+  `grace` (30 s, a service's stop timeout), then it removes the file. yardd runs it for every
+  instance in `services.toml` before the first reconcile. A file that is unreadable, names a dead process or a different program is
   stale and removed too; a live process of that program whose parent is not launchd belongs to a
   running yardd, so it and its file stay. The supervisor writes the file on every spawn
   (`UnitSpec.pid_file`) and removes it when the process is gone, and a unit's own timeout is

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 use yard_core::brew::Brew;
-use yard_core::config::{SitesConfig, YardConfig};
+use yard_core::config::{ServicesConfig, SitesConfig, YardConfig};
 use yard_core::project::{self, Projects};
 use yard_core::render::php::ini_loads;
 use yard_core::{Paths, PhpVersion};
@@ -51,11 +51,13 @@ pub fn read_projects(sites: &SitesConfig) -> Projects {
 
 /// Sets `needs` on each site served from a `.yard`. An extension is present when
 /// `yard.toml` manages it for the version (on or off), brew's `conf.d` loads it, or the
-/// version's PHP has it compiled in.
+/// version's PHP has it compiled in. A `[services]` entry is met by an instance in
+/// `services.toml`, running or not: a stopped or failed instance is not a need.
 pub fn fill_needs(
     sites: &mut [SiteInfo],
     projects: &Projects,
     yard: &YardConfig,
+    services: &ServicesConfig,
     brew: &Brew,
     paths: &Paths,
 ) {
@@ -83,5 +85,6 @@ pub fn fill_needs(
                 || loaded.contains(&m.to_lowercase())
         };
         site.needs = project::needs(file, v, &installed, &has);
+        site.needs.extend(project::service_needs(file, services));
     }
 }

@@ -1,4 +1,4 @@
-//! FSEvents on the three TOML files and each linked project's `.yard`; any change
+//! FSEvents on the four TOML files and each linked project's `.yard`; any change
 //! reconciles. The project directories are read from `sites.toml` at start and again
 //! whenever it changes. An edit
 //! in `nginx/overrides/` is tested with `nginx -t` and, if it passes, reloaded. Every
@@ -32,10 +32,11 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
         }
     };
     let overrides = canonical(&ctx.paths.nginx_dir().join("overrides"));
-    let tomls: BTreeSet<PathBuf> = [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml()]
-        .iter()
-        .map(|p| canonical(p))
-        .collect();
+    let tomls: BTreeSet<PathBuf> =
+        [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml(), ctx.paths.services_toml()]
+            .iter()
+            .map(|p| canonical(p))
+            .collect();
     let sites_toml = canonical(&ctx.paths.sites_toml());
     let mut projects = project_dirs(&ctx.paths);
     let mut watch = vec![canonical(ctx.paths.root()), overrides.clone()];

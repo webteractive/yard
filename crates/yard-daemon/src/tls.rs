@@ -9,7 +9,7 @@ use rcgen::{
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use time::{Duration, OffsetDateTime};
 use x509_parser::extensions::GeneralName;
@@ -62,6 +62,36 @@ pub fn ca_due(paths: &Paths, now: OffsetDateTime) -> bool {
 /// Issues `site`'s certificate for `host` and `*.host`, valid `days` from `now`, with a
 /// fresh P-256 key, signed by the stored CA.
 pub fn issue(paths: &Paths, site: &str, host: &str, now: OffsetDateTime, days: i64) -> Result<(), YardError> {
+    issue_at(paths, &paths.certs_dir(), &leaf_files(&paths.certs_dir(), site), host, now, days)
+}
+
+/// As `issue`, for a service's hostname (`minio.<tld>`): `certs/services/<name>.pem`, kept
+/// apart from the sites' so `prune_certs` and a site of the same name never meet.
+pub fn issue_service(
+    paths: &Paths,
+    name: &str,
+    host: &str,
+    now: OffsetDateTime,
+    days: i64,
+) -> Result<(), YardError> {
+    let dir = paths.services_certs_dir();
+    private_dir(&paths.certs_dir())?;
+    issue_at(paths, &dir, &leaf_files(&dir, name), host, now, days)
+}
+
+/// `(<dir>/<name>.pem, <dir>/<name>.key)`.
+fn leaf_files(dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+    (dir.join(format!("{name}.pem")), dir.join(format!("{name}.key")))
+}
+
+fn issue_at(
+    paths: &Paths,
+    dir: &Path,
+    (cert_file, key_file): &(PathBuf, PathBuf),
+    host: &str,
+    now: OffsetDateTime,
+    days: i64,
+) -> Result<(), YardError> {
     let ca = load_ca(paths)?.ok_or_else(|| YardError::internal("there is no usable CA to sign with"))?;
     let issuer = Issuer::from_ca_cert_pem(&ca.pem, ca.key).map_err(|e| failed("read the CA", e))?;
     let mut params = CertificateParams::new(vec![host.to_string(), format!("*.{host}")])
@@ -79,9 +109,9 @@ pub fn issue(paths: &Paths, site: &str, host: &str, now: OffsetDateTime, days: i
     let key = KeyPair::generate().map_err(|e| failed("generate a site key", e))?;
     let cert =
         params.signed_by(&key, &issuer).map_err(|e| failed(&format!("sign {host}'s certificate"), e))?;
-    private_dir(&paths.certs_dir())?;
-    write_private(&paths.cert_key(site), &key.serialize_pem())?;
-    write_file(&paths.cert(site), &cert.pem())
+    private_dir(dir)?;
+    write_private(key_file, &key.serialize_pem())?;
+    write_file(cert_file, &cert.pem())
 }
 
 /// What reconcile needs to know about `site`'s certificate; `None` when it or its key is
@@ -92,10 +122,20 @@ pub fn facts(paths: &Paths, site: &str) -> Option<CertFacts> {
 
 /// As `facts`, against `ca_pem` read once by the caller, e.g. for every secured site.
 pub fn facts_against(paths: &Paths, site: &str, ca_pem: Option<&[u8]>) -> Option<CertFacts> {
-    let leaf_pem = std::fs::read(paths.cert(site)).ok()?;
+    facts_of(&paths.cert(site), &paths.cert_key(site), ca_pem)
+}
+
+/// As `facts_against`, for a service's certificate under `certs/services/`.
+pub fn service_facts_against(paths: &Paths, name: &str, ca_pem: Option<&[u8]>) -> Option<CertFacts> {
+    let (cert, key) = leaf_files(&paths.services_certs_dir(), name);
+    facts_of(&cert, &key, ca_pem)
+}
+
+fn facts_of(cert: &Path, key: &Path, ca_pem: Option<&[u8]>) -> Option<CertFacts> {
+    let leaf_pem = std::fs::read(cert).ok()?;
     let (_, leaf) = parse_x509_pem(&leaf_pem).ok()?;
     let leaf = leaf.parse_x509().ok()?;
-    let key = KeyPair::from_pem(&std::fs::read_to_string(paths.cert_key(site)).ok()?).ok()?;
+    let key = KeyPair::from_pem(&std::fs::read_to_string(key).ok()?).ok()?;
     if key.subject_public_key_info() != leaf.public_key().raw {
         return None;
     }

@@ -8,7 +8,8 @@ use crate::jobs::Jobs;
 use crate::privileged::PrivilegedSockets;
 use crate::reconcile::Reconciler;
 use crate::supervisor::{Supervisor, SupervisorConfig};
-use crate::{portscan, rpc, watch};
+use crate::{portscan, rpc, services, watch};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,13 @@ pub struct DaemonOptions {
     pub shim: Option<PathBuf>,
     /// `/usr/bin/security`, which `ca.info` asks whether the login keychain trusts the CA.
     pub security: PathBuf,
+    /// The port each service is offered first, keyed `mysql`, `postgres`, `redis`, `minio`
+    /// and `minio-console`. `None` is the engine table's (3306, 5432, 6379, 9000, 9001);
+    /// tests set every one from `free_port()`, so they never bind a real database's port.
+    pub usual_ports: Option<BTreeMap<String, u16>>,
+    /// Where DBngin.app and Postgres.app would be installed. Their usual ports stay unpinned
+    /// while either is, since a probe only sees a running server.
+    pub app_dirs: Vec<PathBuf>,
 }
 
 impl DaemonOptions {
@@ -56,8 +64,17 @@ impl DaemonOptions {
             // Installed next to yardd.
             shim: std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("yard-shim"))),
             security: PathBuf::from("/usr/bin/security"),
+            usual_ports: None,
+            app_dirs: app_dirs(),
         }
     }
+}
+
+/// `/Applications` and `~/Applications`.
+fn app_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/Applications")];
+    dirs.extend(std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Applications")));
+    dirs
 }
 
 /// What every connection and background task shares.
@@ -103,7 +120,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
             bus.clone(),
             opts.resolver_dir.clone(),
         )?
-        .with_shim(opts.shim.clone()),
+        .with_shim(opts.shim.clone())
+        .with_services(opts.usual_ports.clone(), opts.app_dirs.clone()),
     );
     let jobs = Jobs::new(bus.clone());
     let ctx = Arc::new(Context {
@@ -123,6 +141,10 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| YardError::internal(format!("cannot set the mode of {}: {e}", socket.display())))?;
 
+    // A service a killed yardd left running holds its port and data directory.
+    for (instance, pid) in services::stop_orphans(&opts.paths, &ctx.brew).await {
+        tracing::warn!("stopped {instance} (pid {pid}), which an earlier yardd left running");
+    }
     match ctx.reconciler.reconcile().await {
         Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
         Err(e) => tracing::error!("first reconcile failed: {}", describe(&e)),

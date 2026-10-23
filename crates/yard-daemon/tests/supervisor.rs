@@ -532,7 +532,8 @@ async fn orphan_service_is_stopped_on_start() {
     let pid_file = dir.path().join("svc.pid");
     std::fs::write(&pid_file, format!("{pid}\n")).unwrap();
 
-    let stopped = orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_secs(2));
+    let stopped =
+        orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_secs(2), libc::SIGTERM).await;
     assert_eq!(stopped, Some(pid));
     assert!(support::wait_until(|| !alive(pid), Duration::from_secs(5)).await, "the orphan exited");
     assert!(
@@ -558,10 +559,35 @@ async fn orphan_that_ignores_sigterm_is_killed_after_the_grace() {
     std::fs::write(&pid_file, pid.to_string()).unwrap();
 
     let started = Instant::now();
-    let stopped = orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_millis(300));
+    let stopped =
+        orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_millis(300), libc::SIGTERM).await;
     assert_eq!(stopped, Some(pid));
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(support::wait_until(|| !alive(pid), Duration::from_secs(5)).await, "SIGKILL after the grace");
+    kill(pid);
+}
+
+#[tokio::test]
+async fn orphan_gets_the_units_own_stop_signal() {
+    // PostgreSQL's stop signal is SIGINT. `stubborn` ignores SIGTERM and SIGQUIT but not SIGINT,
+    // so with a long grace only the right signal ends it quickly.
+    let port = free_port();
+    let out = std::process::Command::new("/bin/sh")
+        .args(["-c", "\"$0\" stubborn \"$1\" >/dev/null 2>&1 & echo $!", FAKE, &port.to_string()])
+        .output()
+        .unwrap();
+    let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    assert!(support::wait_until(|| support::ppid(pid) == 1, Duration::from_secs(5)).await);
+    assert!(support::wait_until(|| support::served(port), Duration::from_secs(5)).await);
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("svc.pid");
+    std::fs::write(&pid_file, pid.to_string()).unwrap();
+
+    let started = Instant::now();
+    let stopped = orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_secs(20), libc::SIGINT);
+    assert_eq!(stopped.await, Some(pid));
+    assert!(started.elapsed() < Duration::from_secs(5), "SIGINT ended it, not the 20 s grace");
+    assert!(support::wait_until(|| !alive(pid), Duration::from_secs(5)).await);
     kill(pid);
 }
 
@@ -574,7 +600,9 @@ async fn orphan_ignores_other_programs() {
     let pid_file = dir.path().join("svc.pid");
     std::fs::write(&pid_file, pid.to_string()).unwrap();
 
-    let stopped = orphans::stop(&pid_file, std::path::Path::new("/bin/sh"), Duration::from_millis(200));
+    let stopped =
+        orphans::stop(&pid_file, std::path::Path::new("/bin/sh"), Duration::from_millis(200), libc::SIGTERM)
+            .await;
     assert_eq!(stopped, None);
     assert!(alive(pid), "an unrelated process is left running");
     assert!(support::served(port));
@@ -593,30 +621,32 @@ async fn orphan_that_still_has_a_parent_is_left_alone() {
     let pid_file = dir.path().join("svc.pid");
     std::fs::write(&pid_file, pid.to_string()).unwrap();
 
-    assert_eq!(orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_millis(200)), None);
+    let left =
+        orphans::stop(&pid_file, std::path::Path::new(FAKE), Duration::from_millis(200), libc::SIGTERM);
+    assert_eq!(left.await, None);
     assert!(alive(pid));
     h.sup.shutdown().await;
 }
 
-#[test]
-fn stale_pid_files_are_removed() {
+#[tokio::test]
+async fn stale_pid_files_are_removed() {
     let dir = tempfile::tempdir().unwrap();
     let program = std::path::Path::new(FAKE);
     let grace = Duration::from_millis(100);
 
     let missing = dir.path().join("missing.pid");
-    assert_eq!(orphans::stop(&missing, program, grace), None, "no file, nothing to do");
+    assert_eq!(orphans::stop(&missing, program, grace, libc::SIGTERM).await, None, "no file, nothing to do");
 
     let dead = dir.path().join("dead.pid");
     let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
     let gone = child.id();
     child.wait().unwrap();
     std::fs::write(&dead, gone.to_string()).unwrap();
-    assert_eq!(orphans::stop(&dead, program, grace), None);
+    assert_eq!(orphans::stop(&dead, program, grace, libc::SIGTERM).await, None);
     assert!(!dead.exists(), "a dead pid is stale");
 
     let junk = dir.path().join("junk.pid");
     std::fs::write(&junk, "not a pid").unwrap();
-    assert_eq!(orphans::stop(&junk, program, grace), None);
+    assert_eq!(orphans::stop(&junk, program, grace, libc::SIGTERM).await, None);
     assert!(!junk.exists());
 }

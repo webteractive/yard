@@ -7,6 +7,7 @@ use crate::events::EventBus;
 use crate::helper_client::HelperClient;
 use crate::nginx::NginxCommand;
 use crate::probe::{self, Proto};
+use crate::services;
 use crate::state::{Snapshot, State};
 use crate::supervisor::{Health, Reload, Supervisor, UnitSpec};
 use crate::tls;
@@ -19,20 +20,24 @@ use tokio::sync::Mutex;
 use yard_core::brew::Brew;
 use yard_core::config::edit::TomlFile;
 use yard_core::config::yard::DEFAULT_TLD;
-use yard_core::config::{load_sites, load_yard};
+use yard_core::config::{ServicesConfig, load_services, load_sites, load_yard};
 use yard_core::generated::{self, Action};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::php::system_timezone;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
-use yard_core::render::nginx::{default_index, nginx_main, nginx_site, setup_page};
+use yard_core::render::nginx::{default_index, nginx_main, nginx_site, service_site, setup_page};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
+use yard_core::services::render::config_file;
+use yard_core::services::reserved::reserved_ports;
 use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::tls::{LEAF_DAYS, needs_issue};
 use yard_core::{Paths, PhpVersion};
-use yard_proto::{CaInfo, ErrorCode, Event, PortMode, Profile, SiteInfo, SiteKind, UnitState, YardError};
+use yard_proto::{
+    CaInfo, ErrorCode, Event, PortMode, PortRef, Profile, SiteInfo, SiteKind, UnitState, YardError,
+};
 
 const USER_OWNED_NGINX: &str =
     "# USER-OWNED — Yard never rewrites this file. nginx directives for this site go here.\n";
@@ -59,6 +64,11 @@ pub struct Reconciler {
     resolver_dir: PathBuf,
     /// The `yard-shim` binary `bin/<shim>` links to; `None` leaves `bin/` alone.
     shim: Option<PathBuf>,
+    /// The port each service is offered first (`DaemonOptions.usual_ports`); `None` is the
+    /// engine table's.
+    usual_ports: Option<BTreeMap<String, u16>>,
+    /// Where DBngin.app and Postgres.app would be, for the ports they keep.
+    app_dirs: Vec<PathBuf>,
 }
 
 const HERD_APP: &str = "/Applications/Herd.app";
@@ -88,7 +98,21 @@ impl Reconciler {
             timezone: system_timezone(localtime.as_deref()),
             resolver_dir,
             shim: None,
+            usual_ports: None,
+            app_dirs: Vec::new(),
         })
+    }
+
+    /// Where service ports start (`None`: each engine's usual port) and where DBngin.app
+    /// and Postgres.app would be installed.
+    pub fn with_services(
+        mut self,
+        usual_ports: Option<BTreeMap<String, u16>>,
+        app_dirs: Vec<PathBuf>,
+    ) -> Self {
+        self.usual_ports = usual_ports;
+        self.app_dirs = app_dirs;
+        self
     }
 
     pub fn with_shim(mut self, shim: Option<PathBuf>) -> Self {
@@ -147,7 +171,8 @@ impl Reconciler {
         let state = self.state.lock().await;
         let Some(snap) = &state.snapshot else { return false };
         let mut secure = snap.resolution.sites.iter().filter(|s| s.secure).peekable();
-        if secure.peek().is_none() {
+        let console = secure_console(&snap.services, &snap.resolution.sites, &snap.yard, &snap.tld);
+        if secure.peek().is_none() && console.is_none() {
             return false;
         }
         let now = OffsetDateTime::now_utc();
@@ -158,6 +183,8 @@ impl Reconciler {
         let now = now.unix_timestamp();
         secure.any(|s| {
             needs_issue(tls::facts_against(&state.paths, &s.name, ca.as_deref()).as_ref(), &s.host, now)
+        }) || console.is_some_and(|(name, host)| {
+            needs_issue(tls::service_facts_against(&state.paths, name, ca.as_deref()).as_ref(), &host, now)
         })
     }
 
@@ -197,9 +224,10 @@ impl Reconciler {
         let mut report = ReconcileReport::default();
 
         // 1. Load config. A parse error keeps the last good state serving.
-        let loaded = load_yard(&state.paths)
-            .and_then(|y| Ok((y, load_sites(&state.paths)?, Registry::load(&state.paths)?)));
-        let ((yard, yard_warnings), sites_cfg, mut registry) = loaded?;
+        let loaded = load_yard(&state.paths).and_then(|y| {
+            Ok((y, load_sites(&state.paths)?, load_services(&state.paths)?, Registry::load(&state.paths)?))
+        });
+        let ((yard, yard_warnings), sites_cfg, services_cfg, mut registry) = loaded?;
         report.warnings.extend(yard_warnings);
         let tld = yard.effective_tld().to_string();
         // Moving to a TLD another tool's resolver claims would serve nothing (Herd's `.test`).
@@ -237,17 +265,28 @@ impl Reconciler {
             }
         }
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
+        // A service's ports were pinned when it was added. Reconcile only reads them, and
+        // pins a new one the same way when `ports.toml` lost its entry.
+        let service_ports = self.settle_service_ports(&services_cfg, &mut registry, &is_free, &mut report);
 
         // 3. Resolve sites.
         let projects = crate::project::read_projects(&sites_cfg);
         let mut resolution =
             sites::resolve(&yard, &sites_cfg, &projects, &tld, http, https, &|p: &Path| p.is_dir());
-        crate::project::fill_needs(&mut resolution.sites, &projects, &yard, &state.brew, &state.paths);
+        crate::project::fill_needs(
+            &mut resolution.sites,
+            &projects,
+            &yard,
+            &services_cfg,
+            &state.brew,
+            &state.paths,
+        );
         report.warnings.extend(resolution.warnings.iter().cloned());
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.
         let paths = state.paths.clone();
-        if issue_certs(&paths, &resolution.sites, &mut report)? {
+        let console = secure_console(&services_cfg, &resolution.sites, &yard, &tld);
+        if issue_certs(&paths, &resolution.sites, console.as_ref(), &mut report)? {
             state.nginx_reload_pending = true;
         }
 
@@ -294,11 +333,27 @@ impl Reconciler {
                 }
             }
         }
-        prepare_dirs(&paths, &resolution.sites, &inis).map_err(io_error)?;
+        // Each instance's own config, and `minio.<tld>` unless a site has the name.
+        let mut service_confs = BTreeMap::new();
+        for (instance, entry) in &services_cfg.services {
+            let Some(ports) = service_ports.get(instance) else { continue };
+            if let Some((file, text)) = config_file(entry.engine, instance, &paths, ports) {
+                service_confs.insert(instance.clone(), file.clone());
+                rendered.insert(file, text);
+            }
+        }
+        if serves_console(&services_cfg, &resolution.sites)
+            && let Some(ports) = service_ports.get("minio")
+            && let Some(console) = ports.iter().find(|p| p.name == "minio-console")
+        {
+            let secure = yard.secure_by_default;
+            rendered.insert(paths.nginx_service("minio"), service_site(&ctx, "minio", console.port, secure));
+        }
+        prepare_dirs(&paths, &resolution.sites, &inis, services_cfg.services.keys()).map_err(io_error)?;
 
         // 6. Write.
         let mut hashes = state.hashes.clone();
-        let mut managed = vec![paths.nginx_sites_dir(), paths.nginx_setup_dir()];
+        let mut managed = vec![paths.nginx_sites_dir(), paths.nginx_setup_dir(), paths.nginx_services_dir()];
         for dir in subdirs(&paths.root().join("php")) {
             managed.push(dir.join("conf.d"));
             managed.push(dir);
@@ -349,7 +404,7 @@ impl Reconciler {
         }
         state.hashes = hashes;
         // Only now: until the new confs passed, the old ones still named these files.
-        report.removed.extend(prune_certs(&paths, &resolution.sites));
+        report.removed.extend(prune_certs(&paths, &resolution.sites, console.is_some()));
 
         // 8. Apply units; restart the ones whose files changed and reload nginx. In the
         // privileged profile nginx inherits the helper's sockets, whose bind is the probe.
@@ -427,6 +482,31 @@ impl Reconciler {
                 pid_file: None,
             });
         }
+        for (instance, entry) in services_cfg.services.iter().filter(|(_, e)| !e.stopped) {
+            let Some(ports) = service_ports.get(instance) else { continue };
+            let cmd =
+                services::unit_command(&state.brew, &paths, entry.engine, instance, &entry.formula, ports);
+            if let Some(warning) = missing_keg(&state.brew, instance, &entry.formula, &cmd.program) {
+                report.warnings.push(warning);
+                continue;
+            }
+            if service_confs.get(instance).is_some_and(|conf| changed.contains(conf)) {
+                restart.push(instance.clone());
+            }
+            desired.push(UnitSpec {
+                name: instance.clone(),
+                program: cmd.program,
+                args: cmd.args,
+                env: cmd.env,
+                health: Health::Tcp(ports.first().map_or(0, |p| p.port)),
+                ports: ports.iter().map(|p| (p.port, Proto::Tcp)).collect(),
+                reload: Reload::Restart,
+                stop: cmd.stop_signal,
+                inherit: vec![],
+                stop_timeout: Some(services::STOP_TIMEOUT),
+                pid_file: Some(paths.service_pid(instance)),
+            });
+        }
         if !existing.contains("nginx")
             && let Some(pid) = self.nginx.stop_orphan().await
         {
@@ -486,8 +566,51 @@ impl Reconciler {
         for name in old.iter().filter(|n| !new.contains(n.as_str())) {
             self.bus.emit(Event::SiteRemoved { name: name.clone() });
         }
-        state.snapshot = Some(Snapshot { yard, sites_cfg, projects, registry, tld, resolution });
+        state.snapshot =
+            Some(Snapshot { yard, sites_cfg, services: services_cfg, projects, registry, tld, resolution });
         Ok(report)
+    }
+
+    /// The registry entries of every instance in `services.toml`, as the `PortRef`s its unit
+    /// command takes, main port first. An existing entry is read as it is (a user's edit of
+    /// `ports.toml` wins); a missing one is pinned at the first free port from the engine's
+    /// usual one, around the ports DBngin and Postgres.app keep. An instance whose port
+    /// cannot be had is a warning and has no unit.
+    fn settle_service_ports(
+        &self,
+        services: &ServicesConfig,
+        registry: &mut Registry,
+        is_free: &dyn Fn(u16) -> bool,
+        report: &mut ReconcileReport,
+    ) -> BTreeMap<String, Vec<PortRef>> {
+        let missing = services.services.iter().any(|(i, e)| {
+            services::port_entries(e.engine, i).iter().any(|(n, ..)| !registry.entries.contains_key(n))
+        });
+        let reserved =
+            if missing { reserved_ports(&self.app_dirs, &|p: &Path| p.exists()) } else { Default::default() };
+        let mut settled = BTreeMap::new();
+        'instances: for (instance, entry) in &services.services {
+            let mut ports = vec![];
+            for (name, key, usual) in services::port_entries(entry.engine, instance) {
+                let port = match registry.entries.get(&name) {
+                    Some(e) => e.port,
+                    None => {
+                        let usual =
+                            self.usual_ports.as_ref().and_then(|p| p.get(&key)).copied().unwrap_or(usual);
+                        match registry.allocate_from(&name, usual, &reserved, is_free) {
+                            Ok(port) => port,
+                            Err(e) => {
+                                report.warnings.push(format!("{instance}: {}", describe(&e)));
+                                continue 'instances;
+                            }
+                        }
+                    }
+                };
+                ports.push(PortRef { name, port });
+            }
+            settled.insert(instance.clone(), ports);
+        }
+        settled
     }
 
     /// Registered ports whose unit is running now: nginx-http and nginx-https belong to nginx.
@@ -537,10 +660,16 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
 }
 
 /// Makes the CA when a site is secure and issues each secure site whose certificate
-/// `needs_issue`. `Ok(true)` when it issued one.
-fn issue_certs(paths: &Paths, sites: &[SiteInfo], report: &mut ReconcileReport) -> Result<bool, YardError> {
+/// `needs_issue`, and likewise `console`, the `(name, host)` of a secured service host
+/// (`minio.<tld>`). `Ok(true)` when it issued one.
+fn issue_certs(
+    paths: &Paths,
+    sites: &[SiteInfo],
+    console: Option<&(&str, String)>,
+    report: &mut ReconcileReport,
+) -> Result<bool, YardError> {
     let secure: Vec<&SiteInfo> = sites.iter().filter(|s| s.secure).collect();
-    if secure.is_empty() {
+    if secure.is_empty() && console.is_none() {
         return Ok(false);
     }
     let now = OffsetDateTime::now_utc();
@@ -555,7 +684,45 @@ fn issue_certs(paths: &Paths, sites: &[SiteInfo], report: &mut ReconcileReport) 
             issued = true;
         }
     }
+    if let Some((name, host)) = console {
+        let facts = tls::service_facts_against(paths, name, ca.as_deref());
+        if needs_issue(facts.as_ref(), host, now.unix_timestamp()) {
+            tls::issue_service(paths, name, host, now, LEAF_DAYS)?;
+            report.written.push(paths.services_certs_dir().join(format!("{name}.pem")));
+            issued = true;
+        }
+    }
     Ok(issued)
+}
+
+/// Whether `minio.<tld>` is served: there is a `minio` instance and no site took the name.
+pub(crate) fn serves_console(services: &ServicesConfig, sites: &[SiteInfo]) -> bool {
+    services.services.contains_key("minio") && !sites.iter().any(|s| s.name == "minio")
+}
+
+/// `("minio", "minio.<tld>")` when that host is served over HTTPS, which `secure_by_default`
+/// decides: a service has no `secure` setting of its own.
+fn secure_console(
+    services: &ServicesConfig,
+    sites: &[SiteInfo],
+    yard: &yard_core::config::YardConfig,
+    tld: &str,
+) -> Option<(&'static str, String)> {
+    (yard.secure_by_default && serves_console(services, sites)).then(|| ("minio", format!("minio.{tld}")))
+}
+
+/// The warning for an instance whose binary is not there, or `None`. A keg directory with no
+/// binary in it is a broken install, which `brew install` skips, so that one says reinstall.
+fn missing_keg(brew: &Brew, instance: &str, formula: &str, program: &Path) -> Option<String> {
+    if program.exists() {
+        return None;
+    }
+    let keg = services::keg(brew, formula);
+    Some(if keg.exists() {
+        format!("{instance}: {} is missing (brew reinstall {formula})", program.display())
+    } else {
+        format!("{instance}: {} is missing (brew install {formula})", keg.display())
+    })
 }
 
 /// Who the CA's name says it belongs to: `Yard CA (<user>)`.
@@ -564,19 +731,19 @@ fn ca_user() -> String {
 }
 
 /// Removes every `certs/<name>.{pem,key}` whose site is not secure, and any `.yard-tmp`
-/// file an interrupted write left there.
-fn prune_certs(paths: &Paths, sites: &[SiteInfo]) -> Vec<PathBuf> {
+/// file an interrupted write left there; the same under `certs/services/` unless
+/// `console` (a secured `minio.<tld>`) keeps its certificate.
+fn prune_certs(paths: &Paths, sites: &[SiteInfo], console: bool) -> Vec<PathBuf> {
     let secure: BTreeSet<&str> = sites.iter().filter(|s| s.secure).map(|s| s.name.as_str()).collect();
-    let stale = |f: &Path| match f.extension().and_then(|e| e.to_str()) {
+    let stale = |f: &Path, keep: &dyn Fn(&str) -> bool| match f.extension().and_then(|e| e.to_str()) {
         Some("yard-tmp") => true,
-        Some("pem" | "key") => f.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !secure.contains(s)),
+        Some("pem" | "key") => f.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !keep(s)),
         _ => false,
     };
-    files_in(&paths.certs_dir())
-        .into_iter()
-        .filter(|f| stale(f))
-        .filter(|f| std::fs::remove_file(f).is_ok())
-        .collect()
+    let sites_certs = files_in(&paths.certs_dir()).into_iter().filter(|f| stale(f, &|s| secure.contains(s)));
+    let service_certs =
+        files_in(&paths.services_certs_dir()).into_iter().filter(|f| stale(f, &|s| console && s == "minio"));
+    sites_certs.chain(service_certs).filter(|f| std::fs::remove_file(f).is_ok()).collect()
 }
 
 fn files_in(dir: &Path) -> Vec<PathBuf> {
@@ -646,13 +813,19 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Directories nginx and the units write into, and the user-owned files the generated
-/// configs include, which must exist before `nginx -t`.
-fn prepare_dirs(paths: &Paths, sites: &[SiteInfo], versions: &BTreeSet<PhpVersion>) -> std::io::Result<()> {
+/// configs include, which must exist before `nginx -t` or a unit starts.
+fn prepare_dirs<'a>(
+    paths: &Paths,
+    sites: &[SiteInfo],
+    versions: &BTreeSet<PhpVersion>,
+    instances: impl Iterator<Item = &'a String>,
+) -> std::io::Result<()> {
     for dir in [
         paths.logs_dir(),
         paths.run_dir().join("nginx"),
         paths.nginx_sites_dir(),
         paths.nginx_setup_dir(),
+        paths.nginx_services_dir(),
         paths.nginx_dir().join("overrides"),
     ] {
         std::fs::create_dir_all(dir)?;
@@ -662,6 +835,10 @@ fn prepare_dirs(paths: &Paths, sites: &[SiteInfo], versions: &BTreeSet<PhpVersio
     }
     for v in versions {
         generated::ensure_user_file(&paths.php_overrides(*v), USER_OWNED_INI)?;
+    }
+    // Empty, so mysqld and redis have a file to include and the user's first line is theirs.
+    for instance in instances {
+        generated::ensure_user_file(&paths.service_overrides(instance), "")?;
     }
     Ok(())
 }
@@ -693,4 +870,30 @@ fn nginx_rejected(output: &str, rolled_back: bool) -> YardError {
 
 fn io_error(e: std::io::Error) -> YardError {
     YardError::internal(format!("writing generated files: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_keg_names_the_command_that_fixes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let brew = Brew::new(dir.path());
+        let program = dir.path().join("opt/mysql@8.4/bin/mysqld");
+        let keg = dir.path().join("opt/mysql@8.4");
+        assert_eq!(
+            missing_keg(&brew, "mysql-8.4", "mysql@8.4", &program),
+            Some(format!("mysql-8.4: {} is missing (brew install mysql@8.4)", keg.display()))
+        );
+        // A keg with no binary in it is a broken install, which `brew install` would skip.
+        std::fs::create_dir_all(&keg).unwrap();
+        assert_eq!(
+            missing_keg(&brew, "mysql-8.4", "mysql@8.4", &program),
+            Some(format!("mysql-8.4: {} is missing (brew reinstall mysql@8.4)", program.display()))
+        );
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, "").unwrap();
+        assert_eq!(missing_keg(&brew, "mysql-8.4", "mysql@8.4", &program), None);
+    }
 }

@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::{holder, portscan, tls};
 use std::path::{Path, PathBuf};
 use yard_core::brew::Brew;
-use yard_core::config::{YardConfig, load_sites, load_yard};
+use yard_core::config::{YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
@@ -76,10 +76,14 @@ impl View {
         };
         let sites_cfg = load_sites(paths);
         let registry = Registry::load(paths);
-        let config_error = [yard.as_ref().err(), sites_cfg.as_ref().err(), registry.as_ref().err()]
-            .into_iter()
-            .flatten()
-            .next();
+        let services = load_services(paths);
+        let config_error =
+            [yard.as_ref().err(), sites_cfg.as_ref().err(), registry.as_ref().err(), services.as_ref().err()]
+                .into_iter()
+                .flatten()
+                .next()
+                .cloned();
+        let services = services.unwrap_or_default();
         let tld = match (&yard, &registry) {
             (Ok(y), Ok(_)) => Some(y.effective_tld().to_string()),
             _ => None,
@@ -93,14 +97,14 @@ impl View {
                 projects = crate::project::read_projects(s);
                 let mut resolution =
                     sites::resolve(y, s, &projects, tld, http, https, &|p: &Path| p.is_dir());
-                crate::project::fill_needs(&mut resolution.sites, &projects, y, brew, paths);
+                crate::project::fill_needs(&mut resolution.sites, &projects, y, &services, brew, paths);
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }
             _ => None,
         };
         View {
-            config_error: config_error.cloned(),
+            config_error,
             default_php: yard.as_ref().map_or(PhpVersion::DEFAULT, |y| y.default_php),
             tld,
             registry: registry.ok(),

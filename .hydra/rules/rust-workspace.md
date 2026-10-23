@@ -28,7 +28,8 @@ triggers:
 - No `.unwrap()` / `.expect()` on daemon or helper runtime paths. Errors become a
   `YardError` with a hint. Tests may unwrap.
 - Tests use a temp `YARD_ROOT`, OS-assigned free ports and `yard-fake-unit` (via
-  `argv[0]` it stands in for nginx, dnsmasq and php-fpm and reads the configs Yard
+  `argv[0]` it stands in for nginx, dnsmasq and php-fpm, and for the service engines
+  (`mysqld`, `postgres`, `initdb`, `redis-server`, `minio`), and reads the configs Yard
   rendered). Its nginx runs in the foreground; with `NGINX` set it serves on every
   inherited socket and logs real nginx's `using inherited sockets from` line, which
   `support::inherited_starts` counts. A bare connect cannot prove inheritance, since
@@ -37,13 +38,21 @@ triggers:
   macOS write a crash report, and ReportCrash holds the process (and its sockets) while
   it does, which stalls stops and flakes tests. Its `signals <port>` mode logs which of
   SIGQUIT and SIGTERM stopped it, and `stubborn <port>` ignores both, so only SIGKILL (a stop
-  timeout) ends it.
+  timeout) or SIGINT ends it.
 - The fake `brew` (`<prefix>/bin/brew`) logs each call to `fake-brew.log` and the `HOMEBREW_*`
   keys it saw to `fake-brew-env.log`. `Fixture::new` seeds `fake-trust.json` with the
   `shivammathur/php` and `shivammathur/extensions` taps (what `brew trust --json=v1`
   prints; `brew trust|untrust` edit it); `fake-brew-version` sets `--version` (default
   7.0.10). Service formulae come from `fake-formulae.json` (`brew info --json=v2` objects)
   for `search`, `info --json=v2` and `install`.
+- The fake engines: `mysqld --defaults-file=F` listens on the `port` in `F` and exits 1 with
+  `unknown variable` when the overrides file `F` includes contains `bad`; `postgres -c port=N`,
+  `redis-server F` and `minio server … --address A --console-address C` listen where they are
+  told. `mysqld --initialize-insecure --datadir=D` and `initdb -D D` create `D/ibdata1` and
+  `D/PG_VERSION`, wait `<prefix>/fake-init-delay` ms and fail while `<prefix>/fake-init-fail`
+  exists. `Fixture::add_formula(name)` makes the keg `opt/<name>/bin/<binaries>` as the fake
+  brew's `install` does, and `Fixture::add_service(instance, formula, stopped)` appends an entry
+  to `services.toml`.
 - Keep unix socket paths under 104 bytes: put test sockets under a short
   `/tmp/yard-test-*` dir.
 - A test that reconciles, probes or runs doctor writes a `ports.toml` first
