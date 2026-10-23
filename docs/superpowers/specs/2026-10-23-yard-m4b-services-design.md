@@ -321,8 +321,9 @@ follows the cli-output rule.
   than writing `stopped = false`, so the file is clean again. **`restart`** is
   `units.restart` for the instance; on a stopped instance it refuses (`INVALID_ARGUMENT`, hint
   `yard service start <instance>`) and never clears `stopped` **(builder's call)**.
-- **`logs`** prints the last 100 lines of `logs/<instance>.log` (`lines` sets the count), read
-  from the end of the file, and nothing while there is no file; `-f` follows it through
+- **`logs`** prints the last 100 lines of `logs/<instance>.log` (`lines` sets the count, at most
+  10000), read from the end of the file in blocks (at most 8 MiB, so one huge line cannot make
+  it read the whole file), and nothing while there is no file; `-f` follows it through
   `log_line` events.
 - **`port`** is §6.
 

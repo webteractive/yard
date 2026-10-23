@@ -680,9 +680,15 @@ pub async fn remove(
 
 /// `services.stop` and `services.start`: sets `stopped` on the instance's entry, or removes
 /// the key (not `stopped = false`), so the user's file is as it was before the stop. The
-/// caller has checked that the entry exists, and reconciles afterwards.
+/// entry is checked inside the edit: one that a remove deleted since the caller looked is
+/// `SERVICE_NOT_FOUND` and nothing is saved, where a `set` would write a stub
+/// `[services.<i>] stopped = true` that `services.toml` cannot parse. The caller reconciles
+/// afterwards.
 pub fn set_stopped(paths: &Paths, instance: &str, stopped: bool) -> Result<(), YardError> {
     TomlFile::edit(&paths.services_toml(), |file| {
+        if file.doc().get("services").and_then(|s| s.get(instance)).is_none() {
+            return Err(not_found(instance));
+        }
         if stopped {
             file.set(&["services", instance, "stopped"], value(true));
         } else {
@@ -718,11 +724,21 @@ pub fn move_port(paths: &Paths, engine: Engine, instance: &str, port: u16) -> Re
 /// How far back from the end of a log the tail reads each time.
 const TAIL_BLOCK: u64 = 8 * 1024;
 
-/// The last `lines` lines of the file at `path`, read from its end in blocks, so a large
-/// log is never read whole. A file that is not there is no lines.
+/// The most lines `services.logs` returns, whatever a caller asks for.
+pub const MAX_LOG_LINES: usize = 10_000;
+
+/// The most bytes the tail reads, so one huge line cannot make it read the whole file; the
+/// first line of such a tail may then be a partial one.
+const MAX_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The last `lines` lines (at most `MAX_LOG_LINES`) of the file at `path`, read from its end
+/// in blocks, so a large log is never read whole: at most `MAX_TAIL_BYTES`, and each block's
+/// newlines are counted once. Bytes that are not UTF-8 are replaced, not an error. A file
+/// that is not there is no lines.
 pub fn tail(path: &std::path::Path, lines: usize) -> Result<Vec<String>, YardError> {
     use std::io::{Read, Seek, SeekFrom};
     let unreadable = |e: std::io::Error| YardError::internal(format!("cannot read {}: {e}", path.display()));
+    let lines = lines.min(MAX_LOG_LINES);
     if lines == 0 {
         return Ok(vec![]);
     }
@@ -731,18 +747,20 @@ pub fn tail(path: &std::path::Path, lines: usize) -> Result<Vec<String>, YardErr
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(unreadable(e)),
     };
-    let mut at = file.metadata().map_err(unreadable)?.len();
-    let mut bytes: Vec<u8> = Vec::new();
+    let size = file.metadata().map_err(unreadable)?.len();
+    let (mut at, mut newlines) = (size, 0usize);
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
     // One newline more than `lines` means the first line kept is a whole one.
-    while at > 0 && bytes.iter().filter(|b| **b == b'\n').count() <= lines {
+    while at > 0 && newlines <= lines && size - at < MAX_TAIL_BYTES {
         let block = at.min(TAIL_BLOCK);
         at -= block;
         file.seek(SeekFrom::Start(at)).map_err(unreadable)?;
         let mut chunk = vec![0; block as usize];
         file.read_exact(&mut chunk).map_err(unreadable)?;
-        chunk.extend_from_slice(&bytes);
-        bytes = chunk;
+        newlines += chunk.iter().filter(|b| **b == b'\n').count();
+        chunks.push(chunk);
     }
+    let bytes: Vec<u8> = chunks.into_iter().rev().flatten().collect();
     let text = String::from_utf8_lossy(&bytes);
     let all: Vec<&str> = text.lines().collect();
     Ok(all[all.len().saturating_sub(lines)..].iter().map(|l| l.to_string()).collect())

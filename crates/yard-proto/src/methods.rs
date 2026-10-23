@@ -314,7 +314,7 @@ pub struct ServicePortParams {
     pub port: u16,
 }
 
-/// `services.logs`: the last `lines` lines (a default when unset).
+/// `services.logs`: the last `lines` lines (100 when unset, and never more than 10000).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceLogsParams {
     pub name: String,

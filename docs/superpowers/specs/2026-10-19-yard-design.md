@@ -667,12 +667,13 @@ As built (daemon methods; the CLI is M4b Task 13):
   then deletes `services/<i>/`, keeping `data/` with `keep_data`. It never runs `brew
   uninstall`. Confirmation is the CLI's.
 - `services.stop` and `services.start { name }` set `stopped = true` on the entry, or remove the
-  key (never `stopped = false`, so the user's file is clean again), through `TomlFile`, then
-  reconcile; both answer a `ServiceInfo`, and a start answers once the unit is spawned
+  key (never `stopped = false`, so the user's file is clean again), through `TomlFile` (an
+  entry a remove deleted since the handler looked is `SERVICE_NOT_FOUND`, never a stub entry),
+  then reconcile; both answer a `ServiceInfo`, and a start answers once the unit is spawned
   (`starting` until its health check passes). `services.restart { name }` is `units.restart` for
   the instance and refuses a stopped one with `INVALID_ARGUMENT`, hint `yard service start <i>`;
   it never clears `stopped`. `services.logs { name, lines? }` answers the last `lines` (default
-  100) of `logs/<i>.log`, read from the end of the file, and an empty list while there is no file.
+  100, at most 10000) of `logs/<i>.log`, read from the end of the file (at most 8 MiB), and an empty list while there is no file.
   `services.port { name, port }` pins the instance's first port (MinIO's API port) with
   `allocate_exact` and reconciles, which restarts a running instance on it; a stopped one moves
   too and stays stopped. A port that is registered to another unit (MinIO's console included) or

@@ -1373,3 +1373,76 @@ async fn logs_of_a_missing_file_is_empty() {
     assert_eq!(got, json!([]));
     d.shutdown().await.unwrap();
 }
+
+// ---- fix round 1 ----
+
+/// A remove that lands between the handler's check and the edit must not leave a stub
+/// `[services.<i>] stopped = true`, which `services.toml` cannot parse.
+#[tokio::test]
+async fn a_stop_of_an_entry_that_vanished_writes_no_stub() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "running").await.expect("redis runs");
+    // The entry goes behind the handler's back, as a `services.remove` would.
+    std::fs::write(d.fx.paths.services_toml(), "# nothing here\n").unwrap();
+
+    for stopped in [true, false] {
+        let e = yard_daemon::services::set_stopped(&d.fx.paths, "redis", stopped).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ServiceNotFound, "{e:?}");
+    }
+    assert_eq!(services_text(&d), "# nothing here\n", "nothing was saved");
+    assert!(load_services(&d.fx.paths).unwrap().services.is_empty(), "and the file still parses");
+    let e = c.call("services.stop", json!({"name": "redis"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceNotFound);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn logs_asking_for_more_than_the_file_has_returns_every_line() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    write_log(&d, "redis", "one\ntwo\nthree\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let got = c.call("services.logs", json!({"name": "redis", "lines": 5000})).await.unwrap();
+    assert_eq!(got, json!(["one", "two", "three"]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_very_large_lines_is_clamped_and_answers_promptly() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    let text: String = (1..=30_000).map(|i| format!("line {i}\n")).collect();
+    write_log(&d, "redis", &text);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let started = Instant::now();
+    let got = c.call("services.logs", json!({"name": "redis", "lines": usize::MAX})).await.unwrap();
+    let got = got.as_array().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(got.len(), 10_000, "clamped to the most a call returns");
+    assert_eq!(got[0], json!("line 20001"));
+    assert_eq!(got[9_999], json!("line 30000"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_log_line_that_is_not_utf8_comes_back_lossy() {
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", true);
+    std::fs::create_dir_all(d.fx.paths.logs_dir()).unwrap();
+    std::fs::write(d.fx.paths.log("redis"), b"ok\nbad \xff\xfe bytes\nlast\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let got = c.call("services.logs", json!({"name": "redis", "lines": 3})).await.unwrap();
+    assert_eq!(got, json!(["ok", "bad \u{fffd}\u{fffd} bytes", "last"]));
+    d.shutdown().await.unwrap();
+}
