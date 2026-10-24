@@ -36,9 +36,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `yard env`, `yard info` and brew sources (`yard source trust`), designed in
   `docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md` (approved 2026-10-23),
   planned in `docs/superpowers/plans/2026-10-23-yard-m4b-services.md` (approved 2026-10-24).
-  M4b is built on branch `m4b-services` and its gates pass; `scripts/e2e-m4b.sh` is written
-  but has not run on this machine, so M4b is not verified until the maintainer approves the run and it
-  passes. M4c Node still needs a plan. The maintainer moved emailulator out of M4b into
+  M4b is built on branch `m4b-services` and verified on this machine on 2026-10-24 with
+  `scripts/e2e-m1.sh` and `e2e-m4b.sh` passing (maintainer approved the run; its first pass found that
+  postgres needs `LC_ALL` under launchd, fixed in 4420fb5). M4c Node still needs a plan. The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
@@ -141,6 +141,11 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - The extensions tap's `formula_renames.json` maps `redis@8.4` to `phpredis@8.4`, which
   `brew search` cannot see (it matches real formula names only) but `brew info` resolves, so
   the trust gate looks in the tap's files instead of asking `brew search`.
+- For the M4b e2e (2026-10-24) the maintainer approved `brew install mysql@8.4 postgresql@17 redis`
+  (with `abseil` and `protobuf`); they stay installed. `minio/stable/minio` was already
+  installed. Under launchd yardd has no locale, and postgres on macOS then exits at startup
+  ("postmaster became multithreaded during startup"), so Yard runs `postgres` and `initdb`
+  with `LC_ALL=en_US.UTF-8`.
 
 ## Build & test
 
