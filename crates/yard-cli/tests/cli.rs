@@ -1873,6 +1873,22 @@ fn info_snapshot() {
 }
 
 #[test]
+fn info_managed_snapshot() {
+    let mut detail = site_detail();
+    detail["site"]["php"] = json!("7.4");
+    detail["site"]["project_file"] = json!("/Users/me/Library/Application Support/Yard/sites/blog/.yard");
+    detail["site"]["project_file_kind"] = json!("managed");
+    detail["php_full"] = json!("7.4.33");
+    detail["sources"] = json!({"php": "managed_file", "docroot": "default", "secure": "default"});
+    detail["services"] = json!([]);
+    detail["site"]["needs"] = json!([]);
+    let d = MockDaemon::start(&[("sites.info", Ok(detail)), ("ext.list", Ok(json!([])))]);
+    let out = d.yard().arg("info").env("HOME", "/Users/me").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    insta::assert_snapshot!(stdout(&out));
+}
+
+#[test]
 fn info_for_a_proxy_shows_its_target() {
     let mut proxy = serde_json::to_value(sites().remove(1)).unwrap();
     proxy["secure"] = json!(true);

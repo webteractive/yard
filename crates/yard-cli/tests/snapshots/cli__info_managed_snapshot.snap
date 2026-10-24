@@ -1,0 +1,15 @@
+---
+source: crates/yard-cli/tests/cli.rs
+expression: stdout(&out)
+---
+blog   http://blog.yard:8080         serving
+  path        ~/code/blog
+  config      managed (~/Library/Application Support/Yard/sites/blog/.yard)
+  php         7.4.33       from managed
+  docroot     public       from default
+  https       off          from default
+  extensions  none
+
+  needs       nothing
+
+For agents and scripts: yard info --json

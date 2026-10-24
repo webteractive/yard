@@ -4,7 +4,9 @@ use super::services::{account_parts, address, failure_line, state_name};
 use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
-use yard_proto::{ExtInfo, Need, SettingSource, SiteDetail, SiteKind, SiteSource, YardError};
+use yard_proto::{
+    ExtInfo, Need, ProjectFileKind, SettingSource, SiteDetail, SiteKind, SiteSource, YardError,
+};
 
 /// The label column: `extensions` is the longest.
 const LABEL: usize = 10;
@@ -45,6 +47,7 @@ fn enabled(exts: &[ExtInfo]) -> Vec<String> {
 fn source_name(detail: &SiteDetail, key: &str) -> &'static str {
     match detail.sources.get(key) {
         Some(SettingSource::ProjectFile) => ".yard",
+        Some(SettingSource::ManagedFile) => "managed",
         Some(SettingSource::SitesToml) => "sites.toml",
         Some(SettingSource::Default) | None => "default",
     }
@@ -85,7 +88,12 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
                 None => tilde(docroot, home),
             };
             out.push_str(&line("path", &tilde(path, home)));
-            out.push_str(&line("config", if site.project_file.is_some() { ".yard" } else { "none" }));
+            let config = match (&site.project_file, site.project_file_kind) {
+                (Some(file), Some(ProjectFileKind::Managed)) => format!("managed ({})", tilde(file, home)),
+                (Some(_), _) => ".yard".to_string(),
+                (None, _) => "none".to_string(),
+            };
+            out.push_str(&line("config", &config));
             settings.push(("php", shown_php, source_name(detail, "php")));
             settings.push(("docroot", shown_docroot, source_name(detail, "docroot")));
         }

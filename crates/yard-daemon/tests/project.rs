@@ -933,6 +933,21 @@ async fn info_by_path_and_name() {
 }
 
 #[tokio::test]
+async fn info_names_the_managed_file_as_the_source() {
+    let (d, _dir, managed) = managed_site("php = \"7.4\"\n").await;
+    let mut c = d.client().await;
+    let detail = c.call("sites.info", json!({"site": "ee"})).await.unwrap();
+    assert_eq!(
+        detail["sources"],
+        json!({"php": "managed_file", "docroot": "default", "secure": "default"}),
+        "{detail}"
+    );
+    assert_eq!(detail["site"]["project_file"], managed.display().to_string(), "{detail}");
+    assert_eq!(detail["site"]["project_file_kind"], "managed", "{detail}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn info_names_sites_toml_as_the_source_and_a_proxy_has_no_php() {
     let d = prepared("").await;
     d.fx.add_php("7.3");

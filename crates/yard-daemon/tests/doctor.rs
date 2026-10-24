@@ -525,6 +525,77 @@ async fn doctor_reports_project_files() {
     assert!(!report.checks.iter().any(|c| c.id == "yard-php-ignored:met"));
 }
 
+impl Env {
+    /// Yard's managed `.yard` for `name`, with `text`; returns its path.
+    fn managed(&self, name: &str, text: &str) -> std::path::PathBuf {
+        let file = self.fx.paths.managed_project_file(name);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, text).unwrap();
+        file
+    }
+
+    /// A linked site `name` whose project has no `.yard`.
+    fn plain_site(&self, name: &str, dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let project = self.yard_site(name, "", dir);
+        std::fs::remove_file(project.join(".yard")).unwrap();
+        project
+    }
+}
+
+#[tokio::test]
+async fn a_managed_file_hidden_by_a_committed_one_warns() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    let project = e.yard_site("control", "php = \"8.4\"\n", &dir);
+    let file =
+        e.managed("control", &format!("php = \"7.4\"\nproject = {:?}\n", project.display().to_string()));
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "managed-file-ignored:control");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, format!("control has a committed .yard, so {} is ignored", file.display()));
+    assert_eq!(c.hint.as_deref(), Some(format!("rm {}", file.display()).as_str()));
+    assert_eq!(only(&report, "project-file:control").status, CheckStatus::Ok);
+}
+
+#[tokio::test]
+async fn a_managed_file_for_another_directory_warns() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = e.plain_site("app", &dir);
+    let file = e.managed("app", "php = \"7.4\"\nproject = \"/elsewhere/app\"\n");
+    let shop = e.plain_site("shop", &dir);
+    let unnamed = e.managed("shop", "php = \"7.4\"\n");
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "managed-file-mismatch:app");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, format!("{} is for /elsewhere/app, not {}", file.display(), app.display()));
+    assert_eq!(c.hint.as_deref(), Some(format!("cd {} && yard init --replace", app.display()).as_str()));
+    let c = only(&report, "managed-file-mismatch:shop");
+    assert_eq!(c.message, format!("{} is for no project, not {}", unnamed.display(), shop.display()));
+    not_present(&report, "managed-file-orphan");
+}
+
+#[tokio::test]
+async fn a_managed_file_with_no_linked_site_is_reported_without_a_warning() {
+    let e = env().await;
+    let gone = e.managed("gone", "php = \"7.4\"\nproject = \"/code/gone\"\n");
+    std::fs::write(e.fx.paths.sites_toml(), "[sites.api]\nproxy = \"http://127.0.0.1:3000\"\n").unwrap();
+    let api = e.managed("api", "php = \"7.4\"\nproject = \"/code/api\"\n");
+    std::fs::create_dir_all(e.fx.paths.managed_sites_dir().join("empty")).unwrap();
+
+    let report = e.offline(&e.helper).await;
+    for (name, file) in [("gone", &gone), ("api", &api)] {
+        let c = only(&report, &format!("managed-file-orphan:{name}"));
+        assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+        assert_eq!(c.message, format!("{} belongs to no linked site", file.display()));
+        assert_eq!(c.hint.as_deref(), Some(format!("yard link {name}").as_str()));
+    }
+    assert!(!report.checks.iter().any(|c| c.id == "managed-file-orphan:empty"));
+    not_present(&report, "managed-file-mismatch");
+}
+
 #[tokio::test]
 async fn an_unreadable_services_toml_makes_no_site_a_service_need() {
     let e = env().await;

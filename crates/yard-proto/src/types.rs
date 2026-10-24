@@ -491,6 +491,8 @@ pub struct SourceInfo {
 #[serde(rename_all = "snake_case")]
 pub enum SettingSource {
     ProjectFile,
+    /// The site's managed `.yard`, in Yard's data root.
+    ManagedFile,
     SitesToml,
     Default,
 }

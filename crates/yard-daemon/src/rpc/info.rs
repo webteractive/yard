@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use yard_core::PhpVersion;
 use yard_core::php::full_version;
-use yard_core::project::ServiceWant;
+use yard_core::project::{FileKind, ServiceWant};
 use yard_core::services::{Engine, env_lines, instance_name};
 use yard_proto::methods::{EnvParams, SiteDetailParams};
 use yard_proto::{
@@ -233,15 +233,19 @@ fn php_full(ctx: &Context, site: &SiteInfo) -> Option<String> {
     full_version(&read_link(&opt)?.to_string_lossy())
 }
 
-/// Where `php`, `docroot` and `secure` come from: the `.yard` when the project has one (it
-/// owns them: `sites.toml`'s are not read then), else `sites.toml` where its entry sets
-/// them, else the default. A proxy has only `secure`.
+/// Where `php`, `docroot` and `secure` come from: the `.yard` when the site has one, the
+/// project's or its managed one (it owns them: `sites.toml`'s are not read then), else
+/// `sites.toml` where its entry sets them, else the default. A proxy has only `secure`.
 fn sources(snap: &Snapshot, site: &SiteInfo) -> BTreeMap<String, SettingSource> {
     let entry = snap.sites_cfg.sites.get(&site.name);
     let project = snap.projects.get(&site.name);
     let file = project.and_then(|p| p.ok());
+    let from_file = match project.map(|p| p.kind) {
+        Some(FileKind::Managed) => SettingSource::ManagedFile,
+        _ => SettingSource::ProjectFile,
+    };
     let source = |in_file: bool, in_sites_toml: bool| match (project.is_some(), in_file, in_sites_toml) {
-        (true, true, _) => SettingSource::ProjectFile,
+        (true, true, _) => from_file,
         (true, false, _) => SettingSource::Default,
         (false, _, true) => SettingSource::SitesToml,
         (false, _, false) => SettingSource::Default,

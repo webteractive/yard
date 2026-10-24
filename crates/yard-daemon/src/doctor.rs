@@ -24,8 +24,8 @@ use yard_core::services::{Engine, instance_name, plain_line};
 use yard_core::sources::{tap_dir, tap_of};
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
-    Check, CheckStatus, DoctorReport, Holder, HolderKind, Need, PortInfo, PortMode, PortStatus, SiteInfo,
-    SiteKind, UnitInfo, UnitState, YardError,
+    Check, CheckStatus, DoctorReport, Holder, HolderKind, IgnoredBecause, Need, PortInfo, PortMode,
+    PortStatus, SiteInfo, SiteKind, UnitInfo, UnitState, YardError,
 };
 
 /// How many of a failed unit's last log lines the `units` check quotes.
@@ -238,6 +238,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         for site in sites {
             checks.extend(project_checks(site, view.yard.as_ref(), &view.projects));
         }
+        checks.extend(managed_checks(paths, sites));
     }
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
     checks.extend(legacy_php_mysql(sites, &view.projects));
@@ -363,6 +364,50 @@ fn project_checks(site: &SiteInfo, yard: Option<&YardConfig>, projects: &Project
             format!("{} has a .yard, so {} is ignored", site.name, yard_php.display()),
             format!("delete {}", yard_php.display()),
         ));
+    }
+    checks
+}
+
+/// The managed `.yard` files that are not used (managed-file spec §6):
+/// `managed-file-ignored:<site>` warns of one a committed `.yard` hides,
+/// `managed-file-mismatch:<name>` of one written for another directory, and
+/// `managed-file-orphan:<name>`, information only, of one no linked project can use.
+fn managed_checks(paths: &Paths, sites: &[SiteInfo]) -> Vec<Check> {
+    let mut checks = vec![];
+    for site in sites {
+        let (Some(ignored), SiteKind::Php { path, .. }) = (&site.ignored_managed_file, &site.kind) else {
+            continue;
+        };
+        let file = &ignored.file;
+        checks.push(match ignored.because {
+            IgnoredBecause::Committed => warn(
+                &format!("managed-file-ignored:{}", site.name),
+                format!("{} has a committed .yard, so {file} is ignored", site.name),
+                format!("rm {file}"),
+            ),
+            IgnoredBecause::OtherProject => warn(
+                &format!("managed-file-mismatch:{}", site.name),
+                format!("{file} is for {}, not {path}", ignored.project.as_deref().unwrap_or("no project")),
+                format!("cd {path} && yard init --replace"),
+            ),
+        });
+    }
+    let linked = |name: &str| sites.iter().any(|s| s.name == name && matches!(s.kind, SiteKind::Php { .. }));
+    let Ok(dirs) = std::fs::read_dir(paths.managed_sites_dir()) else { return checks };
+    let mut orphans: Vec<String> = dirs
+        .flatten()
+        .filter_map(|d| d.file_name().into_string().ok())
+        .filter(|name| !linked(name) && paths.managed_project_file(name).symlink_metadata().is_ok())
+        .collect();
+    orphans.sort();
+    for name in orphans {
+        let file = paths.managed_project_file(&name);
+        checks.push(Check {
+            id: format!("managed-file-orphan:{name}"),
+            status: CheckStatus::Ok,
+            message: format!("{} belongs to no linked site", file.display()),
+            hint: Some(format!("yard link {name}")),
+        });
     }
     checks
 }
