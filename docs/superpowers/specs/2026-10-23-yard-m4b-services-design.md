@@ -197,7 +197,9 @@ Projects that need a stable MySQL use a versioned line.
 - Initialize: `initdb -D <data> -U <macOS user> --auth=trust -E UTF8`. The superuser is
   the macOS user with no password, as in Postgres.app **(builder's call)**.
 - Run: `postgres -D <data> -c listen_addresses=127.0.0.1 -c port=<p> -c
-  unix_socket_directories=<root>/run`. `postgresql.conf` in the data directory is the
+  unix_socket_directories=<root>/run`. Both `initdb` and `postgres` run with `LC_ALL=en_US.UTF-8`: yardd runs
+  from launchd with no locale, and postgres on macOS then exits at startup with "postmaster
+  became multithreaded during startup" (found by the e2e run, 2026-10-24). `postgresql.conf` in the data directory is the
   user's file: `initdb` writes it, Yard never touches it, and the `-c` settings win over it.
   A PostgreSQL instance has no `overrides.conf`: nothing would include it.
 - Health: TCP connect. Stop: SIGINT (PostgreSQL's fast shutdown) **(builder's call)**.

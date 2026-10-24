@@ -47,6 +47,15 @@ fn arg(text: impl Into<OsString>) -> OsString {
     text.into()
 }
 
+/// The locale `postgres` and `initdb` run with. yardd runs from launchd with none, and
+/// postgres on macOS then exits at startup ("postmaster became multithreaded during startup",
+/// hint: set LC_ALL), as Postgres.app knows. Every macOS install has this one.
+pub const POSTGRES_LOCALE: &str = "en_US.UTF-8";
+
+fn postgres_env() -> Vec<(String, String)> {
+    vec![("LC_ALL".to_string(), POSTGRES_LOCALE.to_string())]
+}
+
 /// The command that runs `instance` in the foreground (spec 5.1 to 5.4). Every program is a
 /// binary in `keg`, which is brew's `opt/<formula>`; nothing is looked up on PATH.
 pub fn command(engine: Engine, instance: &str, keg: &Path, paths: &Paths, ports: &[PortRef]) -> UnitCommand {
@@ -71,7 +80,7 @@ pub fn command(engine: Engine, instance: &str, keg: &Path, paths: &Paths, ports:
                 arg("-c"),
                 arg(format!("unix_socket_directories={}", paths.run_dir().display())),
             ],
-            env: Vec::new(),
+            env: postgres_env(),
             // SIGINT is PostgreSQL's fast shutdown; SIGTERM is the smart one and waits for clients.
             stop_signal: SIGINT,
         },
@@ -136,7 +145,7 @@ pub fn init_command(
                 arg("-E"),
                 arg("UTF8"),
             ],
-            env: Vec::new(),
+            env: postgres_env(),
             stop_signal: SIGTERM,
         }),
         Engine::Redis | Engine::Minio => None,
@@ -347,6 +356,20 @@ mod tests {
 
         assert_eq!(init_command(Engine::Redis, "redis", keg, &paths, "me"), None);
         assert_eq!(init_command(Engine::Minio, "minio", keg, &paths, "me"), None);
+    }
+
+    #[test]
+    fn postgres_gets_a_locale_from_yard() {
+        // yardd runs from launchd with no locale, and postgres on macOS then exits with
+        // "postmaster became multithreaded during startup" (seen on 2026-10-24).
+        let paths = Paths::new(ROOT);
+        let keg = Path::new("/opt/homebrew/opt/postgresql@17");
+        let locale = ("LC_ALL".to_string(), POSTGRES_LOCALE.to_string());
+        let run = command(Engine::Postgres, "postgres-17", keg, &paths, &[port("postgres-17", 5433)]);
+        let init = init_command(Engine::Postgres, "postgres-17", keg, &paths, "me").unwrap();
+        assert_eq!(run.env, vec![locale.clone()]);
+        assert_eq!(init.env, vec![locale]);
+        assert_eq!(POSTGRES_LOCALE, "en_US.UTF-8");
     }
 
     #[test]
