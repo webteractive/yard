@@ -175,6 +175,11 @@ pub async fn run(cli: Cli) -> i32 {
 /// of the job's output (each event as NDJSON with `--json`), then `done` once it succeeds.
 /// A failed job is the command's error. Ctrl-C cancels the job and waits for it to clean
 /// up (`JOB_CANCELLED`); a second Ctrl-C stops waiting and exits 130.
+///
+/// The SIGINT stream is made once, before the first line is printed, and kept. A
+/// `ctrl_c()` made anew on each turn of the loop registers nothing until `select!` polls it,
+/// so a Ctrl-C right after a line could kill the command outright, or, once tokio's handler
+/// was installed, reach no listener and leave the command waiting on a job nobody cancelled.
 pub async fn run_job<P: Serialize>(
     ctx: &Ctx,
     method: &str,
@@ -184,11 +189,13 @@ pub async fn run_job<P: Serialize>(
     let mut client = ctx.client().await?;
     client.subscribe(&[Topic::Jobs]).await?;
     let started: JobStarted = client.call(method, params).await?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|e| YardError::internal(format!("cannot listen for Ctrl-C: {e}")))?;
     let mut cancelling = false;
     loop {
         let event = tokio::select! {
             event = client.next_event() => event?,
-            _ = tokio::signal::ctrl_c() => {
+            _ = interrupt.recv() => {
                 if cancelling {
                     eprintln!("Stopped waiting; {} may still be finishing.", started.job_id);
                     return Ok(130);

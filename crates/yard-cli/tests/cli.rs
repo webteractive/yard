@@ -580,6 +580,21 @@ fn install_shims_warns_when_herd_php_comes_first() {
     );
 }
 
+/// Kills `pid` if it still runs after 60 s, so a hung command fails its test instead of
+/// stalling the suite. Hold the guard until the child is reaped: dropping it calls the kill off.
+fn watchdog(pid: libc::pid_t) -> std::sync::mpsc::Sender<()> {
+    let (guard, dropped) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if dropped.recv_timeout(std::time::Duration::from_secs(60))
+            == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        {
+            // SAFETY: signalling our own child process, which has not been reaped yet.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    });
+    guard
+}
+
 /// Starts `yard php install 7.1`, waits for its first output line, and sends SIGINT.
 fn interrupted_install(d: &MockDaemon, times: usize) -> std::process::Output {
     use std::io::{BufRead, BufReader};
@@ -590,17 +605,25 @@ fn interrupted_install(d: &MockDaemon, times: usize) -> std::process::Output {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let pid = child.id() as libc::pid_t;
+    let guard = watchdog(pid);
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let mut first = String::new();
     out.read_line(&mut first).unwrap();
     assert!(first.contains("Downloading"), "{first}");
-    let pid = child.id() as libc::pid_t;
     for _ in 0..times {
         // SAFETY: signalling our own child process.
         unsafe { libc::kill(pid, libc::SIGINT) };
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    child.wait_with_output().unwrap()
+    let output = child.wait_with_output().unwrap();
+    drop(guard);
+    assert_ne!(
+        std::os::unix::process::ExitStatusExt::signal(&output.status),
+        Some(libc::SIGKILL),
+        "yard was still running 60 s after Ctrl-C"
+    );
+    output
 }
 
 #[test]
@@ -626,7 +649,7 @@ fn ctrl_c_cancels_the_job_and_waits_for_it() {
         ],
     );
     let out = interrupted_install(&d, 1);
-    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(1), "{:?}: {}", out.status, stderr(&out));
     assert_eq!(d.params("jobs.cancel"), [json!({"job_id": "php-install-1"})]);
     let err = stderr(&out);
     assert!(err.contains("Cancelling php-install-1"), "{err}");
@@ -649,7 +672,7 @@ fn a_second_ctrl_c_stops_waiting() {
         )],
     );
     let out = interrupted_install(&d, 2);
-    assert_eq!(out.status.code(), Some(130), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(130), "{:?}: {}", out.status, stderr(&out));
 }
 
 #[test]

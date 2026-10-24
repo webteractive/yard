@@ -138,10 +138,11 @@ pub fn short_root() -> TempDir {
     tempfile::Builder::new().prefix("yard-test-").tempdir_in("/tmp").unwrap()
 }
 
-/// `yard --root <root>`, with no `YARD_ROOT` leaking in from the environment.
+/// `yard --root <root>`, with no `YARD_ROOT` leaking in from the environment. A command
+/// still running after 60 s is killed, so a hang fails its test instead of stalling the suite.
 pub fn yard_at(root: &Path) -> Command {
     let mut cmd = Command::cargo_bin("yard").unwrap();
-    cmd.env_remove("YARD_ROOT").arg("--root").arg(root);
+    cmd.env_remove("YARD_ROOT").arg("--root").arg(root).timeout(std::time::Duration::from_secs(60));
     cmd
 }
 
