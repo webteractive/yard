@@ -159,13 +159,14 @@ impl Runner {
         let stop_timeout = self.spec.stop_timeout.unwrap_or(self.cfg.stop_timeout);
 
         let interval = self.cfg.health_interval;
-        let deadline = tokio::time::Instant::now() + self.cfg.start_grace;
+        let grace = self.spec.start_timeout.unwrap_or(self.cfg.start_grace);
+        let deadline = tokio::time::Instant::now() + grace;
         // Until the first health check passes nothing is in flight, and the unit may not
         // handle its graceful signal yet, so it gets SIGTERM.
         while !self.healthy().await {
             if tokio::time::Instant::now() >= deadline {
                 process.stop(libc::SIGTERM, stop_timeout).await;
-                let grace = self.cfg.start_grace.as_secs_f32();
+                let grace = grace.as_secs_f32();
                 return Ended::Failure(format!("not healthy within {grace} s of starting"));
             }
             tokio::select! {

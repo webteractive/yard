@@ -478,7 +478,18 @@ fn mysqld(argv0: &Path, args: &[String]) -> ExitCode {
     let port = text
         .lines()
         .find_map(|l| l.trim().strip_prefix("port")?.trim_start().strip_prefix('=')?.trim().parse().ok());
+    // Real mysqld opens its port only after crash recovery or a data upgrade.
+    delay_from(argv0, "fake-listen-delay");
     listen_tcp(port)
+}
+
+/// Sleeps the milliseconds in `<prefix>/<file>`, if it exists. The prefix is three directories
+/// above the binary: `<prefix>/opt/<formula>/bin/<name>`.
+fn delay_from(argv0: &Path, file: &str) {
+    let prefix = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
+    if let Some(ms) = std::fs::read_to_string(prefix.join(file)).ok().and_then(|t| t.trim().parse().ok()) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
 }
 
 /// `initdb -D D` creates `D/PG_VERSION`.
@@ -492,11 +503,7 @@ fn initdb(argv0: &Path, args: &[String]) -> ExitCode {
 /// The prefix is three directories above the binary: `<prefix>/opt/<formula>/bin/<name>`.
 fn init_data(argv0: &Path, data: &Path, marker: &str) -> ExitCode {
     let prefix = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
-    if let Some(ms) =
-        std::fs::read_to_string(prefix.join("fake-init-delay")).ok().and_then(|t| t.trim().parse().ok())
-    {
-        std::thread::sleep(Duration::from_millis(ms));
-    }
+    delay_from(argv0, "fake-init-delay");
     if prefix.join("fake-init-fail").exists() {
         eprintln!("{}: initialization failed", argv0.display());
         return ExitCode::from(1);

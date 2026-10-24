@@ -684,6 +684,12 @@ checklists say. The M4d plan is re-checked against the M4b plan before M4d is bu
 
 - **Stop timeout.** The supervisor sends SIGKILL 5 s after its stop signal, which can
   cut a database off mid-checkpoint. Service units get 30 s **(builder's call)**.
+- **Start timeout.** A unit that has not passed a health check within the supervisor's start
+  grace (10 s, meant for nginx and php-fpm) is stopped with SIGTERM and retried. mysqld opens
+  its port only after InnoDB crash recovery or after upgrading its data in place (`brew upgrade
+  mysql`, §5), so MySQL and PostgreSQL units get 120 s (`UnitSpec.start_timeout`, `None` = the
+  grace), and health checks keep polling throughout. Redis and MinIO keep the 10 s
+  (review ruling, 2026-10-24).
 - **Leftovers.** If yardd is killed, its service processes keep running and hold their
   ports and data directories. On start, before the first reconcile, yardd stops a
   process recorded in `run/<instance>.pid` when it is the instance's own binary under

@@ -426,6 +426,7 @@ impl Reconciler {
                 stop: libc::SIGTERM,
                 inherit: vec![],
                 stop_timeout: None,
+                start_timeout: None,
                 pid_file: None,
             },
             UnitSpec {
@@ -439,6 +440,7 @@ impl Reconciler {
                 stop: libc::SIGQUIT,
                 inherit: inherit.clone(),
                 stop_timeout: None,
+                start_timeout: None,
                 pid_file: None,
             },
         ];
@@ -479,6 +481,7 @@ impl Reconciler {
                 stop: libc::SIGTERM,
                 inherit: vec![],
                 stop_timeout: None,
+                start_timeout: None,
                 pid_file: None,
             });
         }
@@ -504,6 +507,7 @@ impl Reconciler {
                 stop: cmd.stop_signal,
                 inherit: vec![],
                 stop_timeout: Some(services::STOP_TIMEOUT),
+                start_timeout: services::start_timeout(entry.engine),
                 pid_file: Some(paths.service_pid(instance)),
             });
         }

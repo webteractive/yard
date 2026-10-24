@@ -56,6 +56,10 @@ pub struct UnitSpec {
     /// How long SIGKILL waits after the stop signal; `None` uses `SupervisorConfig.stop_timeout`.
     /// A database gets longer, so it can finish a checkpoint.
     pub stop_timeout: Option<Duration>,
+    /// How long a start may take to pass its first health check before the unit is stopped and
+    /// retried; `None` uses `SupervisorConfig.start_grace`. A database gets longer: mysqld opens
+    /// its port only after crash recovery or a data upgrade. Health checks poll throughout.
+    pub start_timeout: Option<Duration>,
     /// Written with the process id on every spawn and removed when the process is gone, so
     /// a yardd that was killed leaves a record of what to stop (`orphans::stop`).
     pub pid_file: Option<PathBuf>,

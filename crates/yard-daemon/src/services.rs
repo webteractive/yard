@@ -31,6 +31,20 @@ use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, UnitState, YardE
 /// finishes its checkpoint (spec §15).
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a database gets to open its port after it starts: mysqld does only after crash
+/// recovery or after upgrading its data in place (`brew upgrade mysql`, spec §5), and a SIGTERM
+/// then is the riskiest moment to stop it. PostgreSQL's recovery is the same shape. Redis and
+/// MinIO keep the supervisor's start grace (spec §15).
+pub const DATABASE_START_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The unit's `start_timeout` for an instance of `engine`; `None` is the supervisor's grace.
+pub fn start_timeout(engine: Engine) -> Option<Duration> {
+    match engine {
+        Engine::Mysql | Engine::Postgres => Some(DATABASE_START_TIMEOUT),
+        Engine::Redis | Engine::Minio => None,
+    }
+}
+
 /// The names of an instance's registry entries, in the order the unit lists its ports and
 /// with the engine's usual port for each: `mysql-8.4` for MySQL, `minio` and `minio-console`
 /// for MinIO. The key is the one `DaemonOptions.usual_ports` uses.

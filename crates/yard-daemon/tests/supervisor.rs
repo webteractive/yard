@@ -43,6 +43,7 @@ fn process(name: &str, program: &str, args: &[&str], health: Health) -> UnitSpec
         stop: libc::SIGTERM,
         inherit: vec![],
         stop_timeout: None,
+        start_timeout: None,
         pid_file: None,
     }
 }
@@ -473,6 +474,24 @@ async fn unit_stop_timeout_overrides_default() {
     assert!(!alive(pid), "SIGKILL ended the process that ignores SIGTERM");
     assert!(took >= Duration::from_millis(300), "SIGTERM got its full timeout first: {took:?}");
     assert!(took < Duration::from_secs(5), "the unit's timeout applied, not the config's: {took:?}");
+}
+
+#[tokio::test]
+async fn unit_start_timeout_overrides_the_start_grace() {
+    // The config would give 30 s; the unit's own 300 ms is what applies to a unit whose port
+    // never opens.
+    let h = harness(SupervisorConfig { start_grace: Duration::from_secs(30), ..fast() });
+    let port = free_port();
+    let slow = UnitSpec {
+        start_timeout: Some(Duration::from_millis(300)),
+        ..process("slow", FAKE, &["hang"], Health::Tcp(port))
+    };
+    h.sup.apply(vec![slow]).await;
+
+    let u = wait_for(&h.sup, "slow", |u| u.last_error.is_some()).await;
+    let error = u.last_error.unwrap_or_default();
+    assert!(error.contains("not healthy within 0.3 s"), "{error}");
+    h.sup.shutdown().await;
 }
 
 #[tokio::test]

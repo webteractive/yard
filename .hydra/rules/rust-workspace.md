@@ -51,7 +51,8 @@ triggers:
   `redis-server F` and `minio server … --address A --console-address C` listen where they are
   told. `mysqld --no-defaults --initialize-insecure --datadir=D` and `initdb -D D` create `D/ibdata1` and
   `D/PG_VERSION`, wait `<prefix>/fake-init-delay` ms and fail while `<prefix>/fake-init-fail`
-  exists. `Fixture::add_formula(name)` makes the keg `opt/<name>/bin/<binaries>` as the fake
+  exists; a running `mysqld` waits `<prefix>/fake-listen-delay` ms before it listens, as one in
+  crash recovery does. `Fixture::add_formula(name)` makes the keg `opt/<name>/bin/<binaries>` as the fake
   brew's `install` does, and `Fixture::add_service(instance, formula, stopped)` appends an entry
   to `services.toml`. The fake brew reads `tap`, `versions.stable`, `deprecated`, `disabled` and
   `disable_date` from a `fake-formulae.json` entry, and `fake-brew-delay` (ms) holds every install, which

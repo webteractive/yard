@@ -442,6 +442,25 @@ async fn redis_gets_its_data_directory_and_the_databases_do_not() {
 }
 
 #[tokio::test]
+async fn a_database_gets_longer_than_the_start_grace_to_open_its_port() {
+    // mysqld opens its port only after crash recovery or a data upgrade: a SIGTERM at the
+    // supervisor's start grace (2 s in tests, 10 s in yardd) would cut that off.
+    let port = free_port();
+    let d = prepared(&pin("mysql-8.4", port)).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    let grace = d.opts.supervisor.start_grace;
+    std::fs::write(d.fx.brew.path().join("fake-listen-delay"), (grace.as_millis() + 1500).to_string())
+        .unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let u = reaches(&mut c, "mysql-8.4", "running").await.expect("mysql-8.4 runs once its port opens");
+    assert_eq!(u["restarts"], json!(0), "it was never stopped for being slow: {u}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn each_engine_gets_the_user_file_it_reads() {
     // PostgreSQL reads `postgresql.conf` in its data directory, so an `overrides.conf` would be
     // a file nothing includes. Redis's include takes a bare file.
