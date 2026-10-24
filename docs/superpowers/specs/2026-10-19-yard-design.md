@@ -665,7 +665,7 @@ As built (daemon methods, and the CLI commands that call them):
   port or the next free one, skipping DBngin's and Postgres.app's), runs the engine's init
   into an absent or empty `data/` (`mysqld --no-defaults --initialize-insecure`, `initdb`;
   otherwise the job says `reusing the data in <dir>`), writes the entry, reconciles, and waits
-  up to 60 s for the unit to run (`failed` ends it with the last lines). A failure or cancel
+  up to 130 s for the unit to run (longer than a database's 120 s start timeout; `failed` ends it at once with the last lines). A failure or cancel
   removes the entry and port entries it wrote and what it created in `services/<i>/`, never
   data that was there before or a file the user put there.
 - `services.remove { name, keep_data? }` refuses an unknown instance (`SERVICE_NOT_FOUND`) and

@@ -8,9 +8,21 @@ pub mod render;
 pub mod reserved;
 
 use brew_info::Formula;
+use std::time::Duration;
 use yard_proto::{ErrorCode, YardError};
 
 pub use engine::{Engine, env_lines, instance_name, parse_instance};
+
+/// How long a database gets to open its port after it starts: mysqld does only after crash
+/// recovery or after upgrading its data in place (`brew upgrade mysql`, spec §5), and a SIGTERM
+/// then is the riskiest moment to stop it. PostgreSQL's recovery is the same shape. Redis and
+/// MinIO keep the supervisor's start grace (spec §15).
+pub const DATABASE_START_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long the add job and the CLI's `start`, `restart` and `port` wait for an instance to
+/// run: longer than any instance's start timeout, so neither calls one failed (or rolls an add
+/// back) while the daemon is still giving it time. A `failed` instance ends the wait at once.
+pub const READY_WAIT: Duration = Duration::from_secs(DATABASE_START_TIMEOUT.as_secs() + 10);
 
 /// A release line as numbers, so `9.7` sorts before `26.10`.
 fn line_key(line: &str) -> Vec<u64> {
@@ -148,6 +160,13 @@ mod tests {
     use super::brew_info::Formula;
     use super::*;
     use yard_proto::ErrorCode;
+
+    #[test]
+    fn the_ready_wait_outlasts_a_database_start() {
+        // The add job and the CLI must not give up on an instance the supervisor is still
+        // waiting for: a mysqld upgrading its data after brew upgrade.
+        assert!(READY_WAIT > DATABASE_START_TIMEOUT);
+    }
 
     fn formula(name: &str, version: &str) -> Formula {
         Formula {

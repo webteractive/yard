@@ -370,7 +370,7 @@ Settled in M4b task 13 (`yard-cli` `commands/services.rs`) **(builder's calls)**
   Declining is `NEEDS_CONFIRMATION` too, as declining `Install these?` is `NEEDS_INSTALL`.
   With `--keep-data` the hint keeps the flag, so it never turns into a delete of the data.
 - `start`, `restart` and `port` answer while the instance is `starting`, so the CLI polls
-  `services.list` every 200 ms for up to 60 s. `failed` prints the last 10 log lines the
+  `services.list` every 200 ms for up to 130 s (`READY_WAIT`: longer than a database's 120 s start timeout). `failed` prints the last 10 log lines the
   daemon gave, then `error: <i> failed to start: <reason>; its log ends: <last line>` and exits
   1; a timeout is the same error code with its own message. The reason is
   `ServiceState::Failed.reason` (review I2, 2026-10-24): a port someone else holds is

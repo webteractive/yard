@@ -23,19 +23,15 @@ use yard_core::project::ServiceWant;
 use yard_core::services::brew_info::{self, Formula};
 use yard_core::services::render::{UnitCommand, command, init_command};
 use yard_core::services::reserved::reserved_ports;
-use yard_core::services::{Engine, candidate_names, instance_name, line_formula, resolve_line};
+use yard_core::services::{
+    DATABASE_START_TIMEOUT, Engine, READY_WAIT, candidate_names, instance_name, line_formula, resolve_line,
+};
 use yard_core::sources::tap_of;
 use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, UnitState, YardError};
 
 /// How long a service gets to stop after its stop signal before SIGKILL: a database
 /// finishes its checkpoint (spec §15).
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How long a database gets to open its port after it starts: mysqld does only after crash
-/// recovery or after upgrading its data in place (`brew upgrade mysql`, spec §5), and a SIGTERM
-/// then is the riskiest moment to stop it. PostgreSQL's recovery is the same shape. Redis and
-/// MinIO keep the supervisor's start grace (spec §15).
-pub const DATABASE_START_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The unit's `start_timeout` for an instance of `engine`; `None` is the supervisor's grace.
 pub fn start_timeout(engine: Engine) -> Option<Duration> {
@@ -362,9 +358,6 @@ fn deprecation_note(f: &Formula) -> Option<String> {
 
 // ---- Add ----
 
-/// How long a new instance gets to pass its health check (spec §7.2).
-const READY_TIMEOUT: Duration = Duration::from_secs(60);
-
 pub fn exists(instance: &str) -> YardError {
     YardError::new(ErrorCode::ServiceExists, format!("{instance} is already added"))
         .with_hint("yard services lists the instances")
@@ -540,7 +533,7 @@ impl Add {
     async fn wait_ready(&self, job: &JobCtx, warnings: &[String]) -> Result<(), YardError> {
         let instance = self.instance.as_str();
         let supervisor = self.reconciler.supervisor();
-        let deadline = Instant::now() + READY_TIMEOUT;
+        let deadline = Instant::now() + READY_WAIT;
         loop {
             job.check_cancelled()?;
             let unit = supervisor.list().into_iter().find(|u| u.name == instance);
@@ -575,7 +568,7 @@ impl Add {
             if Instant::now() >= deadline {
                 return Err(YardError::new(
                     ErrorCode::JobFailed,
-                    format!("{instance} did not pass its health check within {} s", READY_TIMEOUT.as_secs()),
+                    format!("{instance} did not pass its health check within {} s", READY_WAIT.as_secs()),
                 )
                 .with_hint(format!("yard service logs {instance}")));
             }

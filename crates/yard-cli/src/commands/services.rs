@@ -15,9 +15,9 @@ use yard_proto::{
     Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceState, SiteInfo, Topic, YardError,
 };
 
-/// How long `start` and `restart` wait for an instance to come up: the daemon gives a new
-/// instance 60 s to pass its health check, and so does this.
-const UP_WAIT: Duration = Duration::from_secs(60);
+/// How long `start`, `restart` and `port` wait for an instance to come up: the same wait as
+/// the daemon's add job, longer than any instance's start timeout.
+const UP_WAIT: Duration = yard_core::services::READY_WAIT;
 const POLL: Duration = Duration::from_millis(200);
 
 /// How many of a failed instance's last lines are printed under the error.

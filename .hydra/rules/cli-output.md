@@ -52,7 +52,7 @@ triggers:
   `Delete <i> and its data? [y/N] ` (`--yes` skips). With no terminal and no `--yes` it deletes nothing and fails with
   `NEEDS_CONFIRMATION`; the hint is the exact command with `--yes`, keeping `--keep-data`.
 - A command whose method answers before the work is done (`yard service start`, `restart`,
-  `port`) polls `services.list` until the instance is `running` (60 s). A `failed` one is
+  `port`) polls `services.list` until the instance is `running` (130 s, `READY_WAIT`, longer than any start timeout). A `failed` one is
   `ServiceState::failure` (yard-proto, shared with the daemon's add job): its reason first, then
   its log's last line, with the reason's code and hint (`PORT_IN_USE` naming the holder, hint
   `yard service port <i> <port>`; else `JOB_FAILED`, hint `yard service logs <i>`). Its last log
