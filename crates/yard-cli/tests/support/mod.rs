@@ -102,10 +102,14 @@ fn serve(stream: UnixStream, answers: &Answers, events: &Events, seen: &Mutex<Ve
         seen.lock().unwrap().push(request.clone());
         let id = request.id.unwrap_or_default();
         let response = match request.method.as_str() {
-            "hello" => Response::ok(
-                id,
-                json!({"protocol": PROTOCOL_VERSION, "daemon_version": MOCK_VERSION, "commit": "mock"}),
-            ),
+            // A test may answer hello itself, as an older yardd would.
+            "hello" => match next_answer(answers, "hello") {
+                Some(Ok(value)) => Response::ok(id, value),
+                _ => Response::ok(
+                    id,
+                    json!({"protocol": PROTOCOL_VERSION, "daemon_version": MOCK_VERSION, "commit": "mock"}),
+                ),
+            },
             method => match next_answer(answers, method) {
                 Some(Ok(value)) => Response::ok(id, value),
                 Some(Err(e)) => Response::err(id, e),

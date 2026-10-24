@@ -1004,6 +1004,24 @@ fn commands_that_edit_a_managed_file_name_it() {
 }
 
 #[test]
+fn init_refuses_a_yardd_that_would_write_into_the_project() {
+    let old = json!({"protocol": "2.5", "daemon_version": "0.1.0", "commit": "old"});
+    let d = MockDaemon::start(&[("hello", Ok(old.clone()))]);
+    let out = d.yard().args(["init", "blog"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("protocol 2.5"), "{err}");
+    assert!(err.contains("hint: yard stop && yard start"), "{err}");
+    assert!(d.params("sites.init").is_empty(), "nothing is sent to the old yardd");
+
+    // --local asks for what the old yardd does anyway.
+    let d =
+        MockDaemon::start(&[("hello", Ok(old)), ("sites.init", Ok(init_result(project_site(json!([])))))]);
+    let out = d.yard().args(["init", "blog", "--local"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
 fn init_without_terminal_or_yes_is_needs_install() {
     let mut result = init_result(project_site(json!([{"kind": "php", "php": "7.3"}])));
     result["written"] = json!(false);

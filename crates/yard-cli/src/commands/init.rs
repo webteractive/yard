@@ -7,6 +7,12 @@ use serde_json::{Value, json};
 use yard_proto::methods::{self, ExtAddParams, InitParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
+/// A `major.minor` protocol version.
+fn version(protocol: &str) -> Option<(u32, u32)> {
+    let (major, minor) = protocol.split_once('.')?;
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
 /// `yard init`'s flags.
 pub struct InitArgs {
     pub name: Option<String>,
@@ -20,6 +26,16 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
     let InitArgs { name, force, replace, yes, local } = args;
     let mut params = InitParams { path: cwd()?.display().to_string(), name, force, replace, local };
     let mut client = ctx.client().await?;
+    // A yardd before 2.6 knows no managed .yard and would write this one into the project.
+    let protocol = &client.hello.protocol;
+    if !local && version(protocol) < Some((2, 6)) {
+        return Err(YardError::new(
+            ErrorCode::ProtocolMismatch,
+            format!("yardd speaks protocol {protocol}, so yard init would write .yard into the project"),
+        )
+        .with_hint("yard stop && yard start")
+        .into());
+    }
     let mut result: InitResult = match client.call(methods::SITES_INIT, &params).await {
         // The name serves another directory and this one has its own .yard: ask first.
         Err(e) if e.code == ErrorCode::SiteNameTaken && interactive(ctx) => {
