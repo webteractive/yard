@@ -254,6 +254,18 @@ async fn stop(handle: Handle) {
     let _ = handle.task.await;
 }
 
+/// How a unit's `last_error` starts when someone else holds one of its ports: the pre-start
+/// probe found it, or the helper did for a privileged port.
+const CONFLICT: &str = "PORT_IN_USE: ";
+
+/// The port and the message (`port 3307 is held by mysqld (pid 77034, DBngin)`) of a
+/// `last_error` that records a port conflict; `None` for any other error.
+pub fn conflict_of(last_error: &str) -> Option<(u16, &str)> {
+    let message = last_error.strip_prefix(CONFLICT)?;
+    let port = message.strip_prefix("port ")?.split(' ').next()?.parse().ok()?;
+    Some((port, message))
+}
+
 fn no_unit(name: &str) -> YardError {
     YardError::new(ErrorCode::InvalidArgument, format!("no unit named {name:?}"))
         .with_hint("`yard status` lists the units")
@@ -262,4 +274,17 @@ fn no_unit(name: &str) -> YardError {
 /// A poisoned table is still a consistent map; keep serving it.
 pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_conflict_is_read_back_from_the_error_it_wrote() {
+        let error = format!("{CONFLICT}port 3307 is held by mysqld (pid 77034, DBngin)");
+        assert_eq!(conflict_of(&error), Some((3307, "port 3307 is held by mysqld (pid 77034, DBngin)")));
+        assert_eq!(conflict_of("not healthy within 10 s of starting"), None);
+        assert_eq!(conflict_of("PORT_IN_USE: something else"), None);
+    }
 }

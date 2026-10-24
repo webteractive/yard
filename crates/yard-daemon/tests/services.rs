@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use support::daemon::{Client, Daemon, prepared, run_job};
-use support::{Fixture, fast, free_port, served, spawn_helper, wait_until};
+use support::{Fixture, fast, free_port, held_listener, served, spawn_helper, wait_until};
 use yard_core::brew::Brew;
 use yard_core::config::load_services;
 use yard_core::ports::Registry;
@@ -1242,6 +1242,34 @@ async fn restart_of_a_failed_instance_answers_with_the_new_attempt() {
         assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
     }
     assert!(served(port));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_held_port_is_the_reason_a_failed_instance_gives() {
+    // Something else listens on the instance's pinned port before it starts: the start fails
+    // before the process runs, so its log has nothing to say and the reason must.
+    let held = held_listener();
+    let port = held.local_addr().unwrap().port();
+    let d = prepared(&pin("redis", port)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "redis", "failed").await.expect("redis cannot have its port");
+
+    let check = |info: &Value| {
+        let reason = &info["state"]["failed"]["reason"];
+        assert_eq!(reason["code"], json!("PORT_IN_USE"), "{info}");
+        let message = reason["message"].as_str().unwrap_or_default();
+        assert!(message.starts_with(&format!("port {port} is held by ")), "{message}");
+        assert_eq!(reason["hint"], json!("yard service port redis <port>"), "{info}");
+        assert_eq!(reason["data"]["port"], json!(port), "{info}");
+    };
+    check(&list(&mut c).await[0]);
+    check(&c.call("services.start", json!({"name": "redis"})).await.unwrap());
+    check(&c.call("services.restart", json!({"name": "redis"})).await.unwrap_or_else(|e| panic!("{e:?}")));
+    drop(held);
     d.shutdown().await.unwrap();
 }
 

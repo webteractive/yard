@@ -151,11 +151,14 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
     let state = if entry.stopped {
         ServiceState::Stopped
     } else {
-        match supervisor.list().into_iter().find(|u| u.name == name).map(|u| u.state) {
-            Some(UnitState::Running) => ServiceState::Running,
-            Some(UnitState::Starting | UnitState::Backoff { .. }) => ServiceState::Starting,
-            Some(UnitState::Failed { last_lines }) => ServiceState::Failed { last_lines },
-            Some(UnitState::Stopped) | None => ServiceState::Stopped,
+        let unit = supervisor.list().into_iter().find(|u| u.name == name);
+        match unit.map(|u| (u.state, u.last_error)) {
+            Some((UnitState::Running, _)) => ServiceState::Running,
+            Some((UnitState::Starting | UnitState::Backoff { .. }, _)) => ServiceState::Starting,
+            Some((UnitState::Failed { last_lines }, last_error)) => {
+                ServiceState::Failed { last_lines, reason: failure_reason(name, last_error.as_deref()) }
+            }
+            Some((UnitState::Stopped, _)) | None => ServiceState::Stopped,
         }
     };
     let port_of = |unit: &str, usual: u16| snapshot.registry.entries.get(unit).map_or(usual, |e| e.port);
@@ -177,6 +180,21 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
         account: engine.account(&macos_user()),
         console,
         used_by: used_by(snapshot, engine, name),
+    })
+}
+
+/// Why the unit of `instance` failed, from the supervisor's `last_error`: a port someone else
+/// holds is `PORT_IN_USE` naming the holder (`port 3307 is held by mysqld (pid 77034, DBngin)`),
+/// hint `yard service port <i> <port>`, since retrying cannot free it; anything else is
+/// `JOB_FAILED` with the supervisor's words and a hint at the log.
+pub fn failure_reason(instance: &str, last_error: Option<&str>) -> Option<YardError> {
+    let last_error = last_error?;
+    Some(match crate::supervisor::conflict_of(last_error) {
+        Some((port, message)) => YardError::new(ErrorCode::PortInUse, message)
+            .with_hint(format!("yard service port {instance} <port>"))
+            .with_data(serde_json::json!({ "port": port })),
+        None => YardError::new(ErrorCode::JobFailed, last_error)
+            .with_hint(format!("yard service logs {instance}")),
     })
 }
 
@@ -526,17 +544,12 @@ impl Add {
                 }
                 Some(UnitState::Running) => return Ok(()),
                 Some(UnitState::Failed { last_lines }) => {
-                    let last = last_lines
-                        .iter()
-                        .rev()
-                        .find(|l| !l.trim().is_empty())
-                        .map_or("no output", |l| l.trim());
-                    return Err(YardError::new(
-                        ErrorCode::JobFailed,
-                        format!("{instance} failed to start: {last}"),
-                    )
-                    .with_hint(format!("yard service logs {instance}"))
-                    .with_data(serde_json::json!({ "last_lines": last_lines })));
+                    let last_error = unit_error(supervisor, instance);
+                    let reason = failure_reason(instance, last_error.as_deref());
+                    let failed = ServiceState::Failed { last_lines, reason };
+                    return Err(failed.failure(instance).unwrap_or_else(|| {
+                        YardError::new(ErrorCode::JobFailed, format!("{instance} failed to start"))
+                    }));
                 }
                 Some(_) => {}
             }
@@ -570,6 +583,11 @@ impl Add {
             job.line(format!("could not finish rolling back {instance}: {}", e.message));
         }
     }
+}
+
+/// The supervisor's `last_error` for `instance`'s unit.
+fn unit_error(supervisor: &Supervisor, instance: &str) -> Option<String> {
+    supervisor.list().into_iter().find(|u| u.name == instance).and_then(|u| u.last_error)
 }
 
 // ---- Removing ----

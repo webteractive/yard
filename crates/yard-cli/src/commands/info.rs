@@ -1,6 +1,6 @@
 //! `yard info`: what one site runs on (spec §7.4).
 
-use super::services::{account_parts, address, state_name};
+use super::services::{account_parts, address, failure_line, state_name};
 use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
@@ -123,6 +123,7 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
 fn services_block(detail: &SiteDetail) -> String {
     let mut rows: Vec<Vec<String>> = vec![];
     let mut consoles: Vec<String> = vec![];
+    let mut failures: Vec<String> = vec![];
     for wanted in &detail.services {
         match &wanted.service {
             Some(s) => {
@@ -131,6 +132,7 @@ fn services_block(detail: &SiteDetail) -> String {
                 if let Some(console) = &s.console {
                     consoles.push(format!("{} console  {console}", s.name));
                 }
+                failures.extend(failure_line(s));
             }
             None => {
                 let name = match &wanted.want {
@@ -145,8 +147,8 @@ fn services_block(detail: &SiteDetail) -> String {
     for l in table(&["services", "", "", "account", ""], &rows).lines() {
         out.push_str(&format!("  {l}\n"));
     }
-    for console in consoles {
-        out.push_str(&format!("  {console}\n"));
+    for line in consoles.into_iter().chain(failures) {
+        out.push_str(&format!("  {line}\n"));
     }
     out
 }

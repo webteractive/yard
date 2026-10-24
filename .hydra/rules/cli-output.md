@@ -52,8 +52,12 @@ triggers:
   `Delete <i> and its data? [y/N] ` (`--yes` skips). With no terminal and no `--yes` it deletes nothing and fails with
   `NEEDS_CONFIRMATION`; the hint is the exact command with `--yes`, keeping `--keep-data`.
 - A command whose method answers before the work is done (`yard service start`, `restart`,
-  `port`) polls `services.list` until the instance is `running` (60 s). A `failed` one prints
-  its last log lines on stderr, then the error (`JOB_FAILED`, hint `yard service logs <i>`).
+  `port`) polls `services.list` until the instance is `running` (60 s). A `failed` one is
+  `ServiceState::failure` (yard-proto, shared with the daemon's add job): its reason first, then
+  its log's last line, with the reason's code and hint (`PORT_IN_USE` naming the holder, hint
+  `yard service port <i> <port>`; else `JOB_FAILED`, hint `yard service logs <i>`). Its last log
+  lines go to stderr first, except for a held port or a missing keg, where the process never ran.
+  `yard services` and `yard info` print `<i> failed: <reason>  (<hint>)` under their tables.
 - A command that follows a stream (`yard service logs -f`) subscribes before it fetches the
   tail, registers its SIGINT handler before printing, and exits 0 on Ctrl-C.
 - Output meant to be pasted (`yard env`) has no header or footer lines (no `For agents and

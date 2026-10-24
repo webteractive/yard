@@ -355,8 +355,14 @@ Settled in M4b task 13 (`yard-cli` `commands/services.rs`) **(builder's calls)**
   With `--keep-data` the hint keeps the flag, so it never turns into a delete of the data.
 - `start`, `restart` and `port` answer while the instance is `starting`, so the CLI polls
   `services.list` every 200 ms for up to 60 s. `failed` prints the last 10 log lines the
-  daemon gave, then `error: <i> failed to start: <last line>` with hint `yard service logs
-  <i>` and exits 1; a timeout is the same error code with its own message.
+  daemon gave, then `error: <i> failed to start: <reason>; its log ends: <last line>` and exits
+  1; a timeout is the same error code with its own message. The reason is
+  `ServiceState::Failed.reason` (review I2, 2026-10-24): a port someone else holds is
+  `PORT_IN_USE`, `port 3307 is held by mysqld (pid 77034, DBngin)`, hint `yard service port <i>
+  <port>`, and prints no log lines (the process never ran); anything else is `JOB_FAILED` with
+  the supervisor's words (`not healthy within 120 s of starting`, `exited unexpectedly …`),
+  hint `yard service logs <i>`. With no reason (an older daemon) the message is the last line.
+  `yard services` and `yard info` print `<i> failed: <reason>  (<hint>)` under their tables.
 - `logs -n <lines>` sets the tail (the daemon's `lines`). `-f` prints the tail, then every
   `log_line` event for that unit until Ctrl-C, which exits 0; with `--json` each line is a
   `log_line` event on its own line.
@@ -648,7 +654,9 @@ sends `$http_host` in both the site proxy block and the new service block, since
   `env.print { path?, site?, service? }`, `sites.info { path?, site? }`,
   `sources.list|trust|untrust`. `services.add` and
   `sources.trust` are jobs; the rest answer directly.
-- Types: `ServiceInfo { name, engine, version, formula, ports, state, account, used_by }`;
+- Types: `ServiceInfo { name, engine, version, formula, ports, state, account, used_by }`, whose
+  `state` is `running`, `starting`, `stopped` or `failed { last_lines, reason? }`, `reason` a
+  `YardError` (§7.2; added before 2.5 shipped, so no bump, and absent from an older daemon);
   `SiteDetail` (§7.4);
   `Need::Service { engine, version }`; `EnvBlock { instance, lines }`;
   `SourceInfo { tap, tapped, trusted, formulae }`.

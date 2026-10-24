@@ -1,6 +1,6 @@
 //! One unit's lifecycle: pre-start port check, start, health, backoff, failed.
 
-use super::{Health, SupervisorConfig, Table, UnitSpec, lock};
+use super::{CONFLICT, Health, SupervisorConfig, Table, UnitSpec, lock};
 use crate::events::EventBus;
 use crate::logsink::LogSink;
 use crate::privileged::PrivilegedSockets;
@@ -397,5 +397,5 @@ pub(super) fn signal(pid: u32, sig: libc::c_int) -> Result<(), YardError> {
 }
 
 fn port_in_use(port: u16, holder: Option<&Holder>) -> String {
-    format!("PORT_IN_USE: port {port} is held by {}", holder::label(holder))
+    format!("{CONFLICT}port {port} is held by {}", holder::label(holder))
 }

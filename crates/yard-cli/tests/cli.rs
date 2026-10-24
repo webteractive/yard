@@ -1448,6 +1448,74 @@ fn service_restart_of_a_failed_instance_polls_to_running() {
     assert_eq!(d.params("services.list").len(), 2, "polled until running");
 }
 
+fn held_by_dbngin() -> Value {
+    json!({"failed": {"last_lines": [], "reason": {
+        "code": "PORT_IN_USE",
+        "message": "port 3307 is held by mysqld (pid 77034, DBngin)",
+        "hint": "yard service port mysql-8.4 <port>",
+        "data": {"port": 3307},
+    }}})
+}
+
+#[test]
+fn service_start_on_a_held_port_names_the_holder() {
+    let d = MockDaemon::start(&[("services.start", Ok(mysql(held_by_dbngin())))]);
+    let out = d.yard().args(["service", "start", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("error: mysql-8.4 failed to start: port 3307 is held by mysqld (pid 77034, DBngin)\n"),
+        "{err}"
+    );
+    assert!(err.contains("  hint: yard service port mysql-8.4 <port>\n"), "{err}");
+    assert!(!err.contains("no output"), "{err}");
+    assert!(!stdout(&out).contains("Started"), "{}", stdout(&out));
+
+    let out = d.yard().args(["service", "start", "mysql-8.4", "--json"]).output().unwrap();
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["error"]["code"], "PORT_IN_USE", "{printed}");
+    assert_eq!(printed["error"]["hint"], "yard service port mysql-8.4 <port>", "{printed}");
+}
+
+#[test]
+fn a_failure_reason_comes_before_the_log() {
+    let failed = json!({"failed": {"last_lines": ["InnoDB: upgrading the data dictionary"], "reason": {
+        "code": "JOB_FAILED",
+        "message": "not healthy within 120 s of starting",
+        "hint": "yard service logs mysql-8.4",
+    }}});
+    let d = MockDaemon::start(&[("services.start", Ok(mysql(failed)))]);
+    let out = d.yard().args(["service", "start", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("  InnoDB: upgrading the data dictionary\n"), "{err}");
+    assert!(
+        err.contains("error: mysql-8.4 failed to start: not healthy within 120 s of starting; its log ends: InnoDB: upgrading the data dictionary\n"),
+        "{err}"
+    );
+}
+
+#[test]
+fn services_and_info_name_why_an_instance_failed() {
+    let d = MockDaemon::start(&[("services.list", Ok(json!([mysql(held_by_dbngin())])))]);
+    let out = d.yard().arg("services").output().unwrap();
+    let so = stdout(&out);
+    assert!(
+        so.contains("mysql-8.4 failed: port 3307 is held by mysqld (pid 77034, DBngin)  (yard service port mysql-8.4 <port>)\n"),
+        "{so}"
+    );
+
+    let mut detail = site_detail();
+    detail["services"][0]["service"]["state"] = held_by_dbngin();
+    let d = MockDaemon::start(&[("sites.info", Ok(detail)), ("ext.list", Ok(ext_rows()))]);
+    let out = d.yard().arg("info").env("HOME", "/Users/me").output().unwrap();
+    let so = stdout(&out);
+    assert!(
+        so.contains("  mysql-8.4 failed: port 3307 is held by mysqld (pid 77034, DBngin)  (yard service port mysql-8.4 <port>)\n"),
+        "{so}"
+    );
+}
+
 #[test]
 fn service_start_that_fails_shows_the_last_lines_and_exits_1() {
     let failed = json!({"failed": {"last_lines": ["[ERROR] Can't start server", "[ERROR] Aborting"]}});

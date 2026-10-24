@@ -1,6 +1,6 @@
 //! Domain values that cross the wire, shared by core, daemon, CLI and app.
 
-use crate::YardError;
+use crate::{ErrorCode, YardError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -335,7 +335,52 @@ pub enum ServiceState {
     Running,
     Starting,
     Stopped,
-    Failed { last_lines: Vec<String> },
+    Failed {
+        last_lines: Vec<String>,
+        /// Why it failed, when yardd knows: `PORT_IN_USE` naming the holder of a port it needs
+        /// (hint `yard service port <i> <port>`), `FORMULA_MISSING` for a keg that is gone (hint
+        /// `brew install|reinstall <formula>`), or `JOB_FAILED` with the supervisor's reason
+        /// (`not healthy within 120 s of starting`). Added in protocol 2.5; absent from older
+        /// daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<YardError>,
+    },
+}
+
+impl ServiceState {
+    /// The error a command that waited for `name` to start reports when it is `Failed`:
+    /// the reason first, then the last line of its log. Its code and hint are the reason's
+    /// (`PORT_IN_USE`, hint `yard service port …`), else `JOB_FAILED` with `yard service logs`.
+    /// `None` for any other state.
+    pub fn failure(&self, name: &str) -> Option<YardError> {
+        let ServiceState::Failed { last_lines, reason } = self else { return None };
+        let last = last_lines.iter().rev().map(|l| l.trim()).find(|l| !l.is_empty());
+        let message = match (reason, last) {
+            (Some(r), _) if r.code == ErrorCode::PortInUse || r.code == ErrorCode::FormulaMissing => {
+                r.message.clone()
+            }
+            (Some(r), Some(last)) => format!("{}; its log ends: {last}", r.message),
+            (Some(r), None) => r.message.clone(),
+            (None, Some(last)) => last.to_string(),
+            (None, None) => "no output".to_string(),
+        };
+        let mut error = YardError::new(
+            reason.as_ref().map_or(ErrorCode::JobFailed, |r| r.code),
+            format!("{name} failed to start: {message}"),
+        )
+        .with_hint(
+            reason
+                .as_ref()
+                .and_then(|r| r.hint.clone())
+                .unwrap_or_else(|| format!("yard service logs {name}")),
+        );
+        let mut data = reason.as_ref().and_then(|r| r.data.clone()).unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = data.as_object_mut() {
+            map.insert("last_lines".into(), serde_json::json!(last_lines));
+        }
+        error = error.with_data(data);
+        Some(error)
+    }
 }
 
 /// A login a service accepts. `user: None` means the service has no authentication;
@@ -587,15 +632,55 @@ mod tests {
 
     #[test]
     fn service_state_failed_carries_lines() {
-        let s = ServiceState::Failed { last_lines: vec!["boom".into()] };
+        let s = ServiceState::Failed { last_lines: vec!["boom".into()], reason: None };
         assert_eq!(serde_json::to_value(&s).unwrap(), json!({"failed":{"last_lines":["boom"]}}));
         assert_eq!(serde_json::to_value(ServiceState::Running).unwrap(), json!("running"));
         assert_eq!(serde_json::to_value(ServiceState::Starting).unwrap(), json!("starting"));
         assert_eq!(serde_json::to_value(ServiceState::Stopped).unwrap(), json!("stopped"));
         assert_eq!(
             serde_json::from_value::<ServiceState>(json!({"failed":{"last_lines":[]}})).unwrap(),
-            ServiceState::Failed { last_lines: vec![] }
+            ServiceState::Failed { last_lines: vec![], reason: None },
+            "an older daemon sends no reason"
         );
+    }
+
+    #[test]
+    fn service_state_failed_carries_its_reason() {
+        let reason = YardError::new(ErrorCode::PortInUse, "port 3307 is held by mysqld (pid 77034, DBngin)")
+            .with_hint("yard service port mysql-8.4 <port>")
+            .with_data(json!({"port": 3307}));
+        let s = ServiceState::Failed { last_lines: vec![], reason: Some(reason.clone()) };
+        let wire = serde_json::to_value(&s).unwrap();
+        assert_eq!(wire["failed"]["reason"]["code"], "PORT_IN_USE");
+        assert_eq!(serde_json::from_value::<ServiceState>(wire).unwrap(), s);
+
+        let e = s.failure("mysql-8.4").unwrap();
+        assert_eq!(e.code, ErrorCode::PortInUse);
+        assert_eq!(e.message, "mysql-8.4 failed to start: port 3307 is held by mysqld (pid 77034, DBngin)");
+        assert_eq!(e.hint.as_deref(), Some("yard service port mysql-8.4 <port>"));
+        assert_eq!(e.data, Some(json!({"port": 3307, "last_lines": []})));
+    }
+
+    #[test]
+    fn a_failure_names_the_reason_then_the_log() {
+        let lines = vec!["InnoDB: upgrading".to_string(), "  ".to_string()];
+        let timeout = YardError::new(ErrorCode::JobFailed, "not healthy within 120 s of starting")
+            .with_hint("yard service logs mysql-8.4");
+        let with = ServiceState::Failed { last_lines: lines.clone(), reason: Some(timeout) };
+        let e = with.failure("mysql-8.4").unwrap();
+        assert_eq!(e.code, ErrorCode::JobFailed);
+        assert_eq!(
+            e.message,
+            "mysql-8.4 failed to start: not healthy within 120 s of starting; its log ends: InnoDB: upgrading"
+        );
+        // An older daemon gives no reason: the last line is the message, as before.
+        let without = ServiceState::Failed { last_lines: lines, reason: None };
+        let e = without.failure("mysql-8.4").unwrap();
+        assert_eq!(e.message, "mysql-8.4 failed to start: InnoDB: upgrading");
+        assert_eq!(e.hint.as_deref(), Some("yard service logs mysql-8.4"));
+        let empty = ServiceState::Failed { last_lines: vec![], reason: None };
+        assert_eq!(empty.failure("redis").unwrap().message, "redis failed to start: no output");
+        assert_eq!(ServiceState::Running.failure("redis"), None);
     }
 
     #[test]

@@ -48,6 +48,17 @@ pub fn state_name(state: &ServiceState) -> &'static str {
     }
 }
 
+/// `mysql-8.4 failed: port 3307 is held by mysqld (pid 77034, DBngin)  (yard service port
+/// mysql-8.4 <port>)`: why a failed instance failed, when yardd says, with the command that
+/// fixes it. `None` for any other state.
+pub fn failure_line(info: &ServiceInfo) -> Option<String> {
+    let ServiceState::Failed { reason: Some(reason), .. } = &info.state else { return None };
+    Some(match &reason.hint {
+        Some(hint) => format!("{} failed: {}  ({hint})", info.name, reason.message),
+        None => format!("{} failed: {}", info.name, reason.message),
+    })
+}
+
 /// `127.0.0.1:3307`: where the instance listens (its first port; MinIO's is the API's).
 pub fn address(info: &ServiceInfo) -> String {
     info.ports.first().map_or_else(|| "-".to_string(), |p| format!("127.0.0.1:{}", p.port))
@@ -84,6 +95,11 @@ pub async fn list(ctx: &Ctx) -> Outcome {
             .collect();
         let mut out = table(&["INSTANCE", "ENGINE", "VERSION", "PORT", "STATE", "ACCOUNT", "USED BY"], &rows);
         out.push('\n');
+        let failures: Vec<String> = services.iter().filter_map(failure_line).collect();
+        if !failures.is_empty() {
+            failures.iter().for_each(|f| out.push_str(&format!("{f}\n")));
+            out.push('\n');
+        }
         out.push_str(&for_agents("yard services"));
         out
     });
@@ -237,22 +253,21 @@ async fn wait_up(ctx: &Ctx, mut info: ServiceInfo) -> Result<ServiceInfo, CliErr
     loop {
         match &info.state {
             ServiceState::Running | ServiceState::Stopped => return Ok(info),
-            ServiceState::Failed { last_lines } => {
-                if !ctx.json {
+            ServiceState::Failed { last_lines, reason } => {
+                // A held port or a missing keg failed it before it ran: its log is not why.
+                let before_running = reason
+                    .as_ref()
+                    .is_some_and(|r| matches!(r.code, ErrorCode::PortInUse | ErrorCode::FormulaMissing));
+                if !ctx.json && !before_running {
                     let skip = last_lines.len().saturating_sub(SHOWN_LINES);
                     for line in &last_lines[skip..] {
                         eprintln!("  {line}");
                     }
                 }
-                let last =
-                    last_lines.iter().rev().find(|l| !l.trim().is_empty()).map_or("no output", |l| l.trim());
-                return Err(YardError::new(
-                    ErrorCode::JobFailed,
-                    format!("{} failed to start: {last}", info.name),
-                )
-                .with_hint(format!("yard service logs {}", info.name))
-                .with_data(serde_json::json!({ "last_lines": last_lines }))
-                .into());
+                let error = info.state.failure(&info.name).unwrap_or_else(|| {
+                    YardError::new(ErrorCode::JobFailed, format!("{} failed to start", info.name))
+                });
+                return Err(error.into());
             }
             ServiceState::Starting => {}
         }
