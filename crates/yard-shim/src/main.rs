@@ -58,7 +58,7 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
         YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
             .with_hint("cd into an existing directory")
     })?;
-    let (v, source) = resolve_version(&cwd, &yard, &sites, &read_small)?;
+    let (v, source) = resolve_version(&cwd, &yard, &sites, &paths, &read_small)?;
     if std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1") {
         eprintln!("yard-shim: {name} runs PHP {v} ({source})");
     }
@@ -66,7 +66,7 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     let brew = Brew::from_env(&exists)?;
     let opt = brew.php_opt(v, &exists, &|p| std::fs::read_link(p).ok()).map_err(|e| match &source {
         // The project asks for it, so `yard init` there is what installs it.
-        Source::Project(file) => YardError::new(
+        Source::Project(file) | Source::Managed(file) => YardError::new(
             ErrorCode::FormulaMissing,
             format!("PHP {v} is not installed ({})", file.display()),
         )

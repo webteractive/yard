@@ -142,6 +142,35 @@ fn missing_project_php_hints_init() {
     assert!(stderr.contains("  hint: yard init"), "{stderr}");
 }
 
+fn write_managed(s: &Setup, text: &str) -> PathBuf {
+    let file = s.root.join("sites/old/.yard");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, format!("{text}project = {:?}\n", s.project.display().to_string())).unwrap();
+    file
+}
+
+#[test]
+fn managed_file_php_is_run() {
+    let s = setup();
+    script(&s.brew.join("opt/php@7.3/bin/php"), "echo \"argv0:$0\"");
+    let file = write_managed(&s, "php = \"7.3\"\n");
+    let out = run(&s, &[], true);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("php@7.3/bin/php"), "the managed file beats the 7.1 isolation: {stdout}");
+    assert!(stderr.contains(&file.display().to_string()), "{stderr}");
+}
+
+#[test]
+fn missing_managed_php_hints_init() {
+    let s = setup();
+    let file = write_managed(&s, "php = \"7.3\"\n");
+    let out = run(&s, &[], false);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(&format!("yard: PHP 7.3 is not installed ({})", file.display())), "{stderr}");
+    assert!(stderr.contains("  hint: yard init"), "{stderr}");
+}
+
 #[test]
 fn project_file_php_is_run() {
     let s = setup();

@@ -17,6 +17,9 @@ pub const SHIMS: [&str; 5] = ["php", "composer", "pecl", "phpize", "php-config"]
 pub enum Source {
     /// The nearest `.yard`: its `php`, or the default when it names none.
     Project(PathBuf),
+    /// The managed `.yard` of the linked site containing the cwd: its `php`, or the
+    /// default when it names none.
+    Managed(PathBuf),
     /// The isolation of the linked site containing the cwd.
     Site(String),
     /// The nearest `.yard-php`.
@@ -27,7 +30,7 @@ pub enum Source {
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Source::Project(file) => write!(f, "{}", file.display()),
+            Source::Project(file) | Source::Managed(file) => write!(f, "{}", file.display()),
             Source::Site(name) => write!(f, "site {name} is isolated to it"),
             Source::File(file) => write!(f, "{}", file.display()),
             Source::Default => write!(f, "the default"),
@@ -35,13 +38,15 @@ impl fmt::Display for Source {
     }
 }
 
-/// The version a shim runs in `cwd` (spec §4.5, project-file spec §5): the nearest `.yard`
-/// (its `php`, else the default), else the isolation of the innermost linked site
-/// containing it, else the nearest `.yard-php`, else the default.
+/// The version a shim runs in `cwd` (spec §4.5, project-file spec §5, managed-file spec
+/// §4): the nearest `.yard` (its `php`, else the default), else the managed `.yard` of the
+/// innermost linked site containing it while that file is for the site's path, else that
+/// site's isolation, else the nearest `.yard-php`, else the default.
 pub fn resolve_version(
     cwd: &Path,
     yard: &YardConfig,
     sites: &SitesConfig,
+    paths: &Paths,
     read: &dyn Fn(&Path) -> Option<String>,
 ) -> Result<(PhpVersion, Source), YardError> {
     for dir in cwd.ancestors() {
@@ -57,6 +62,15 @@ pub fn resolve_version(
         .filter_map(|(name, e)| Some((name, e, e.path.as_deref()?)))
         .filter(|(_, _, path)| cwd.starts_with(path))
         .max_by_key(|(_, _, path)| path.components().count());
+    if let Some((name, _, path)) = site {
+        let file = paths.managed_project_file(name);
+        if let Some(text) = read(&file) {
+            let (managed, project) = project::parse_managed(&text, &file)?;
+            if project.as_deref() == Some(path) {
+                return Ok((managed.php.unwrap_or(yard.default_php), Source::Managed(file)));
+            }
+        }
+    }
     if let Some((name, entry, _)) = site
         && let Some(v) = entry.php
     {
@@ -169,7 +183,8 @@ php = "7.4"
         let (yard, sites) = configs(SITES);
         let files = BTreeMap::from([(PathBuf::from("/code/.yard-php"), "7.3\n".to_string())]);
         let read = |p: &Path| files.get(p).cloned();
-        let at = |cwd: &str| resolve_version(Path::new(cwd), &yard, &sites, &read).unwrap();
+        let at =
+            |cwd: &str| resolve_version(Path::new(cwd), &yard, &sites, &Paths::new("/r"), &read).unwrap();
         assert_eq!(at("/code/old/app"), (v("7.1"), Source::Site("old".into())));
         assert_eq!(at("/code/old/vendor/inner/src"), (v("7.4"), Source::Site("inner".into())));
         assert_eq!(at("/code/plain/src"), (v("7.3"), Source::File("/code/.yard-php".into())));
@@ -183,7 +198,7 @@ php = "7.4"
         let (yard, sites) = configs("");
         for bad in ["5.6", "banana"] {
             let read = |p: &Path| (p == Path::new("/w/.yard-php")).then(|| bad.to_string());
-            let e = resolve_version(Path::new("/w/x"), &yard, &sites, &read).unwrap_err();
+            let e = resolve_version(Path::new("/w/x"), &yard, &sites, &Paths::new("/r"), &read).unwrap_err();
             assert_eq!(e.code, ErrorCode::InvalidArgument, "{bad}");
             assert!(e.message.contains("/w/.yard-php"), "{}", e.message);
         }
@@ -197,7 +212,8 @@ php = "7.4"
             (PathBuf::from("/code/old/.yard"), "php = \"7.3\"\n".to_string()),
         ]);
         let read = |p: &Path| files.get(p).cloned();
-        let got = resolve_version(Path::new("/code/old/app"), &yard, &sites, &read).unwrap();
+        let got =
+            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read).unwrap();
         assert_eq!(got, (v("7.3"), Source::Project("/code/old/.yard".into())));
         assert_eq!(got.1.to_string(), "/code/old/.yard");
     }
@@ -207,7 +223,8 @@ php = "7.4"
         let (yard, sites) = configs(SITES);
         let files = BTreeMap::from([(PathBuf::from("/code/old/.yard"), "docroot = \"web\"\n".to_string())]);
         let read = |p: &Path| files.get(p).cloned();
-        let got = resolve_version(Path::new("/code/old/app"), &yard, &sites, &read).unwrap();
+        let got =
+            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read).unwrap();
         assert_eq!(got, (v("8.4"), Source::Project("/code/old/.yard".into())));
     }
 
@@ -219,15 +236,52 @@ php = "7.4"
             (PathBuf::from("/code/a/sub/.yard"), "php = \"7.4\"\n".to_string()),
         ]);
         let read = |p: &Path| files.get(p).cloned();
-        let got = resolve_version(Path::new("/code/a/sub/x"), &yard, &sites, &read).unwrap();
+        let got =
+            resolve_version(Path::new("/code/a/sub/x"), &yard, &sites, &Paths::new("/r"), &read).unwrap();
         assert_eq!(got, (v("7.4"), Source::Project("/code/a/sub/.yard".into())));
+    }
+
+    #[test]
+    fn managed_file_sits_between_committed_and_isolation() {
+        let (yard, sites) = configs(SITES);
+        let managed = |project: &str| format!("php = \"7.3\"\nproject = {project:?}\n");
+        let mut files = BTreeMap::from([(PathBuf::from("/r/sites/old/.yard"), managed("/code/old"))]);
+        let at = |files: &BTreeMap<PathBuf, String>, cwd: &str| {
+            let read = |p: &Path| files.get(p).cloned();
+            resolve_version(Path::new(cwd), &yard, &sites, &Paths::new("/r"), &read).unwrap()
+        };
+        let got = at(&files, "/code/old/app");
+        assert_eq!(got, (v("7.3"), Source::Managed("/r/sites/old/.yard".into())));
+        assert_eq!(got.1.to_string(), "/r/sites/old/.yard");
+        // The innermost site's file: `inner` has none, so its isolation.
+        assert_eq!(at(&files, "/code/old/vendor/inner/src"), (v("7.4"), Source::Site("inner".into())));
+        // A committed .yard nearer the cwd wins.
+        files.insert(PathBuf::from("/code/old/app/.yard"), "php = \"7.4\"\n".to_string());
+        assert_eq!(at(&files, "/code/old/app"), (v("7.4"), Source::Project("/code/old/app/.yard".into())));
+        files.remove(Path::new("/code/old/app/.yard"));
+        // A file for another directory is not used: the site's isolation is.
+        files.insert(PathBuf::from("/r/sites/old/.yard"), managed("/code/elsewhere"));
+        assert_eq!(at(&files, "/code/old/app"), (v("7.1"), Source::Site("old".into())));
+        // One without php is the default.
+        files.insert(PathBuf::from("/r/sites/old/.yard"), "project = \"/code/old\"\n".to_string());
+        assert_eq!(at(&files, "/code/old/app"), (v("8.4"), Source::Managed("/r/sites/old/.yard".into())));
+    }
+
+    #[test]
+    fn bad_managed_file_names_it() {
+        let (yard, sites) = configs(SITES);
+        let read = |p: &Path| (p == Path::new("/r/sites/old/.yard")).then(|| "php = 7.3\n".to_string());
+        let e =
+            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(e.message.contains("/r/sites/old/.yard"), "{}", e.message);
     }
 
     #[test]
     fn bad_project_file_names_it() {
         let (yard, sites) = configs("");
         let read = |p: &Path| (p == Path::new("/w/.yard")).then(|| "php = 7.3\n".to_string());
-        let e = resolve_version(Path::new("/w/x"), &yard, &sites, &read).unwrap_err();
+        let e = resolve_version(Path::new("/w/x"), &yard, &sites, &Paths::new("/r"), &read).unwrap_err();
         assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
         assert!(e.message.contains("/w/.yard"), "{}", e.message);
     }
