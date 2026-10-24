@@ -216,11 +216,16 @@ async fn a_newly_linked_project_is_watched() {
     let dir = d.projects.path().join("fresh");
     std::fs::create_dir_all(&dir).unwrap();
     c.call("sites.link", json!({"name": "fresh", "path": dir.display().to_string()})).await.unwrap();
-    // The watcher learns of the link from sites.toml's change; give it that event first.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Written at once, before the watcher may have seen the link. The watcher adds the
+    // directory when sites.toml changes and reconciles only after that, so whichever comes
+    // first, this edit is read, and once it is, the directory is watched.
     write_yard(&dir, "php = \"7.3\"\n");
-    let s = php_within(&mut c, "fresh", "7.3", Duration::from_secs(2)).await;
+    let s = php_within(&mut c, "fresh", "7.3", Duration::from_secs(10)).await;
     assert_eq!(s["php"], "7.3", "{s}");
+    // Only the watch on the project directory sees this one.
+    write_yard(&dir, "php = \"8.4\"\n");
+    let s = php_within(&mut c, "fresh", "8.4", Duration::from_secs(10)).await;
+    assert_eq!(s["php"], "8.4", "{s}");
     d.shutdown().await.unwrap();
 }
 
