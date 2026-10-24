@@ -20,8 +20,9 @@ pub enum Event {
         unit: String,
         state: UnitState,
     },
+    /// Boxed: a site is much larger than every other event. The wire form is the same.
     SiteAdded {
-        site: SiteInfo,
+        site: Box<SiteInfo>,
     },
     SiteRemoved {
         name: String,

@@ -1,12 +1,13 @@
-//! The `.yard` project file (project-file spec §4): how Yard serves the project it sits in.
+//! The `.yard` project file (project-file spec §4): how Yard serves the project it sits in,
+//! from the project itself or from Yard's data root (managed-file spec §4).
 
-use crate::PhpVersion;
 use crate::config::located_error;
 use crate::config::yard::{ExtName, parse_ext_name};
 use crate::config::{ServicesConfig, SiteEntry, SitesConfig};
 use crate::constraint::best_version;
 use crate::services::{Engine, instance_name};
 use crate::sites::detect_docroot;
+use crate::{Paths, PhpVersion};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -36,8 +37,51 @@ pub enum ServiceWant {
     Default,
 }
 
-/// Each linked site's `.yard`, by site name; a site without one has no entry.
-pub type Projects = BTreeMap<String, Result<ProjectFile, YardError>>;
+/// Where the `.yard` a site is served from lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileKind {
+    /// `<project>/.yard`, the project's own.
+    Committed,
+    /// `<data root>/sites/<name>/.yard`.
+    Managed,
+}
+
+/// The `.yard` a site is served from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Loaded {
+    pub file: PathBuf,
+    pub kind: FileKind,
+    pub parsed: Result<ProjectFile, YardError>,
+}
+
+impl Loaded {
+    /// The file's settings, when it could be read and parsed.
+    pub fn ok(&self) -> Option<&ProjectFile> {
+        self.parsed.as_ref().ok()
+    }
+}
+
+/// A managed `.yard` that exists for a site but is not used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ignored {
+    pub file: PathBuf,
+    pub because: IgnoredBecause,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IgnoredBecause {
+    /// The project has its own `.yard`, which always wins.
+    Committed,
+    /// Its `project` names another directory, or none.
+    OtherProject(Option<PathBuf>),
+}
+
+/// The `.yard` each linked site is served from, by site name; a site without one has no
+/// entry.
+pub type Projects = BTreeMap<String, Loaded>;
+
+/// By site name, a managed `.yard` that exists but is not used.
+pub type IgnoredFiles = BTreeMap<String, Ignored>;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +93,7 @@ struct Raw {
     extensions: Vec<Spanned<String>>,
     #[serde(default)]
     services: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
+    project: Option<Spanned<PathBuf>>,
 }
 
 /// `PROJECT_FILE_INVALID` at the line at fault for a file that does not parse, has an
@@ -56,6 +101,16 @@ struct Raw {
 /// extension that is not a name, or a `[services]` entry that is not an engine with one of
 /// its lines or `true`.
 pub fn parse(text: &str, file: &Path) -> Result<ProjectFile, YardError> {
+    parse_as(text, file, FileKind::Committed).map(|(parsed, _)| parsed)
+}
+
+/// A managed `.yard`: what [`parse`] accepts, plus `project`, the absolute path of the
+/// directory it was written for (`None` when the file names none).
+pub fn parse_managed(text: &str, file: &Path) -> Result<(ProjectFile, Option<PathBuf>), YardError> {
+    parse_as(text, file, FileKind::Managed)
+}
+
+fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Option<PathBuf>), YardError> {
     let invalid = |span, message: &str| {
         located_error(
             ErrorCode::ProjectFileInvalid,
@@ -90,7 +145,17 @@ pub fn parse(text: &str, file: &Path) -> Result<ProjectFile, YardError> {
         })
         .collect::<Result<_, _>>()?;
     let services = parse_services(raw.services, &invalid)?;
-    Ok(ProjectFile { php: raw.php, docroot, secure: raw.secure, extensions, services })
+    let project = match (raw.project, kind) {
+        (Some(p), FileKind::Committed) => {
+            return Err(invalid(Some(p.span()), "project is only for a managed .yard"));
+        }
+        (Some(p), FileKind::Managed) if !p.get_ref().is_absolute() => {
+            let message = format!("project {:?} must be an absolute path", p.get_ref());
+            return Err(invalid(Some(p.span()), &message));
+        }
+        (p, _) => p.map(Spanned::into_inner),
+    };
+    Ok((ProjectFile { php: raw.php, docroot, secure: raw.secure, extensions, services }, project))
 }
 
 /// `[services]`: keys are engines, values a release line of that engine or `true`.
@@ -265,23 +330,57 @@ pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
     Ok(doc.to_string())
 }
 
-/// The `.yard` of each linked site. `read` gives `None` when there is no file, and an
-/// error when there is one Yard cannot read.
-pub fn load(sites: &SitesConfig, read: &dyn Fn(&Path) -> Option<Result<String, YardError>>) -> Projects {
-    sites
-        .sites
-        .iter()
-        .filter_map(|(name, entry)| {
-            let file = entry.path.as_ref()?.join(FILE);
-            let parsed = read(&file)?.and_then(|text| parse(&text, &file));
-            Some((name.clone(), parsed))
-        })
-        .collect()
+/// The `.yard` each linked site is served from, and the managed files that are not used
+/// (managed-file spec §4). `read` gives `None` when there is no file, and an error when
+/// there is one Yard cannot read. The project's own `.yard` wins as soon as `read` finds
+/// anything there, usable or not; else the site's managed file, while its `project` is
+/// the site's `path` exactly. A managed file that does not parse is the site's error.
+pub fn load(
+    sites: &SitesConfig,
+    paths: &Paths,
+    read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
+) -> (Projects, IgnoredFiles) {
+    let mut projects = Projects::new();
+    let mut ignored = IgnoredFiles::new();
+    for (name, entry) in &sites.sites {
+        let Some(path) = entry.path.as_ref() else { continue };
+        let committed = path.join(FILE);
+        let managed = paths.managed_project_file(name);
+        if let Some(text) = read(&committed) {
+            let parsed = text.and_then(|text| parse(&text, &committed));
+            projects.insert(name.clone(), Loaded { file: committed, kind: FileKind::Committed, parsed });
+            if read(&managed).is_some() {
+                ignored.insert(name.clone(), Ignored { file: managed, because: IgnoredBecause::Committed });
+            }
+            continue;
+        }
+        let Some(text) = read(&managed) else { continue };
+        match text.and_then(|text| parse_managed(&text, &managed)) {
+            Ok((parsed, Some(project))) if project == *path => {
+                projects.insert(
+                    name.clone(),
+                    Loaded { file: managed, kind: FileKind::Managed, parsed: Ok(parsed) },
+                );
+            }
+            Ok((_, project)) => {
+                ignored.insert(
+                    name.clone(),
+                    Ignored { file: managed, because: IgnoredBecause::OtherProject(project) },
+                );
+            }
+            Err(e) => {
+                projects
+                    .insert(name.clone(), Loaded { file: managed, kind: FileKind::Managed, parsed: Err(e) });
+            }
+        }
+    }
+    (projects, ignored)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Paths;
     use crate::config::SiteEntry;
     use crate::config::sites::parse_sites;
     use std::collections::BTreeMap;
@@ -578,8 +677,98 @@ mod tests {
             (PathBuf::from("/code/ee/.yard"), "php = \"7.3\"\n".to_string()),
             (PathBuf::from("/code/.yard"), "php = \"7.1\"\n".to_string()),
         ]);
-        let projects = load(&sites, &|p: &Path| files.get(p).cloned().map(Ok));
+        let (projects, ignored) = load(&sites, &Paths::new("/r"), &|p: &Path| files.get(p).cloned().map(Ok));
         assert_eq!(projects.keys().collect::<Vec<_>>(), ["ee"]);
-        assert_eq!(projects["ee"].as_ref().unwrap().php, Some("7.3".parse().unwrap()));
+        assert_eq!(projects["ee"].ok().unwrap().php, Some("7.3".parse().unwrap()));
+        assert!(ignored.is_empty());
+    }
+
+    const MANAGED: &str = "/r/sites/ee/.yard";
+
+    #[test]
+    fn project_key_is_only_for_a_managed_file() {
+        let e = parse("project = \"/code/ee\"\n", Path::new(FILE)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert_eq!(e.data.as_ref().unwrap()["line"], 1);
+        assert!(e.message.contains("project is only for a managed .yard"), "{}", e.message);
+        let (f, project) =
+            parse_managed("php = \"7.3\"\nproject = \"/code/ee\"\n", Path::new(MANAGED)).unwrap();
+        assert_eq!((f.php, project), (Some(v("7.3")), Some(PathBuf::from("/code/ee"))));
+        let (_, none) = parse_managed("php = \"7.3\"\n", Path::new(MANAGED)).unwrap();
+        assert_eq!(none, None);
+        let e = parse_managed("project = \"code/ee\"\n", Path::new(MANAGED)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(e.message.contains(MANAGED), "{}", e.message);
+    }
+
+    type Files = BTreeMap<PathBuf, Result<String, YardError>>;
+
+    fn load_files(sites_toml: &str, files: &Files) -> (Projects, IgnoredFiles) {
+        let sites = parse_sites(Some(sites_toml), Path::new("/r/sites.toml")).unwrap();
+        load(&sites, &Paths::new("/r"), &|p: &Path| files.get(p).cloned())
+    }
+
+    fn managed(project: &str, php: &str) -> Result<String, YardError> {
+        Ok(format!(
+            "# .yard for x, kept by Yard outside the project.\nphp = {php:?}\nproject = {project:?}\n"
+        ))
+    }
+
+    #[test]
+    fn load_picks_committed_then_a_matching_managed_file() {
+        let sites = "[sites.ee]\npath = \"/code/ee\"\n[sites.app]\npath = \"/code/app\"\n\
+            [sites.other]\npath = \"/code/other\"\n[sites.broken]\npath = \"/code/broken\"\n\
+            [sites.api]\nproxy = \"http://127.0.0.1:3000\"\n[sites.bare]\npath = \"/code/bare\"\n";
+        let dangling =
+            YardError::new(ErrorCode::ProjectFileInvalid, "/code/broken/.yard is a symlink to nothing");
+        let files: Files = BTreeMap::from([
+            (PathBuf::from("/code/ee/.yard"), Ok("php = \"7.3\"\n".to_string())),
+            (PathBuf::from("/r/sites/ee/.yard"), managed("/code/ee", "7.4")),
+            (PathBuf::from("/r/sites/app/.yard"), managed("/code/app", "7.4")),
+            (PathBuf::from("/r/sites/other/.yard"), managed("/code/elsewhere", "7.4")),
+            (PathBuf::from("/code/broken/.yard"), Err(dangling)),
+            (PathBuf::from("/r/sites/broken/.yard"), managed("/code/broken", "7.4")),
+            (PathBuf::from("/r/sites/api/.yard"), managed("/code/api", "7.4")),
+        ]);
+        let (p, ignored) = load_files(sites, &files);
+        assert_eq!(p.keys().collect::<Vec<_>>(), ["app", "broken", "ee"]);
+        assert_eq!((p["ee"].kind, p["ee"].ok().unwrap().php), (FileKind::Committed, Some(v("7.3"))));
+        assert_eq!(p["ee"].file, PathBuf::from("/code/ee/.yard"));
+        assert_eq!(ignored["ee"].file, PathBuf::from("/r/sites/ee/.yard"));
+        assert_eq!(ignored["ee"].because, IgnoredBecause::Committed);
+        assert_eq!(
+            (p["app"].kind, p["app"].file.as_path()),
+            (FileKind::Managed, Path::new("/r/sites/app/.yard"))
+        );
+        assert_eq!(p["app"].ok().unwrap().php, Some(v("7.4")));
+        assert!(!ignored.contains_key("app"));
+        // Another project's file is not used: the site resolves as if it had none.
+        assert_eq!(ignored["other"].because, IgnoredBecause::OtherProject(Some("/code/elsewhere".into())));
+        // An unusable committed file never falls through to the managed one.
+        assert_eq!(p["broken"].kind, FileKind::Committed);
+        assert!(p["broken"].ok().is_none() && p["broken"].parsed.is_err());
+        assert_eq!(ignored["broken"].because, IgnoredBecause::Committed);
+        // A proxy has no project, so its managed file is never read.
+        assert!(!p.contains_key("api") && !ignored.contains_key("api"));
+    }
+
+    #[test]
+    fn a_managed_file_without_project_is_not_used() {
+        let files: Files =
+            BTreeMap::from([(PathBuf::from("/r/sites/ee/.yard"), Ok("php = \"7.4\"\n".to_string()))]);
+        let (p, ignored) = load_files("[sites.ee]\npath = \"/code/ee\"\n", &files);
+        assert!(p.is_empty());
+        assert_eq!(ignored["ee"].because, IgnoredBecause::OtherProject(None));
+    }
+
+    #[test]
+    fn a_broken_managed_file_is_the_sites_error() {
+        let files: Files =
+            BTreeMap::from([(PathBuf::from("/r/sites/ee/.yard"), Ok("php = 7.3\n".to_string()))]);
+        let (p, _) = load_files("[sites.ee]\npath = \"/code/ee\"\n", &files);
+        assert_eq!(p["ee"].kind, FileKind::Managed);
+        let e = p["ee"].parsed.as_ref().unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(e.message.contains(MANAGED), "{}", e.message);
     }
 }

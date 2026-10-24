@@ -59,6 +59,73 @@ async fn project_file_php_is_served() {
     d.shutdown().await.unwrap();
 }
 
+/// A managed `.yard` for `name`, written for `dir` as `sites.toml` spells it.
+fn write_managed(d: &support::daemon::Daemon, name: &str, dir: &Path, body: &str) -> std::path::PathBuf {
+    let file = d.fx.paths.managed_project_file(name);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, format!("{body}project = {:?}\n", dir.display().to_string())).unwrap();
+    file
+}
+
+#[tokio::test]
+async fn managed_file_is_served_and_committed_wins() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    let managed = write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "ee").await;
+    assert_eq!(
+        (s["php"].as_str(), s["project_file"].as_str(), s["project_file_kind"].as_str()),
+        (Some("7.4"), Some(managed.to_str().unwrap()), Some("managed")),
+        "{s}"
+    );
+    write_yard(&dir, "php = \"7.3\"\n");
+    reconcile(&mut c).await;
+    let s = site(&mut c, "ee").await;
+    assert_eq!((s["php"].as_str(), s["project_file_kind"].as_str()), (Some("7.3"), Some("project")), "{s}");
+    assert_eq!(s["ignored_managed_file"]["because"], "committed", "{s}");
+    assert_eq!(s["ignored_managed_file"]["file"], managed.display().to_string(), "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_dangling_committed_symlink_does_not_fall_through() {
+    let d = prepared("").await;
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
+    std::os::unix::fs::symlink(dir.join("nowhere"), dir.join(".yard")).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "ee").await;
+    assert_eq!(s["project_file_kind"], "project", "{s}");
+    assert_eq!(s["project_error"]["code"], "PROJECT_FILE_INVALID", "{s}");
+    assert!(s["project_error"]["message"].as_str().unwrap().contains(".yard"), "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_managed_file_for_another_project_is_not_used() {
+    let d = prepared("").await;
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    let other = d.projects.path().join("elsewhere");
+    let managed = write_managed(&d, "ee", &other, "php = \"7.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "ee").await;
+    assert_eq!(s["php"], "8.4", "{s}");
+    assert!(s.get("project_file").is_none(), "{s}");
+    assert_eq!(s["ignored_managed_file"]["because"], "other_project", "{s}");
+    assert_eq!(s["ignored_managed_file"]["project"], other.display().to_string(), "{s}");
+    assert_eq!(s["ignored_managed_file"]["file"], managed.display().to_string(), "{s}");
+    let _ = dir;
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn unmet_site_serves_setup_page_and_others_keep_serving() {
     let d = prepared("").await;

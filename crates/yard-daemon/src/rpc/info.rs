@@ -62,7 +62,7 @@ fn project_blocks(
     supervisor: &Supervisor,
     site: &SiteInfo,
 ) -> Result<Vec<(Engine, EnvBlock)>, YardError> {
-    let file = match snap.projects.get(&site.name) {
+    let file = match snap.projects.get(&site.name).map(|l| &l.parsed) {
         None => return Ok(vec![]),
         Some(Err(e)) => return Err(e.clone()),
         Some(Ok(file)) => file,
@@ -199,7 +199,7 @@ pub(super) async fn site_detail(ctx: &Context, p: SiteDetailParams) -> Result<Si
         (None, None) => return Err(outside(None)),
     };
     let supervisor = ctx.supervisor();
-    let services = match snap.projects.get(&site.name) {
+    let services = match snap.projects.get(&site.name).map(|l| &l.parsed) {
         Some(Ok(file)) => file
             .services
             .iter()
@@ -239,7 +239,7 @@ fn php_full(ctx: &Context, site: &SiteInfo) -> Option<String> {
 fn sources(snap: &Snapshot, site: &SiteInfo) -> BTreeMap<String, SettingSource> {
     let entry = snap.sites_cfg.sites.get(&site.name);
     let project = snap.projects.get(&site.name);
-    let file = project.and_then(|p| p.as_ref().ok());
+    let file = project.and_then(|p| p.ok());
     let source = |in_file: bool, in_sites_toml: bool| match (project.is_some(), in_file, in_sites_toml) {
         (true, true, _) => SettingSource::ProjectFile,
         (true, false, _) => SettingSource::Default,

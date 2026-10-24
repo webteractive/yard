@@ -106,7 +106,7 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
 /// directory it serves when that is inside `dir`, so serving does not change.
 async fn carry(ctx: &Context, name: &str, other: &SiteEntry, dir: &Path) -> SiteEntry {
     let snapshot = snapshot(ctx).await.ok();
-    let old_file = snapshot.as_ref().and_then(|s| s.projects.get(name)).and_then(|p| p.as_ref().ok());
+    let old_file = snapshot.as_ref().and_then(|s| s.projects.get(name)).and_then(|p| p.ok());
     let served =
         snapshot.as_ref().and_then(|s| s.resolution.sites.iter().find(|s| s.name == name)).and_then(|s| {
             match &s.kind {

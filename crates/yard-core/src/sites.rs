@@ -2,9 +2,9 @@
 //! only when it is linked.
 
 use crate::config::{SitesConfig, YardConfig};
-use crate::project::{self, Projects};
+use crate::project::{FileKind, IgnoredBecause, IgnoredFiles, Projects};
 use std::path::{Component, Path, PathBuf};
-use yard_proto::{ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
+use yard_proto::{ErrorCode, IgnoredManagedFile, ProjectFileKind, SiteInfo, SiteKind, SiteSource, YardError};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Resolution {
@@ -97,7 +97,8 @@ pub fn resolve(
                 ));
             }
             (Some(path), None) => {
-                let (php, docroot, secure, project_error) = match projects.get(name) {
+                let loaded = projects.get(name);
+                let (php, docroot, secure, project_error) = match loaded.map(|l| &l.parsed) {
                     Some(Ok(file)) => (
                         file.php.unwrap_or(cfg.default_php),
                         file.docroot
@@ -130,9 +131,12 @@ pub fn resolve(
                         php: php.to_string(),
                     },
                     secure,
-                    project_file: projects
-                        .contains_key(name)
-                        .then(|| path.join(project::FILE).display().to_string()),
+                    project_file: loaded.map(|l| l.file.display().to_string()),
+                    project_file_kind: loaded.map(|l| match l.kind {
+                        FileKind::Committed => ProjectFileKind::Project,
+                        FileKind::Managed => ProjectFileKind::Managed,
+                    }),
+                    ignored_managed_file: None,
                     needs: vec![],
                     project_error,
                 });
@@ -146,6 +150,8 @@ pub fn resolve(
                     kind: SiteKind::Proxy { target: target.clone() },
                     secure,
                     project_file: None,
+                    project_file_kind: None,
+                    ignored_managed_file: None,
                     needs: vec![],
                     project_error: None,
                 }),
@@ -155,6 +161,21 @@ pub fn resolve(
         }
     }
     Resolution { sites: out, warnings }
+}
+
+/// Sets `ignored_managed_file` on each site with a managed `.yard` that is not used.
+pub fn mark_ignored(sites: &mut [SiteInfo], ignored: &IgnoredFiles) {
+    for site in sites {
+        let Some(i) = ignored.get(&site.name) else { continue };
+        let (because, project) = match &i.because {
+            IgnoredBecause::Committed => (yard_proto::IgnoredBecause::Committed, None),
+            IgnoredBecause::OtherProject(p) => {
+                (yard_proto::IgnoredBecause::OtherProject, p.as_ref().map(|p| p.display().to_string()))
+            }
+        };
+        site.ignored_managed_file =
+            Some(IgnoredManagedFile { file: i.file.display().to_string(), because, project });
+    }
 }
 
 #[cfg(test)]
@@ -205,7 +226,46 @@ mod tests {
 
     fn project(name: &str, text: &str) -> Projects {
         let file = Path::new("/code").join(name).join(crate::project::FILE);
-        Projects::from([(name.to_string(), crate::project::parse(text, &file))])
+        let parsed = crate::project::parse(text, &file);
+        Projects::from([(
+            name.to_string(),
+            crate::project::Loaded { file, kind: FileKind::Committed, parsed },
+        )])
+    }
+
+    #[test]
+    fn a_managed_file_is_named_with_its_kind_and_an_ignored_one_is_marked() {
+        let fs = Fs::new(&["/code/ee", "/code/app"]);
+        let file = PathBuf::from("/r/sites/ee/.yard");
+        let parsed = crate::project::parse("php = \"7.3\"\n", &file);
+        let p = Projects::from([(
+            "ee".to_string(),
+            crate::project::Loaded { file, kind: FileKind::Managed, parsed },
+        )]);
+        let s = sites(&[("ee", linked("/code/ee")), ("app", linked("/code/app"))]);
+        let mut r = resolve(&cfg(), &s, &p, "yard", 8080, 8443, &fs.is_dir());
+        let ignored = IgnoredFiles::from([(
+            "app".to_string(),
+            crate::project::Ignored {
+                file: "/r/sites/app/.yard".into(),
+                because: IgnoredBecause::OtherProject(Some("/code/old-app".into())),
+            },
+        )]);
+        mark_ignored(&mut r.sites, &ignored);
+        let ee = r.sites.iter().find(|s| s.name == "ee").unwrap();
+        assert_eq!(ee.project_file.as_deref(), Some("/r/sites/ee/.yard"));
+        assert_eq!(ee.project_file_kind, Some(ProjectFileKind::Managed));
+        assert_eq!(ee.ignored_managed_file, None);
+        let app = r.sites.iter().find(|s| s.name == "app").unwrap();
+        assert_eq!(app.project_file_kind, None);
+        assert_eq!(
+            app.ignored_managed_file,
+            Some(IgnoredManagedFile {
+                file: "/r/sites/app/.yard".into(),
+                because: yard_proto::IgnoredBecause::OtherProject,
+                project: Some("/code/old-app".into()),
+            })
+        );
     }
 
     #[test]

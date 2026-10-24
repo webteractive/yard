@@ -130,7 +130,7 @@ pub fn used_by(snapshot: &Snapshot, engine: Engine, instance: &str) -> Vec<Strin
     snapshot
         .projects
         .iter()
-        .filter_map(|(site, project)| Some((site, project.as_ref().ok()?.services.get(&engine)?)))
+        .filter_map(|(site, project)| Some((site, project.ok()?.services.get(&engine)?)))
         .filter(|(_, want)| match want {
             ServiceWant::Line(line) => instance_name(engine, Some(line)) == instance,
             ServiceWant::Default => default_instance(services, engine) == Some(instance),

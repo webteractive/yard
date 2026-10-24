@@ -10,7 +10,6 @@ use crate::sources::require_trusted;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
 use yard_core::config::load_services;
-use yard_core::project::FILE as PROJECT_FILE;
 use yard_core::services::{Engine, instance_name};
 use yard_core::sources::tap_of;
 use yard_proto::methods::{
@@ -96,8 +95,8 @@ pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), 
     if !sites.is_empty() {
         let files: Vec<String> = sites
             .iter()
-            .filter_map(|site| snap.sites_cfg.sites.get(site)?.path.as_ref())
-            .map(|path| path.join(PROJECT_FILE).display().to_string())
+            .filter_map(|site| snap.projects.get(site))
+            .map(|loaded| loaded.file.display().to_string())
             .collect();
         let message = format!("{} is used by {}, from its .yard", p.name, sites.join(", "));
         let mut refused = YardError::new(ErrorCode::ServiceInUse, message)

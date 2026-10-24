@@ -113,6 +113,8 @@ mod tests {
             kind: SiteKind::Php { path: path.into(), docroot: format!("{path}/public"), php: "8.4".into() },
             secure: false,
             project_file: None,
+            project_file_kind: None,
+            ignored_managed_file: None,
             needs: vec![],
             project_error: None,
         }
@@ -127,6 +129,8 @@ mod tests {
             kind: SiteKind::Proxy { target: "http://127.0.0.1:3000".into() },
             secure: false,
             project_file: None,
+            project_file_kind: None,
+            ignored_managed_file: None,
             needs: vec![],
             project_error: None,
         }

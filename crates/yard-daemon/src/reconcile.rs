@@ -156,7 +156,7 @@ impl Reconciler {
         let Some(snap) = &state.snapshot else { return false };
         snap.resolution.sites.iter().any(|site| {
             let SiteKind::Php { path, docroot, .. } = &site.kind else { return false };
-            let pinned = match snap.projects.get(&site.name) {
+            let pinned = match snap.projects.get(&site.name).map(|l| &l.parsed) {
                 Some(Ok(file)) => file.docroot.is_some(),
                 Some(Err(_)) => false,
                 None => snap.sites_cfg.sites.get(&site.name).is_some_and(|e| e.docroot.is_some()),
@@ -272,9 +272,10 @@ impl Reconciler {
             self.settle_service_ports(&services_cfg, &mut registry, &is_free, &mut report, &mut left_out);
 
         // 3. Resolve sites.
-        let projects = crate::project::read_projects(&sites_cfg);
+        let (projects, ignored_managed) = crate::project::read_projects(&sites_cfg, &state.paths);
         let mut resolution =
             sites::resolve(&yard, &sites_cfg, &projects, &tld, http, https, &|p: &Path| p.is_dir());
+        sites::mark_ignored(&mut resolution.sites, &ignored_managed);
         crate::project::fill_needs(
             &mut resolution.sites,
             &projects,
@@ -567,7 +568,7 @@ impl Reconciler {
             .map(|s| s.resolution.sites.iter().map(|s| s.name.clone()).collect())
             .unwrap_or_default();
         for site in resolution.sites.iter().filter(|s| !old.contains(&s.name)) {
-            self.bus.emit(Event::SiteAdded { site: site.clone() });
+            self.bus.emit(Event::SiteAdded { site: Box::new(site.clone()) });
         }
         let new: BTreeSet<&str> = resolution.sites.iter().map(|s| s.name.as_str()).collect();
         for name in old.iter().filter(|n| !new.contains(n.as_str())) {
@@ -580,6 +581,7 @@ impl Reconciler {
             sites_cfg,
             services: services_cfg,
             projects,
+            ignored_managed,
             registry,
             tld,
             resolution,

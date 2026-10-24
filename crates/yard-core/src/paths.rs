@@ -57,6 +57,16 @@ impl Paths {
         self.root.join("services.toml")
     }
 
+    /// Where the managed `.yard` files live, one directory per site name.
+    pub fn managed_sites_dir(&self) -> PathBuf {
+        self.root.join("sites")
+    }
+
+    /// A site's managed `.yard`, used when its project has none of its own.
+    pub fn managed_project_file(&self, name: &str) -> PathBuf {
+        self.managed_sites_dir().join(name).join(crate::project::FILE)
+    }
+
     pub fn hashes(&self) -> PathBuf {
         self.root.join("state/hashes.json")
     }
@@ -270,6 +280,13 @@ mod tests {
         assert_eq!(p.nginx_services_dir(), Path::new("/r/nginx/services"));
         assert_eq!(p.nginx_service("minio"), Path::new("/r/nginx/services/minio.conf"));
         assert_eq!(p.services_certs_dir(), Path::new("/r/certs/services"));
+    }
+
+    #[test]
+    fn managed_project_files_live_under_sites() {
+        let p = Paths::new("/r");
+        assert_eq!(p.managed_sites_dir(), Path::new("/r/sites"));
+        assert_eq!(p.managed_project_file("control"), Path::new("/r/sites/control/.yard"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::io::Read;
 use std::path::Path;
 use yard_core::brew::Brew;
 use yard_core::config::{ServicesConfig, SitesConfig, YardConfig};
-use yard_core::project::{self, Projects};
+use yard_core::project::{self, IgnoredFiles, Loaded, Projects};
 use yard_core::render::php::ini_loads;
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, SiteInfo, SiteKind, YardError};
@@ -27,13 +27,19 @@ pub fn read_small(file: &Path, max: u64) -> Option<String> {
     (text.len() as u64 <= max).then_some(text)
 }
 
-/// `None` when there is no `.yard`; an error when there is one Yard will not read.
+/// `None` when there is no `.yard`; an error when there is one Yard will not read,
+/// including a symlink to nothing.
 pub fn read_project_file(file: &Path) -> Option<Result<String, YardError>> {
     let invalid = |what: &str| {
         YardError::new(ErrorCode::ProjectFileInvalid, format!("{} {what}", file.display()))
             .with_hint(format!("replace {} with a text file", file.display()))
     };
     let meta = match std::fs::metadata(file) {
+        // A symlink to nothing is still a file there: it wins over a managed `.yard`, and
+        // is the site's error until it is fixed (managed-file spec §4).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && file.symlink_metadata().is_ok() => {
+            return Some(Err(invalid("is a symlink to nothing")));
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => return Some(Err(invalid(&format!("cannot be read: {e}")))),
         Ok(meta) => meta,
@@ -44,9 +50,9 @@ pub fn read_project_file(file: &Path) -> Option<Result<String, YardError>> {
     Some(read_small(file, PROJECT_FILE_MAX).ok_or_else(|| invalid("is larger than 64 KiB or not UTF-8")))
 }
 
-/// The `.yard` of every linked site in `sites`.
-pub fn read_projects(sites: &SitesConfig) -> Projects {
-    project::load(sites, &read_project_file)
+/// The `.yard` every linked site in `sites` is served from, and the managed files not used.
+pub fn read_projects(sites: &SitesConfig, paths: &Paths) -> (Projects, IgnoredFiles) {
+    project::load(sites, paths, &read_project_file)
 }
 
 /// Sets `needs` on each site served from a `.yard`. An extension is present when
@@ -68,7 +74,7 @@ pub fn fill_needs(
     let installed = brew.installed_php(&exists, &read_link);
     let mut present: BTreeMap<PhpVersion, BTreeSet<String>> = BTreeMap::new();
     for site in sites {
-        let Some(Ok(file)) = projects.get(&site.name) else { continue };
+        let Some(file) = projects.get(&site.name).and_then(Loaded::ok) else { continue };
         let SiteKind::Php { php, .. } = &site.kind else { continue };
         let Ok(v) = php.parse::<PhpVersion>() else { continue };
         let loaded = present.entry(v).or_insert_with(|| match brew.php_opt(v, &exists, &read_link) {

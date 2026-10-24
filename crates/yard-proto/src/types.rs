@@ -70,6 +70,13 @@ pub struct SiteInfo {
     /// The project's `.yard`, when it has one; the site is then served as that file says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_file: Option<String>,
+    /// Whether `project_file` is the project's own `.yard` or the managed one in Yard's
+    /// data root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_file_kind: Option<ProjectFileKind>,
+    /// A managed `.yard` for the site that is not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignored_managed_file: Option<IgnoredManagedFile>,
     /// What the `.yard` asks for that is not installed; the site serves a setup page
     /// until it is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -85,6 +92,35 @@ impl SiteInfo {
     pub fn needs_setup(&self) -> bool {
         self.project_error.is_some() || !self.needs.is_empty()
     }
+}
+
+/// Where a site's `.yard` lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectFileKind {
+    /// `<project>/.yard`.
+    Project,
+    /// `<data root>/sites/<name>/.yard`.
+    Managed,
+}
+
+/// A managed `.yard` that exists for a site but is not used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IgnoredManagedFile {
+    pub file: String,
+    pub because: IgnoredBecause,
+    /// The directory the file names as its project, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IgnoredBecause {
+    /// The project has its own `.yard`, which always wins.
+    Committed,
+    /// The file names another directory as its project, or none.
+    OtherProject,
 }
 
 /// Something a project's `.yard` asks for that is not installed.

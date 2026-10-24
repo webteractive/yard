@@ -16,7 +16,7 @@ use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
-use yard_core::project::{Projects, ServiceWant};
+use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
 use yard_core::services::brew_info;
 use yard_core::services::render::init_command;
@@ -105,9 +105,11 @@ impl View {
                 let mut warnings = yard_warnings.clone();
                 let http = r.entries.get(NGINX_HTTP).map_or(r.profile.http_port(), |e| e.port);
                 let https = r.entries.get(NGINX_HTTPS).map_or(r.profile.https_port(), |e| e.port);
-                projects = crate::project::read_projects(s);
+                let ignored;
+                (projects, ignored) = crate::project::read_projects(s, paths);
                 let mut resolution =
                     sites::resolve(y, s, &projects, tld, http, https, &|p: &Path| p.is_dir());
+                sites::mark_ignored(&mut resolution.sites, &ignored);
                 // A services.toml that does not parse is `config_error`'s to report: reading it as
                 // empty would call every `[services]` entry a missing instance.
                 let services = services.as_ref().ok();
@@ -328,20 +330,21 @@ fn project_checks(site: &SiteInfo, yard: Option<&YardConfig>, projects: &Project
         return vec![];
     };
     let id = format!("project-file:{}", site.name);
-    let off: Vec<&str> = match (projects.get(&site.name), yard, php.parse::<PhpVersion>()) {
-        (Some(Ok(project)), Some(yard), Ok(v)) => project
-            .extensions
-            .iter()
-            .filter(|e| {
-                yard.extensions
-                    .get(&v)
-                    .and_then(|exts| exts.iter().find(|(k, _)| k.eq_ignore_ascii_case(&e.module)))
-                    .is_some_and(|(_, entry)| !entry.enabled)
-            })
-            .map(|e| e.module.as_str())
-            .collect(),
-        _ => vec![],
-    };
+    let off: Vec<&str> =
+        match (projects.get(&site.name).and_then(Loaded::ok), yard, php.parse::<PhpVersion>()) {
+            (Some(project), Some(yard), Ok(v)) => project
+                .extensions
+                .iter()
+                .filter(|e| {
+                    yard.extensions
+                        .get(&v)
+                        .and_then(|exts| exts.iter().find(|(k, _)| k.eq_ignore_ascii_case(&e.module)))
+                        .is_some_and(|(_, entry)| !entry.enabled)
+                })
+                .map(|e| e.module.as_str())
+                .collect(),
+            _ => vec![],
+        };
     let mut checks = vec![if let Some(e) = &site.project_error {
         from_error(&id, e)
     } else if !site.needs.is_empty() {
@@ -494,7 +497,7 @@ fn instance_line(brew: &Brew, instance: &str, entry: &ServiceEntry) -> Option<Ch
 /// added. A missing instance already fails the site's `project-file` check; this says
 /// which one and how to add it.
 fn site_needs(view: &ServiceView<'_>, site: &SiteInfo, projects: &Projects) -> Vec<Check> {
-    let Some(Ok(project)) = projects.get(&site.name) else { return vec![] };
+    let Some(project) = projects.get(&site.name).and_then(Loaded::ok) else { return vec![] };
     let id = format!("service-need:{}", site.name);
     let mut checks = vec![];
     for (engine, want) in &project.services {
@@ -545,7 +548,7 @@ fn legacy_php_mysql(sites: &[SiteInfo], projects: &Projects) -> Vec<Check> {
         .iter()
         .filter_map(|site| {
             let SiteKind::Php { php, .. } = &site.kind else { return None };
-            let Some(Ok(project)) = projects.get(&site.name) else { return None };
+            let project = projects.get(&site.name).and_then(Loaded::ok)?;
             if php != "7.0" || !project.services.contains_key(&Engine::Mysql) {
                 return None;
             }

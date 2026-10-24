@@ -6,7 +6,7 @@ use yard_core::brew::Brew;
 use yard_core::config::{ServicesConfig, SitesConfig, YardConfig};
 use yard_core::generated::Hashes;
 use yard_core::ports::Registry;
-use yard_core::project::Projects;
+use yard_core::project::{IgnoredFiles, Projects};
 use yard_core::sites::Resolution;
 use yard_proto::YardError;
 
@@ -17,8 +17,10 @@ pub struct Snapshot {
     pub sites_cfg: SitesConfig,
     /// The service instances `services.toml` lists.
     pub services: ServicesConfig,
-    /// Each linked project's `.yard`, as last read.
+    /// The `.yard` each linked site is served from, as last read.
     pub projects: Projects,
+    /// The managed `.yard` files that exist but are not used, by site.
+    pub ignored_managed: IgnoredFiles,
     pub registry: Registry,
     pub tld: String,
     pub resolution: Resolution,

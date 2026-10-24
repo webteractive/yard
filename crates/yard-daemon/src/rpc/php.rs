@@ -12,7 +12,6 @@ use yard_core::brew::Brew;
 use yard_core::config::yard::ExtSource;
 use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::php::{SUPPORTED, formula};
-use yard_core::project;
 use yard_core::{Paths, PhpVersion};
 use yard_core::{generated, ini};
 use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpParams};
@@ -114,11 +113,11 @@ fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Resul
     }
     let sites = load_sites(paths)?;
     // A site with a .yard runs the file's php; whatever sites.toml says is not served.
-    let projects = crate::project::read_projects(&sites);
+    let (projects, _) = crate::project::read_projects(&sites, paths);
     let from_files: Vec<(&String, PathBuf)> = projects
         .iter()
-        .filter(|(_, p)| matches!(p, Ok(f) if f.php == Some(v)))
-        .filter_map(|(name, _)| Some((name, sites.sites.get(name)?.path.as_ref()?.join(project::FILE))))
+        .filter(|(_, p)| p.ok().is_some_and(|f| f.php == Some(v)))
+        .map(|(name, p)| (name, p.file.clone()))
         .collect();
     if let Some((_, file)) = from_files.first() {
         let names: Vec<&str> = from_files.iter().map(|(n, _)| n.as_str()).collect();
