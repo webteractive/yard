@@ -12,11 +12,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use toml_edit::value;
 use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::project::{FILE as PROJECT_FILE, FileKind};
+use yard_core::project::{FILE as PROJECT_FILE, FileKind, relative_docroot};
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
@@ -288,13 +288,32 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
         None => "remove docroot".to_string(),
     };
     let target = project_file_target(ctx, &p.site, &change)?;
-    site(ctx, &p.site).await?;
+    let current = site(ctx, &p.site).await?;
     let (path, keys) = match &target {
         Target::Managed(file) => (file.clone(), vec!["docroot"]),
         Target::SitesToml => (ctx.paths.sites_toml(), vec!["sites", &p.site, "docroot"]),
     };
+    // A managed `.yard` holds a docroot inside the project, relative to it.
+    let docroot = match (&target, &p.path, &current.kind) {
+        (Target::Managed(_), Some(docroot), yard_proto::SiteKind::Php { path: project, .. }) => {
+            let project = Path::new(project);
+            let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            let relative = relative_docroot(project, docroot).or_else(|| {
+                let docroot = canonical(Path::new(docroot)).to_string_lossy().into_owned();
+                relative_docroot(&canonical(project), &docroot)
+            });
+            Some(relative.ok_or_else(|| {
+                YardError::new(
+                    ErrorCode::InvalidArgument,
+                    format!("docroot {docroot:?} is outside {}", project.display()),
+                )
+                .with_hint("yard docroot <path inside the project>, such as public")
+            })?)
+        }
+        _ => p.path.clone(),
+    };
     let set = |file: &mut TomlFile| {
-        match &p.path {
+        match &docroot {
             Some(path) => file.set(&keys, value(path.as_str())),
             None => {
                 file.remove(&keys);

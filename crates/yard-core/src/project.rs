@@ -199,6 +199,18 @@ fn parse_services(
     Ok(services)
 }
 
+/// `docroot` as a `.yard` holds it: relative to `project`, with an absolute path under
+/// `project` made relative and the project itself as `.`. `None` when it is outside.
+pub fn relative_docroot(project: &Path, docroot: &str) -> Option<String> {
+    let path = Path::new(docroot);
+    let relative = if path.is_absolute() { path.strip_prefix(project).ok()? } else { path };
+    if !inside(relative) {
+        return None;
+    }
+    let relative = relative.to_string_lossy();
+    Some(if relative.is_empty() { ".".to_string() } else { relative.into_owned() })
+}
+
 fn inside(path: &Path) -> bool {
     path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }

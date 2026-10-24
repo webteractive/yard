@@ -344,12 +344,23 @@ async fn docroot_outside_the_project_is_refused_for_a_managed_file() {
     let (d, _dir, managed) = managed_site("php = \"7.3\"\n").await;
     let mut c = d.client().await;
     let before = std::fs::read(&managed).unwrap();
-    let e = c.call("sites.docroot", json!({"site": "ee", "path": "../x"})).await.unwrap_err();
-    assert!(
-        matches!(e.code, yard_proto::ErrorCode::InvalidArgument | yard_proto::ErrorCode::ProjectFileInvalid),
-        "{e:?}"
-    );
+    for outside in ["../x", "/elsewhere/public"] {
+        let e = c.call("sites.docroot", json!({"site": "ee", "path": outside})).await.unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
+        assert!(e.message.contains("outside"), "{e:?}");
+    }
     assert_eq!(std::fs::read(&managed).unwrap(), before);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_absolute_docroot_inside_the_project_is_written_relative() {
+    let (d, dir, managed) = managed_site("php = \"7.3\"\n").await;
+    let mut c = d.client().await;
+    let web = dir.join("web");
+    let s = c.call("sites.docroot", json!({"site": "ee", "path": web.display().to_string()})).await.unwrap();
+    assert!(std::fs::read_to_string(&managed).unwrap().contains("docroot = \"web\""));
+    assert_eq!(s["docroot"], web.display().to_string(), "{s}");
     d.shutdown().await.unwrap();
 }
 
