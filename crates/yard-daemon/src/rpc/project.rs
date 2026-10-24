@@ -106,6 +106,8 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
         }
         // `--local` with this site's managed file: moved into the project.
         (None, Some(old)) if p.local && ours == Some(true) => {
+            // `existing` is `None` only when nothing is at `committed`, so only a file made
+            // since it was read gets here: never write over it.
             if committed.symlink_metadata().is_ok() {
                 return Err(YardError::new(
                     ErrorCode::ProjectFileExists,

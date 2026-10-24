@@ -542,10 +542,13 @@ async fn init_local_moves_the_managed_file() {
     std::fs::create_dir_all(&dir).unwrap();
     init_managed(&mut c, &dir, json!({})).await.unwrap();
     let managed = d.fx.paths.managed_project_file("ee");
-    // A committed file already there: refused, nothing written or removed.
+    // A committed file already there wins (managed-file spec §5's table): it is applied, and
+    // the managed file it hides is neither moved nor touched.
     write_yard(&dir, "php = \"8.4\"\n");
-    let e = init(&mut c, &dir, json!({})).await;
-    assert!(e.is_ok(), "a committed file is applied as before: {e:?}");
+    let hidden = std::fs::read(&managed).unwrap();
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!((r["written"].as_bool(), &r["from_managed"]), (Some(false), &Value::Null), "{r}");
+    assert_eq!(std::fs::read(&managed).unwrap(), hidden);
     std::fs::remove_file(dir.join(".yard")).unwrap();
     let r = init(&mut c, &dir, json!({})).await.unwrap();
     let text = std::fs::read_to_string(dir.join(".yard")).unwrap();

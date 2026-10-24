@@ -51,8 +51,8 @@ pub enum ErrorCode {
     /// `yard init` would take a name another directory or proxy already serves;
     /// `data` has `name` and `serves`. `replace` moves that site here.
     SiteNameTaken,
-    /// `yard init --local` would move the managed `.yard` into a project that already has
-    /// its own; `data.file` names it.
+    /// `yard init --local` was moving the managed `.yard` into the project when a `.yard`
+    /// appeared there; `data.file` names it. (A `.yard` already there is applied instead.)
     ProjectFileExists,
     /// No service instance has that name; `yard services` lists them.
     ServiceNotFound,

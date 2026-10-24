@@ -197,7 +197,9 @@ unchanged. Step 1 picks the file:
   It never touches a managed file that a committed one hides.
 - **Moving with `--local`** writes the managed file's text unchanged into
   `<project>/.yard` (with the committed header swapped in), then deletes the managed file.
-  It refuses with `PROJECT_FILE_EXISTS` if `<project>/.yard` already exists. Without the
+  A `<project>/.yard` already there is applied instead, as the table says, and the managed
+  file is left alone; `PROJECT_FILE_EXISTS` is only for one that appears while `init` runs,
+  which is never written over (reconciled with the table on 2026-10-25). Without the
   delete, the doctor would warn about a hidden file forever **(builder's call)**.
 - **`--force --local`** with a managed file and no committed one moves the file as
   above, then rewrites the moved file as `--force` does. This is one path, move then
