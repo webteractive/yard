@@ -70,7 +70,8 @@ triggers:
   `DB_PORT` under a project's `.env`. Reconcile only re-reads pinned entries (an entry the user
   edited keeps its mode); one `ports.toml` lost is pinned again the same way
   (`Reconciler::settle_service_ports`, around `reserved_ports`), and an instance whose port cannot
-  be had is a reconcile warning with no unit. `DaemonOptions.usual_ports` (keys `mysql`, `postgres`,
+  be had is a reconcile warning with no unit, kept in `Snapshot.left_out` with the error, so
+  `services.list` shows it failed with that reason and `services.start` refuses with it. `DaemonOptions.usual_ports` (keys `mysql`, `postgres`,
   `redis`, `minio`, `minio-console`) replaces the engine's usual ports and `app_dirs` where DBngin
   and Postgres.app are looked for; tests set the first from `free_port()` and the second to a
   directory with neither, so no test binds 3306, 5432, 6379, 9000 or 9001. `services::reserved(app_dirs,

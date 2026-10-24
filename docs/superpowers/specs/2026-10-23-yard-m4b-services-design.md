@@ -269,7 +269,8 @@ Projects that need a stable MySQL use a versioned line.
   back on 3306. Yard never does this by itself.
 - If a user deletes an instance's entry from `ports.toml`, reconcile pins it again the same
   way (usual port, or the next free one, around the reserved ports) and the instance
-  keeps running; an instance whose port cannot be had is a reconcile warning with no unit.
+  keeps running; an instance whose port cannot be had is a reconcile warning with no unit, and
+  shows as `failed` with that reason (§7.2).
 - `yard service remove` drops the instance's registry entries.
 - A unit with two ports (MinIO) probes both before it starts, so `UnitSpec.port` became
   `UnitSpec.ports: Vec<(u16, Proto)>`; the first one held fails the unit, without backoff,
@@ -325,7 +326,12 @@ follows the cli-output rule.
   linked site's `.yard` asks for it, naming the sites, the way `yard php uninstall`
   refuses a PHP a `.yard` runs. It never runs `brew uninstall`: the keg may be the user's.
 - **`stop`/`start`** write or clear `stopped` and reconcile. `start` removes the key rather
-  than writing `stopped = false`, so the file is clean again. **`restart`** is
+  than writing `stopped = false`, so the file is clean again. An instance reconcile starts no
+  unit for, though the user did not stop it, is *left out* (`Snapshot.left_out`, with why): its
+  keg is missing (`FORMULA_MISSING`, `<keg> is missing`, hint `brew install <formula>`; a keg
+  directory without its binary says `brew reinstall <formula>`), or its port could not be had.
+  `services.list` shows it `failed` with that reason, and `start` and `restart` refuse with it,
+  so the CLI never prints `Started` for an instance that is not running (review I3, 2026-10-24). **`restart`** is
   `units.restart` for the instance; on a stopped instance it refuses (`INVALID_ARGUMENT`, hint
   `yard service start <instance>`) and never clears `stopped` **(builder's call)**. It answers
   once the unit has taken the restart (`Supervisor::restart_and_wait`, at most 45 s, for a unit
@@ -594,8 +600,9 @@ New checks, by id. A check with nothing to say is left out (as `php-constraint:<
 except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instance.
 
 - `service:<i>`, one per instance. `fail` for a failed instance: its last lines, hint `yard
-  service restart <i>`. `warn` for one yardd has no unit for, one that is not running, or one in
-  backoff. `ok` when running, starting, or stopped by the user. With no daemon (the offline
+  service restart <i>`. `warn` for one whose keg or binary is missing (`<i> cannot run: <keg> is
+  missing`, hint `brew install <formula>` or `brew reinstall <formula>`, known without the daemon
+  too), one yardd has no unit for, one that is not running, or one in backoff. `ok` when running, starting, or stopped by the user. With no daemon (the offline
   doctor) only "stopped by the user" is known, so the rest are skipped, as unit state is today.
 - An instance's port held by something else: the existing `ports` check (`portscan::infos`),
   which names the instance's pinned entry and the holder (`mysqld (pid 77034, DBngin)`).

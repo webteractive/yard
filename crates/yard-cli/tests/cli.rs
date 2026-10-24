@@ -1517,6 +1517,39 @@ fn services_and_info_name_why_an_instance_failed() {
 }
 
 #[test]
+fn service_start_never_says_started_unless_it_runs() {
+    // An instance yardd runs no unit for answers `stopped` though the user never stopped it.
+    let mut left_out = mysql(json!("stopped"));
+    left_out["stopped_by_user"] = json!(false);
+    let d = MockDaemon::start(&[("services.start", Ok(left_out))]);
+    let out = d.yard().args(["service", "start", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("Started"), "{}", stdout(&out));
+    assert!(stderr(&out).contains("error: mysql-8.4 did not start"), "{}", stderr(&out));
+    // Even a stopped answer that says the user stopped it is not a start.
+    let d = MockDaemon::start(&[("services.start", Ok(mysql(json!("stopped"))))]);
+    let out = d.yard().args(["service", "start", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("Started"), "{}", stdout(&out));
+
+    let missing = json!({"failed": {"last_lines": [], "reason": {
+        "code": "FORMULA_MISSING",
+        "message": "/opt/homebrew/opt/mysql@8.4 is missing",
+        "hint": "brew install mysql@8.4",
+    }}});
+    let d = MockDaemon::start(&[("services.restart", Ok(mysql(missing)))]);
+    let out = d.yard().args(["service", "restart", "mysql-8.4"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("error: mysql-8.4 failed to start: /opt/homebrew/opt/mysql@8.4 is missing\n"),
+        "{err}"
+    );
+    assert!(err.contains("  hint: brew install mysql@8.4\n"), "{err}");
+    assert!(!stdout(&out).contains("Restarted"), "{}", stdout(&out));
+}
+
+#[test]
 fn service_start_that_fails_shows_the_last_lines_and_exits_1() {
     let failed = json!({"failed": {"last_lines": ["[ERROR] Can't start server", "[ERROR] Aborting"]}});
     let d = MockDaemon::start_sequenced(&[

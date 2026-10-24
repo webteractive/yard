@@ -618,6 +618,21 @@ async fn a_failed_service_fails_with_its_last_lines_and_the_restart_hint() {
 }
 
 #[tokio::test]
+async fn an_instance_without_its_keg_names_the_brew_command() {
+    let e = env().await;
+    e.fx.add_service("redis", "redis", false);
+    e.formulae(json!([formula("redis", "8.0.1")]));
+
+    // yardd runs no unit for it: reconcile left it out for the missing keg.
+    let report = e.with(vec![], &[]).await;
+    let c = only(&report, "service:redis");
+    assert_ne!(c.status, CheckStatus::Ok, "{c:?}");
+    let keg = e.fx.brew.path().join("opt/redis");
+    assert!(c.message.contains(&keg.display().to_string()), "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some("brew install redis"), "{c:?}");
+}
+
+#[tokio::test]
 async fn a_service_port_held_by_something_else_fails_the_port_check() {
     let e = env().await;
     e.instance("mysql-8.4", "mysql@8.4", false);

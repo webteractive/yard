@@ -1,5 +1,6 @@
 //! What the daemon last applied, and what went wrong since.
 
+use std::collections::BTreeMap;
 use yard_core::Paths;
 use yard_core::brew::Brew;
 use yard_core::config::{ServicesConfig, SitesConfig, YardConfig};
@@ -21,6 +22,11 @@ pub struct Snapshot {
     pub registry: Registry,
     pub tld: String,
     pub resolution: Resolution,
+    /// The instances in `services` that are not stopped but have no unit, and why: their keg
+    /// or binary is missing (`FORMULA_MISSING`, hint `brew install|reinstall <formula>`), or
+    /// their port could not be had. `services.list` shows them as failed with that reason, and
+    /// `services.start` and `restart` refuse with it.
+    pub left_out: BTreeMap<String, YardError>,
 }
 
 #[derive(Clone)]

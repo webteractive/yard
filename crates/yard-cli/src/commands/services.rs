@@ -208,7 +208,7 @@ pub async fn remove(ctx: &Ctx, instance: String, keep_data: bool, yes: bool) -> 
 pub async fn start(ctx: &Ctx, instance: String) -> Outcome {
     let info: ServiceInfo =
         ctx.client().await?.call(methods::SERVICES_START, ServiceParams { name: instance }).await?;
-    let info = wait_up(ctx, info).await?;
+    let info = wait_up(ctx, info, false).await?;
     ctx.emit(&info, || format!("Started {} on {}.\n", info.name, address(&info)));
     Ok(0)
 }
@@ -223,7 +223,7 @@ pub async fn stop(ctx: &Ctx, instance: String) -> Outcome {
 pub async fn restart(ctx: &Ctx, instance: String) -> Outcome {
     let info: ServiceInfo =
         ctx.client().await?.call(methods::SERVICES_RESTART, ServiceParams { name: instance }).await?;
-    let info = wait_up(ctx, info).await?;
+    let info = wait_up(ctx, info, false).await?;
     ctx.emit(&info, || format!("Restarted {} on {}.\n", info.name, address(&info)));
     Ok(0)
 }
@@ -231,7 +231,7 @@ pub async fn restart(ctx: &Ctx, instance: String) -> Outcome {
 pub async fn port(ctx: &Ctx, instance: String, port: u16) -> Outcome {
     let params = ServicePortParams { name: instance, port };
     let info: ServiceInfo = ctx.client().await?.call(methods::SERVICES_PORT, params).await?;
-    let info = wait_up(ctx, info).await?;
+    let info = wait_up(ctx, info, true).await?;
     ctx.emit(&info, || match info.state {
         ServiceState::Stopped => format!(
             "{0} will listen on {1} once it is started: yard service start {0}\n",
@@ -244,15 +244,26 @@ pub async fn port(ctx: &Ctx, instance: String, port: u16) -> Outcome {
 }
 
 /// `start`, `restart` and `port` answer while the instance is still `starting`: polls
-/// `services.list` until it is `running` (or `stopped`, which a port move on a stopped
-/// instance leaves it). A `failed` instance is the command's error, with its last log
-/// lines printed first; one still starting after `UP_WAIT` is an error too.
-async fn wait_up(ctx: &Ctx, mut info: ServiceInfo) -> Result<ServiceInfo, CliError> {
+/// `services.list` until it is `running`, or, with `stopped_ok` (`port`), `stopped` by the
+/// user, which a port move on a stopped instance leaves it. A `failed` instance is the command's error, with its last log
+/// lines printed first, and so is one `stopped` that the user did not stop, which yardd runs
+/// nothing for: nothing here ever reports an instance up that is not `running`. One still
+/// starting after `UP_WAIT` is an error too.
+async fn wait_up(ctx: &Ctx, mut info: ServiceInfo, stopped_ok: bool) -> Result<ServiceInfo, CliError> {
     let deadline = Instant::now() + UP_WAIT;
     let mut client = ctx.client().await?;
     loop {
         match &info.state {
-            ServiceState::Running | ServiceState::Stopped => return Ok(info),
+            ServiceState::Running => return Ok(info),
+            ServiceState::Stopped if stopped_ok && info.stopped_by_user => return Ok(info),
+            ServiceState::Stopped => {
+                return Err(YardError::new(
+                    ErrorCode::JobFailed,
+                    format!("{} did not start: yardd runs nothing for it", info.name),
+                )
+                .with_hint("yard doctor says why")
+                .into());
+            }
             ServiceState::Failed { last_lines, reason } => {
                 // A held port or a missing keg failed it before it ran: its log is not why.
                 let before_running = reason

@@ -282,6 +282,34 @@ async fn missing_keg_is_a_warning_not_a_unit() {
 }
 
 #[tokio::test]
+async fn start_without_the_keg_names_the_brew_command() {
+    // `brew uninstall redis` since it was added: reconcile can start nothing for it, so a start
+    // must say so, never answer `stopped` for the CLI to print as started.
+    let d = prepared(&pin("redis", free_port())).await;
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let keg = d.fx.brew.path().join("opt/redis");
+
+    for method in ["services.start", "services.restart"] {
+        let e = c.call(method, json!({"name": "redis"})).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::FormulaMissing, "{method}: {e:?}");
+        assert!(e.message.contains(&keg.display().to_string()), "{method}: {}", e.message);
+        assert_eq!(e.hint.as_deref(), Some("brew install redis"), "{method}");
+    }
+    let listed = &list(&mut c).await[0];
+    assert_eq!(listed["state"]["failed"]["reason"]["code"], json!("FORMULA_MISSING"), "{listed}");
+    assert_eq!(listed["state"]["failed"]["reason"]["hint"], json!("brew install redis"), "{listed}");
+
+    // A keg with no binary in it is a broken install, which `brew install` would skip.
+    std::fs::create_dir_all(keg.join("bin")).unwrap();
+    let e = c.call("services.start", json!({"name": "redis"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::FormulaMissing, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some("brew reinstall redis"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn orphaned_instance_is_stopped_before_the_first_reconcile() {
     // A yardd that was killed left redis running, holding its port.
     let port = free_port();

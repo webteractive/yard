@@ -401,6 +401,13 @@ fn instance_state(view: &ServiceView<'_>, instance: &str, entry: &ServiceEntry) 
     if entry.stopped {
         return Some(ok(&id, format!("{instance} is stopped; you stopped it")));
     }
+    // Knowable without yardd, and the reason reconcile leaves an instance out.
+    let program =
+        services::unit_command(view.brew, view.paths, entry.engine, instance, &entry.formula, &[]).program;
+    if let Some(missing) = services::missing_program(view.brew, &entry.formula, &program) {
+        let hint = missing.hint.unwrap_or_default();
+        return Some(warn(&id, format!("{instance} cannot run: {}", missing.message), hint));
+    }
     if !view.daemon_running {
         return None;
     }

@@ -68,6 +68,21 @@ pub fn keg(brew: &Brew, formula: &str) -> PathBuf {
     brew.prefix.join("opt").join(formula.rsplit('/').next().unwrap_or(formula))
 }
 
+/// `FORMULA_MISSING` when the binary that runs an instance on `formula` is not there, else
+/// `None`. A keg directory with no binary in it is a broken install, which `brew install` would
+/// skip, so that one says reinstall (homebrew rule).
+pub fn missing_program(brew: &Brew, formula: &str, program: &std::path::Path) -> Option<YardError> {
+    if program.exists() {
+        return None;
+    }
+    let keg = keg(brew, formula);
+    let (missing, fix) = if keg.exists() { (program.to_path_buf(), "reinstall") } else { (keg, "install") };
+    Some(
+        YardError::new(ErrorCode::FormulaMissing, format!("{} is missing", missing.display()))
+            .with_hint(format!("brew {fix} {formula}")),
+    )
+}
+
 /// What running `instance` takes, with its ports read from the registry: the unit command.
 pub fn unit_command(
     brew: &Brew,
@@ -157,6 +172,10 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
             Some((UnitState::Starting | UnitState::Backoff { .. }, _)) => ServiceState::Starting,
             Some((UnitState::Failed { last_lines }, last_error)) => {
                 ServiceState::Failed { last_lines, reason: failure_reason(name, last_error.as_deref()) }
+            }
+            // Reconcile started no unit for it (a missing keg, a port it could not have).
+            None if snapshot.left_out.contains_key(name) => {
+                ServiceState::Failed { last_lines: vec![], reason: snapshot.left_out.get(name).cloned() }
             }
             Some((UnitState::Stopped, _)) | None => ServiceState::Stopped,
         }

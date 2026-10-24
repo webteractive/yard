@@ -150,7 +150,19 @@ pub(super) async fn set_stopped(
     engine_of(ctx, &p.name)?;
     services::set_stopped(&ctx.paths, &p.name, stopped)?;
     reconcile(ctx).await?;
+    if !stopped {
+        refuse_left_out(ctx, &p.name).await?;
+    }
     info(ctx, &p.name).await
+}
+
+/// A start or restart of an instance reconcile started no unit for is refused with the
+/// reason (`FORMULA_MISSING`, hint `brew install <formula>`), so nothing reports it started.
+async fn refuse_left_out(ctx: &Context, name: &str) -> Result<(), YardError> {
+    match snapshot(ctx).await?.left_out.get(name) {
+        Some(why) => Err(why.clone()),
+        None => Ok(()),
+    }
 }
 
 /// `services.restart`: `units.restart` for the instance. A stopped one is the user's to
@@ -167,6 +179,7 @@ pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceIn
         )
         .with_hint(format!("yard service start {}", p.name)));
     }
+    refuse_left_out(ctx, &p.name).await?;
     ctx.supervisor().restart_and_wait(&p.name).await?;
     info(ctx, &p.name).await
 }

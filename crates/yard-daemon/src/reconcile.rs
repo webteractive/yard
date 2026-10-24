@@ -267,7 +267,9 @@ impl Reconciler {
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
         // A service's ports were pinned when it was added. Reconcile only reads them, and
         // pins a new one the same way when `ports.toml` lost its entry.
-        let service_ports = self.settle_service_ports(&services_cfg, &mut registry, &is_free, &mut report);
+        let mut left_out = BTreeMap::new();
+        let service_ports =
+            self.settle_service_ports(&services_cfg, &mut registry, &is_free, &mut report, &mut left_out);
 
         // 3. Resolve sites.
         let projects = crate::project::read_projects(&sites_cfg);
@@ -489,8 +491,9 @@ impl Reconciler {
             let Some(ports) = service_ports.get(instance) else { continue };
             let cmd =
                 services::unit_command(&state.brew, &paths, entry.engine, instance, &entry.formula, ports);
-            if let Some(warning) = missing_keg(&state.brew, instance, &entry.formula, &cmd.program) {
-                report.warnings.push(warning);
+            if let Some(missing) = services::missing_program(&state.brew, &entry.formula, &cmd.program) {
+                report.warnings.push(left_out_warning(instance, &missing));
+                left_out.insert(instance.clone(), missing);
                 continue;
             }
             if service_confs.get(instance).is_some_and(|conf| changed.contains(conf)) {
@@ -570,8 +573,18 @@ impl Reconciler {
         for name in old.iter().filter(|n| !new.contains(n.as_str())) {
             self.bus.emit(Event::SiteRemoved { name: name.clone() });
         }
-        state.snapshot =
-            Some(Snapshot { yard, sites_cfg, services: services_cfg, projects, registry, tld, resolution });
+        // A stopped instance runs nothing on purpose; only the others were left out.
+        left_out.retain(|instance, _| services_cfg.services.get(instance).is_some_and(|e| !e.stopped));
+        state.snapshot = Some(Snapshot {
+            yard,
+            sites_cfg,
+            services: services_cfg,
+            projects,
+            registry,
+            tld,
+            resolution,
+            left_out,
+        });
         Ok(report)
     }
 
@@ -586,6 +599,7 @@ impl Reconciler {
         registry: &mut Registry,
         is_free: &dyn Fn(u16) -> bool,
         report: &mut ReconcileReport,
+        left_out: &mut BTreeMap<String, YardError>,
     ) -> BTreeMap<String, Vec<PortRef>> {
         let missing = services.services.iter().any(|(i, e)| {
             services::port_entries(e.engine, i).iter().any(|(n, ..)| !registry.entries.contains_key(n))
@@ -608,6 +622,7 @@ impl Reconciler {
                             Ok(port) => port,
                             Err(e) => {
                                 report.warnings.push(format!("{instance}: {}", describe(&e)));
+                                left_out.insert(instance.clone(), e);
                                 continue 'instances;
                             }
                         }
@@ -718,18 +733,13 @@ fn secure_console(
     (yard.secure_by_default && serves_console(services, sites)).then(|| ("minio", format!("minio.{tld}")))
 }
 
-/// The warning for an instance whose binary is not there, or `None`. A keg directory with no
-/// binary in it is a broken install, which `brew install` skips, so that one says reinstall.
-fn missing_keg(brew: &Brew, instance: &str, formula: &str, program: &Path) -> Option<String> {
-    if program.exists() {
-        return None;
+/// The reconcile warning for an instance left out for `why` (`services::missing_program`):
+/// `mysql-8.4: <keg> is missing (brew install mysql@8.4)`.
+fn left_out_warning(instance: &str, why: &YardError) -> String {
+    match &why.hint {
+        Some(hint) => format!("{instance}: {} ({hint})", why.message),
+        None => format!("{instance}: {}", why.message),
     }
-    let keg = services::keg(brew, formula);
-    Some(if keg.exists() {
-        format!("{instance}: {} is missing (brew reinstall {formula})", program.display())
-    } else {
-        format!("{instance}: {} is missing (brew install {formula})", keg.display())
-    })
 }
 
 /// Removes every `certs/<name>.{pem,key}` whose site is not secure, and any `.yard-tmp`
@@ -891,18 +901,21 @@ mod tests {
         let brew = Brew::new(dir.path());
         let program = dir.path().join("opt/mysql@8.4/bin/mysqld");
         let keg = dir.path().join("opt/mysql@8.4");
+        let warning = |brew: &Brew| {
+            services::missing_program(brew, "mysql@8.4", &program).map(|e| left_out_warning("mysql-8.4", &e))
+        };
         assert_eq!(
-            missing_keg(&brew, "mysql-8.4", "mysql@8.4", &program),
+            warning(&brew),
             Some(format!("mysql-8.4: {} is missing (brew install mysql@8.4)", keg.display()))
         );
         // A keg with no binary in it is a broken install, which `brew install` would skip.
         std::fs::create_dir_all(&keg).unwrap();
         assert_eq!(
-            missing_keg(&brew, "mysql-8.4", "mysql@8.4", &program),
+            warning(&brew),
             Some(format!("mysql-8.4: {} is missing (brew reinstall mysql@8.4)", program.display()))
         );
         std::fs::create_dir_all(program.parent().unwrap()).unwrap();
         std::fs::write(&program, "").unwrap();
-        assert_eq!(missing_keg(&brew, "mysql-8.4", "mysql@8.4", &program), None);
+        assert_eq!(warning(&brew), None);
     }
 }
