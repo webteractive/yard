@@ -974,6 +974,36 @@ fn link_names_the_managed_file_it_uses_or_ignores() {
 }
 
 #[test]
+fn commands_that_edit_a_managed_file_name_it() {
+    let mut site = serde_json::to_value(sites().remove(0)).unwrap();
+    site["project_file"] = json!("/r/sites/blog/.yard");
+    site["project_file_kind"] = json!("managed");
+    let mut secured = site.clone();
+    secured["secure"] = json!(true);
+    secured["url"] = json!("https://blog.yard:8443/");
+    let d = MockDaemon::start(&[
+        ("sites.isolate", Ok(site.clone())),
+        ("sites.docroot", Ok(site.clone())),
+        ("sites.unsecure", Ok(site)),
+        ("sites.secure", Ok(secured)),
+        ("ca.info", Ok(ca_info(true))),
+    ]);
+    let run = |args: &[&str]| {
+        let out = d.yard().args(args).output().unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+    };
+    let set_in = " (set in /r/sites/blog/.yard)\n";
+    assert_eq!(run(&["isolate", "8.4", "--site", "blog"]), format!("blog now runs PHP 8.4{set_in}"));
+    assert_eq!(
+        run(&["docroot", "public", "--site", "blog"]),
+        format!("blog now serves /Users/me/code/blog/public{set_in}")
+    );
+    assert_eq!(run(&["unsecure", "blog"]), format!("blog is back on http://blog.yard:8080/{set_in}"));
+    assert_eq!(run(&["secure", "blog"]), format!("Secured blog → https://blog.yard:8443/{set_in}"));
+}
+
+#[test]
 fn init_without_terminal_or_yes_is_needs_install() {
     let mut result = init_result(project_site(json!([{"kind": "php", "php": "7.3"}])));
     result["written"] = json!(false);

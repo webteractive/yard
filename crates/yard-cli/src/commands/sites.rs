@@ -77,6 +77,14 @@ fn managed_note(site: &SiteInfo) -> String {
     }
 }
 
+/// ` (set in <file>)` for a site whose managed `.yard` the command edited, else nothing.
+fn set_in(site: &SiteInfo) -> String {
+    match (&site.project_file_kind, &site.project_file) {
+        (Some(ProjectFileKind::Managed), Some(file)) => format!(" (set in {file})"),
+        _ => String::new(),
+    }
+}
+
 pub async fn unlink(ctx: &Ctx, name: Option<String>) -> Outcome {
     let name = match name {
         Some(n) => n,
@@ -112,7 +120,9 @@ pub async fn docroot(ctx: &Ctx, path: String, site: Option<String>) -> Outcome {
     let params = DocrootParams { site, path: Some(path) };
     let updated: SiteInfo = client.call(methods::SITES_DOCROOT, params).await?;
     ctx.emit(&updated, || match &updated.kind {
-        SiteKind::Php { docroot, .. } => format!("{} now serves {docroot}\n", updated.name),
+        SiteKind::Php { docroot, .. } => {
+            format!("{} now serves {docroot}{}\n", updated.name, set_in(&updated))
+        }
         SiteKind::Proxy { target } => format!("{} proxies to {target}\n", updated.name),
     });
     Ok(0)
@@ -160,7 +170,7 @@ pub async fn isolate(ctx: &Ctx, php: Option<String>, site: Option<String>) -> Ou
     };
     let updated: SiteInfo = client.call(methods::SITES_ISOLATE, IsolateParams { site, php }).await?;
     ctx.emit(&updated, || match &updated.kind {
-        SiteKind::Php { php, .. } => format!("{} now runs PHP {php}\n", updated.name),
+        SiteKind::Php { php, .. } => format!("{} now runs PHP {php}{}\n", updated.name, set_in(&updated)),
         SiteKind::Proxy { target } => format!("{} proxies to {target}\n", updated.name),
     });
     Ok(0)
@@ -183,10 +193,10 @@ pub async fn secure(ctx: &Ctx, site: Option<String>, on: bool) -> Outcome {
         return Ok(0);
     }
     if !on {
-        println!("{} is back on {}", updated.name, updated.url);
+        println!("{} is back on {}{}", updated.name, updated.url, set_in(&updated));
         return Ok(0);
     }
-    println!("Secured {} → {}", updated.name, updated.url);
+    println!("Secured {} → {}{}", updated.name, updated.url, set_in(&updated));
     let ca: CaInfo = client.call(methods::CA_INFO, Value::Null).await?;
     if !ca.trusted {
         println!(
