@@ -10,6 +10,7 @@ pub mod helper_client;
 pub mod holder;
 pub mod jobs;
 pub mod logsink;
+pub mod managed;
 pub mod modules;
 pub mod nginx;
 pub mod orphans;

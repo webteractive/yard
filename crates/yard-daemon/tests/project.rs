@@ -243,6 +243,113 @@ async fn php_within(c: &mut Client, name: &str, want: &str, within: Duration) ->
     }
 }
 
+/// A linked `ee` served from its managed file, which says `body`.
+async fn managed_site(body: &str) -> (support::daemon::Daemon, std::path::PathBuf, std::path::PathBuf) {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    std::fs::create_dir_all(dir.join("web")).unwrap();
+    let managed = write_managed(&d, "ee", &dir, body);
+    (d.start().await, dir, managed)
+}
+
+#[tokio::test]
+async fn isolate_edits_the_managed_file_and_keeps_comments() {
+    let (d, _dir, managed) = managed_site("# keep me\nphp = \"7.3\"\n").await;
+    let mut c = d.client().await;
+    let s = c.call("sites.isolate", json!({"site": "ee", "php": "7.4"})).await.unwrap();
+    assert_eq!(s["php"], "7.4", "{s}");
+    let text = std::fs::read_to_string(&managed).unwrap();
+    assert!(text.starts_with("# keep me\nphp = \"7.4\"\n"), "{text}");
+    assert!(text.contains("project = "), "{text}");
+    let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(!toml.contains("php ="), "{toml}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unisolate_secure_unsecure_docroot_edit_the_managed_file() {
+    let (d, _dir, managed) = managed_site("php = \"7.3\"\n").await;
+    let mut c = d.client().await;
+    let read = || std::fs::read_to_string(&managed).unwrap();
+    c.call("sites.isolate", json!({"site": "ee"})).await.unwrap();
+    assert!(!read().contains("php ="), "{}", read());
+    let s = c.call("sites.secure", json!({"site": "ee"})).await.unwrap();
+    assert!(read().contains("secure = true") && s["secure"] == true, "{}", read());
+    let s = c.call("sites.unsecure", json!({"site": "ee"})).await.unwrap();
+    assert!(read().contains("secure = false") && s["secure"] == false, "{}", read());
+    let s = c.call("sites.docroot", json!({"site": "ee", "path": "web"})).await.unwrap();
+    assert!(read().contains("docroot = \"web\""), "{}", read());
+    assert!(s["docroot"].as_str().unwrap().ends_with("/ee/web"), "{s}");
+    c.call("sites.docroot", json!({"site": "ee"})).await.unwrap();
+    assert!(!read().contains("docroot ="), "{}", read());
+    let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(!toml.contains("secure") && !toml.contains("docroot"), "{toml}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn isolate_refuses_a_broken_managed_file() {
+    let (d, _dir, managed) = managed_site("php = 7.3\n").await;
+    let mut c = d.client().await;
+    let before = std::fs::read(&managed).unwrap();
+    let e = c.call("sites.isolate", json!({"site": "ee", "php": "7.4"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::ProjectFileInvalid, "{e:?}");
+    assert!(e.message.contains(&managed.display().to_string()), "{e:?}");
+    assert_eq!(std::fs::read(&managed).unwrap(), before);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn isolate_to_a_missing_version_leaves_the_managed_file() {
+    let (d, dir, managed) = managed_site("php = \"7.3\"\n").await;
+    let mut c = d.client().await;
+    let before = std::fs::read(&managed).unwrap();
+    let e = c.call("sites.isolate", json!({"site": "ee", "php": "7.2"})).await.unwrap_err();
+    // The same refusal a site without a file gets.
+    let plain = d.project("plain");
+    let _ = (dir, plain);
+    reconcile(&mut c).await;
+    let e2 = c.call("sites.isolate", json!({"site": "plain", "php": "7.2"})).await.unwrap_err();
+    assert_eq!(e.code, e2.code, "{e:?} {e2:?}");
+    assert_eq!(std::fs::read(&managed).unwrap(), before);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn docroot_outside_the_project_is_refused_for_a_managed_file() {
+    let (d, _dir, managed) = managed_site("php = \"7.3\"\n").await;
+    let mut c = d.client().await;
+    let before = std::fs::read(&managed).unwrap();
+    let e = c.call("sites.docroot", json!({"site": "ee", "path": "../x"})).await.unwrap_err();
+    assert!(
+        matches!(e.code, yard_proto::ErrorCode::InvalidArgument | yard_proto::ErrorCode::ProjectFileInvalid),
+        "{e:?}"
+    );
+    assert_eq!(std::fs::read(&managed).unwrap(), before);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_symlinked_managed_file_is_not_edited() {
+    let d = prepared("").await;
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    let target = d.projects.path().join("dotfiles.yard");
+    std::fs::write(&target, format!("php = \"8.4\"\nproject = {:?}\n", dir.display().to_string())).unwrap();
+    let managed = d.fx.paths.managed_project_file("ee");
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &managed).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = c.call("sites.isolate", json!({"site": "ee", "php": "7.4"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some(format!("edit {}", target.display()).as_str()), "{e:?}");
+    assert!(managed.symlink_metadata().unwrap().file_type().is_symlink());
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_managed_file_written_later_is_applied() {
     let d = prepared("").await;

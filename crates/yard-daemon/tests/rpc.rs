@@ -496,6 +496,11 @@ async fn commands_are_refused_with_a_project_file() {
     d.fx.add_php("7.1");
     let dir = d.project("ee");
     std::fs::write(dir.join(".yard"), "").unwrap();
+    // A managed file beside it is hidden by the project's own: still refused, never edited.
+    let managed = d.fx.paths.managed_project_file("ee");
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, format!("project = {:?}\n", dir.display().to_string())).unwrap();
+    let managed_before = std::fs::read(&managed).unwrap();
     let d = d.start().await;
     let mut c = d.client().await;
     let before = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
@@ -513,5 +518,6 @@ async fn commands_are_refused_with_a_project_file() {
         assert_eq!(e.hint, Some(format!("edit {file}: {change}")), "{method}");
     }
     assert_eq!(std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap(), before);
+    assert_eq!(std::fs::read(&managed).unwrap(), managed_before);
     d.shutdown().await.unwrap();
 }

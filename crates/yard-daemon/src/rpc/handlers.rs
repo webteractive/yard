@@ -4,6 +4,8 @@
 use super::{ext, info, php, project, services, sources};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
+use crate::managed::edit_managed;
+use crate::project::read_project_file;
 use crate::state::Snapshot;
 use crate::{holder, portscan, probe};
 use serde::Serialize;
@@ -149,18 +151,37 @@ pub(super) fn not_found(name: &str) -> YardError {
         .with_hint("yard sites lists them")
 }
 
+/// Where `isolate`, `secure` and `docroot` make their change for a site.
+pub(super) enum Target {
+    SitesToml,
+    /// The site is served from its managed `.yard`, which they edit (managed-file spec §4).
+    Managed(PathBuf),
+}
+
 /// `SITE_HAS_PROJECT_FILE` when the site's project has a `.yard`, which owns every
-/// setting `isolate`, `secure` and `docroot` would change. `change` is the edit to make
-/// in the file instead. Yard never edits the file itself.
-pub(super) fn refuse_project_file(ctx: &Context, site: &str, change: &str) -> Result<(), YardError> {
+/// setting `isolate`, `secure` and `docroot` would change: `change` is the edit to make
+/// in the file instead, since Yard never edits a project's own file. A site served from
+/// its managed `.yard` is changed there; one that does not parse is its error.
+pub(super) fn project_file_target(ctx: &Context, site: &str, change: &str) -> Result<Target, YardError> {
     let sites = load_sites(&ctx.paths)?;
-    let Some(path) = sites.sites.get(site).and_then(|e| e.path.as_ref()) else { return Ok(()) };
+    let Some(path) = sites.sites.get(site).and_then(|e| e.path.as_ref()) else {
+        return Ok(Target::SitesToml);
+    };
     let file = path.join(PROJECT_FILE);
-    if file.symlink_metadata().is_err() {
-        return Ok(());
+    if file.symlink_metadata().is_ok() {
+        return Err(YardError::new(
+            ErrorCode::SiteHasProjectFile,
+            format!("{site} is configured by {}", file.display()),
+        )
+        .with_hint(format!("edit {}: {change}", file.display())));
     }
-    Err(YardError::new(ErrorCode::SiteHasProjectFile, format!("{site} is configured by {}", file.display()))
-        .with_hint(format!("edit {}: {change}", file.display())))
+    let managed = ctx.paths.managed_project_file(site);
+    let Some(text) = read_project_file(&managed) else { return Ok(Target::SitesToml) };
+    match yard_core::project::parse_managed(&text?, &managed)? {
+        (_, Some(project)) if project == *path => Ok(Target::Managed(managed)),
+        // Written for another directory: not this site's, so not used and not edited.
+        _ => Ok(Target::SitesToml),
+    }
 }
 
 pub(super) fn valid_name(name: &str) -> Result<(), YardError> {
@@ -266,17 +287,25 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
         Some(path) => format!("docroot = {path:?}"),
         None => "remove docroot".to_string(),
     };
-    refuse_project_file(ctx, &p.site, &change)?;
+    let target = project_file_target(ctx, &p.site, &change)?;
     site(ctx, &p.site).await?;
-    TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+    let (path, keys) = match &target {
+        Target::Managed(file) => (file.clone(), vec!["docroot"]),
+        Target::SitesToml => (ctx.paths.sites_toml(), vec!["sites", &p.site, "docroot"]),
+    };
+    let set = |file: &mut TomlFile| {
         match &p.path {
-            Some(path) => file.set(&["sites", &p.site, "docroot"], value(path.as_str())),
+            Some(path) => file.set(&keys, value(path.as_str())),
             None => {
-                file.remove(&["sites", &p.site, "docroot"]);
+                file.remove(&keys);
             }
         }
         Ok(())
-    })?;
+    };
+    match target {
+        Target::Managed(_) => edit_managed(&path, set)?,
+        Target::SitesToml => TomlFile::edit(&path, set)?,
+    }
     reconcile(ctx).await?;
     site(ctx, &p.site).await
 }
@@ -285,8 +314,17 @@ async fn docroot(ctx: &Context, p: DocrootParams) -> Result<SiteInfo, YardError>
 /// securing then unsecuring a site leaves the file as it was. The default is read from
 /// `yard.toml` as it is now: the last good state can predate an edit to it.
 async fn secure(ctx: &Context, p: SiteParams, on: bool) -> Result<SiteInfo, YardError> {
-    refuse_project_file(ctx, &p.site, &format!("secure = {on}"))?;
+    let target = project_file_target(ctx, &p.site, &format!("secure = {on}"))?;
     site(ctx, &p.site).await?;
+    if let Target::Managed(file) = target {
+        // The file says it either way, so it never depends on `secure_by_default`.
+        edit_managed(&file, |toml| {
+            toml.set(&["secure"], value(on));
+            Ok(())
+        })?;
+        reconcile(ctx).await?;
+        return site(ctx, &p.site).await;
+    }
     let default = load_yard(&ctx.paths)?.0.secure_by_default;
     TomlFile::edit(&ctx.paths.sites_toml(), |file| {
         if on == default {

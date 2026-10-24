@@ -53,7 +53,13 @@ impl TomlFile {
             return;
         };
         let table = descend(self.doc.as_table_mut(), parents);
-        table.insert(last, value);
+        // Replace in place: `insert` replaces the key too, and with it the comment above it.
+        match table.get_mut(last) {
+            Some(item) => *item = value,
+            None => {
+                table.insert(last, value);
+            }
+        }
     }
 
     /// Removes the key, and any table above it that is left empty, so no bare header stays.
@@ -152,6 +158,21 @@ fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> bool {
 mod tests {
     use super::*;
     use toml_edit::value;
+
+    #[test]
+    fn set_keeps_the_comment_above_a_key_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yard");
+        std::fs::write(&path, "# keep me\nphp = \"7.3\"\n# and me\n[sites.ee]\n# mine\nphp = \"7.1\"\n")
+            .unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        f.set(&["php"], value("7.4"));
+        f.set(&["sites", "ee", "php"], value("7.2"));
+        assert_eq!(
+            f.doc().to_string(),
+            "# keep me\nphp = \"7.4\"\n# and me\n[sites.ee]\n# mine\nphp = \"7.2\"\n"
+        );
+    }
 
     #[test]
     fn toml_edit_preserves_comments() {
