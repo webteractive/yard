@@ -154,7 +154,9 @@ pub(super) async fn set_stopped(
 }
 
 /// `services.restart`: `units.restart` for the instance. A stopped one is the user's to
-/// start, and a restart never clears `stopped`.
+/// start, and a restart never clears `stopped`. It answers once the unit has taken the
+/// restart, so the state is this attempt's (`starting`), never the failure it replaces or a
+/// `running` that has not stopped yet.
 pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceInfo, YardError> {
     engine_of(ctx, &p.name)?;
     let current = info(ctx, &p.name).await?;
@@ -165,7 +167,7 @@ pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceIn
         )
         .with_hint(format!("yard service start {}", p.name)));
     }
-    ctx.supervisor().restart(&p.name).await?;
+    ctx.supervisor().restart_and_wait(&p.name).await?;
     info(ctx, &p.name).await
 }
 

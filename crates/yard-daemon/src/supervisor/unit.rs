@@ -21,7 +21,10 @@ const HEALTH_TIMEOUT: Duration = Duration::from_millis(200);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub enum Control {
-    Restart,
+    /// Forget past failures and start again. The sender, when there is one, hears once the
+    /// runner has taken the restart and left the state it was in (`Starting`), so a caller
+    /// that reads the state then reads this restart's, never the failure it replaces.
+    Restart(Option<oneshot::Sender<()>>),
     Stop(oneshot::Sender<()>),
 }
 
@@ -64,23 +67,23 @@ impl Runner {
         let ack = loop {
             if let Some(port) = self.busy_port() {
                 match self.conflict(port).await {
-                    Control::Restart => self.policy.reset(),
+                    Control::Restart(_) => self.policy.reset(),
                     Control::Stop(ack) => break ack,
                 }
                 continue;
             }
             match self.attempt().await {
-                Ended::Control(Control::Restart) => self.policy.reset(),
+                Ended::Control(Control::Restart(_)) => self.policy.reset(),
                 Ended::Control(Control::Stop(ack)) => break ack,
                 Ended::Conflict(port) => match self.conflict(port).await {
-                    Control::Restart => self.policy.reset(),
+                    Control::Restart(_) => self.policy.reset(),
                     Control::Stop(ack) => break ack,
                 },
                 Ended::Fatal(reason) => {
                     self.update(|u| u.last_error = Some(reason));
                     self.enter_failed();
                     match self.next_control().await {
-                        Control::Restart => self.policy.reset(),
+                        Control::Restart(_) => self.policy.reset(),
                         Control::Stop(ack) => break ack,
                     }
                 }
@@ -93,7 +96,7 @@ impl Runner {
                             tokio::select! {
                                 () = tokio::time::sleep(delay) => {}
                                 control = self.next_control() => match control {
-                                    Control::Restart => self.policy.reset(),
+                                    Control::Restart(_) => self.policy.reset(),
                                     Control::Stop(ack) => break ack,
                                 },
                             }
@@ -101,7 +104,7 @@ impl Runner {
                         Decision::Fail => {
                             self.enter_failed();
                             match self.next_control().await {
-                                Control::Restart => self.policy.reset(),
+                                Control::Restart(_) => self.policy.reset(),
                                 Control::Stop(ack) => break ack,
                             }
                         }
@@ -279,9 +282,18 @@ impl Runner {
         }
     }
 
-    /// The supervisor dropping its sender means it is gone: treat that as a stop.
+    /// The supervisor dropping its sender means it is gone: treat that as a stop. A restart
+    /// is under way from the moment it is taken, so the unit is `Starting` at once (a running
+    /// one keeps its pid while it stops), and whoever asked for it hears so.
     async fn next_control(&mut self) -> Control {
         match self.control.recv().await {
+            Some(Control::Restart(ack)) => {
+                self.set_state(UnitState::Starting);
+                if let Some(ack) = ack {
+                    let _ = ack.send(());
+                }
+                Control::Restart(None)
+            }
             Some(control) => control,
             None => Control::Stop(oneshot::channel().0),
         }

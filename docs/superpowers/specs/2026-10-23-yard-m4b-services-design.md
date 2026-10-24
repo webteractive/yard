@@ -327,7 +327,11 @@ follows the cli-output rule.
 - **`stop`/`start`** write or clear `stopped` and reconcile. `start` removes the key rather
   than writing `stopped = false`, so the file is clean again. **`restart`** is
   `units.restart` for the instance; on a stopped instance it refuses (`INVALID_ARGUMENT`, hint
-  `yard service start <instance>`) and never clears `stopped` **(builder's call)**.
+  `yard service start <instance>`) and never clears `stopped` **(builder's call)**. It answers
+  once the unit has taken the restart (`Supervisor::restart_and_wait`, at most 45 s, for a unit
+  still stopping its process), so the state is the new attempt's `starting`: never the failure it
+  replaces, which would make the CLI report a restart that worked as failed, nor a `running` that
+  has not stopped yet (review I1, 2026-10-24).
 - **`logs`** prints the last 100 lines of `logs/<instance>.log` (`lines` sets the count, at most
   10000), read from the end of the file in blocks (at most 8 MiB, so one huge line cannot make
   it read the whole file), and nothing while there is no file; `-f` follows it through

@@ -90,6 +90,11 @@ impl Default for SupervisorConfig {
 
 pub(crate) type Table = Arc<Mutex<BTreeMap<String, UnitInfo>>>;
 
+/// How long `restart_and_wait` waits for the runner to take a restart: longer than a
+/// service's 30 s stop timeout, which a runner already stopping its process finishes first,
+/// and shorter than the CLI's 60 s call timeout.
+const RESTART_TAKEN: std::time::Duration = std::time::Duration::from_secs(45);
+
 struct Handle {
     spec: UnitSpec,
     control: mpsc::UnboundedSender<Control>,
@@ -155,7 +160,30 @@ impl Supervisor {
     pub async fn restart(&self, name: &str) -> Result<(), YardError> {
         let units = self.units.lock().await;
         let handle = units.get(name).ok_or_else(|| no_unit(name))?;
-        handle.control.send(Control::Restart).map_err(|_| no_unit(name))
+        handle.control.send(Control::Restart(None)).map_err(|_| no_unit(name))
+    }
+
+    /// As `restart`, returning once the runner has taken it and the unit is `Starting`, so a
+    /// state read afterwards is this restart's, not the one it replaces (a stale `Failed`, or a
+    /// `Running` that has not stopped yet). A runner busy stopping its process takes the restart
+    /// when that is done, which `RESTART_TAKEN` bounds.
+    pub async fn restart_and_wait(&self, name: &str) -> Result<(), YardError> {
+        let (ack, taken) = oneshot::channel();
+        {
+            let units = self.units.lock().await;
+            let handle = units.get(name).ok_or_else(|| no_unit(name))?;
+            handle.control.send(Control::Restart(Some(ack))).map_err(|_| no_unit(name))?;
+        }
+        match tokio::time::timeout(RESTART_TAKEN, taken).await {
+            Ok(Ok(())) => Ok(()),
+            // The runner ended (a stop raced the restart): the state says what happened.
+            Ok(Err(_)) => Ok(()),
+            Err(_) => Err(YardError::internal(format!(
+                "{name} did not take the restart within {} s",
+                RESTART_TAKEN.as_secs()
+            ))
+            .with_hint(format!("yard status shows {name}'s state"))),
+        }
     }
 
     /// The unit's reload signal while it has a pid; a restart otherwise.

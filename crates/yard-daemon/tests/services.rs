@@ -1219,6 +1219,33 @@ async fn restart_restarts_a_running_instance() {
 }
 
 #[tokio::test]
+async fn restart_of_a_failed_instance_answers_with_the_new_attempt() {
+    let port = free_port();
+    let d = prepared(&pin("mysql-8.4", port)).await;
+    d.fx.add_formula("mysql@8.4");
+    d.fx.add_service("mysql-8.4", "mysql@8.4", false);
+    let overrides = d.fx.paths.service_overrides("mysql-8.4");
+    std::fs::create_dir_all(overrides.parent().unwrap()).unwrap();
+    std::fs::write(&overrides, "[mysqld]\nbad\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "mysql-8.4", "failed").await.expect("the broken override fails it");
+
+    // The user fixes the file, then restarts: the answer is about this restart, not the failure.
+    std::fs::write(&overrides, "[mysqld]\n").unwrap();
+    for _ in 0..5 {
+        let info = c.call("services.restart", json!({"name": "mysql-8.4"})).await.unwrap();
+        assert!(
+            info["state"] == json!("starting") || info["state"] == json!("running"),
+            "the restart's own state: {info}"
+        );
+        assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
+    }
+    assert!(served(port));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn restart_refuses_a_stopped_instance() {
     let d = prepared(&pin("redis", free_port())).await;
     d.fx.add_formula("redis");

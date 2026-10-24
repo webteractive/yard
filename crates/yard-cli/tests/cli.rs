@@ -1436,6 +1436,19 @@ fn service_start_waits_until_it_is_running() {
 }
 
 #[test]
+fn service_restart_of_a_failed_instance_polls_to_running() {
+    // yardd answers once the restart is under way, so the state is the new attempt's.
+    let d = MockDaemon::start_sequenced(&[
+        ("services.restart", vec![Ok(mysql(json!("starting")))]),
+        ("services.list", vec![Ok(json!([mysql(json!("starting"))])), Ok(json!([mysql(json!("running"))]))]),
+    ]);
+    let out = d.yard().args(["service", "restart", "mysql-8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Restarted mysql-8.4 on 127.0.0.1:3307.\n");
+    assert_eq!(d.params("services.list").len(), 2, "polled until running");
+}
+
+#[test]
 fn service_start_that_fails_shows_the_last_lines_and_exits_1() {
     let failed = json!({"failed": {"last_lines": ["[ERROR] Can't start server", "[ERROR] Aborting"]}});
     let d = MockDaemon::start_sequenced(&[
