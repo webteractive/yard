@@ -453,9 +453,28 @@ async fn security_does_not_inherit_a_listener() {
     let started = || std::fs::read_to_string(&log).is_ok_and(|l| l.contains("verify-cert"));
     assert!(wait_until(started, Duration::from_secs(5)).await, "security ran");
     drop(listener);
-    let free = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+    // Another test's child spawned meanwhile can inherit the listener too, so only this
+    // fixture's `security` holding it is a failure.
+    let ours = std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+        && holders(port).iter().any(|args| args.starts_with(&e.fx.security.display().to_string()));
     check.abort();
-    assert!(free, "security kept the listener on {port}");
+    assert!(!ours, "security kept the listener on {port}");
+}
+
+/// The command line of each process listening on `port`.
+fn holders(port: u16) -> Vec<String> {
+    let out = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|pid| {
+            let ps =
+                std::process::Command::new("ps").args(["-o", "args=", "-p", pid.trim()]).output().ok()?;
+            Some(String::from_utf8_lossy(&ps.stdout).trim().to_string())
+        })
+        .collect()
 }
 
 impl Env {
