@@ -38,6 +38,13 @@ triggers:
   before moving a site onto a directory with its own `.yard` (`Replace it with this
   directory? [y/N] `, `--replace`, else `SITE_NAME_TAKEN`); it never asks when there
   is no `.yard` yet, since codifying the running site is what init is for.
+- `yard init` writes the managed `.yard` (Yard's data root) unless `--local`; it prints
+  `Wrote <file>:`, `Moved <managed> to <project file>:` for a `--local` move, and
+  `Kept the old file as <backup>.` after a `--replace` over another project's managed file.
+  `yard link` ends with `Using <file>` when it adopts a managed file, or
+  `<file> is for <project>, so it is not used here.` `isolate`, `unisolate`, `secure`,
+  `unsecure` and `docroot` end their line with ` (set in <file>)` when they edited a managed
+  file. `yard info` shows `config  managed (<~ path>)` and `from managed` for its settings.
 - Yard never edits dotfiles. Shell setup is printed for the user to paste
   (`yard install-shims`, M2).
 - A command that asks about **trust** goes through `commands/sources.rs` `with_trust`: when

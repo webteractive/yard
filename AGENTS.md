@@ -38,7 +38,12 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   planned in `docs/superpowers/plans/2026-10-23-yard-m4b-services.md` (approved 2026-10-24).
   M4b is built on branch `m4b-services` and verified on this machine on 2026-10-24 with
   `scripts/e2e-m1.sh` and `e2e-m4b.sh` passing (maintainer approved the run; its first pass found that
-  postgres needs `LC_ALL` under launchd, fixed in 4420fb5). M4c Node still needs a plan. The maintainer moved emailulator out of M4b into
+  postgres needs `LC_ALL` under launchd, fixed in 4420fb5), and merged into main on 2026-10-25.
+  M4a.1, the managed `.yard` kept in Yard's data root (`sites/<name>/.yard`), is designed in
+  `docs/superpowers/specs/2026-10-24-yard-managed-project-file-design.md` (approved
+  2026-10-25) and planned in `docs/superpowers/plans/2026-10-25-yard-m4a1-managed-project-file.md`;
+  it is built on branch `m4a1-managed-file`, and `scripts/e2e-m4a1.sh` has not run on this
+  machine yet (ask the maintainer). M4c Node still needs a plan. The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
@@ -78,10 +83,13 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   Herd, and moving to `.test` is the user's own steps once Herd is gone (spec §5.5). 80/443 is opt-in, and even then root never runs
   nginx: the helper hands yardd the two sockets (spec §3.1).
 - **Sites are explicit** (decided 2026-10-20): a project is served only after
-  `yard link`; nothing is written into the project, except `.yard` by `yard init`
-  (2026-10-22), which never overwrites one without `--force`. A linked project's
+  `yard link`; nothing is written into the project, except `.yard` by
+  `yard init --local` (2026-10-22, `--local` since 2026-10-24), which never overwrites one
+  without `--force`. Plain `yard init` writes a managed `.yard` in Yard's data root
+  (`sites/<name>/.yard`, carrying `project = "<path>"`), so the repo stays clean; a
+  committed `.yard` always wins over it (maintainer, 2026-10-24). A linked project's committed
   `.yard` owns its `php`, `docroot`, `secure` and `extensions`, and `yard isolate`,
-  `secure` and `docroot` are refused for it. Herd-style parking, which M1
+  `secure` and `docroot` are refused for it; for a managed one they edit that file. Herd-style parking, which M1
   shipped, was removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
   each project moves from Herd by `yard link` run in it.
 - **Services** (M4b, spec `2026-10-23-yard-m4b-services-design.md`): MySQL, PostgreSQL, Redis
@@ -172,6 +180,12 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `.yard` picks PHP 7.1, then 8.4 after an edit, then a missing 7.2 serves the setup
   page, and `yard isolate` is refused. It needs php@7.1 (from `e2e-m2.sh`) and installs
   nothing; ask the maintainer first.
+- `scripts/e2e-m4a1.sh` — real-machine M4a.1 check after `e2e-m1.sh`: `yard init` in a
+  scratch git repo leaves `git status` clean and serves from the managed `.yard`,
+  `yard isolate 7.1` edits that file and keeps its comment, a committed `.yard` added
+  afterwards wins within 5 s and `yard doctor` warns `managed-file-ignored`, and
+  `yard init --local` moves the file into the project. It needs php@7.1 (from `e2e-m2.sh`)
+  and installs nothing; ask the maintainer first. `shellcheck scripts/e2e-m4a1.sh` stays clean.
 - `scripts/e2e-m4b.sh` — real-machine M4b check after `e2e-m1.sh`: adds `mysql-8.4`,
   `postgres-17`, `redis` and `minio`, asks each one a question with its own client by
   absolute keg path, checks `yard env` against `yard services`, checks that brew's installed
@@ -244,7 +258,7 @@ Rule files are in `.hydra/rules`.
 | Applies when | Matches (path glob / command) | Rule |
 | --- | --- | --- |
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
-| adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` | config-ownership.md |
+| adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` | config-ownership.md |
 | running yard against the real data root on this machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
 | installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary · gating an install on brew's trust, or trusting a tap or formula | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `crates/yard-core/src/sources.rs` · `crates/yard-daemon/src/sources.rs` · `crates/yard-daemon/src/rpc/sources.rs` · `brew ` | homebrew.md |
 | a unit needs a TCP or UDP port · adding a service or proxy that listens on or targets a port | `crates/yard-core/src/ports/**` · `crates/yard-daemon/src/probe.rs` · `crates/yard-daemon/src/holder.rs` · `crates/yard-daemon/src/portscan.rs` | port-registry.md |

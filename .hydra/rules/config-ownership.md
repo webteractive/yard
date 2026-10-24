@@ -8,11 +8,13 @@ paths:
   - "crates/yard-core/src/project.rs"
   - "crates/yard-daemon/src/project.rs"
   - "crates/yard-daemon/src/rpc/project.rs"
+  - "crates/yard-daemon/src/managed.rs"
 triggers:
   - adding a generated config file
   - writing to a user's toml or override file
   - Yard overwrote something the user edited
   - reading or writing a project's .yard
+  - reading or writing a managed .yard in Yard's data root
 ---
 
 # Config ownership
@@ -95,4 +97,18 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   (`php`, `docroot`, `secure`) are refused by `isolate`, `secure` and `docroot` with
   `SITE_HAS_PROJECT_FILE`, whose hint is the edit to make in the file. `[services]` is the
   user's to uncomment: `project::render` writes it as comments only, and `rewrite` keeps it.
+  `yard init` writes it only with `--local`.
+- **A managed `.yard` (`<root>/sites/<name>/.yard`, managed-file spec) is the user's file
+  in Yard's data root.** Plain `yard init` writes it (`project::render_managed`, with
+  `project = "<path>"` exactly as `sites.toml` spells it), `--force` rewrites it, and
+  `--local` moves it into the project (`project::to_committed`) and deletes it.
+  `isolate`, `unisolate`, `secure`, `unsecure` and `docroot` edit it through
+  `managed::edit_managed`, which takes `TomlFile`'s lock, keeps every other key and
+  comment, refuses a file that does not parse before or after the edit, and never writes
+  through a symlink (`INVALID_ARGUMENT`, hint `edit <link target>`). `init --replace` over
+  another project's file keeps it as `sites/<name>/.yard-backup` first. `yard unlink` never
+  deletes it. A committed `.yard` always wins, and Yard never edits or deletes the managed
+  file it hides.
+- `TomlFile::set` replaces an existing key's value in place, so the comment above the key
+  survives; `insert` would drop it.
 - Yard never writes project `.env` files (spec non-goal).

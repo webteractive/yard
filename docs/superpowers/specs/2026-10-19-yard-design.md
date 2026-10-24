@@ -154,6 +154,8 @@ certs/<site>.pem, certs/<site>.key
 certs/services/<name>.pem, .key    # certificates for service hostnames (minio.<tld> once secured)
 services/<instance>/data/     # the engine's data dir; never re-initialized or deleted by Yard except `service remove`
 services/<instance>/my.cnf    # generated (MySQL), or redis.conf (Redis); PostgreSQL and MinIO have none
+sites/<name>/.yard            # USER-OWNED managed .yard (M4a.1): written by `yard init`, edited by isolate/secure/docroot, never deleted by `unlink`
+sites/<name>/.yard-backup     # the managed file `yard init --replace` replaced
 services/<instance>/overrides.conf  # USER-OWNED, created once, included by my.cnf (seeded with [mysqld]) / redis.conf / nginx's minio block; PostgreSQL has none (its data/postgresql.conf is the user's)
 logs/                         # rotated logs per unit
 run/                          # sockets, pid files (run/<instance>.pid for a service)
@@ -299,16 +301,19 @@ quoted when it holds spaces or `;`.
 For a site, the version is the first match of:
 1. The `.yard` at the project's root (project-file spec §5): its `php`, a major.minor
    version. A site with a `.yard` refuses `yard isolate`,
-   `secure` and `docroot` (`SITE_HAS_PROJECT_FILE`): the file owns them.
+   `secure` and `docroot` (`SITE_HAS_PROJECT_FILE`): the file owns them. Without one,
+   the site's managed `.yard` (`sites/<name>/.yard`, managed-file spec §4), while its
+   `project` is the site's path; those commands then edit it.
 2. `sites.toml` isolation (`yard isolate <ver> [--site <name>]`).
 3. The global default.
 
 For the CLI shims (current working directory), the version is the first match of:
 1. The nearest `.yard` in the cwd or any parent (project-file spec §5): its `php`, else
    the global default.
-2. The isolation of the site containing the cwd.
-3. A `.yard-php` file in the cwd or any parent.
-4. The global default.
+2. The managed `.yard` of the site containing the cwd (managed-file spec §4).
+3. The isolation of the site containing the cwd.
+4. A `.yard-php` file in the cwd or any parent.
+5. The global default.
 
 `composer.json` `require.php` is advisory only: `yard doctor` warns when the
 resolved version does not satisfy it (check `php-constraint:<site>`). Constraints are
@@ -364,9 +369,10 @@ profile; Yard does not edit dotfiles.
   M1 `yard.toml` is ignored with a warning. Moving a project from Herd is
   `yard link` (and `yard isolate`) run in it by hand.
 - **Linked:** `yard link [name]` serves the cwd as `<name>.<tld>`;
-  `yard unlink [name]`. Nothing is written into the project, except by `yard init`,
-  which writes its `.yard` (project-file spec §4) and never overwrites one without
-  `--force`.
+  `yard unlink [name]`. Nothing is written into the project, except by
+  `yard init --local`, which writes its `.yard` (project-file spec §4) and never
+  overwrites one without `--force`. Plain `yard init` writes the managed `.yard` in
+  Yard's data root instead (managed-file spec, M4a.1).
 - **Proxied:** `yard proxy <name> <url>` serves `<name>.<tld>` as a reverse proxy
   (Node, Vite, etc.); `yard unproxy <name>`.
 - **Docroot detection** order: `public/`, `web/`, `public_html/`, project root.
@@ -529,7 +535,7 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `BREW_MISSING`, `NGINX_CONFIG_INVALID`,
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`,
 `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`,
-`SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
+`PROJECT_FILE_EXISTS`, `SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
 `FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
@@ -803,13 +809,16 @@ Each milestone is usable on its own and gets its own implementation plan.
    - **M4a the `.yard` project file and `yard init`**, designed in
      `docs/superpowers/specs/2026-10-22-yard-project-file-design.md`: `php`, `docroot`,
      `secure` and `extensions`, the setup page, and the shims following the file.
+     **M4a.1** (2026-10-25) adds the managed `.yard` in Yard's data root, designed in
+     `docs/superpowers/specs/2026-10-24-yard-managed-project-file-design.md` and planned in
+     `docs/superpowers/plans/2026-10-25-yard-m4a1-managed-project-file.md`.
    - **M4b services:** MySQL, Postgres, Redis, MinIO, `yard env`, `yard info`, the
      file's `[services]`, and installs from third-party taps gated on brew's own trust
      (`yard sources`, `yard source trust|untrust`). Designed in
      `docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md`, which refines §7
      and §8.2 for services, and planned in
-     `docs/superpowers/plans/2026-10-23-yard-m4b-services.md`. Built on branch
-     `m4b-services` (2026-10-24); `scripts/e2e-m4b.sh` has yet to run on the maintainer's machine.
+     `docs/superpowers/plans/2026-10-23-yard-m4b-services.md`. Built and verified with
+     `scripts/e2e-m4b.sh` on the maintainer's machine on 2026-10-24, and merged into main.
    - **M4c Node:** the fnm wrapper and the file's `node`.
    - **M4d emailulator** (moved out of M4b by the maintainer on 2026-10-23): emailulator as a
      service, `mail.<tld>`, its `MAIL_*` lines and `emailulator = true` in the file.

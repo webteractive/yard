@@ -22,7 +22,9 @@ PHP. M3 adds HTTPS: `yard secure` serves a site with a certificate from a local 
 and `yard trust` puts that CA in your login keychain. M4a adds the `.yard` project file:
 a project commits the PHP, docroot, HTTPS and extensions it needs, `yard init` writes it,
 and a site whose file asks for something not installed serves a setup page naming the
-fix. M4b adds services: MySQL, PostgreSQL, Redis and MinIO instances Yard runs from
+fix. M4a.1 keeps that file out of the project when you want: `yard init` writes it to
+Yard's data root (`sites/<name>/.yard`), `yard init --local` into the project, and a
+committed `.yard` always wins. M4b adds services: MySQL, PostgreSQL, Redis and MinIO instances Yard runs from
 brew's kegs (`yard service add`), a `[services]` table in `.yard`, `yard env` for the
 `.env` lines, `yard info` for what one site runs on, and `yard source` for the brew
 taps you trust. Node (M4c), tunnels (M5) and Yard.app (M6) come later.
@@ -68,7 +70,8 @@ exit, and removes the two files that nginx left owned by root (`logs/nginx-error
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
 proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
 `scripts/e2e-m2.sh` checks multi-PHP and extensions, `scripts/e2e-m3.sh` HTTPS, `scripts/e2e-m4a.sh`
-the `.yard` file, and `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
+the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git status` stays clean),
+and `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
 (installing what is missing with brew), asks each one a question, and removes what it added.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
@@ -107,12 +110,12 @@ error, 3 `yardd` is not running.
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. It tells yardd which `XDG_CONFIG_HOME` and `HOMEBREW_FORBIDDEN_*` your shell sets (and nothing else), so it can warn when brew would see something else under launchd. |
 | `yard sites` | yes | The sites Yard serves, with the directory each one serves and whether it is `serving` or `needs setup`. |
-| `yard link [name] [--yes]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. When its `.yard` needs a PHP, extension or service that is not installed, it asks before installing (`--yes` does not ask). |
-| `yard init [name] [--force] [--replace] [--yes]` | yes | Writes `.yard` for the current project from its settings, links it, moves its `php`, `secure` and `docroot` out of `sites.toml`, and installs what the file needs (PHP, then extensions, then services) after asking. An existing `.yard` is kept; `--force` rewrites the keys Yard detects and keeps the rest. When the name already serves another directory, it moves that site here, keeping how it serves; it asks first (or takes `--replace`) only when this directory has its own `.yard` or the name is a proxy. |
+| `yard link [name] [--yes]` / `unlink [name]` | yes | Serves the current directory as `<name>.yard`. When its `.yard` needs a PHP, extension or service that is not installed, it asks before installing (`--yes` does not ask). Without a committed `.yard` it uses the managed one written for this directory (`Using <file>`). `unlink` never deletes a managed file. |
+| `yard init [name] [--local] [--force] [--replace] [--yes]` | yes | Writes a `.yard` for the current project from its settings: the managed one in Yard's data root (`sites/<name>/.yard`, nothing added to the repo), or with `--local` `<project>/.yard`, moving a managed one there. A committed `.yard` always wins and is applied. It links the project, moves its `php`, `secure` and `docroot` out of `sites.toml`, and installs what the file needs (PHP, then extensions, then services) after asking. An existing `.yard` is kept; `--force` rewrites the keys Yard detects and keeps the rest. When the name already serves another directory, it moves that site here, keeping how it serves; it asks first (or takes `--replace`) only when this directory has its own `.yard` or the name is a proxy. |
 | `yard proxy <name> <url>` / `unproxy <name>` | yes | Serves `<name>.yard` by proxying to a URL. |
-| `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. Refused for a site with a `.yard`, which owns its docroot: edit the file. |
-| `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. Refused for a site with a `.yard`: edit its `php`. |
-| `yard secure [site]` / `unsecure [site]` | yes | Serves a site over HTTPS with a certificate from Yard's CA, its http URL redirecting there, or plain HTTP again. The site defaults to the one containing the current directory. Refused for a site with a `.yard`: edit its `secure`. |
+| `yard docroot <path> [--site <name>]` | yes | Sets the directory a site serves, e.g. `public`. Refused for a site with a committed `.yard`, which owns its docroot: edit the file. For a managed `.yard` it edits that file. |
+| `yard isolate <ver> [--site <name>]` / `unisolate [--site <name>]` | yes | Runs a site on its own installed PHP version, or the default again. The site defaults to the one containing the current directory. Refused for a site with a committed `.yard`: edit its `php`. For a managed `.yard` it edits that file. |
+| `yard secure [site]` / `unsecure [site]` | yes | Serves a site over HTTPS with a certificate from Yard's CA, its http URL redirecting there, or plain HTTP again. The site defaults to the one containing the current directory. Refused for a site with a committed `.yard`: edit its `secure`. For a managed `.yard` it edits that file. |
 | `yard trust` / `untrust` | yes | Adds Yard's CA to your login keychain as trusted, or removes it; macOS asks for your password. |
 | `yard php [list]` | yes | Installed PHP versions, the default, the sites on each and its pool. |
 | `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels it. Homebrew 6+ must trust the formula or its tap (`brew trust`): Yard asks `brew trust --json=v1` first and refuses with `FORMULA_UNTRUSTED` instead of installing; on a terminal the CLI then asks `Trust <formula> (from the <tap> tap)? [y/N]` and, on yes, trusts that formula and retries. `--yes` never answers it. `uninstall` is refused while the version is the default, a site is isolated to it or names it in its `.yard`, or it has extensions you added. |
@@ -131,10 +134,10 @@ error, 3 `yardd` is not running.
 | `yard service logs <instance> [-f] [-n <lines>]` | yes | The last 100 lines (at most 10000) of the instance's log; `-f` keeps following until Ctrl-C. |
 | `yard service port <instance> <port>` | yes | Moves an instance to another port; a running one restarts on it. |
 | `yard env [--site <name>] [--service <instance>]` | yes | Prints `KEY=value` lines under a `# <instance>` comment per service, for you to paste into `.env`; it never writes a file. In a linked project (or with `--site`) it prints the services its `.yard` lists; outside one, every instance. Yard creates no database or bucket, so there is no `DB_DATABASE` or `AWS_BUCKET`. |
-| `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, `sites.toml` or the default. |
+| `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, the managed `.yard` (`managed`), `sites.toml` or the default. |
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |
 | `yard source trust\|untrust <formula> [--tap]` | yes | Runs `brew trust` / `brew untrust` for one formula, or with `--tap` a whole tap. Needs no terminal. Untrusting something installed does not stop it serving, but brew will no longer load it. |
-| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize` and `php-config` first; they follow the nearest `.yard`, then the site's isolated version, then `.yard-php`, then the default. Warns when Herd's `php` would still win. |
+| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize` and `php-config` first; they follow the nearest `.yard`, then the site's managed `.yard`, then the site's isolated version, then `.yard-php`, then the default. Warns when Herd's `php` would still win. |
 | `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 

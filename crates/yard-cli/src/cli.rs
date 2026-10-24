@@ -62,8 +62,9 @@ pub enum Command {
         /// Rewrite the settings Yard detects in an existing .yard, keeping the rest.
         #[arg(long)]
         force: bool,
-        /// Move a site with this name here even though this directory has its own .yard
-        /// (or the name is a proxy). Without a .yard here, init moves it without asking.
+        /// Move a site with this name here even though this directory has its own .yard, the
+        /// name's managed .yard is another directory's (kept as .yard-backup), or the name is a
+        /// proxy. Without a .yard here, init moves it without asking.
         #[arg(long)]
         replace: bool,
         /// Install what the .yard needs without asking.

@@ -4,8 +4,10 @@ Date: 2026-10-22
 Status: approved by the maintainer on 2026-10-22. It extends `2026-10-19-yard-design.md` (the main
 spec). M4a built `php`, `docroot`, `secure`, `extensions` and `yard init`
 (`docs/superpowers/plans/2026-10-22-yard-m4a-project-file.md`, §8); M4b built
-`[services]` (`2026-10-23-yard-m4b-services-design.md` §9, on branch `m4b-services`); `node`
-follows in M4c.
+`[services]` (`2026-10-23-yard-m4b-services-design.md` §9); `node` follows in M4c. M4a.1
+(`2026-10-24-yard-managed-project-file-design.md`, approved 2026-10-25) adds the managed
+`.yard`, kept in Yard's data root at `sites/<name>/.yard`, and amends §2, §3, §5, §6 and §7
+where marked.
 
 Decisions marked **(maintainer)** are the maintainer's, from 2026-10-22. Decisions marked
 **(builder's call)** were made while writing this and can be reversed on their own.
@@ -25,7 +27,10 @@ the site itself is served from `sites.toml`, which lives on one machine.
 - **When a project has a `.yard`, that file is the source of truth for how Yard serves
   it (maintainer).** Nothing in `sites.toml` overrides it.
 - **`yard init` writes it (maintainer).** It is the only time Yard writes into a project, and
-  only because the user ran it there.
+  only because the user ran it there. *Amended by M4a.1 (maintainer, 2026-10-24):* `yard init`
+  now writes the managed file, `<data root>/sites/<name>/.yard`, and only
+  `yard init --local` writes `.yard` into the project. A committed `.yard` always wins
+  over a managed one.
 - **`yard init` also links the project when it is not linked yet (maintainer),** so one command
   takes a fresh clone to served.
 - **Yard asks before installing anything a `.yard` needs (maintainer).** It lists what is
@@ -55,8 +60,10 @@ the site itself is served from `sites.toml`, which lives on one machine.
 
 ### Anti-goals (never)
 
-- Yard never writes `.yard` except in `yard init`, and `init` never overwrites one
-  without `--force`.
+- Yard never writes a project's `.yard` except in `yard init --local`, and `init` never
+  overwrites one without `--force`. *Amended by M4a.1:* a managed `.yard` is written by
+  `yard init` and edited by `isolate`, `unisolate`, `secure`, `unsecure` and `docroot`;
+  a committed one is never edited.
 - Yard never reads `.env` to fill in `.yard`.
 - A `.yard` never installs software, opens a port beyond what its services register in
   `ports.toml`, or runs a command, without the confirmation in §2.
@@ -139,13 +146,18 @@ minio = true
   `unsecure`, `docroot` and (M4) `node use --site` on a site with `.yard` fail with
   `SITE_HAS_PROJECT_FILE`, hint `edit <path>/.yard` (and the key to change), whether or
   not the file sets that key **(builder's call)**. Yard never edits the file to make them
-  work.
+  work. *Amended by M4a.1:* for a site served from its managed `.yard` they edit that file
+  instead (managed-file spec §4).
+- **Managed file (M4a.1).** A site whose project has no `.yard` is served from
+  `<data root>/sites/<name>/.yard` while that file's `project` key equals the site's path;
+  everything in this section then holds for it (managed-file spec §4).
 - **Shims.** A shim looks for `.yard` in the cwd and its parents, as it does for
   `.yard-php`, whether or not the project is linked, so `composer install` before
   `yard init` already runs under the project's PHP **(builder's call)**. It uses the
   nearest `.yard`, so in a subdirectory with its own file the shims follow that file while
   serving follows the root's (§4) **(builder's call)**. It uses the file's `php` (and, from M4, `node`); a file with no `php` key means the default.
-  `.yard` replaces `.yard-php`: when both exist, `.yard` wins and `yard doctor` warns
+  Between that and the site's isolation it uses the managed `.yard` of the innermost linked
+  site (M4a.1). `.yard` replaces `.yard-php`: when both exist, `.yard` wins and `yard doctor` warns
   that `.yard-php` is ignored. A directory with only `.yard-php` works as today. A
   `.yard` that does not parse is an error naming the file, like a bad `.yard-php`; one
   whose PHP is not installed is `FORMULA_MISSING`, hint `yard init`.
@@ -171,10 +183,12 @@ minio = true
 ## 6. `yard init`
 
 ```
-yard init [NAME] [--force] [--replace] [--yes] [--json]
+yard init [NAME] [--local] [--force] [--replace] [--yes] [--json]
 ```
 
-Run in a project directory.
+Run in a project directory. *Amended by M4a.1:* step 1 writes the managed file unless the
+project has a `.yard` or `--local` is given, and `--local` moves an existing managed file
+into the project (managed-file spec §5).
 
 1. **Write `.yard`** from what Yard can tell, never from guesses:
    - `php`: when the directory is a linked site with settings in `sites.toml`
@@ -231,13 +245,16 @@ docroot = "public"
 
 ## 7. RPC and errors
 
-- `sites.init { path, name?, force?, replace? }` returns the written file's text, a
+- `sites.init { path, name?, force?, replace?, local? }` (`local` from M4a.1) returns the written file's text, a
   `SiteInfo` and `moved_from` when it moved a site whose name was taken;
   the CLI does the confirmation and then runs the installs as the existing jobs
   (`php.install`, `ext.add`, and from M4b `services.add`, which asks about trust
   when the formula's tap needs it).
 - `SiteInfo` gains `project_file: Option<String>` (the path) and `needs: Vec<Need>`
   (what the file asks for that is not installed). Additive; protocol minor bump.
+- M4a.1 adds `SiteInfo.project_file_kind` and `ignored_managed_file`, the code
+  `PROJECT_FILE_EXISTS` and the doctor checks `managed-file-ignored`, `managed-file-mismatch`
+  and `managed-file-orphan` (managed-file spec §6).
 - New codes: `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN` (`data { name,
   serves }`), and `PROJECT_FILE_INVALID` (parse or unknown key, with the
   file and line in `data`).
