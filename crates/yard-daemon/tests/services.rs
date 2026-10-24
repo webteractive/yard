@@ -91,7 +91,8 @@ async fn instance_runs_with_its_config() {
     assert!(conf.contains("bind-address = 127.0.0.1"), "{conf}");
     assert!(conf.contains(&format!("port = {port}")), "{conf}");
     let overrides = std::fs::read_to_string(d.fx.paths.service_overrides("mysql-8.4")).unwrap();
-    assert_eq!(overrides, "", "the user's file is created empty");
+    assert!(overrides.starts_with("# USER-OWNED"), "the user's file says whose it is: {overrides}");
+    assert!(overrides.ends_with("\n[mysqld]\n"), "and has the group a setting needs: {overrides}");
     let pid_file = std::fs::read_to_string(d.fx.paths.service_pid("mysql-8.4")).unwrap();
     assert_eq!(pid_file.trim(), u["pid"].to_string(), "the unit records its pid for a later yardd");
     d.shutdown().await.unwrap();
@@ -437,6 +438,26 @@ async fn redis_gets_its_data_directory_and_the_databases_do_not() {
     assert!(d.fx.paths.service_data("redis").is_dir());
     assert!(reaches(&mut c, "mysql-8.4", "running").await.is_ok());
     assert!(!d.fx.paths.service_data("mysql-8.4").exists(), "mysqld --initialize wants it absent");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn each_engine_gets_the_user_file_it_reads() {
+    // PostgreSQL reads `postgresql.conf` in its data directory, so an `overrides.conf` would be
+    // a file nothing includes. Redis's include takes a bare file.
+    let (redis, postgres) = (free_port(), free_port());
+    let d = prepared(&(pin("redis", redis) + &pin("postgres-17", postgres))).await;
+    d.fx.add_formula("redis");
+    d.fx.add_formula("postgresql@17");
+    d.fx.add_service("redis", "redis", false);
+    d.fx.add_service("postgres-17", "postgresql@17", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    assert!(reaches(&mut c, "postgres-17", "running").await.is_ok());
+    assert!(reaches(&mut c, "redis", "running").await.is_ok());
+    assert!(!d.fx.paths.service_overrides("postgres-17").exists(), "no overrides.conf for PostgreSQL");
+    assert_eq!(std::fs::read_to_string(d.fx.paths.service_overrides("redis")).unwrap(), "");
     d.shutdown().await.unwrap();
 }
 

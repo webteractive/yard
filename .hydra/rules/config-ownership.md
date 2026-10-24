@@ -36,7 +36,11 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     service add …`; it reads Redis's and MinIO's directories not at all.
   - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`,
     `services/<instance>/overrides.conf`)
-    are created empty once with `ensure_user_file` and never written again, except
+    are created once with `ensure_user_file` (empty, or a comment saying whose they are) and never
+    written again. A MySQL instance's `overrides.conf` starts with that comment and `[mysqld]`, since
+    an `!include`d file needs its own group (`services::render::user_overrides`); a PostgreSQL
+    instance has none, since its user file is `data/postgresql.conf`, which `initdb` writes. The one
+    exception to "never written" is
     `99-overrides.ini` through `yard php config set|unset` (`rpc/php.rs`
     `config_edit`, via `yard_core::ini`, which keeps every other line as written,
     and `generated::write_preserving`, which writes through a symlink and keeps the mode).

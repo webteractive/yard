@@ -154,7 +154,7 @@ certs/<site>.pem, certs/<site>.key
 certs/services/<name>.pem, .key    # certificates for service hostnames (minio.<tld> once secured)
 services/<instance>/data/     # the engine's data dir; never re-initialized or deleted by Yard except `service remove`
 services/<instance>/my.cnf    # generated (MySQL), or redis.conf (Redis); PostgreSQL and MinIO have none
-services/<instance>/overrides.conf  # USER-OWNED, created empty once, included by my.cnf / redis.conf / nginx's minio block
+services/<instance>/overrides.conf  # USER-OWNED, created once, included by my.cnf (seeded with [mysqld]) / redis.conf / nginx's minio block; PostgreSQL has none (its data/postgresql.conf is the user's)
 logs/                         # rotated logs per unit
 run/                          # sockets, pid files (run/<instance>.pid for a service)
 bin/                          # shims: php, composer, pecl, phpize, php-config, node, npm, npx

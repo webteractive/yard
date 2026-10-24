@@ -143,6 +143,23 @@ pub fn init_command(
     }
 }
 
+/// What `services/<i>/overrides.conf` starts as, for the engines that include it; Yard creates
+/// it once with this and never writes it again. `None` for PostgreSQL, whose user file is
+/// `postgresql.conf` in its data directory (spec 5.2). MySQL's needs a group header before any
+/// setting, or mysqld exits at startup, so it starts with `[mysqld]`. Redis's include and
+/// MinIO's (an nginx include for `minio.<tld>`) take bare lines.
+pub fn user_overrides(engine: Engine) -> Option<&'static str> {
+    match engine {
+        Engine::Mysql => Some(
+            "# USER-OWNED — Yard never rewrites this file. my.cnf includes it last, so a setting here wins.\n\
+             # mysqld needs a group before any setting: put yours under [mysqld].\n\
+             [mysqld]\n",
+        ),
+        Engine::Redis | Engine::Minio => Some(""),
+        Engine::Postgres => None,
+    }
+}
+
 /// The generated config file for `instance` and its text, for the engines that read one
 /// (MySQL's `my.cnf`, Redis's `redis.conf`). The header names `overrides.conf`, which the
 /// file includes last so the user's lines win.
@@ -324,6 +341,16 @@ mod tests {
 
         assert_eq!(init_command(Engine::Redis, "redis", keg, &paths, "me"), None);
         assert_eq!(init_command(Engine::Minio, "minio", keg, &paths, "me"), None);
+    }
+
+    #[test]
+    fn each_engine_starts_its_overrides_as_its_config_reads_it() {
+        let mysql = user_overrides(Engine::Mysql).unwrap();
+        assert!(mysql.starts_with("# USER-OWNED"), "{mysql}");
+        // A setting before any group makes mysqld exit ("Found option without preceding group").
+        assert_eq!(mysql.lines().find(|l| !l.starts_with('#')), Some("[mysqld]"));
+        assert_eq!(user_overrides(Engine::Redis), Some(""));
+        assert_eq!(user_overrides(Engine::Postgres), None, "PostgreSQL's file is postgresql.conf");
     }
 
     #[test]

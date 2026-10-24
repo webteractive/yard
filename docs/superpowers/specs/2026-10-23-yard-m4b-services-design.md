@@ -127,7 +127,8 @@ Data layout additions (main spec §3.3):
 services.toml                         # USER TOML, edited via TomlFile
 services/<instance>/data/             # the engine's data directory
 services/<instance>/<engine>.conf     # generated (mysql: my.cnf, redis: redis.conf)
-services/<instance>/overrides.conf    # USER-OWNED, included last, never rewritten
+services/<instance>/overrides.conf    # USER-OWNED, included last, never rewritten (MySQL, Redis, MinIO;
+                                      #   PostgreSQL's is data/postgresql.conf)
 run/<instance>.sock                   # mysql's socket; postgres's socket dir is run/
 logs/<instance>.log                   # the unit's log, rotated like every unit's
 nginx/services/minio.conf             # generated: minio.<tld> (§5.4)
@@ -182,7 +183,10 @@ Projects that need a stable MySQL use a versioned line.
 - Run: `mysqld --defaults-file=<root>/services/<i>/my.cnf`. The generated `my.cnf` sets
   `port`, `bind-address = 127.0.0.1`, `socket = <root>/run/<i>.sock`, `datadir`,
   `mysqlx = OFF` (the X Protocol would otherwise take 33060 for every instance), and
-  ends with `!include <root>/services/<i>/overrides.conf`, created empty once.
+  ends with `!include <root>/services/<i>/overrides.conf`, created once and never written
+  again. It starts as a comment saying it is the user's file and included last, then
+  `[mysqld]`: a file `!include` pulls in needs its own group header, and a setting before one
+  makes mysqld exit ("Found option without preceding group").
   The include path is the one unquoted path in Yard's output: mysqld takes the rest of the
   line and keeps a quote as part of the path (checked against mysqld 8.0.33, 2026-10-24).
 - Health: TCP connect. Stop: SIGTERM (mysqld shuts down cleanly).
@@ -195,6 +199,7 @@ Projects that need a stable MySQL use a versioned line.
 - Run: `postgres -D <data> -c listen_addresses=127.0.0.1 -c port=<p> -c
   unix_socket_directories=<root>/run`. `postgresql.conf` in the data directory is the
   user's file: `initdb` writes it, Yard never touches it, and the `-c` settings win over it.
+  A PostgreSQL instance has no `overrides.conf`: nothing would include it.
 - Health: TCP connect. Stop: SIGINT (PostgreSQL's fast shutdown) **(builder's call)**.
 - Every PostgreSQL formula is versioned, so a `brew upgrade` is never a new major.
 

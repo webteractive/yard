@@ -30,7 +30,7 @@ use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{default_index, nginx_main, nginx_site, service_site, setup_page};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::services::Engine;
-use yard_core::services::render::config_file;
+use yard_core::services::render::{config_file, user_overrides};
 use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::tls::{LEAF_DAYS, needs_issue};
@@ -835,8 +835,10 @@ fn prepare_dirs(
         generated::ensure_user_file(&paths.php_overrides(*v), USER_OWNED_INI)?;
     }
     for (instance, entry) in &services.services {
-        // Empty, so mysqld and redis have a file to include and the user's first line is theirs.
-        generated::ensure_user_file(&paths.service_overrides(instance), "")?;
+        // The file my.cnf, redis.conf or minio.<tld>'s block includes; PostgreSQL has none.
+        if let Some(initial) = user_overrides(entry.engine) {
+            generated::ensure_user_file(&paths.service_overrides(instance), initial)?;
+        }
         // redis-server exits at config load when its `dir` is missing. MySQL's and PostgreSQL's
         // init needs the data directory empty or absent, and MinIO makes its own.
         if entry.engine == Engine::Redis {
