@@ -269,6 +269,28 @@ async fn isolate_edits_the_managed_file_and_keeps_comments() {
 }
 
 #[tokio::test]
+async fn unisolate_and_a_docroot_reset_keep_the_header_and_comments() {
+    let header = "# .yard for ee, kept by Yard outside the project.\n";
+    let body = format!("{header}# legacy mcrypt\nphp = \"7.3\"\n# served from web\ndocroot = \"web\"\n");
+    let (d, _dir, managed) = managed_site(&body).await;
+    let mut c = d.client().await;
+    let read = || std::fs::read_to_string(&managed).unwrap();
+    c.call("sites.isolate", json!({"site": "ee"})).await.unwrap();
+    assert!(
+        read().starts_with(&format!("{header}# legacy mcrypt\n# served from web\ndocroot = ")),
+        "{}",
+        read()
+    );
+    c.call("sites.docroot", json!({"site": "ee"})).await.unwrap();
+    assert!(
+        read().starts_with(&format!("{header}# legacy mcrypt\n# served from web\nproject = ")),
+        "{}",
+        read()
+    );
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unisolate_secure_unsecure_docroot_edit_the_managed_file() {
     let (d, _dir, managed) = managed_site("php = \"7.3\"\n").await;
     let mut c = d.client().await;

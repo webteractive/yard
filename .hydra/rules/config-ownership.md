@@ -109,6 +109,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   another project's file keeps it as `sites/<name>/.yard-backup` first. `yard unlink` never
   deletes it. A committed `.yard` always wins, and Yard never edits or deletes the managed
   file it hides.
-- `TomlFile::set` replaces an existing key's value in place, so the comment above the key
-  survives; `insert` would drop it.
+- toml_edit keeps the comment lines above a key in that key's decor. `TomlFile::set`
+  replaces an existing key's value in place, so they survive (`insert` would drop them),
+  and `TomlFile::remove` moves them onto the item that follows in the same table; they go
+  only when nothing follows.
 - Yard never writes project `.env` files (spec non-goal).

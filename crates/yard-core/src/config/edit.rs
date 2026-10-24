@@ -142,7 +142,15 @@ fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> bool {
         return false;
     };
     if rest.is_empty() {
-        return table.remove(first).is_some();
+        let comments = leading_comments(table, first);
+        let next = table.iter().map(|(k, _)| k.to_string()).skip_while(|k| k != first).nth(1);
+        if table.remove(first).is_none() {
+            return false;
+        }
+        if let (Some(comments), Some(next)) = (comments, next) {
+            keep_comments(table, &next, &comments);
+        }
+        return true;
     }
     let Some(child) = table.get_mut(first).and_then(Item::as_table_like_mut) else {
         return false;
@@ -154,10 +162,48 @@ fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> bool {
     removed
 }
 
+/// The comment lines toml_edit keeps above `key` in its decor, which go when it is removed.
+fn leading_comments(table: &dyn TableLike, key: &str) -> Option<String> {
+    let (key, _) = table.get_key_value(key)?;
+    let prefix = key.leaf_decor().prefix()?.as_str()?;
+    prefix.contains('#').then(|| prefix.to_string())
+}
+
+/// Puts `comments` above `next`: its key, or its header when it is a table.
+fn keep_comments(table: &mut dyn TableLike, next: &str, comments: &str) {
+    let Some((mut key, item)) = table.get_key_value_mut(next) else { return };
+    let decor = match item.as_table_mut() {
+        Some(t) => t.decor_mut(),
+        None => key.leaf_decor_mut(),
+    };
+    let own = decor.prefix().and_then(|p| p.as_str()).unwrap_or_default().to_string();
+    decor.set_prefix(format!("{comments}{own}"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use toml_edit::value;
+
+    #[test]
+    fn remove_keeps_the_comments_above_the_key_it_removes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yard");
+        let text = "# header\n# legacy mcrypt\nphp = \"7.3\"\ndocroot = \"web\"\n# tail\nsecure = true\n\n[x]\na = 1\n";
+        std::fs::write(&path, text).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["php"]));
+        assert_eq!(
+            f.doc().to_string(),
+            "# header\n# legacy mcrypt\ndocroot = \"web\"\n# tail\nsecure = true\n\n[x]\na = 1\n"
+        );
+        // The last plain key: its comments go to what follows it, the [x] header.
+        assert!(f.remove(&["secure"]));
+        assert_eq!(
+            f.doc().to_string(),
+            "# header\n# legacy mcrypt\ndocroot = \"web\"\n# tail\n\n[x]\na = 1\n"
+        );
+    }
 
     #[test]
     fn set_keeps_the_comment_above_a_key_it_changes() {
