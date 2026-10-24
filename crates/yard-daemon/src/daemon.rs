@@ -107,8 +107,11 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         )
         .with_hint("use a shorter --root or YARD_ROOT"));
     }
-    std::fs::create_dir_all(opts.paths.root())
-        .map_err(|e| YardError::internal(format!("cannot create {}: {e}", opts.paths.root().display())))?;
+    // `sites/` too, so the watcher sees the first managed `.yard` written into it.
+    for dir in [opts.paths.root().to_path_buf(), opts.paths.managed_sites_dir()] {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| YardError::internal(format!("cannot create {}: {e}", dir.display())))?;
+    }
     let bus = EventBus::new();
     let helper = HelperClient::new(&opts.helper_socket);
     let brew = Brew::new(&opts.brew_prefix);

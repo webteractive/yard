@@ -43,9 +43,12 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
     let sites_toml = canonical(&ctx.paths.sites_toml());
     let services_toml = canonical(&ctx.paths.services_toml());
     let mut projects = project_dirs(&ctx.paths);
+    let managed_root = canonical(&ctx.paths.managed_sites_dir());
+    let mut managed = managed_dirs(&ctx.paths);
     let mut includes = nginx_include_dirs(&ctx.paths);
     let mut watch = vec![canonical(ctx.paths.root()), overrides.clone()];
     watch.extend(projects.iter().cloned());
+    watch.extend(managed.iter().cloned());
     watch.extend(includes.iter().cloned());
     change_watches(&debouncer, watch, vec![]).await;
 
@@ -82,7 +85,23 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
                 change_watches(&debouncer, add, remove).await;
                 projects = now;
             }
-            let relevant = changed.iter().any(|p| tomls.contains(p) || is_project_file(p, &projects));
+            // Before relevance, so a `sites/<name>/` made in this batch is watched; a file
+            // already written into a directory only now watched, or one removed with its
+            // directory, counts as a change.
+            let mut managed_moved = false;
+            if changed.contains(&sites_toml) || changed.iter().any(|p| p.starts_with(&managed_root)) {
+                let now = managed_dirs(&ctx.paths);
+                let add: Vec<PathBuf> = now.difference(&managed).cloned().collect();
+                let remove = managed.difference(&now).cloned().collect();
+                let remove: Vec<PathBuf> = remove;
+                managed_moved = !add.is_empty() || !remove.is_empty();
+                change_watches(&debouncer, add, remove).await;
+                managed = now;
+            }
+            let relevant = managed_moved
+                || changed.iter().any(|p| {
+                    tomls.contains(p) || is_project_file(p, &projects) || is_project_file(p, &managed)
+                });
             let overridden = changed
                 .iter()
                 .any(|p| p.parent() == Some(overrides.as_path()) || is_nginx_include(p, &includes));
@@ -119,6 +138,18 @@ type Watcher = Arc<Mutex<Debouncer<RecommendedWatcher>>>;
 fn project_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
     let Ok(sites) = yard_core::config::load_sites(paths) else { return BTreeSet::new() };
     sites.sites.values().filter_map(|e| e.path.as_deref()).filter(|p| p.is_dir()).map(canonical).collect()
+}
+
+/// The managed-file directory, always, and each `sites/<name>/` in it that exists for a
+/// name in `sites.toml`, canonical (managed-file spec §4). yardd makes `sites/` at
+/// startup and never stops watching it: FSEvents reported nothing more for a `sites/`
+/// that was unwatched when removed and watched again once made anew.
+fn managed_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
+    let root = paths.managed_sites_dir();
+    let names: Vec<String> =
+        yard_core::config::load_sites(paths).map(|s| s.sites.into_keys().collect()).unwrap_or_default();
+    let sites = names.iter().map(|name| root.join(name)).filter(|dir| dir.is_dir());
+    std::iter::once(root.clone()).chain(sites).map(|dir| canonical(&dir)).collect()
 }
 
 /// The directories of the instances whose `overrides.conf` nginx includes: MinIO's, which

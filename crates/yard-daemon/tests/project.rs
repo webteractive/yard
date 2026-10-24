@@ -244,6 +244,54 @@ async fn php_within(c: &mut Client, name: &str, want: &str, within: Duration) ->
 }
 
 #[tokio::test]
+async fn a_managed_file_written_later_is_applied() {
+    let d = prepared("").await;
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert_eq!(site(&mut c, "ee").await["php"], "8.4");
+    // sites/ may be missing while yardd runs: one appearing later is watched too.
+    let _ = std::fs::remove_dir_all(d.fx.paths.managed_sites_dir());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
+    let s = php_within(&mut c, "ee", "7.4", Duration::from_secs(5)).await;
+    assert_eq!(s["php"], "7.4", "{s}");
+    // And an edit to it afterwards.
+    write_managed(&d, "ee", &dir, "php = \"8.4\"\n");
+    let s = php_within(&mut c, "ee", "8.4", Duration::from_secs(5)).await;
+    assert_eq!(s["php"], "8.4", "{s}");
+    // The site's directory removed and made again, as unlink, rm and init would.
+    std::fs::remove_dir_all(d.fx.paths.managed_project_file("ee").parent().unwrap()).unwrap();
+    let s = php_within(&mut c, "ee", "x", Duration::from_secs(2)).await;
+    assert!(s.get("project_file").is_none(), "{s}");
+    write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
+    let s = php_within(&mut c, "ee", "7.4", Duration::from_secs(5)).await;
+    assert_eq!(s["php"], "7.4", "{s}");
+    write_managed(&d, "ee", &dir, "php = \"8.4\"\n");
+    let s = php_within(&mut c, "ee", "8.4", Duration::from_secs(5)).await;
+    assert_eq!(s["php"], "8.4", "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn removing_the_committed_file_falls_back_to_the_managed_one() {
+    let d = prepared("").await;
+    d.fx.add_php("7.3");
+    d.fx.add_php("7.4");
+    let dir = d.project("ee");
+    write_yard(&dir, "php = \"7.3\"\n");
+    write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert_eq!(site(&mut c, "ee").await["php"], "7.3");
+    std::fs::remove_file(dir.join(".yard")).unwrap();
+    let s = php_within(&mut c, "ee", "7.4", Duration::from_secs(5)).await;
+    assert_eq!((s["php"].as_str(), s["project_file_kind"].as_str()), (Some("7.4"), Some("managed")), "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn editing_the_project_file_reconciles() {
     let d = prepared("").await;
     d.fx.add_php("7.3");
