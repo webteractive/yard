@@ -200,6 +200,12 @@ pub struct InitResult {
     /// What the site served before `init` moved it here, when the name was taken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_from: Option<String>,
+    /// The managed `.yard` that `--local` moved into the project as `file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_managed: Option<String>,
+    /// Where `replace` kept the managed `.yard` written for another directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -54,7 +54,8 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Write .yard for the current project, link it, and install what it needs after asking.
+    /// Write the current project's .yard (kept in Yard's data root unless --local), link
+    /// it, and install what it needs after asking.
     Init {
         /// The site name when the project is not linked yet; defaults to the directory's name.
         name: Option<String>,
@@ -68,6 +69,9 @@ pub enum Command {
         /// Install what the .yard needs without asking.
         #[arg(long)]
         yes: bool,
+        /// Write .yard into the project instead of Yard's data root (sites/<name>/.yard).
+        #[arg(long)]
+        local: bool,
     },
     /// Stop serving a linked site.
     Unlink {

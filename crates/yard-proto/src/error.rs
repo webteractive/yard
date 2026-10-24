@@ -51,6 +51,9 @@ pub enum ErrorCode {
     /// `yard init` would take a name another directory or proxy already serves;
     /// `data` has `name` and `serves`. `replace` moves that site here.
     SiteNameTaken,
+    /// `yard init --local` would move the managed `.yard` into a project that already has
+    /// its own; `data.file` names it.
+    ProjectFileExists,
     /// No service instance has that name; `yard services` lists them.
     ServiceNotFound,
     /// That service instance is already added.
@@ -138,6 +141,7 @@ mod tests {
             json!("PROJECT_FILE_INVALID")
         );
         for (code, name) in [
+            (ErrorCode::ProjectFileExists, "PROJECT_FILE_EXISTS"),
             (ErrorCode::ServiceNotFound, "SERVICE_NOT_FOUND"),
             (ErrorCode::ServiceExists, "SERVICE_EXISTS"),
             (ErrorCode::ServiceInUse, "SERVICE_IN_USE"),

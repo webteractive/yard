@@ -1,5 +1,6 @@
-//! `sites.init`: write a project's `.yard`, link the project, and move its settings out
-//! of `sites.toml` (project-file spec §4).
+//! `sites.init`: write a site's `.yard` (the managed one, or the project's own with
+//! `local`), link the project, and move its settings out of `sites.toml` (project-file
+//! spec §6, managed-file spec §5).
 
 use super::handlers::{directory, reconcile, site, snapshot, valid_name};
 use crate::daemon::Context;
@@ -17,9 +18,11 @@ use yard_proto::{ErrorCode, InitResult, SiteKind, YardError};
 /// The largest `composer.json` `init` reads for `require.php`.
 const COMPOSER_JSON_MAX: u64 = 1 << 20;
 
-/// Writes the file unless one is there (or rewrites it with `force`), then links the
-/// project and drops `php`, `secure` and `docroot` from its `sites.toml` entry. A `.yard`
-/// that does not parse is refused before anything is linked or moved.
+/// Writes the site's `.yard` unless one is there (or rewrites it with `force`), then links
+/// the project and drops `php`, `secure` and `docroot` from its `sites.toml` entry. The
+/// file is the managed one in Yard's data root, or with `local` the project's own; the
+/// project's own always wins when it is there (managed-file spec §5). A `.yard` that does
+/// not parse is refused before anything is linked or moved.
 pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError> {
     let dir = directory(&p.path)?;
     let sites = load_sites(&ctx.paths)?;
@@ -42,11 +45,27 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
     };
     valid_name(&name)?;
     let entry = linked.map(|(_, e)| e);
-    let file = dir.join(project::FILE);
-    let existing = read_project_file(&file).transpose()?;
+    let committed = dir.join(project::FILE);
+    let existing = read_project_file(&committed).transpose()?;
+    // The managed file matters only while the project has no .yard of its own. It is this
+    // site's when its `project` is the site's path as sites.toml spells it.
+    let managed = ctx.paths.managed_project_file(&name);
+    let site_path = entry.and_then(|e| e.path.clone()).unwrap_or_else(|| dir.clone());
+    let managed_text = match existing {
+        Some(_) => None,
+        None => read_project_file(&managed).transpose()?,
+    };
+    let managed_project = match &managed_text {
+        Some(text) => Some(project::parse_managed(text, &managed)?.1),
+        None => None,
+    };
+    let ours = managed_project.as_ref().map(|project| project.as_deref() == Some(site_path.as_path()));
+    // Another directory's managed file is in the way of writing this one's.
+    let foreign = !p.local && ours == Some(false);
 
     // The name serves another directory: init codifies that site here. Without a .yard
-    // yet that is what the user is doing; a .yard here, or a proxy, needs `replace`.
+    // yet that is what the user is doing; a .yard here (or the name's managed file, written
+    // for that other directory), or a proxy, needs `replace`.
     let mut moved_from = None;
     let mut carried = None;
     if let (None, Some(other)) = (entry, sites.sites.get(&name)) {
@@ -55,34 +74,90 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
             (None, Some(url)) => url.clone(),
             (None, None) => "another project".to_string(),
         };
-        if (existing.is_some() || other.path.is_none()) && !p.replace {
-            return Err(YardError::new(ErrorCode::SiteNameTaken, format!("{name} already serves {serves}"))
-                .with_hint("yard init --replace")
-                .with_data(json!({ "name": name, "serves": serves })));
+        if (existing.is_some() || foreign || other.path.is_none()) && !p.replace {
+            return Err(name_taken(&name, &format!("{name} already serves {serves}"), &serves));
         }
         if other.path.is_some() {
             carried = Some(carry(ctx, &name, other, &dir).await);
         }
         moved_from = Some(serves);
+    } else if foreign && !p.replace {
+        let for_dir = managed_project.flatten().map_or("no project".to_string(), |d| d.display().to_string());
+        let message = format!("{} is for {for_dir}, not {}", managed.display(), site_path.display());
+        return Err(name_taken(&name, &message, &for_dir));
     }
     let entry = carried.as_ref().or(entry);
 
-    let (text, written) = match existing {
-        Some(text) if !p.force => {
-            project::parse(&text, &file)?;
-            (text, false)
+    let mut from_managed = None;
+    let mut backup = None;
+    let (file, text, written) = match (existing, managed_text) {
+        // The project's own .yard: applied, or rewritten with `force`, as before.
+        (Some(text), _) if !p.force => {
+            project::parse(&text, &committed)?;
+            (committed, text, false)
         }
-        existing => {
-            let detected = detect(ctx, entry, &dir)?;
-            let text = match &existing {
-                Some(old) => project::rewrite(old, &detected)?,
-                None => project::render(&detected),
-            };
-            let written = existing.as_deref() != Some(text.as_str());
+        (Some(old), _) => {
+            let text = project::rewrite(&old, &detect(ctx, entry, &dir)?)?;
+            let written = old != text;
             if written {
-                write_project_file(&file, &text)?;
+                write_project_file(&committed, &text)?;
             }
-            (text, written)
+            (committed, text, written)
+        }
+        // `--local` with this site's managed file: moved into the project.
+        (None, Some(old)) if p.local && ours == Some(true) => {
+            if committed.symlink_metadata().is_ok() {
+                return Err(YardError::new(
+                    ErrorCode::ProjectFileExists,
+                    format!("{} already has a .yard", dir.display()),
+                )
+                .with_hint(format!("rm {}", managed.display()))
+                .with_data(json!({ "file": committed.display().to_string() })));
+            }
+            let mut text = project::to_committed(&old)?;
+            if p.force {
+                text = project::rewrite(&text, &detect(ctx, entry, &dir)?)?;
+            }
+            write_project_file(&committed, &text)?;
+            std::fs::remove_file(&managed).map_err(|e| {
+                YardError::new(ErrorCode::Internal, format!("cannot remove {}: {e}", managed.display()))
+            })?;
+            from_managed = Some(managed.display().to_string());
+            (committed, text, true)
+        }
+        (None, _) if p.local => {
+            let text = project::render(&detect(ctx, entry, &dir)?);
+            write_project_file(&committed, &text)?;
+            (committed, text, true)
+        }
+        // This site's managed file: applied, or rewritten with `force`.
+        (None, Some(text)) if ours == Some(true) && !p.force => (managed, text, false),
+        (None, Some(old)) if ours == Some(true) => {
+            let text = project::rewrite(&old, &detect(ctx, entry, &dir)?)?;
+            let text = project::set_project(&text, &site_path)?;
+            let written = old != text;
+            if written {
+                write_project_file(&managed, &text)?;
+            }
+            (managed, text, written)
+        }
+        // Another directory's (with `replace`), or none yet: a fresh one, the old one kept.
+        (None, old) => {
+            if old.is_some() {
+                let kept = managed.with_file_name(".yard-backup");
+                std::fs::copy(&managed, &kept).map_err(|e| {
+                    YardError::new(ErrorCode::Internal, format!("cannot copy {}: {e}", managed.display()))
+                })?;
+                backup = Some(kept.display().to_string());
+            }
+            let text = project::render_managed(&name, &site_path, &detect(ctx, entry, &dir)?);
+            if let Some(parent) = managed.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    YardError::new(ErrorCode::Internal, format!("cannot create {}: {e}", parent.display()))
+                })?;
+            }
+            write_project_file(&managed, &text)?;
+            (managed, text, true)
         }
     };
 
@@ -98,7 +173,14 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
     })?;
     reconcile(ctx).await?;
     let site = site(ctx, &name).await?;
-    Ok(InitResult { file: file.display().to_string(), text, written, site, moved_from })
+    Ok(InitResult { file: file.display().to_string(), text, written, site, moved_from, from_managed, backup })
+}
+
+/// `SITE_NAME_TAKEN`: `replace` takes the name (and its managed `.yard`) for this directory.
+fn name_taken(name: &str, message: &str, serves: &str) -> YardError {
+    YardError::new(ErrorCode::SiteNameTaken, message)
+        .with_hint("yard init --replace")
+        .with_data(json!({ "name": name, "serves": serves }))
 }
 
 /// The settings of `name`, linked at another directory, as they apply once it serves

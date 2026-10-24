@@ -239,8 +239,16 @@ pub fn service_needs(file: &ProjectFile, services: &ServicesConfig) -> Vec<Need>
         .collect()
 }
 
-/// The first line `yard init` writes.
+/// The first line `yard init --local` writes into the project.
 pub const HEADER: &str = "# .yard: how Yard serves this project. Commit it.\n";
+
+/// How the first line of a managed `.yard` starts.
+pub const MANAGED_HEADER_PREFIX: &str = "# .yard for ";
+
+/// The first line of the managed `.yard` `yard init` writes for `name`.
+pub fn managed_header(name: &str) -> String {
+    format!("{MANAGED_HEADER_PREFIX}{name}, kept by Yard outside the project.\n")
+}
 
 /// What `yard init` can tell about a project, never guessed (project-file spec §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,7 +309,19 @@ const SERVICES_BLOCK: &str =
 /// A new `.yard`. `secure` is written only when detected: absent, HTTPS follows each
 /// teammate's `secure_by_default`.
 pub fn render(d: &Detected) -> String {
-    let mut out = HEADER.to_string();
+    format!("{HEADER}{}{SERVICES_BLOCK}", render_keys(d))
+}
+
+/// A new managed `.yard` for the site `name`, written for the directory `project` (as
+/// `sites.toml` spells it): what [`render`] writes, under the managed header, with
+/// `project` after the detected keys.
+pub fn render_managed(name: &str, project: &Path, d: &Detected) -> String {
+    let project = toml_edit::Value::from(project.display().to_string());
+    format!("{}{}project = {project}\n{SERVICES_BLOCK}", managed_header(name), render_keys(d))
+}
+
+fn render_keys(d: &Detected) -> String {
+    let mut out = String::new();
     if let Some(v) = d.php {
         out.push_str(&format!("php = \"{v}\"\n"));
     }
@@ -309,17 +329,40 @@ pub fn render(d: &Detected) -> String {
     if let Some(on) = d.secure {
         out.push_str(&format!("secure = {on}\n"));
     }
-    out.push_str(SERVICES_BLOCK);
     out
+}
+
+fn edit_doc(text: &str) -> Result<toml_edit::DocumentMut, YardError> {
+    text.parse().map_err(|e: toml_edit::TomlError| {
+        YardError::new(ErrorCode::ProjectFileInvalid, format!(".yard does not parse: {}", e.message()))
+            .with_hint("fix it first, or delete it and run yard init")
+    })
+}
+
+/// `text` with `project` set to `project`, keeping every other key and comment.
+pub fn set_project(text: &str, project: &Path) -> Result<String, YardError> {
+    let mut doc = edit_doc(text)?;
+    doc["project"] = toml_edit::value(project.display().to_string());
+    Ok(doc.to_string())
+}
+
+/// A managed `.yard` as the project's own: without `project`, and under the committed
+/// header instead of the managed one. Every other key and comment is kept.
+pub fn to_committed(text: &str) -> Result<String, YardError> {
+    let mut doc = edit_doc(text)?;
+    doc.remove("project");
+    let text = doc.to_string();
+    Ok(match text.strip_prefix(MANAGED_HEADER_PREFIX) {
+        Some(rest) => format!("{HEADER}{}", rest.split_once('\n').map_or("", |(_, after)| after)),
+        None if text.starts_with(HEADER) => text,
+        None => format!("{HEADER}{text}"),
+    })
 }
 
 /// `existing` with the keys detection produced written over, keeping every other key and
 /// comment: `php` and `secure` only when detected, `docroot` always.
 pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
-    let mut doc: toml_edit::DocumentMut = existing.parse().map_err(|e: toml_edit::TomlError| {
-        YardError::new(ErrorCode::ProjectFileInvalid, format!(".yard does not parse: {}", e.message()))
-            .with_hint("fix it first, or delete it and run yard init")
-    })?;
+    let mut doc = edit_doc(existing)?;
     if let Some(v) = d.php {
         doc["php"] = toml_edit::value(v.to_string());
     }
@@ -770,5 +813,51 @@ mod tests {
         let e = p["ee"].parsed.as_ref().unwrap_err();
         assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
         assert!(e.message.contains(MANAGED), "{}", e.message);
+    }
+
+    fn eepower() -> Detected {
+        Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None }
+    }
+
+    #[test]
+    fn render_managed_names_the_site_and_its_project() {
+        let text = render_managed("ee", Path::new("/code/ee"), &eepower());
+        assert!(text.starts_with("# .yard for ee, kept by Yard outside the project.\n"), "{text}");
+        assert!(text.starts_with(&managed_header("ee")));
+        assert!(text.contains("\n# [services]\n"), "{text}");
+        let (f, project) = parse_managed(&text, Path::new(MANAGED)).unwrap();
+        assert_eq!((f.php, f.docroot), (Some(v("7.3")), Some(PathBuf::from("public"))));
+        assert_eq!(project, Some(PathBuf::from("/code/ee")));
+        // The project's own .yard cannot say `project`.
+        assert!(parse(&text, Path::new(FILE)).is_err());
+    }
+
+    #[test]
+    fn set_project_sets_or_replaces_it_and_keeps_the_rest() {
+        let text = "# mine\nphp = \"7.3\"\n\n[services]\nredis = true\n";
+        let set = set_project(text, Path::new("/code/ee")).unwrap();
+        assert!(set.starts_with("# mine\nphp = \"7.3\"\n"), "{set}");
+        let (f, project) = parse_managed(&set, Path::new(MANAGED)).unwrap();
+        assert_eq!((f.services.len(), project), (1, Some(PathBuf::from("/code/ee"))));
+        let moved = set_project(&set, Path::new("/code/ee2")).unwrap();
+        assert_eq!(parse_managed(&moved, Path::new(MANAGED)).unwrap().1, Some(PathBuf::from("/code/ee2")));
+        assert_eq!(moved.matches("project =").count(), 1, "{moved}");
+        assert_eq!(set_project("php = \n", Path::new("/x")).unwrap_err().code, ErrorCode::ProjectFileInvalid);
+    }
+
+    #[test]
+    fn to_committed_drops_project_and_swaps_the_header() {
+        let managed = render_managed("ee", Path::new("/code/ee"), &eepower())
+            .replace("docroot", "# keep me\ndocroot")
+            .replace("# [services]\n", "[services]\nredis = true\n# [services]\n");
+        let committed = to_committed(&managed).unwrap();
+        assert!(committed.starts_with(HEADER), "{committed}");
+        assert!(!committed.contains(MANAGED_HEADER_PREFIX), "{committed}");
+        assert!(committed.contains("# keep me\n"), "{committed}");
+        let f = parse(&committed, Path::new(FILE)).unwrap();
+        assert_eq!((f.php, f.services.len()), (Some(v("7.3")), 1));
+        // A file without the managed header gets the committed one on top.
+        let bare = to_committed("php = \"7.4\"\nproject = \"/code/ee\"\n").unwrap();
+        assert_eq!(bare, format!("{HEADER}php = \"7.4\"\n"));
     }
 }

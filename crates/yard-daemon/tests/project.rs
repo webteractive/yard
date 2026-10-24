@@ -348,10 +348,200 @@ async fn a_newly_linked_project_is_watched() {
 const SERVICES_BLOCK: &str =
     "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
 
+/// `sites.init` writing into the project, as every test written before managed files did.
 async fn init(c: &mut Client, dir: &Path, extra: Value) -> Result<Value, yard_proto::YardError> {
+    let mut params = json!({"path": dir.display().to_string(), "local": true});
+    params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    c.call("sites.init", params).await
+}
+
+/// `sites.init` as the CLI sends it by default: the managed file.
+async fn init_managed(c: &mut Client, dir: &Path, extra: Value) -> Result<Value, yard_proto::YardError> {
     let mut params = json!({"path": dir.display().to_string()});
     params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
     c.call("sites.init", params).await
+}
+
+#[tokio::test]
+async fn init_writes_the_managed_file_by_default() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("ee");
+    std::fs::create_dir_all(dir.join("public")).unwrap();
+    let r = init_managed(&mut c, &dir, json!({})).await.unwrap();
+    let managed = d.fx.paths.managed_project_file("ee");
+    assert_eq!(r["file"], managed.display().to_string(), "{r}");
+    let text = r["text"].as_str().unwrap();
+    assert!(text.starts_with("# .yard for ee, kept by Yard outside the project.\n"), "{text}");
+    let canonical = dir.canonicalize().unwrap();
+    assert!(text.contains(&format!("project = {:?}", canonical.display().to_string())), "{text}");
+    assert_eq!(std::fs::read_to_string(&managed).unwrap(), text);
+    assert!(!dir.join(".yard").exists());
+    assert_eq!(r["site"]["project_file_kind"], "managed", "{r}");
+    assert_eq!(r["written"], true);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_applies_an_existing_managed_file() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("ee");
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = init_managed(&mut c, &dir, json!({})).await.unwrap();
+    let again = init_managed(&mut c, &dir, json!({})).await.unwrap();
+    assert_eq!((again["written"].as_bool(), &again["text"]), (Some(false), &first["text"]), "{again}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_local_moves_the_managed_file() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("ee");
+    std::fs::create_dir_all(&dir).unwrap();
+    init_managed(&mut c, &dir, json!({})).await.unwrap();
+    let managed = d.fx.paths.managed_project_file("ee");
+    // A committed file already there: refused, nothing written or removed.
+    write_yard(&dir, "php = \"8.4\"\n");
+    let e = init(&mut c, &dir, json!({})).await;
+    assert!(e.is_ok(), "a committed file is applied as before: {e:?}");
+    std::fs::remove_file(dir.join(".yard")).unwrap();
+    let r = init(&mut c, &dir, json!({})).await.unwrap();
+    let text = std::fs::read_to_string(dir.join(".yard")).unwrap();
+    assert!(text.starts_with("# .yard: how Yard serves this project. Commit it.\n"), "{text}");
+    assert!(!text.contains("project ="), "{text}");
+    assert!(!managed.exists());
+    assert_eq!(r["from_managed"], managed.display().to_string(), "{r}");
+    assert_eq!(r["file"], dir.canonicalize().unwrap().join(".yard").display().to_string(), "{r}");
+    assert_eq!(r["site"]["project_file_kind"], "project", "{r}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_force_local_moves_then_rewrites() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let dir = d.projects.path().join("ee");
+    std::fs::create_dir_all(&dir).unwrap();
+    init_managed(&mut c, &dir, json!({})).await.unwrap();
+    let managed = d.fx.paths.managed_project_file("ee");
+    let text =
+        std::fs::read_to_string(&managed).unwrap().replace("docroot", "extensions = [\"redis\"]\ndocroot");
+    std::fs::write(&managed, text).unwrap();
+    init(&mut c, &dir, json!({"force": true})).await.unwrap();
+    let text = std::fs::read_to_string(dir.join(".yard")).unwrap();
+    assert!(text.contains("extensions = [\"redis\"]"), "{text}");
+    assert!(!text.contains("project =") && !managed.exists(), "{text}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_with_a_committed_file_ignores_the_managed_one() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    let managed = write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
+    write_yard(&dir, "php = \"8.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let before = std::fs::read(&managed).unwrap();
+    let r = init_managed(&mut c, &dir, json!({"force": true})).await.unwrap();
+    assert_eq!(r["site"]["project_file_kind"], "project", "{r}");
+    assert_eq!(std::fs::read(&managed).unwrap(), before);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_refuses_a_symlinked_managed_file() {
+    let d = prepared("").await;
+    let dir = d.project("ee");
+    let target = d.projects.path().join("dotfiles.yard");
+    std::fs::write(&target, format!("php = \"8.4\"\nproject = {:?}\n", dir.display().to_string())).unwrap();
+    let managed = d.fx.paths.managed_project_file("ee");
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &managed).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    // Read through the link it serves; written through, never.
+    assert_eq!(site(&mut c, "ee").await["project_file_kind"], "managed");
+    let before = std::fs::read(&target).unwrap();
+    let e = init_managed(&mut c, &dir, json!({"force": true})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
+    assert_eq!(std::fs::read(&target).unwrap(), before);
+    assert!(managed.symlink_metadata().unwrap().file_type().is_symlink());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_writes_project_as_sites_toml_spells_it() {
+    let d = prepared("").await;
+    let real = d.projects.path().join("real-ee");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = d.projects.path().join("ee");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let mut file = yard_core::config::TomlFile::load(&d.fx.paths.sites_toml()).unwrap();
+    file.set(&["sites", "ee", "path"], toml_edit::value(link.display().to_string()));
+    file.save().unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let r = init_managed(&mut c, &real, json!({})).await.unwrap();
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains(&format!("project = {:?}", link.display().to_string())), "{text}");
+    assert_eq!(r["site"]["project_file_kind"], "managed", "{r}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn init_replace_backs_up_another_projects_managed_file() {
+    let d = prepared("").await;
+    let a = d.project("app");
+    let managed = write_managed(&d, "app", &a, "php = \"8.4\"\n");
+    let old = std::fs::read(&managed).unwrap();
+    let b = d.projects.path().join("b");
+    std::fs::create_dir_all(&b).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = init_managed(&mut c, &b, json!({"name": "app"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::SiteNameTaken, "{e:?}");
+    assert_eq!(std::fs::read(&managed).unwrap(), old);
+    let r = init_managed(&mut c, &b, json!({"name": "app", "replace": true})).await.unwrap();
+    let backup = managed.with_file_name(".yard-backup");
+    assert_eq!(std::fs::read(&backup).unwrap(), old);
+    assert_eq!(r["backup"], backup.display().to_string(), "{r}");
+    let text = std::fs::read_to_string(&managed).unwrap();
+    assert!(
+        text.contains(&format!("project = {:?}", b.canonicalize().unwrap().display().to_string())),
+        "{text}"
+    );
+    assert_eq!(r["site"]["project_file_kind"], "managed", "{r}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn link_adopts_a_matching_managed_file_and_names_another() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    d.fx.add_php("7.4");
+    let a = d.projects.path().join("app");
+    std::fs::create_dir_all(&a).unwrap();
+    let a = a.canonicalize().unwrap();
+    write_managed(&d, "app", &a, "php = \"7.4\"\n");
+    // sites.toml carries a php the file now owns.
+    let mut file = yard_core::config::TomlFile::load(&d.fx.paths.sites_toml()).unwrap();
+    file.set(&["sites", "app", "php"], toml_edit::value("8.4"));
+    file.save().unwrap();
+    let s = c.call("sites.link", json!({"name": "app", "path": a.display().to_string()})).await.unwrap();
+    assert_eq!((s["php"].as_str(), s["project_file_kind"].as_str()), (Some("7.4"), Some("managed")), "{s}");
+    let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+    assert!(!toml.contains("php ="), "{toml}");
+    c.call("sites.unlink", json!({"name": "app"})).await.unwrap();
+    let b = d.projects.path().join("b");
+    std::fs::create_dir_all(&b).unwrap();
+    let s = c.call("sites.link", json!({"name": "app", "path": b.display().to_string()})).await.unwrap();
+    assert_eq!(s["php"], "8.4", "{s}");
+    assert_eq!(s["ignored_managed_file"]["because"], "other_project", "{s}");
+    assert_eq!(s["ignored_managed_file"]["project"], a.display().to_string(), "{s}");
+    d.shutdown().await.unwrap();
 }
 
 #[tokio::test]

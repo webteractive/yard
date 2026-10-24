@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use toml_edit::value;
 use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::project::FILE as PROJECT_FILE;
+use yard_core::project::{FILE as PROJECT_FILE, FileKind};
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
@@ -206,6 +206,9 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
     })
 }
 
+/// Links the directory. When the name's managed `.yard` is for it, the site is served from
+/// that file, which owns its settings: `php`, `secure` and `docroot` leave `sites.toml`,
+/// as `init` moves them (managed-file spec §5).
 async fn link(ctx: &Context, p: LinkParams) -> Result<SiteInfo, YardError> {
     valid_name(&p.name)?;
     let dir = directory(&p.path)?;
@@ -215,6 +218,16 @@ async fn link(ctx: &Context, p: LinkParams) -> Result<SiteInfo, YardError> {
         Ok(())
     })?;
     reconcile(ctx).await?;
+    let managed = snapshot(ctx).await?.projects.get(&p.name).is_some_and(|l| l.kind == FileKind::Managed);
+    if managed {
+        TomlFile::edit(&ctx.paths.sites_toml(), |file| {
+            for key in ["php", "secure", "docroot"] {
+                file.remove(&["sites", &p.name, key]);
+            }
+            Ok(())
+        })?;
+        reconcile(ctx).await?;
+    }
     site(ctx, &p.name).await
 }
 

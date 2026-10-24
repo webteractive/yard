@@ -7,8 +7,18 @@ use serde_json::{Value, json};
 use yard_proto::methods::{self, ExtAddParams, InitParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
-pub async fn init(ctx: &Ctx, name: Option<String>, force: bool, replace: bool, yes: bool) -> Outcome {
-    let mut params = InitParams { path: cwd()?.display().to_string(), name, force, replace };
+/// `yard init`'s flags.
+pub struct InitArgs {
+    pub name: Option<String>,
+    pub force: bool,
+    pub replace: bool,
+    pub yes: bool,
+    pub local: bool,
+}
+
+pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
+    let InitArgs { name, force, replace, yes, local } = args;
+    let mut params = InitParams { path: cwd()?.display().to_string(), name, force, replace, local };
     let mut client = ctx.client().await?;
     let mut result: InitResult = match client.call(methods::SITES_INIT, &params).await {
         // The name serves another directory and this one has its own .yard: ask first.
@@ -26,9 +36,13 @@ pub async fn init(ctx: &Ctx, name: Option<String>, force: bool, replace: bool, y
         if let Some(from) = &result.moved_from {
             println!("Moved {} here from {from}.", result.site.name);
         }
-        match result.written {
-            true => println!("Wrote {}:", result.file),
-            false => println!("{} is already there:", result.file),
+        if let Some(backup) = &result.backup {
+            println!("Kept the old file as {backup}.");
+        }
+        match (&result.from_managed, result.written) {
+            (Some(from), _) => println!("Moved {from} to {}:", result.file),
+            (None, true) => println!("Wrote {}:", result.file),
+            (None, false) => println!("{} is already there:", result.file),
         }
         for line in result.text.lines() {
             println!("  {line}");

@@ -115,6 +115,9 @@ pub struct InitParams {
     pub force: bool,
     #[serde(default)]
     pub replace: bool,
+    /// Write `.yard` into the project instead of the managed one in Yard's data root.
+    #[serde(default)]
+    pub local: bool,
 }
 
 /// `sites.secure` and `sites.unsecure`.

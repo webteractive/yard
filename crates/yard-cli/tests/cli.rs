@@ -916,8 +916,61 @@ fn init_without_needs_prints_file_and_url() {
     let params = d.params("sites.init");
     assert_eq!(params.len(), 1);
     assert_eq!((params[0]["name"].clone(), params[0]["force"].clone()), (json!(null), json!(false)));
+    assert_eq!(params[0]["local"], false, "the managed file is the default");
     let path = Path::new(params[0]["path"].as_str().unwrap()).canonicalize().unwrap();
     assert_eq!(path, projects.path().canonicalize().unwrap());
+}
+
+#[test]
+fn init_local_sends_local_and_prints_a_move() {
+    let mut result = init_result(project_site(json!([])));
+    result["from_managed"] = json!("/r/sites/blog/.yard");
+    let d = MockDaemon::start(&[("sites.init", Ok(result))]);
+    let out = d.yard().args(["init", "--local"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).starts_with("Moved /r/sites/blog/.yard to /Users/me/code/blog/.yard:\n  # .yard:"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(d.params("sites.init")[0]["local"], true);
+}
+
+#[test]
+fn init_names_the_backup_a_replace_kept() {
+    let mut result = init_result(project_site(json!([])));
+    result["backup"] = json!("/r/sites/blog/.yard-backup");
+    let d = MockDaemon::start(&[("sites.init", Ok(result))]);
+    let out = d.yard().args(["init", "--replace"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).starts_with("Kept the old file as /r/sites/blog/.yard-backup.\n"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn link_names_the_managed_file_it_uses_or_ignores() {
+    let mut site = serde_json::to_value(sites().remove(0)).unwrap();
+    site["project_file"] = json!("/r/sites/blog/.yard");
+    site["project_file_kind"] = json!("managed");
+    let d = MockDaemon::start(&[("sites.link", Ok(site))]);
+    let out = d.yard().args(["link", "blog"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).ends_with("Using /r/sites/blog/.yard\n"), "{}", stdout(&out));
+
+    let mut site = serde_json::to_value(sites().remove(0)).unwrap();
+    site["ignored_managed_file"] =
+        json!({"file": "/r/sites/blog/.yard", "because": "other_project", "project": "/code/old-blog"});
+    let d = MockDaemon::start(&[("sites.link", Ok(site))]);
+    let out = d.yard().args(["link", "blog"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).ends_with("/r/sites/blog/.yard is for /code/old-blog, so it is not used here.\n"),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]

@@ -9,7 +9,9 @@ use yard_core::sites::host_label;
 use yard_proto::methods::{
     self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams, SiteParams,
 };
-use yard_proto::{CaInfo, ErrorCode, SiteInfo, SiteKind, SiteSource, YardError};
+use yard_proto::{
+    CaInfo, ErrorCode, IgnoredBecause, ProjectFileKind, SiteInfo, SiteKind, SiteSource, YardError,
+};
 
 pub async fn list(ctx: &Ctx) -> Outcome {
     let sites: Vec<SiteInfo> = ctx.client().await?.call(methods::SITES_LIST, Value::Null).await?;
@@ -47,18 +49,32 @@ pub async fn link(ctx: &Ctx, name: Option<String>, yes: bool) -> Outcome {
     let name = name.map_or_else(|| name_of(&dir), Ok)?;
     let params = LinkParams { name, path: dir.display().to_string() };
     let site: SiteInfo = ctx.client().await?.call(methods::SITES_LINK, params).await?;
+    let note = managed_note(&site);
     if !site.needs_setup() {
-        ctx.emit(&site, || format!("Linked {} → {}\n", dir.display(), site.url));
+        ctx.emit(&site, || format!("Linked {} → {}\n{note}", dir.display(), site.url));
         return Ok(0);
     }
     if !ctx.json {
-        println!("Linked {}.", dir.display());
+        print!("Linked {}.\n{note}", dir.display());
     }
     let site = init::settle(ctx, site, yes).await?;
     if ctx.json {
         ctx.emit(&site, String::new);
     }
     Ok(0)
+}
+
+/// The managed `.yard` a link serves from, or one for another directory it leaves alone
+/// (managed-file spec §5); empty otherwise.
+fn managed_note(site: &SiteInfo) -> String {
+    match (&site.project_file_kind, &site.project_file, &site.ignored_managed_file) {
+        (Some(ProjectFileKind::Managed), Some(file), _) => format!("Using {file}\n"),
+        (_, _, Some(i)) if i.because == IgnoredBecause::OtherProject => {
+            let project = i.project.as_deref().unwrap_or("no project");
+            format!("{} is for {project}, so it is not used here.\n", i.file)
+        }
+        _ => String::new(),
+    }
 }
 
 pub async fn unlink(ctx: &Ctx, name: Option<String>) -> Outcome {
