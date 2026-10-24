@@ -240,7 +240,10 @@ pub fn ppid(pid: u32) -> u32 {
 pub fn served(port: u16) -> bool {
     use std::io::Read;
     let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return false };
-    s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    // macOS answers EINVAL when the peer has already closed the socket: it was served.
+    if s.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
+        return true;
+    }
     s.read_to_end(&mut Vec::new()).is_ok()
 }
 

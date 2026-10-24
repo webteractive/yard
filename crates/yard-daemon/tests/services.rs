@@ -109,7 +109,7 @@ async fn stopped_instance_stays_stopped() {
     reconcile(&mut c).await;
     reconcile(&mut c).await;
     assert!(unit(&mut c, "redis").await.is_none(), "no unit for an instance the user stopped");
-    assert!(state_is(&mut c, "nginx", "running").await, "everything else runs");
+    assert!(reaches(&mut c, "nginx", "running").await.is_ok(), "everything else runs");
     d.shutdown().await.unwrap();
 }
 
@@ -343,7 +343,7 @@ async fn missing_keg_is_a_warning_not_a_unit() {
 
     reconcile(&mut c).await;
     assert!(unit(&mut c, "redis").await.is_none());
-    assert!(state_is(&mut c, "nginx", "running").await, "a missing keg stops nothing else");
+    assert!(reaches(&mut c, "nginx", "running").await.is_ok(), "a missing keg stops nothing else");
     d.shutdown().await.unwrap();
 }
 
@@ -1228,7 +1228,7 @@ async fn stop_stops_the_unit_and_start_clears_stopped() {
     assert!(services_text(&d).contains("stopped = true"), "{}", services_text(&d));
     assert!(unit(&mut c, "redis").await.is_none(), "reconcile dropped the unit");
     assert!(wait_until(|| !served(port), Duration::from_secs(10)).await, "the port is free again");
-    assert!(state_is(&mut c, "nginx", "running").await, "everything else runs");
+    assert!(reaches(&mut c, "nginx", "running").await.is_ok(), "everything else runs");
 
     let info = c.call("services.start", json!({"name": "redis"})).await.unwrap();
     assert_eq!(info["stopped_by_user"], json!(false));
