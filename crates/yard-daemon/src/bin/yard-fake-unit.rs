@@ -684,11 +684,30 @@ fn find_broken(dir: &Path) -> Option<PathBuf> {
         if path.is_dir() {
             find_broken(&path)
         } else {
-            let broken = path.extension().is_some_and(|e| e == "conf")
-                && std::fs::read_to_string(&path).is_ok_and(|t| t.contains("yard-test-broken"));
-            broken.then_some(path)
+            if path.extension().is_none_or(|e| e != "conf") {
+                return None;
+            }
+            let text = std::fs::read_to_string(&path).ok()?;
+            if text.contains("yard-test-broken") {
+                return Some(path);
+            }
+            // Like real nginx, a file a conf includes from outside the prefix is tested too
+            // (MinIO's `services/minio/overrides.conf`).
+            included(&text)
+                .into_iter()
+                .find(|file| std::fs::read_to_string(file).is_ok_and(|t| t.contains("yard-test-broken")))
         }
     })
+}
+
+/// The single files `include "<path>";` lines name; globs (`sites/*.conf`) are left to the walk.
+fn included(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .filter_map(|l| l.trim().strip_prefix("include "))
+        .map(|rest| rest.trim().trim_end_matches(';').trim().trim_matches('"'))
+        .filter(|file| !file.contains('*'))
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// The first `ssl_certificate` or `ssl_certificate_key` file a conf under `dir` names

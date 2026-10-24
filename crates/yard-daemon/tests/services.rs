@@ -206,6 +206,72 @@ async fn minio_gets_its_host() {
     d.shutdown().await.unwrap();
 }
 
+/// `status`'s `config_error.code`, polled until it is `want` (or 5 s pass).
+async fn config_error_becomes(c: &mut Client, want: Value) -> Value {
+    let mut code = Value::Null;
+    for _ in 0..100 {
+        code = c.call("status", Value::Null).await.unwrap()["config_error"]["code"].clone();
+        if code == want {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    code
+}
+
+#[tokio::test]
+async fn minios_override_is_tested_and_applied_like_a_sites() {
+    // `services/minio/overrides.conf` is an nginx include (minio.<tld>'s block), so a bad line
+    // must meet `nginx -t` when it is written, not at the next yardd start.
+    let (api, console) = (free_port(), free_port());
+    let d = prepared(&(pin("minio", api) + &pin("minio-console", console))).await;
+    d.fx.add_formula("minio");
+    d.fx.add_service("minio", "minio/stable/minio", false);
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    reaches(&mut c, "minio", "running").await.expect("minio runs");
+    let nginx = reaches(&mut c, "nginx", "running").await.expect("nginx runs");
+    let overrides = d.fx.paths.service_overrides("minio");
+    let seeded = std::fs::read_to_string(&overrides).unwrap();
+    assert!(seeded.starts_with("# USER-OWNED") && seeded.contains("nginx -t"), "{seeded}");
+
+    std::fs::write(&overrides, "yard-test-broken;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
+    let status = c.call("status", Value::Null).await.unwrap();
+    let message = status["config_error"]["message"].as_str().unwrap_or_default().to_string();
+    assert!(message.contains("nginx keeps serving the config it had"), "{message}");
+    assert_eq!(unit(&mut c, "nginx").await.unwrap()["pid"], nginx["pid"], "nginx kept running");
+    assert!(state_is(&mut c, "minio", "running").await, "and so did minio");
+    assert!(state_is(&mut c, "php-fpm-8.4", "running").await, "and the site");
+
+    std::fs::write(&overrides, "client_max_body_size 1G;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, Value::Null).await, Value::Null);
+    assert_eq!(unit(&mut c, "nginx").await.unwrap()["pid"], nginx["pid"], "reloaded, not restarted");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_minio_added_later_has_its_override_watched() {
+    let (api, console) = (free_port(), free_port());
+    let d = prepared(&(pin("minio", api) + &pin("minio-console", console))).await;
+    d.fx.add_formula("minio");
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    // As `yard service add minio` leaves it: the entry appears once yardd is running.
+    d.fx.add_service("minio", "minio/stable/minio", false);
+    reaches(&mut c, "minio", "running").await.expect("minio runs");
+    // Written at once: the watch on its directory may start only after this, and yardd tests
+    // nginx once when it adds the watch, so the edit is caught either way.
+    std::fs::write(d.fx.paths.service_overrides("minio"), "yard-test-broken;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
+    // Only the watch sees this one.
+    std::fs::write(d.fx.paths.service_overrides("minio"), "client_max_body_size 1G;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, Value::Null).await, Value::Null);
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn minio_is_https_under_secure_by_default() {
     let (api, console) = (free_port(), free_port());

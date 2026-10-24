@@ -380,7 +380,8 @@ profile; Yard does not edit dotfiles.
   reloaded with `SIGHUP`. It stops when `yardd` stops.
 - Every config change runs `nginx -t` (as the user, from `yardd`) before
   reload; on failure the previous config set is restored and the error returned.
-- `yardd` watches `nginx/overrides/`. An edited override is checked with
+- `yardd` watches `nginx/overrides/`, and MinIO's `services/minio/overrides.conf`, which
+  `minio.<tld>`'s block includes (M4b). An edited override is checked with
   `nginx -t` and reloaded; a rejected one leaves nginx serving the old config
   and is reported as `NGINX_CONFIG_INVALID` by `status` and `doctor` until it
   is fixed. `yard restart nginx` checks the config first and refuses a broken one.

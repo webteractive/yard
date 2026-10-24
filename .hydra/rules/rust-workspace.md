@@ -30,7 +30,8 @@ triggers:
 - Tests use a temp `YARD_ROOT`, OS-assigned free ports and `yard-fake-unit` (via
   `argv[0]` it stands in for nginx, dnsmasq and php-fpm, and for the service engines
   (`mysqld`, `postgres`, `initdb`, `redis-server`, `minio`), and reads the configs Yard
-  rendered). Its nginx runs in the foreground; with `NGINX` set it serves on every
+  rendered). Its nginx `-t` fails on `yard-test-broken` in any `.conf` under its prefix or in a single file
+  an `include` there names (as real nginx follows includes). Its nginx runs in the foreground; with `NGINX` set it serves on every
   inherited socket and logs real nginx's `using inherited sockets from` line, which
   `support::inherited_starts` counts. A bare connect cannot prove inheritance, since
   yardd's own copy of the listener accepts it into the backlog. Like real nginx it

@@ -146,8 +146,8 @@ pub fn init_command(
 /// What `services/<i>/overrides.conf` starts as, for the engines that include it; Yard creates
 /// it once with this and never writes it again. `None` for PostgreSQL, whose user file is
 /// `postgresql.conf` in its data directory (spec 5.2). MySQL's needs a group header before any
-/// setting, or mysqld exits at startup, so it starts with `[mysqld]`. Redis's include and
-/// MinIO's (an nginx include for `minio.<tld>`) take bare lines.
+/// setting, or mysqld exits at startup, so it starts with `[mysqld]`. Redis's include takes bare
+/// lines. MinIO's is not MinIO's at all: nginx includes it in `minio.<tld>`'s block, so it says so.
 pub fn user_overrides(engine: Engine) -> Option<&'static str> {
     match engine {
         Engine::Mysql => Some(
@@ -155,7 +155,13 @@ pub fn user_overrides(engine: Engine) -> Option<&'static str> {
              # mysqld needs a group before any setting: put yours under [mysqld].\n\
              [mysqld]\n",
         ),
-        Engine::Redis | Engine::Minio => Some(""),
+        Engine::Redis => Some(""),
+        // The TLD can change and this file is never rewritten, so it names no host.
+        Engine::Minio => Some(
+            "# USER-OWNED — Yard never rewrites this file. nginx includes it in the server block for\n\
+             # MinIO's console (minio.<tld>), so nginx directives go here. Yard tests them with\n\
+             # nginx -t when you save, and keeps the last good config if they fail.\n",
+        ),
         Engine::Postgres => None,
     }
 }
@@ -351,6 +357,9 @@ mod tests {
         assert_eq!(mysql.lines().find(|l| !l.starts_with('#')), Some("[mysqld]"));
         assert_eq!(user_overrides(Engine::Redis), Some(""));
         assert_eq!(user_overrides(Engine::Postgres), None, "PostgreSQL's file is postgresql.conf");
+        // nginx includes MinIO's: comments only, and it names the host.
+        let minio = user_overrides(Engine::Minio).unwrap();
+        assert!(minio.lines().all(|l| l.starts_with('#')) && minio.contains("nginx -t"), "{minio}");
     }
 
     #[test]

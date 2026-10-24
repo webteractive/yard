@@ -70,8 +70,12 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   (`nginx::NginxCommand::test`). On failure, roll back the whole write set and return
   `NGINX_CONFIG_INVALID` with nginx's output. An nginx that cannot run at all is a
   warning on reconcile and a refusal on `yard restart nginx`.
-- User overrides are applied too: the watcher sees `nginx/overrides/` and calls
-  `Reconciler::apply_overrides`, which runs `nginx -t` and reloads only if it passes.
+- User overrides are applied too: the watcher sees `nginx/overrides/`, and the `overrides.conf`
+  of every instance nginx includes it for (MinIO's, in `minio.<tld>`'s block; `watch.rs`
+  `nginx_include_dirs`, re-read when `services.toml` changes, with one `nginx -t` after a watch is
+  added), and calls `Reconciler::apply_overrides`, which runs `nginx -t` and reloads only if it
+  passes. MySQL's and Redis's `overrides.conf` are not watched: a restart of the instance applies
+  them.
   `yard restart nginx` tests first and refuses a broken config, so a typo in an
   override never takes sites down.
 - A TOML parse error never takes sites down. Keep the last good snapshot and report

@@ -1,7 +1,10 @@
 //! FSEvents on the four TOML files and each linked project's `.yard`; any change
 //! reconciles. The project directories are read from `sites.toml` at start and again
 //! whenever it changes. An edit
-//! in `nginx/overrides/` is tested with `nginx -t` and, if it passes, reloaded. Every
+//! in `nginx/overrides/`, or of an instance's `overrides.conf` that nginx includes (MinIO's,
+//! in `minio.<tld>`'s block), is tested with `nginx -t` and, if it passes, reloaded. Those
+//! instance directories are read from `services.toml` the same way. The other engines'
+//! `overrides.conf` are not watched: a restart of the instance applies them. Every
 //! `rescan`, sites whose docroot appeared or vanished since are reconciled too.
 //!
 //! Only those paths count. Yard's own writes under `nginx/`, `php/` and `state/` must not
@@ -38,9 +41,12 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
             .map(|p| canonical(p))
             .collect();
     let sites_toml = canonical(&ctx.paths.sites_toml());
+    let services_toml = canonical(&ctx.paths.services_toml());
     let mut projects = project_dirs(&ctx.paths);
+    let mut includes = nginx_include_dirs(&ctx.paths);
     let mut watch = vec![canonical(ctx.paths.root()), overrides.clone()];
     watch.extend(projects.iter().cloned());
+    watch.extend(includes.iter().cloned());
     change_watches(&debouncer, watch, vec![]).await;
 
     tokio::spawn(async move {
@@ -77,14 +83,29 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
                 projects = now;
             }
             let relevant = changed.iter().any(|p| tomls.contains(p) || is_project_file(p, &projects));
-            let overridden = events.iter().any(|e| canonical(&e.path).parent() == Some(overrides.as_path()));
+            let overridden = changed
+                .iter()
+                .any(|p| p.parent() == Some(overrides.as_path()) || is_nginx_include(p, &includes));
             if relevant {
                 match ctx.reconciler.reconcile().await {
                     Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
                     Err(e) => tracing::warn!("reconcile after a change: {}", describe(&e)),
                 }
             }
-            if overridden && let Err(e) = ctx.reconciler.apply_overrides().await {
+            // After the reconcile, which creates a new instance's directory and file. An edit
+            // made before the new watch started is not reported, so test nginx once after it.
+            let mut added = false;
+            if changed.contains(&services_toml) {
+                let now = nginx_include_dirs(&ctx.paths);
+                let add: Vec<PathBuf> = now.difference(&includes).cloned().collect();
+                let remove = includes.difference(&now).cloned().collect();
+                added = !add.is_empty();
+                change_watches(&debouncer, add, remove).await;
+                includes = now;
+            }
+            if (overridden || added)
+                && let Err(e) = ctx.reconciler.apply_overrides().await
+            {
                 tracing::warn!("applying an override edit: {}", describe(&e));
             }
         }
@@ -98,6 +119,27 @@ type Watcher = Arc<Mutex<Debouncer<RecommendedWatcher>>>;
 fn project_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
     let Ok(sites) = yard_core::config::load_sites(paths) else { return BTreeSet::new() };
     sites.sites.values().filter_map(|e| e.path.as_deref()).filter(|p| p.is_dir()).map(canonical).collect()
+}
+
+/// The directories of the instances whose `overrides.conf` nginx includes: MinIO's, which
+/// `minio.<tld>`'s block ends with. Canonical, and only those that exist; none while
+/// `services.toml` does not parse.
+fn nginx_include_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
+    let Ok(services) = yard_core::config::load_services(paths) else { return BTreeSet::new() };
+    services
+        .services
+        .iter()
+        .filter(|(_, entry)| entry.engine == yard_core::services::Engine::Minio)
+        .map(|(instance, _)| paths.service_dir(instance))
+        .filter(|dir| dir.is_dir())
+        .map(|dir| canonical(&dir))
+        .collect()
+}
+
+/// An instance's `overrides.conf` in one of `dirs` (`nginx_include_dirs`).
+fn is_nginx_include(path: &Path, dirs: &BTreeSet<PathBuf>) -> bool {
+    path.file_name().is_some_and(|n| n == "overrides.conf")
+        && path.parent().is_some_and(|dir| dirs.contains(dir))
 }
 
 fn is_project_file(path: &Path, projects: &BTreeSet<PathBuf>) -> bool {

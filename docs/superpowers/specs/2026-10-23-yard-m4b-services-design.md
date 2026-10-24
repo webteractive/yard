@@ -236,6 +236,16 @@ Projects that need a stable MySQL use a versioned line.
   for 80/443), not the console's own port; it is `https` under `secure_by_default`, and absent
   while a site holds the name. The certificate is `certs/services/minio.pem`, issued by
   reconcile and renewed by the periodic scan like a site's.
+- **Its `overrides.conf` is nginx's, not MinIO's.** The block ends with `include
+  <root>/services/minio/overrides.conf`, so the file holds nginx directives for `minio.<tld>` and
+  is seeded with a comment saying so. yardd watches it as it watches `nginx/overrides/<site>.conf`:
+  an edit is tested with `nginx -t` within about 2 s and reloaded, and a failing one keeps the last
+  good config and is reported as `NGINX_CONFIG_INVALID` by `status` and `doctor` (review I4,
+  2026-10-24). The watch on `services/minio/` is added when `services.toml` gains the instance,
+  and nginx is tested once then, so an edit made before the watch started is not missed. The other
+  engines' `overrides.conf` are not watched: `yard service restart <i>` applies them. As with a
+  site's override, a bad line still on disk when yardd starts fails its first reconcile's
+  `nginx -t`, and that reconcile starts no unit until the file is fixed.
 
 ## 6. Ports
 
