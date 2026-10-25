@@ -402,11 +402,19 @@ fn managed_checks(paths: &Paths, sites: &[SiteInfo]) -> Vec<Check> {
     orphans.sort();
     for name in orphans {
         let file = paths.managed_project_file(&name);
+        // `yard link` links the directory it runs in: the one the file was written for.
+        let project = crate::project::read_project_file(&file)
+            .and_then(Result::ok)
+            .and_then(|text| yard_core::project::parse_managed(&text, &file).ok()?.1);
+        let hint = match project {
+            Some(dir) => format!("cd {} && yard link {name}", dir.display()),
+            None => format!("yard link {name}"),
+        };
         checks.push(Check {
             id: format!("managed-file-orphan:{name}"),
             status: CheckStatus::Ok,
             message: format!("{} belongs to no linked site", file.display()),
-            hint: Some(format!("yard link {name}")),
+            hint: Some(hint),
         });
     }
     checks

@@ -584,13 +584,19 @@ async fn a_managed_file_with_no_linked_site_is_reported_without_a_warning() {
     std::fs::write(e.fx.paths.sites_toml(), "[sites.api]\nproxy = \"http://127.0.0.1:3000\"\n").unwrap();
     let api = e.managed("api", "php = \"7.4\"\nproject = \"/code/api\"\n");
     std::fs::create_dir_all(e.fx.paths.managed_sites_dir().join("empty")).unwrap();
+    let nameless = e.managed("nameless", "php = \"7.4\"\n");
 
     let report = e.offline(&e.helper).await;
-    for (name, file) in [("gone", &gone), ("api", &api)] {
+    // The hint runs yard link where the file was written for, when it says.
+    for (name, file, hint) in [
+        ("gone", &gone, "cd /code/gone && yard link gone"),
+        ("api", &api, "cd /code/api && yard link api"),
+        ("nameless", &nameless, "yard link nameless"),
+    ] {
         let c = only(&report, &format!("managed-file-orphan:{name}"));
         assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
         assert_eq!(c.message, format!("{} belongs to no linked site", file.display()));
-        assert_eq!(c.hint.as_deref(), Some(format!("yard link {name}").as_str()));
+        assert_eq!(c.hint.as_deref(), Some(hint));
     }
     assert!(!report.checks.iter().any(|c| c.id == "managed-file-orphan:empty"));
     not_present(&report, "managed-file-mismatch");
