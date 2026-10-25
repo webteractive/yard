@@ -112,6 +112,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         std::fs::create_dir_all(&dir)
             .map_err(|e| YardError::internal(format!("cannot create {}: {e}", dir.display())))?;
     }
+    private_root(opts.paths.root())?;
     let bus = EventBus::new();
     let helper = HelperClient::new(&opts.helper_socket);
     let brew = Brew::new(&opts.brew_prefix);
@@ -172,6 +173,23 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     ctx.supervisor().sockets().release_except(&[]);
     let _ = std::fs::remove_file(&socket);
     Ok(())
+}
+
+/// Keeps the data root `0700`. `~/.yard` sits in a home folder other local users can list,
+/// and the root holds logs, configs and service data that no one else should read; the keys
+/// and sockets in it carry their own `0600` as well.
+fn private_root(root: &Path) -> Result<(), YardError> {
+    let mode = std::fs::metadata(root)
+        .map_err(|e| YardError::internal(format!("cannot read {}: {e}", root.display())))?
+        .permissions()
+        .mode();
+    if mode & 0o077 == 0 {
+        return Ok(());
+    }
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+        YardError::internal(format!("cannot make {} private: {e}", root.display()))
+            .with_hint(format!("chmod 700 {}", root.display()))
+    })
 }
 
 /// A socket that still answers belongs to a running yardd; one that refuses is stale.

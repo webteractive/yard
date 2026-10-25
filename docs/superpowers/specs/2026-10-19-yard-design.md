@@ -130,6 +130,8 @@ live. Side effects (spawning, binding, brew) live in `yard-daemon`.
 
 Root: `~/.yard/` (moved from `~/Library/Application Support/Yard/` by the maintainer on 2026-10-25, so
 no path Yard writes or runs from has a space in it; `YARD_ROOT` or `--root` overrides it).
+yardd keeps the root `0700` at every start, since a home folder is often readable by other
+local users and the old location inherited `~/Library`'s `0700`.
 
 ```
 yard.toml                     # global: default php, tld override, secure_by_default, [php."<ver>".extensions]

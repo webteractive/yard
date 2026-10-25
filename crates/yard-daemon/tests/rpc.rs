@@ -365,6 +365,18 @@ async fn overlong_socket_path_is_reported() {
 }
 
 #[tokio::test]
+async fn the_data_root_is_private_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = prepared("").await;
+    let root = d.fx.paths.root().to_path_buf();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let d = d.start().await;
+    let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{mode:o}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn shutdown_removes_socket_and_stops_units() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;
