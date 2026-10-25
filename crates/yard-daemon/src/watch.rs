@@ -148,7 +148,8 @@ fn managed_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
     let root = paths.managed_sites_dir();
     let names: Vec<String> =
         yard_core::config::load_sites(paths).map(|s| s.sites.into_keys().collect()).unwrap_or_default();
-    let sites = names.iter().map(|name| root.join(name)).filter(|dir| dir.is_dir());
+    let names = names.iter().filter(|name| yard_core::sites::is_site_name(name));
+    let sites = names.map(|name| root.join(name)).filter(|dir| dir.is_dir());
     std::iter::once(root.clone()).chain(sites).map(|dir| canonical(&dir)).collect()
 }
 
@@ -215,5 +216,23 @@ fn canonical(path: &Path) -> PathBuf {
     match (path.parent().and_then(|d| std::fs::canonicalize(d).ok()), path.file_name()) {
         (Some(dir), Some(name)) => dir.join(name),
         _ => path.to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_dirs_skip_a_name_that_is_not_a_site_name() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = yard_core::Paths::new(root.path());
+        std::fs::create_dir_all(root.path().join("escape")).unwrap();
+        std::fs::create_dir_all(paths.managed_sites_dir().join("ee")).unwrap();
+        let sites = "[sites.\"../escape\"]\npath = \"/code/x\"\n[sites.ee]\npath = \"/code/ee\"\n";
+        std::fs::write(paths.sites_toml(), sites).unwrap();
+        let dirs = managed_dirs(&paths);
+        let sites_dir = canonical(&paths.managed_sites_dir());
+        assert_eq!(dirs, BTreeSet::from([sites_dir.clone(), sites_dir.join("ee")]));
     }
 }

@@ -24,6 +24,13 @@ pub fn host_label(dir_name: &str) -> Option<String> {
         .then_some(label)
 }
 
+/// Whether `name`, a key of `sites.toml`, is a site name Yard serves: a host label as
+/// `host_label` makes one. Only those name a directory under the data root, so a
+/// hand-written `"/etc"` or `"../x"` never becomes a path.
+pub fn is_site_name(name: &str) -> bool {
+    host_label(name).as_deref() == Some(name)
+}
+
 pub fn detect_docroot(project: &Path, is_dir: &dyn Fn(&Path) -> bool) -> PathBuf {
     ["public", "web", "public_html"]
         .iter()
@@ -80,7 +87,7 @@ pub fn resolve(
 
     let mut out = Vec::new();
     for (name, entry) in &sites.sites {
-        if host_label(name).as_deref() != Some(name.as_str()) {
+        if !is_site_name(name) {
             warnings.push(format!("sites.toml: {name:?} is not a valid host name; skipped"));
             continue;
         }

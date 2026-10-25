@@ -397,7 +397,7 @@ pub fn load(
 ) -> (Projects, IgnoredFiles) {
     let mut projects = Projects::new();
     let mut ignored = IgnoredFiles::new();
-    for (name, entry) in &sites.sites {
+    for (name, entry) in sites.sites.iter().filter(|(name, _)| crate::sites::is_site_name(name)) {
         let Some(path) = entry.path.as_ref() else { continue };
         let committed = path.join(FILE);
         let managed = paths.managed_project_file(name);
@@ -767,6 +767,17 @@ mod tests {
         Ok(format!(
             "# .yard for x, kept by Yard outside the project.\nphp = {php:?}\nproject = {project:?}\n"
         ))
+    }
+
+    #[test]
+    fn load_reads_no_managed_file_for_a_name_that_is_not_a_site_name() {
+        let sites = "[sites.\"/etc\"]\npath = \"/code/x\"\n[sites.\"../up\"]\npath = \"/code/up\"\n";
+        let files = Files::from([
+            (PathBuf::from("/etc/.yard"), managed("/code/x", "7.3")),
+            (PathBuf::from("/r/up/.yard"), managed("/code/up", "7.3")),
+        ]);
+        let (projects, ignored) = load_files(sites, &files);
+        assert!(projects.is_empty() && ignored.is_empty(), "{projects:?} {ignored:?}");
     }
 
     #[test]

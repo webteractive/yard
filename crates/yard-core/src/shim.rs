@@ -67,6 +67,7 @@ pub fn resolve_version(
     let containing: Vec<_> = sites
         .sites
         .iter()
+        .filter(|(name, _)| crate::sites::is_site_name(name))
         .filter_map(|(name, e)| Some((name, e, e.path.as_deref()?)))
         .filter_map(|(name, e, path)| {
             let depth = canonical(path).components().count();
@@ -349,6 +350,17 @@ php = "7.4"
             "php = \"7.3\"\nproject = \"/link/old\"\n".to_string(),
         );
         assert_eq!(at(&files), (v("7.3"), Source::Managed("/r/sites/old/.yard".into())));
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_site_name_reads_no_managed_file() {
+        let (yard, sites) = configs("[sites.\"/etc\"]\npath = \"/code/x\"\n");
+        let read = |p: &Path| {
+            (p == Path::new("/etc/.yard")).then(|| Ok("php = \"7.3\"\nproject = \"/code/x\"\n".to_string()))
+        };
+        let got = resolve_version(Path::new("/code/x/app"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap();
+        assert_eq!(got, (v("8.4"), Source::Default));
     }
 
     #[test]
