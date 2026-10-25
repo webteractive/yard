@@ -72,7 +72,13 @@ impl TomlFile {
 
     /// Removes the key, and any table above it that is left empty, so no bare header stays.
     pub fn remove(&mut self, keys: &[&str]) -> bool {
-        remove_in(self.doc.as_table_mut(), keys)
+        let (removed, comments) = remove_in(self.doc.as_table_mut(), keys);
+        // Nothing follows the key anywhere: the comments go first in what ends the file.
+        if let Some(comments) = comments {
+            let trailing = self.doc.trailing().as_str().unwrap_or_default().to_string();
+            self.doc.set_trailing(format!("{comments}{trailing}"));
+        }
+        removed
     }
 
     /// Appends `value` to the string array at `keys` unless already present.
@@ -145,29 +151,34 @@ fn implicit_table() -> Item {
     Item::Table(t)
 }
 
-fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> bool {
+/// Removes the key at `keys`, and any table left empty above it. Returns whether it was
+/// there, and the comment lines above it when no item follows it in its table or any table
+/// above, for the caller to keep; otherwise they move above the item that follows.
+fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> (bool, Option<String>) {
     let Some((first, rest)) = keys.split_first() else {
-        return false;
+        return (false, None);
     };
-    if rest.is_empty() {
+    let next = table.iter().map(|(k, _)| k.to_string()).skip_while(|k| k != first).nth(1);
+    let (removed, comments) = if rest.is_empty() {
         let comments = leading_comments(table, first);
-        let next = table.iter().map(|(k, _)| k.to_string()).skip_while(|k| k != first).nth(1);
-        if table.remove(first).is_none() {
-            return false;
+        (table.remove(first).is_some(), comments)
+    } else {
+        let Some(child) = table.get_mut(first).and_then(Item::as_table_like_mut) else {
+            return (false, None);
+        };
+        let (removed, comments) = remove_in(child, rest);
+        if removed && child.is_empty() {
+            table.remove(first);
         }
-        if let (Some(comments), Some(next)) = (comments, next) {
-            keep_comments(table, &next, &comments);
-        }
-        return true;
-    }
-    let Some(child) = table.get_mut(first).and_then(Item::as_table_like_mut) else {
-        return false;
+        (removed, comments)
     };
-    let removed = remove_in(child, rest);
-    if removed && child.is_empty() {
-        table.remove(first);
+    match (comments, next) {
+        (Some(comments), Some(next)) => {
+            keep_comments(table, &next, &comments);
+            (removed, None)
+        }
+        (comments, _) => (removed, comments),
     }
-    removed
 }
 
 /// The comment lines toml_edit keeps above `key` in its decor, which go when it is removed.
@@ -211,6 +222,28 @@ mod tests {
             f.doc().to_string(),
             "# header\n# legacy mcrypt\ndocroot = \"web\"\n# tail\n\n[x]\na = 1\n"
         );
+    }
+
+    #[test]
+    fn remove_keeps_the_comments_above_a_last_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yard");
+        // As yard isolate leaves a managed .yard: php appended last, comments after it.
+        let text = "# header\ndocroot = \"web\"\n# above php\nphp = \"7.1\"\n\n# [services]\n# keep me\n";
+        std::fs::write(&path, text).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["php"]));
+        assert_eq!(
+            f.doc().to_string(),
+            "# header\ndocroot = \"web\"\n# above php\n\n# [services]\n# keep me\n"
+        );
+
+        // The last key of a table: its comments go above what follows the table.
+        let text = "[sites.a]\npath = \"/a\"\n# a's php\nphp = \"7.1\"\n\n[sites.b]\npath = \"/b\"\n";
+        std::fs::write(&path, text).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["sites", "a", "php"]));
+        assert_eq!(f.doc().to_string(), "[sites.a]\npath = \"/a\"\n# a's php\n\n[sites.b]\npath = \"/b\"\n");
     }
 
     #[test]
