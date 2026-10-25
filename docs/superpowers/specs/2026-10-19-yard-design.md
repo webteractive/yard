@@ -816,7 +816,8 @@ Each milestone is usable on its own and gets its own implementation plan.
      `secure` and `extensions`, the setup page, and the shims following the file.
      **M4a.1** (2026-10-25) adds the managed `.yard` in Yard's data root, designed in
      `docs/superpowers/specs/2026-10-24-yard-managed-project-file-design.md` and planned in
-     `docs/superpowers/plans/2026-10-25-yard-m4a1-managed-project-file.md`.
+     `docs/superpowers/plans/2026-10-25-yard-m4a1-managed-project-file.md`; verified by
+     `scripts/e2e-m4a1.sh` on the maintainer's machine on 2026-10-25.
    - **M4b services:** MySQL, Postgres, Redis, MinIO, `yard env`, `yard info`, the
      file's `[services]`, and installs from third-party taps gated on brew's own trust
      (`yard sources`, `yard source trust|untrust`). Designed in
