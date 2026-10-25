@@ -20,7 +20,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Use this data root instead of YARD_ROOT or ~/Library/Application Support/Yard.
+    /// Use this data root instead of YARD_ROOT or ~/.yard.
     #[arg(long, global = true, value_name = "PATH")]
     pub root: Option<PathBuf>,
 

@@ -45,7 +45,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   it is built, merged into main and verified on this machine on 2026-10-25 with
   `scripts/e2e-m4a1.sh` passing (maintainer approved the run; its first pass found that
   `yard unisolate` dropped the comment above a last key, fixed in 05c77dd). Until the first
-  release, work happens on main, with no feature branches (maintainer, 2026-10-25). M4c Node still
+  release, work happens on main, with no feature branches (maintainer, 2026-10-25). The data root
+  moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
+  path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node still
   needs a plan. The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
@@ -174,7 +176,7 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
 - `scripts/e2e-m2.sh` — real-machine M2 check after `e2e-m1.sh`: brew-installs php@7.1
   and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Run PHP only as
-  `"$HOME/Library/Application Support/Yard/bin/php"`; a bare `php` here is Herd's.
+  `"$HOME/.yard/bin/php"`; a bare `php` here is Herd's.
 - `scripts/e2e-m3.sh` — real-machine M3 check after `e2e-m1.sh`: secures a scratch site and
   curls it over HTTPS with `--cacert`, so it needs no keychain trust; ask the maintainer first. Tests
   never run the real `security` or touch a keychain: `DaemonOptions.security`, the
@@ -203,7 +205,7 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Verifying a change on this machine
 
-The helper is bound to the real data root (`~/Library/Application Support/Yard`), so a
+The helper is bound to the real data root (`~/.yard`), so a
 change to serving, the helper or reconcile is only observable there, through `yard`.
 
 - `cargo build --release`, then `./target/release/yard stop && ./target/release/yard start`;

@@ -76,7 +76,7 @@ and `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in
-`~/Library/Application Support/Yard` (or `YARD_ROOT`, or `--root <path>`).
+`~/.yard` (or `YARD_ROOT`, or `--root <path>`).
 
 ## HTTPS
 

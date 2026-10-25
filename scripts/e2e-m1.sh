@@ -45,7 +45,7 @@ cleanup() {
   "$yard" unlink hello-php >/dev/null 2>&1 || true
   # The override stubs Yard created for the two sites, unless someone has edited them.
   local stub
-  for stub in "$HOME/Library/Application Support/Yard/nginx/overrides/"{hello-php,hello-proxy}.conf; do
+  for stub in "$HOME/.yard/nginx/overrides/"{hello-php,hello-proxy}.conf; do
     if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
   done
   kill "$server" 2>/dev/null || true

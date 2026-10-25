@@ -24,7 +24,7 @@ unset YARD_ROOT
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 yard="${YARD:-$repo/target/release/yard}"
 fixtures="$repo/tests/fixtures/e2e"
-data="$HOME/Library/Application Support/Yard"
+data="$HOME/.yard"
 herd_resolver=/etc/resolver/test
 site="yard-e2e-services"
 instances=(mysql-8.4 postgres-17 redis minio)

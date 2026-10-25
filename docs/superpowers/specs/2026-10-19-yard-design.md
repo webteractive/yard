@@ -128,7 +128,8 @@ live. Side effects (spawning, binding, brew) live in `yard-daemon`.
 
 ### 3.3 Data layout
 
-Root: `~/Library/Application Support/Yard/`
+Root: `~/.yard/` (moved from `~/Library/Application Support/Yard/` by the maintainer on 2026-10-25, so
+no path Yard writes or runs from has a space in it; `YARD_ROOT` or `--root` overrides it).
 
 ```
 yard.toml                     # global: default php, tld override, secure_by_default, [php."<ver>".extensions]

@@ -563,9 +563,9 @@ server {
   come from the helper.
 
 Rejected: an nginx unix socket per tunnel (cloudflared supports `unix:` origins). It skips
-the registry, but socket paths under `~/Library/Application Support/Yard/run/` plus a site
-name of up to 63 characters exceed macOS's 104-byte limit, and the space in the path is one
-more quoting hazard in cloudflared's YAML.
+the registry, and socket paths under the data root's `run/` plus a site name of up to 63
+characters can exceed macOS's 104-byte limit (the data root was
+`~/Library/Application Support/Yard` when this was decided; it is `~/.yard` since 2026-10-25).
 
 ## 10. What a tunnelled app needs
 

@@ -85,8 +85,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   parse errors too (`tld` against `valid_tld`, two units on one port), located at
   their span. Every failed reconcile is kept in `State.last_error`, which `status`
   and `doctor` report until a reconcile succeeds.
-- **Quote every path** in rendered output. The data root is
-  `~/Library/Application Support/Yard`, and that space breaks unquoted nginx, fpm and ini values.
+- **Quote every path** in rendered output. The data root is `~/.yard` by default, but
+  `YARD_ROOT` and project directories can hold spaces, which break unquoted nginx, fpm and
+  ini values (render tests keep a root with a space for that reason).
   The one exception is `!include <path>` in a service's `my.cnf`: mysqld treats a quote there as
   part of the path, so it is written bare, and the rest of the line is the path.
 - **A project's `.yard` is the project's file**, committed with it (project-file spec).

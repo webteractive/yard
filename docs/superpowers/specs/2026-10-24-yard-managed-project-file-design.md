@@ -25,7 +25,7 @@ file.
   `secure`, `extensions`, `[services]`, and from M4c `node`, plus one key of its own,
 `project` (§4).
 - **It lives at `<data root>/sites/<name>/.yard`**, keyed by the site name
-  (`~/Library/Application Support/Yard/sites/control/.yard`) **(builder's call)**. The maintainer
+  (`~/.yard/sites/control/.yard`; the data root was `~/Library/Application Support/Yard` until 2026-10-25) **(builder's call)**. The maintainer
   asked for `sites/<site>.yard/.yard`. The directory is keyed by the bare site name, not
   `<name>.<tld>`, so switching the TLD (spec §5.5) does not orphan every file. Site names are
   host labels (`sites::host_label`), so they are safe as one path segment.

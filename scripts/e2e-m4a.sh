@@ -12,7 +12,7 @@ unset YARD_ROOT
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 yard="${YARD:-$repo/target/release/yard}"
 fixtures="$repo/tests/fixtures/e2e"
-data="$HOME/Library/Application Support/Yard"
+data="$HOME/.yard"
 brew_prefix="$(brew --prefix)"
 herd_resolver=/etc/resolver/test
 site=hello-yard

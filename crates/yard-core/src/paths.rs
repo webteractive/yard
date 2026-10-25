@@ -21,7 +21,7 @@ impl Paths {
         Self { root: root.into() }
     }
 
-    /// `YARD_ROOT`, else `$HOME/Library/Application Support/Yard`.
+    /// `YARD_ROOT`, else `$HOME/.yard`.
     pub fn from_env() -> Result<Self, YardError> {
         Self::from_vars(
             std::env::var_os("YARD_ROOT").map(PathBuf::from),
@@ -32,7 +32,7 @@ impl Paths {
     pub fn from_vars(yard_root: Option<PathBuf>, home: Option<PathBuf>) -> Result<Self, YardError> {
         match (yard_root, home) {
             (Some(root), _) => Ok(Self::new(root)),
-            (None, Some(home)) => Ok(Self::new(home.join("Library/Application Support/Yard"))),
+            (None, Some(home)) => Ok(Self::new(home.join(".yard"))),
             (None, None) => Err(YardError::new(ErrorCode::Internal, "neither YARD_ROOT nor HOME is set")),
         }
     }
@@ -292,10 +292,7 @@ mod tests {
     #[test]
     fn from_root_env_prefers_yard_root() {
         assert_eq!(Paths::from_vars(Some("/x".into()), Some("/h".into())).unwrap().root(), Path::new("/x"));
-        assert_eq!(
-            Paths::from_vars(None, Some("/h".into())).unwrap().root(),
-            Path::new("/h/Library/Application Support/Yard")
-        );
+        assert_eq!(Paths::from_vars(None, Some("/h".into())).unwrap().root(), Path::new("/h/.yard"));
         assert!(Paths::from_vars(None, None).is_err());
     }
 }

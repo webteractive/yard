@@ -14,7 +14,7 @@ unset YARD_ROOT
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 yard="${YARD:-$repo/target/release/yard}"
 fixtures="$repo/tests/fixtures/e2e"
-root="$HOME/Library/Application Support/Yard"
+root="$HOME/.yard"
 shim="$root/bin/php"
 herd_resolver=/etc/resolver/test
 
