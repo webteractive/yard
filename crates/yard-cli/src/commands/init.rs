@@ -37,7 +37,8 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
         .into());
     }
     let mut result: InitResult = match client.call(methods::SITES_INIT, &params).await {
-        // The name serves another directory and this one has its own .yard: ask first.
+        // The name serves another directory and this one has its own .yard, or its managed
+        // .yard was written for another directory: ask first.
         Err(e) if e.code == ErrorCode::SiteNameTaken && interactive(ctx) => {
             println!("{}.", e.message);
             if !confirm("Replace it with this directory? [y/N] ") {

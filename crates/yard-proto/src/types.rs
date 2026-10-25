@@ -67,7 +67,8 @@ pub struct SiteInfo {
     /// then `https://`.
     #[serde(default)]
     pub secure: bool,
-    /// The project's `.yard`, when it has one; the site is then served as that file says.
+    /// The `.yard` the site is served from, when it has one: the project's own, or its
+    /// managed one in Yard's data root (`project_file_kind` says which).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_file: Option<String>,
     /// Whether `project_file` is the project's own `.yard` or the managed one in Yard's

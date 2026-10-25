@@ -102,10 +102,13 @@ pub struct DoctorParams {
     pub client_env: BTreeMap<String, String>,
 }
 
-/// `sites.init`: write `.yard` in `path` (unless it is there and `force` is unset), move
-/// the site's settings into it and link it. `name` defaults to the existing link, else
-/// the directory's name. A name another directory serves is `SITE_NAME_TAKEN` unless
-/// `replace` is set, which moves that site here and keeps how it serves.
+/// `sites.init`: write the site's `.yard`, the managed one in Yard's data root or with
+/// `local` the one in `path` (unless one is there and `force` is unset; a `.yard` in `path`
+/// always wins and is applied), move the site's settings into it and link it. `name`
+/// defaults to the existing link, else the directory's name. A name another directory
+/// serves, or whose managed `.yard` was written for another directory, is
+/// `SITE_NAME_TAKEN` unless `replace` is set, which moves that site here and keeps how it
+/// serves (and keeps the other managed file as `.yard-backup`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InitParams {
     pub path: String,
