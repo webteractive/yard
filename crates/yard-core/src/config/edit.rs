@@ -33,15 +33,23 @@ impl TomlFile {
         path: &Path,
         f: impl FnOnce(&mut TomlFile) -> Result<R, YardError>,
     ) -> Result<R, YardError> {
+        Self::locked(|| {
+            let mut file = Self::load(path)?;
+            let before = file.doc.to_string();
+            let result = f(&mut file)?;
+            if file.doc.to_string() != before {
+                file.save()?;
+            }
+            Ok(result)
+        })
+    }
+
+    /// Runs `f` under the lock `edit` takes, for a write that does not go through `edit`
+    /// (`yard init` writing a managed `.yard`) but must not lose an edit made meanwhile.
+    pub fn locked<R>(f: impl FnOnce() -> R) -> R {
         static LOCK: Mutex<()> = Mutex::new(());
         let _held = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut file = Self::load(path)?;
-        let before = file.doc.to_string();
-        let result = f(&mut file)?;
-        if file.doc.to_string() != before {
-            file.save()?;
-        }
-        Ok(result)
+        f()
     }
 
     pub fn doc(&self) -> &DocumentMut {

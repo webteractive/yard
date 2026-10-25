@@ -37,3 +37,56 @@ pub fn edit_managed(
         Ok(())
     })
 }
+
+/// Runs `write` under `TomlFile`'s lock while the managed `.yard` at `file` still holds
+/// `read`, the text `yard init` decided on (`None`: there was none). An edit made since,
+/// such as `yard isolate`'s, is never written over: init fails and is run again.
+pub fn write_if_unchanged(
+    file: &Path,
+    read: Option<&str>,
+    write: impl FnOnce() -> Result<(), YardError>,
+) -> Result<(), YardError> {
+    TomlFile::locked(|| {
+        let now = read_project_file(file).transpose()?;
+        if now.as_deref() != read {
+            return Err(YardError::new(
+                ErrorCode::InvalidArgument,
+                format!("{} changed while yard init ran", file.display()),
+            )
+            .with_hint("yard init"));
+        }
+        write()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_only_while_the_file_holds_what_was_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".yard");
+        std::fs::write(&file, "php = \"7.3\"\n").unwrap();
+        let wrote = std::cell::Cell::new(false);
+        write_if_unchanged(&file, Some("php = \"7.3\"\n"), || {
+            wrote.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(wrote.get());
+
+        // `yard isolate` changed it after init read it: init writes nothing.
+        wrote.set(false);
+        let e = write_if_unchanged(&file, Some("php = \"7.1\"\n"), || {
+            wrote.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(!wrote.get());
+        assert!(e.message.contains("changed while yard init ran"), "{e:?}");
+        assert_eq!(e.hint.as_deref(), Some("yard init"));
+        // Made since init found none.
+        assert!(write_if_unchanged(&file, None, || Ok(())).is_err());
+    }
+}

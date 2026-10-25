@@ -4,6 +4,7 @@
 
 use super::handlers::{directory, reconcile, site, snapshot, valid_name};
 use crate::daemon::Context;
+use crate::managed::write_if_unchanged;
 use crate::project::{read_project_file, read_small};
 use serde_json::json;
 use std::io::Write;
@@ -120,9 +121,11 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
             if p.force {
                 text = project::rewrite(&text, &detect(ctx, entry, &dir)?)?;
             }
-            write_project_file(&committed, &text)?;
-            std::fs::remove_file(&managed).map_err(|e| {
-                YardError::new(ErrorCode::Internal, format!("cannot remove {}: {e}", managed.display()))
+            write_if_unchanged(&managed, Some(&old), || {
+                write_project_file(&committed, &text)?;
+                std::fs::remove_file(&managed).map_err(|e| {
+                    YardError::new(ErrorCode::Internal, format!("cannot remove {}: {e}", managed.display()))
+                })
             })?;
             from_managed = Some(managed.display().to_string());
             (committed, text, true)
@@ -139,26 +142,31 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
             let text = project::set_project(&text, &site_path)?;
             let written = old != text;
             if written {
-                write_project_file(&managed, &text)?;
+                write_if_unchanged(&managed, Some(&old), || write_project_file(&managed, &text))?;
             }
             (managed, text, written)
         }
         // Another directory's (with `replace`), or none yet: a fresh one, the old one kept.
         (None, old) => {
-            if old.is_some() {
-                let kept = managed.with_file_name(".yard-backup");
-                std::fs::copy(&managed, &kept).map_err(|e| {
-                    YardError::new(ErrorCode::Internal, format!("cannot copy {}: {e}", managed.display()))
-                })?;
-                backup = Some(kept.display().to_string());
-            }
             let text = project::render_managed(&name, &site_path, &detect(ctx, entry, &dir)?);
-            if let Some(parent) = managed.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    YardError::new(ErrorCode::Internal, format!("cannot create {}: {e}", parent.display()))
-                })?;
-            }
-            write_project_file(&managed, &text)?;
+            let kept = managed.with_file_name(".yard-backup");
+            write_if_unchanged(&managed, old.as_deref(), || {
+                if old.is_some() {
+                    std::fs::copy(&managed, &kept).map_err(|e| {
+                        YardError::new(ErrorCode::Internal, format!("cannot copy {}: {e}", managed.display()))
+                    })?;
+                }
+                if let Some(parent) = managed.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        YardError::new(
+                            ErrorCode::Internal,
+                            format!("cannot create {}: {e}", parent.display()),
+                        )
+                    })?;
+                }
+                write_project_file(&managed, &text)
+            })?;
+            backup = old.is_some().then(|| kept.display().to_string());
             (managed, text, true)
         }
     };
