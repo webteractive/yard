@@ -21,6 +21,9 @@ triggers:
 - Types are defined once in `yard-proto` and used unchanged by the CLI's `--json`
   output. From M6 the Swift models are generated from their JSON Schema, so a field
   rename is a breaking change for the app too.
+- An enum a newer daemon may extend in a minor version carries a `#[serde(other)]` variant
+  the daemon never sends (`SettingSource::Other`, shown as `elsewhere`), so an older client
+  still reads the answer instead of failing on an unknown variant.
 - Adding a method touches, in one change: the `yard-proto` const and params, the daemon
   handler, the CLI command, the CLI tests' `MockDaemon`, and the method list in spec §6.2.
 - Mutations go through `TomlFile` and then `reconcile`. Handlers never write generated

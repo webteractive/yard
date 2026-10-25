@@ -1937,6 +1937,16 @@ fn info_managed_snapshot() {
 }
 
 #[test]
+fn info_names_a_source_from_a_newer_yardd_elsewhere() {
+    let mut detail = site_detail();
+    detail["sources"]["docroot"] = json!("something_new");
+    let d = MockDaemon::start(&[("sites.info", Ok(detail)), ("ext.list", Ok(ext_rows()))]);
+    let out = d.yard().arg("info").env("HOME", "/Users/me").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("from elsewhere"), "{}", stdout(&out));
+}
+
+#[test]
 fn info_for_a_proxy_shows_its_target() {
     let mut proxy = serde_json::to_value(sites().remove(1)).unwrap();
     proxy["secure"] = json!(true);

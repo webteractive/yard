@@ -495,6 +495,9 @@ pub enum SettingSource {
     ManagedFile,
     SitesToml,
     Default,
+    /// A source a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// A `[services]` entry of a site's `.yard`, with the instance that meets it.
@@ -769,7 +772,13 @@ mod tests {
         assert_eq!(v["sources"], json!({"php":"project_file"}));
         assert_eq!(serde_json::to_value(SettingSource::SitesToml).unwrap(), json!("sites_toml"));
         assert_eq!(serde_json::to_value(SettingSource::Default).unwrap(), json!("default"));
+        assert_eq!(serde_json::to_value(SettingSource::ManagedFile).unwrap(), json!("managed_file"));
         assert_eq!(serde_json::from_value::<SiteDetail>(v).unwrap(), detail);
+        // A source a newer yardd adds is read, not refused.
+        assert_eq!(
+            serde_json::from_value::<SettingSource>(json!("node_version_file")).unwrap(),
+            SettingSource::Other
+        );
 
         let src = SourceInfo {
             tap: "minio/stable".into(),
