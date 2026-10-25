@@ -103,7 +103,10 @@ async fn a_dangling_committed_symlink_does_not_fall_through() {
     let s = site(&mut c, "ee").await;
     assert_eq!(s["project_file_kind"], "project", "{s}");
     assert_eq!(s["project_error"]["code"], "PROJECT_FILE_INVALID", "{s}");
-    assert!(s["project_error"]["message"].as_str().unwrap().contains(".yard"), "{s}");
+    let committed = dir.join(".yard").display().to_string();
+    assert_eq!(s["project_file"], committed, "{s}");
+    let message = s["project_error"]["message"].as_str().unwrap();
+    assert_eq!(message, format!("{committed} is a symlink to nothing"), "{s}");
     d.shutdown().await.unwrap();
 }
 
@@ -308,6 +311,22 @@ async fn unisolate_secure_unsecure_docroot_edit_the_managed_file() {
     assert!(!read().contains("docroot ="), "{}", read());
     let toml = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
     assert!(!toml.contains("secure") && !toml.contains("docroot"), "{toml}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_broken_managed_file_is_the_sites_error_naming_it() {
+    let (d, _dir, managed) = managed_site("php = 7.3\n").await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "ee").await;
+    assert_eq!(
+        (s["project_file"].as_str(), s["project_file_kind"].as_str()),
+        (Some(managed.to_str().unwrap()), Some("managed")),
+        "{s}"
+    );
+    assert_eq!(s["project_error"]["code"], "PROJECT_FILE_INVALID", "{s}");
+    let message = s["project_error"]["message"].as_str().unwrap();
+    assert!(message.starts_with(&format!("{} line 1", managed.display())), "{s}");
     d.shutdown().await.unwrap();
 }
 
