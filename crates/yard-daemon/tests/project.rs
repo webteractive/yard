@@ -403,7 +403,13 @@ async fn a_managed_file_written_later_is_applied() {
     assert_eq!(s["php"], "8.4", "{s}");
     // The site's directory removed and made again, as unlink, rm and init would.
     std::fs::remove_dir_all(d.fx.paths.managed_project_file("ee").parent().unwrap()).unwrap();
-    let s = php_within(&mut c, "ee", "x", Duration::from_secs(2)).await;
+    // PHP stays 8.4 (the default), so wait for the file to be dropped instead.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut s = site(&mut c, "ee").await;
+    while s.get("project_file").is_some() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        s = site(&mut c, "ee").await;
+    }
     assert!(s.get("project_file").is_none(), "{s}");
     write_managed(&d, "ee", &dir, "php = \"7.4\"\n");
     let s = php_within(&mut c, "ee", "7.4", Duration::from_secs(5)).await;

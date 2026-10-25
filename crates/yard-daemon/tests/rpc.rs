@@ -265,7 +265,8 @@ async fn docroot_created_after_the_project_is_picked_up() {
             .map(|s| s["docroot"].as_str().unwrap().to_string())
     };
     let mut seen = None;
-    for _ in 0..50 {
+    // Up to 15 s: FSEvents can lag several seconds while the whole suite runs.
+    for _ in 0..150 {
         seen = docroot(&c.call("sites.list", Value::Null).await.unwrap());
         if seen.is_some() {
             break;
@@ -276,7 +277,7 @@ async fn docroot_created_after_the_project_is_picked_up() {
 
     // `laravel new` creates public/ seconds after the project directory.
     std::fs::create_dir(blog.join("public")).unwrap();
-    for _ in 0..50 {
+    for _ in 0..150 {
         seen = docroot(&c.call("sites.list", Value::Null).await.unwrap());
         if seen.as_deref().is_some_and(|d| d.ends_with("/public")) {
             break;
