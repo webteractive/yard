@@ -3,7 +3,8 @@
 #
 # Runs `yard init` in a scratch git repo linked as hello-yard and checks that it leaves
 # `git status` clean and serves from the managed .yard in Yard's data root, that
-# `yard isolate 7.1` edits that file and keeps its comments, that a committed .yard added
+# `yard isolate 7.1` edits that file and keeps its comments (and `yard unisolate` the
+# header and the comment above php), that a committed .yard added
 # afterwards wins within 5 s while `yard doctor` warns about the managed one, and that
 # `yard init --local` moves the managed file into the project. It installs nothing: it
 # needs php@7.1 (left by e2e-m2.sh) and 8.4. sites.toml is backed up and put back, and
@@ -91,6 +92,16 @@ want="7.1.*"
 version="$(answer "http://$site.yard:8080/")"
 [[ $version == 7.1.* ]] || fail "http://$site.yard:8080/ answered '$version', expected PHP 7.1.*"
 pass "yard isolate 7.1 edited the managed file, kept its comments, and serves PHP $version"
+
+# 4b. yard unisolate removes php but keeps the header and the comment above it, then the
+# site is isolated to 7.1 again for the steps below.
+awk '/^php = /{print "# e2e: above php"}1' "$managed" >"$work/managed" && cat "$work/managed" >"$managed"
+"$yard" unisolate --site "$site" >/dev/null
+! grep -q '^php = ' "$managed" || fail "yard unisolate left php: $(cat "$managed")"
+[[ $(head -n 1 "$managed") == "$header" ]] || fail "yard unisolate dropped the header: $(cat "$managed")"
+grep -q '^# e2e: above php$' "$managed" || fail "yard unisolate dropped the comment above php: $(cat "$managed")"
+"$yard" isolate 7.1 --site "$site" >/dev/null
+pass "yard unisolate removed php and kept the header and the comment above it"
 
 # 5. A committed .yard wins within 5 s, and the doctor warns about the managed one.
 printf 'php = "8.4"\n' >"$project/.yard"

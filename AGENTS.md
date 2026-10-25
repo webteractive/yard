@@ -182,7 +182,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   nothing; ask the maintainer first.
 - `scripts/e2e-m4a1.sh` — real-machine M4a.1 check after `e2e-m1.sh`: `yard init` in a
   scratch git repo leaves `git status` clean and serves from the managed `.yard`,
-  `yard isolate 7.1` edits that file and keeps its comment, a committed `.yard` added
+  `yard isolate 7.1` edits that file and keeps its comment, `yard unisolate` keeps the
+  header and the comment above `php`, a committed `.yard` added
   afterwards wins within 5 s and `yard doctor` warns `managed-file-ignored`, and
   `yard init --local` moves the file into the project. It needs php@7.1 (from `e2e-m2.sh`)
   and installs nothing; ask the maintainer first. `shellcheck scripts/e2e-m4a1.sh` stays clean.
