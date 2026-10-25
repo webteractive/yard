@@ -181,3 +181,25 @@ fn project_file_php_is_run() {
     assert!(stdout.contains("php@8.4/bin/php"), "the file has no php, so the default: {stdout}");
     assert!(stderr.contains(&s.project.join(".yard").display().to_string()), "{stderr}");
 }
+
+#[test]
+fn an_unusable_committed_file_is_an_error_not_a_fall_through() {
+    let s = setup();
+    write_managed(&s, "php = \"7.3\"\n");
+    symlink(s.project.join("gone"), s.project.join(".yard")).unwrap();
+    let out = run(&s, &[], false);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let file = s.project.join(".yard");
+    assert!(stderr.contains(&format!("yard: {} is a symlink to nothing", file.display())), "{stderr}");
+    assert!(stderr.contains(&format!("  hint: replace {} with a text file", file.display())), "{stderr}");
+}
+
+#[test]
+fn a_directory_named_yard_is_not_a_project_file() {
+    let s = setup();
+    std::fs::create_dir(s.project.join("app/.yard")).unwrap();
+    let out = run(&s, &[], false);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("php@7.1/bin/php"));
+}

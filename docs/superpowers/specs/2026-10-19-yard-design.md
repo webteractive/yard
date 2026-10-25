@@ -337,7 +337,12 @@ profile; Yard does not edit dotfiles.
   site is the linked site whose `path` is the longest ancestor of the cwd; one that is
   not isolated falls through to `.yard-php`. A bad `.yard-php` is `INVALID_ARGUMENT`
   naming the file, and a `.yard` that does not parse is `PROJECT_FILE_INVALID`. Only a
-  regular file of at most 64 KiB is read, so a FIFO cannot hang the shim. When a `.yard`
+  regular file of at most 64 KiB is read, so a FIFO cannot hang the shim; a `.yard` or
+  `.yard-php` that is there but unusable (a FIFO, a dangling link, too large) is an error
+  naming it, never a fall-through to other settings, while a directory of that name is
+  skipped. Site paths are compared resolved, so a `sites.toml` path spelled through a
+  symlink still holds the cwd, and of sites sharing the innermost path the one whose
+  managed `.yard` is for it wins. When a `.yard`
   names a PHP that is not installed, the error is `FORMULA_MISSING`, `PHP <v> is not
   installed (<file>)`, hint `yard init`. A `yard.toml` or `sites.toml` that does not parse is only a warning
   on stderr: the shim uses PHP 8.4 as the default, or ignores site isolation, so one

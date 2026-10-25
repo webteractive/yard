@@ -42,44 +42,57 @@ impl fmt::Display for Source {
 /// §4): the nearest `.yard` (its `php`, else the default), else the managed `.yard` of the
 /// innermost linked site containing it while that file is for the site's path, else that
 /// site's isolation, else the nearest `.yard-php`, else the default.
+///
+/// `read` gives a file's text, `None` when nothing is there, and an error for one that is
+/// there but cannot be used (a FIFO, a dangling link): that stops the search, as it puts the
+/// site on its setup page, rather than falling through to other settings. `canonical`
+/// resolves symlinks, since `cwd` is the real path and `sites.toml` may spell one through a
+/// link. When linked sites share the innermost path, the one whose managed file is for it
+/// wins, else the last in `sites.toml`'s order, as isolation always took.
 pub fn resolve_version(
     cwd: &Path,
     yard: &YardConfig,
     sites: &SitesConfig,
     paths: &Paths,
-    read: &dyn Fn(&Path) -> Option<String>,
+    read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
+    canonical: &dyn Fn(&Path) -> PathBuf,
 ) -> Result<(PhpVersion, Source), YardError> {
     for dir in cwd.ancestors() {
         let file = dir.join(project::FILE);
         if let Some(text) = read(&file) {
-            let php = project::parse(&text, &file)?.php;
+            let php = project::parse(&text?, &file)?.php;
             return Ok((php.unwrap_or(yard.default_php), Source::Project(file)));
         }
     }
-    let site = sites
+    let containing: Vec<_> = sites
         .sites
         .iter()
         .filter_map(|(name, e)| Some((name, e, e.path.as_deref()?)))
-        .filter(|(_, _, path)| cwd.starts_with(path))
-        .max_by_key(|(_, _, path)| path.components().count());
-    if let Some((name, _, path)) = site {
+        .filter_map(|(name, e, path)| {
+            let depth = canonical(path).components().count();
+            (cwd.starts_with(canonical(path)) || cwd.starts_with(path)).then_some((name, e, path, depth))
+        })
+        .collect();
+    let deepest = containing.iter().map(|(.., depth)| *depth).max();
+    let innermost: Vec<_> = containing.iter().filter(|(.., depth)| Some(*depth) == deepest).collect();
+    for (name, _, path, _) in innermost.iter().rev() {
         let file = paths.managed_project_file(name);
         if let Some(text) = read(&file) {
-            let (managed, project) = project::parse_managed(&text, &file)?;
-            if project.as_deref() == Some(path) {
+            let (managed, project) = project::parse_managed(&text?, &file)?;
+            if project.as_deref() == Some(*path) {
                 return Ok((managed.php.unwrap_or(yard.default_php), Source::Managed(file)));
             }
         }
     }
-    if let Some((name, entry, _)) = site
+    if let Some((name, entry, ..)) = innermost.last()
         && let Some(v) = entry.php
     {
-        return Ok((v, Source::Site(name.clone())));
+        return Ok((v, Source::Site((*name).clone())));
     }
     for dir in cwd.ancestors() {
         let file = dir.join(".yard-php");
         if let Some(text) = read(&file) {
-            let v: PhpVersion = text.trim().parse().map_err(|e: YardError| {
+            let v: PhpVersion = text?.trim().parse().map_err(|e: YardError| {
                 YardError::new(ErrorCode::InvalidArgument, format!("{}: {}", file.display(), e.message))
                     .with_hint(format!("put a version such as 8.4 in {}", file.display()))
             })?;
@@ -158,6 +171,11 @@ mod tests {
     use std::collections::BTreeMap;
     use yard_proto::ErrorCode;
 
+    /// No symlinks: every path is its own canonical form.
+    fn same(p: &Path) -> PathBuf {
+        p.to_path_buf()
+    }
+
     fn v(s: &str) -> PhpVersion {
         s.parse().unwrap()
     }
@@ -182,9 +200,10 @@ php = "7.4"
     fn resolution_order() {
         let (yard, sites) = configs(SITES);
         let files = BTreeMap::from([(PathBuf::from("/code/.yard-php"), "7.3\n".to_string())]);
-        let read = |p: &Path| files.get(p).cloned();
-        let at =
-            |cwd: &str| resolve_version(Path::new(cwd), &yard, &sites, &Paths::new("/r"), &read).unwrap();
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        let at = |cwd: &str| {
+            resolve_version(Path::new(cwd), &yard, &sites, &Paths::new("/r"), &read, &same).unwrap()
+        };
         assert_eq!(at("/code/old/app"), (v("7.1"), Source::Site("old".into())));
         assert_eq!(at("/code/old/vendor/inner/src"), (v("7.4"), Source::Site("inner".into())));
         assert_eq!(at("/code/plain/src"), (v("7.3"), Source::File("/code/.yard-php".into())));
@@ -197,8 +216,9 @@ php = "7.4"
     fn yard_php_file_errors_name_the_file() {
         let (yard, sites) = configs("");
         for bad in ["5.6", "banana"] {
-            let read = |p: &Path| (p == Path::new("/w/.yard-php")).then(|| bad.to_string());
-            let e = resolve_version(Path::new("/w/x"), &yard, &sites, &Paths::new("/r"), &read).unwrap_err();
+            let read = |p: &Path| (p == Path::new("/w/.yard-php")).then(|| Ok(bad.to_string()));
+            let e = resolve_version(Path::new("/w/x"), &yard, &sites, &Paths::new("/r"), &read, &same)
+                .unwrap_err();
             assert_eq!(e.code, ErrorCode::InvalidArgument, "{bad}");
             assert!(e.message.contains("/w/.yard-php"), "{}", e.message);
         }
@@ -211,9 +231,9 @@ php = "7.4"
             (PathBuf::from("/code/.yard-php"), "7.2\n".to_string()),
             (PathBuf::from("/code/old/.yard"), "php = \"7.3\"\n".to_string()),
         ]);
-        let read = |p: &Path| files.get(p).cloned();
-        let got =
-            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read).unwrap();
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        let got = resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap();
         assert_eq!(got, (v("7.3"), Source::Project("/code/old/.yard".into())));
         assert_eq!(got.1.to_string(), "/code/old/.yard");
     }
@@ -222,9 +242,9 @@ php = "7.4"
     fn project_file_without_php_is_the_default() {
         let (yard, sites) = configs(SITES);
         let files = BTreeMap::from([(PathBuf::from("/code/old/.yard"), "docroot = \"web\"\n".to_string())]);
-        let read = |p: &Path| files.get(p).cloned();
-        let got =
-            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read).unwrap();
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        let got = resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap();
         assert_eq!(got, (v("8.4"), Source::Project("/code/old/.yard".into())));
     }
 
@@ -235,9 +255,9 @@ php = "7.4"
             (PathBuf::from("/code/a/.yard"), "php = \"7.3\"\n".to_string()),
             (PathBuf::from("/code/a/sub/.yard"), "php = \"7.4\"\n".to_string()),
         ]);
-        let read = |p: &Path| files.get(p).cloned();
-        let got =
-            resolve_version(Path::new("/code/a/sub/x"), &yard, &sites, &Paths::new("/r"), &read).unwrap();
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        let got = resolve_version(Path::new("/code/a/sub/x"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap();
         assert_eq!(got, (v("7.4"), Source::Project("/code/a/sub/.yard".into())));
     }
 
@@ -247,8 +267,8 @@ php = "7.4"
         let managed = |project: &str| format!("php = \"7.3\"\nproject = {project:?}\n");
         let mut files = BTreeMap::from([(PathBuf::from("/r/sites/old/.yard"), managed("/code/old"))]);
         let at = |files: &BTreeMap<PathBuf, String>, cwd: &str| {
-            let read = |p: &Path| files.get(p).cloned();
-            resolve_version(Path::new(cwd), &yard, &sites, &Paths::new("/r"), &read).unwrap()
+            let read = |p: &Path| files.get(p).cloned().map(Ok);
+            resolve_version(Path::new(cwd), &yard, &sites, &Paths::new("/r"), &read, &same).unwrap()
         };
         let got = at(&files, "/code/old/app");
         assert_eq!(got, (v("7.3"), Source::Managed("/r/sites/old/.yard".into())));
@@ -270,18 +290,73 @@ php = "7.4"
     #[test]
     fn bad_managed_file_names_it() {
         let (yard, sites) = configs(SITES);
-        let read = |p: &Path| (p == Path::new("/r/sites/old/.yard")).then(|| "php = 7.3\n".to_string());
-        let e =
-            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read).unwrap_err();
+        let read = |p: &Path| (p == Path::new("/r/sites/old/.yard")).then(|| Ok("php = 7.3\n".to_string()));
+        let e = resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap_err();
         assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
         assert!(e.message.contains("/r/sites/old/.yard"), "{}", e.message);
     }
 
     #[test]
+    fn an_unusable_file_stops_the_search() {
+        let (yard, sites) = configs(SITES);
+        let unusable = |file: &str| {
+            let file = file.to_string();
+            move |p: &Path| {
+                (p == Path::new(&file))
+                    .then(|| Err(YardError::new(ErrorCode::ProjectFileInvalid, format!("{file} is a FIFO"))))
+            }
+        };
+        for file in ["/code/old/app/.yard", "/r/sites/old/.yard"] {
+            let read = unusable(file);
+            let e =
+                resolve_version(Path::new("/code/old/app/x"), &yard, &sites, &Paths::new("/r"), &read, &same)
+                    .unwrap_err();
+            assert_eq!(e.message, format!("{file} is a FIFO"));
+        }
+    }
+
+    #[test]
+    fn sites_sharing_a_path_use_the_matching_managed_file() {
+        let (yard, sites) =
+            configs("[sites.ee]\npath = \"/code/ee\"\n[sites.ee-2]\npath = \"/code/ee\"\nphp = \"7.1\"\n");
+        let files = BTreeMap::from([(
+            PathBuf::from("/r/sites/ee/.yard"),
+            "php = \"7.3\"\nproject = \"/code/ee\"\n".to_string(),
+        )]);
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        let got = resolve_version(Path::new("/code/ee/app"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap();
+        assert_eq!(got, (v("7.3"), Source::Managed("/r/sites/ee/.yard".into())));
+    }
+
+    #[test]
+    fn a_site_path_spelled_through_a_symlink_holds_the_real_cwd() {
+        let (yard, sites) = configs("[sites.old]\npath = \"/link/old\"\nphp = \"7.1\"\n");
+        let canonical = |p: &Path| match p.strip_prefix("/link") {
+            Ok(rest) => Path::new("/code").join(rest),
+            Err(_) => p.to_path_buf(),
+        };
+        let mut files = BTreeMap::new();
+        let at = |files: &BTreeMap<PathBuf, String>| {
+            let read = |p: &Path| files.get(p).cloned().map(Ok);
+            resolve_version(Path::new("/code/old/app"), &yard, &sites, &Paths::new("/r"), &read, &canonical)
+                .unwrap()
+        };
+        assert_eq!(at(&files), (v("7.1"), Source::Site("old".into())));
+        files.insert(
+            PathBuf::from("/r/sites/old/.yard"),
+            "php = \"7.3\"\nproject = \"/link/old\"\n".to_string(),
+        );
+        assert_eq!(at(&files), (v("7.3"), Source::Managed("/r/sites/old/.yard".into())));
+    }
+
+    #[test]
     fn bad_project_file_names_it() {
         let (yard, sites) = configs("");
-        let read = |p: &Path| (p == Path::new("/w/.yard")).then(|| "php = 7.3\n".to_string());
-        let e = resolve_version(Path::new("/w/x"), &yard, &sites, &Paths::new("/r"), &read).unwrap_err();
+        let read = |p: &Path| (p == Path::new("/w/.yard")).then(|| Ok("php = 7.3\n".to_string()));
+        let e =
+            resolve_version(Path::new("/w/x"), &yard, &sites, &Paths::new("/r"), &read, &same).unwrap_err();
         assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
         assert!(e.message.contains("/w/.yard"), "{}", e.message);
     }

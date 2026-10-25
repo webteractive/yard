@@ -30,14 +30,44 @@ fn main() -> ExitCode {
 /// The largest `.yard` or `.yard-php` the shim reads.
 const FILE_MAX: u64 = 64 * 1024;
 
-/// `file` if it is a small regular file: a FIFO named `.yard` in a parent directory would
-/// otherwise hang every `php` run below it.
-fn read_small(file: &Path) -> Option<String> {
-    let meta = std::fs::metadata(file).ok()?;
-    if !meta.is_file() || meta.len() > FILE_MAX {
+/// `file`'s text: `None` when nothing is there, and an error when it is there but not a
+/// small regular text file, so the shim never falls through past it to other settings. It
+/// never opens a FIFO, which would hang every `php` run below it. A directory is skipped:
+/// the shim looks in every parent, and another tool may keep a `~/.yard` directory.
+fn read_small(file: &Path) -> Option<Result<String, YardError>> {
+    let unusable = |what: String| {
+        let code = if file.file_name().is_some_and(|n| n == ".yard-php") {
+            ErrorCode::InvalidArgument
+        } else {
+            ErrorCode::ProjectFileInvalid
+        };
+        Some(Err(YardError::new(code, format!("{} {what}", file.display()))
+            .with_hint(format!("replace {} with a text file", file.display()))))
+    };
+    let meta = match std::fs::metadata(file) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return file
+                .symlink_metadata()
+                .is_ok()
+                .then(|| unusable("is a symlink to nothing".into()))
+                .flatten();
+        }
+        Err(e) => return unusable(format!("cannot be read: {e}")),
+    };
+    if meta.is_dir() {
         return None;
     }
-    std::fs::read_to_string(file).ok()
+    if !meta.is_file() {
+        return unusable("is not a regular file".into());
+    }
+    if meta.len() > FILE_MAX {
+        return unusable("is larger than 64 KiB".into());
+    }
+    match std::fs::read_to_string(file) {
+        Ok(text) => Some(Ok(text)),
+        Err(e) => unusable(format!("cannot be read: {e}")),
+    }
 }
 
 fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
@@ -58,7 +88,8 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
         YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
             .with_hint("cd into an existing directory")
     })?;
-    let (v, source) = resolve_version(&cwd, &yard, &sites, &paths, &read_small)?;
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (v, source) = resolve_version(&cwd, &yard, &sites, &paths, &read_small, &canonical)?;
     if std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1") {
         eprintln!("yard-shim: {name} runs PHP {v} ({source})");
     }
