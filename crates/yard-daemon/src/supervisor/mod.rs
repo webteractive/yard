@@ -69,6 +69,9 @@ pub struct UnitSpec {
 pub struct SupervisorConfig {
     pub policy: PolicyConfig,
     pub health_interval: Duration,
+    /// How often a starting unit is checked until its first health check passes, so a
+    /// woken service is up as soon as it listens (M4e spec §6.2).
+    pub start_poll: Duration,
     pub start_grace: Duration,
     pub stop_timeout: Duration,
     pub log_max_bytes: u64,
@@ -80,6 +83,7 @@ impl Default for SupervisorConfig {
         Self {
             policy: PolicyConfig::default(),
             health_interval: Duration::from_secs(5),
+            start_poll: Duration::from_millis(200),
             start_grace: Duration::from_secs(10),
             stop_timeout: Duration::from_secs(5),
             log_max_bytes: 10 * 1024 * 1024,

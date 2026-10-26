@@ -162,6 +162,7 @@ impl Runner {
         let stop_timeout = self.spec.stop_timeout.unwrap_or(self.cfg.stop_timeout);
 
         let interval = self.cfg.health_interval;
+        let start_poll = self.cfg.start_poll;
         let grace = self.spec.start_timeout.unwrap_or(self.cfg.start_grace);
         let deadline = tokio::time::Instant::now() + grace;
         // Until the first health check passes nothing is in flight, and the unit may not
@@ -178,7 +179,7 @@ impl Runner {
                     process.stop(libc::SIGTERM, stop_timeout).await;
                     return Ended::Control(control);
                 }
-                () = tokio::time::sleep(interval) => {}
+                () = tokio::time::sleep(start_poll) => {}
             }
         }
         self.set_state(UnitState::Running);

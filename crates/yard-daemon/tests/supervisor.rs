@@ -120,6 +120,29 @@ async fn healthy_unit_reaches_running() {
     h.sup.shutdown().await;
 }
 
+/// A woken service is waited for (M4e spec §6.2): until its first health check passes the
+/// unit is polled every `start_poll`, not every `health_interval`.
+#[tokio::test]
+async fn a_starting_unit_is_running_soon_after_it_listens() {
+    let h = harness(SupervisorConfig {
+        health_interval: Duration::from_secs(5),
+        start_poll: Duration::from_millis(20),
+        start_grace: Duration::from_secs(10),
+        ..fast()
+    });
+    let p = free_port();
+    // No `ports`: the pre-start probe is not what this measures.
+    let spec = process("slow", FAKE, &["listen-tcp-after", &p.to_string(), "150"], Health::Tcp(p));
+    let started = Instant::now();
+    h.sup.apply(vec![spec]).await;
+    let deadline = started + Duration::from_secs(1);
+    while !info(&h.sup, "slow").is_some_and(|u| running(&u)) {
+        assert!(Instant::now() < deadline, "not running 1 s after apply: {:?}", info(&h.sup, "slow"));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    h.sup.shutdown().await;
+}
+
 #[tokio::test]
 async fn crashing_unit_backs_off_then_fails_with_last_lines() {
     let h = harness(fast());

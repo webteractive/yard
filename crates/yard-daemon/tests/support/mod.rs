@@ -155,6 +155,7 @@ pub fn fast() -> SupervisorConfig {
             max_failures: 5,
         },
         health_interval: Duration::from_millis(20),
+        start_poll: Duration::from_millis(10),
         start_grace: Duration::from_secs(2),
         stop_timeout: Duration::from_millis(500),
         log_max_bytes: 1024 * 1024,

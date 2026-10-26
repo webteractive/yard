@@ -36,6 +36,11 @@ fn mode(args: &[String]) -> ExitCode {
     let arg = |i: usize| args.get(i).map(String::as_str);
     match arg(0) {
         Some("listen-tcp") => listen_tcp(arg(1).and_then(|p| p.parse().ok())),
+        Some("listen-tcp-after") => {
+            let after = arg(2).and_then(|ms| ms.parse().ok()).unwrap_or(0);
+            std::thread::sleep(Duration::from_millis(after));
+            listen_tcp(arg(1).and_then(|p| p.parse().ok()))
+        }
         Some("signals") => signals(arg(1).and_then(|p| p.parse().ok())),
         Some("stubborn") => stubborn(arg(1).and_then(|p| p.parse().ok())),
         Some("listen-unix") => listen_unix(arg(1).map(PathBuf::from)),
