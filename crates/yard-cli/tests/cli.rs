@@ -90,7 +90,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], "0.1.0");
-    assert_eq!(v["protocol"], "2.7");
+    assert_eq!(v["protocol"], "2.8");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());

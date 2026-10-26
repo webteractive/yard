@@ -48,6 +48,7 @@ pub const SERVICES_STOP: &str = "services.stop";
 pub const SERVICES_RESTART: &str = "services.restart";
 pub const SERVICES_LOGS: &str = "services.logs";
 pub const SERVICES_PORT: &str = "services.port";
+pub const SERVICES_SLEEP_SET: &str = "services.sleep.set";
 pub const ENV_PRINT: &str = "env.print";
 pub const SOURCES_LIST: &str = "sources.list";
 pub const SOURCES_TRUST: &str = "sources.trust";
@@ -253,6 +254,13 @@ mod tests {
     }
 
     #[test]
+    fn sleep_method_name() {
+        assert_eq!(SERVICES_SLEEP_SET, "services.sleep.set");
+        let p: ServiceSleepParams = serde_json::from_value(json!({"name":"redis","after":"15m"})).unwrap();
+        assert_eq!((p.name.as_str(), p.after.as_str()), ("redis", "15m"));
+    }
+
+    #[test]
     fn node_method_names() {
         assert_eq!(
             [NODE_LIST, NODE_INSTALL, NODE_UNINSTALL, NODE_DEFAULT, NODE_USE, NODE_UNUSE],
@@ -382,6 +390,14 @@ pub struct ServiceRemoveParams {
 pub struct ServicePortParams {
     pub name: String,
     pub port: u16,
+}
+
+/// `services.sleep.set`: how long an instance may go unused before it sleeps.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceSleepParams {
+    pub name: String,
+    /// A duration (`15m`), `off`, or `default` to follow `yard.toml`.
+    pub after: String,
 }
 
 /// `services.logs`: the last `lines` lines (100 when unset, and never more than 10000).

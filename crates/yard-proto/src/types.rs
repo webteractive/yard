@@ -387,6 +387,17 @@ pub struct StatusInfo {
     pub sites: usize,
     /// Why the last reconcile failed, until one succeeds; the last good state keeps serving.
     pub config_error: Option<YardError>,
+    /// Service instances that sleep (protocol 2.8); they have no unit while they do.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sleeping: Vec<SleepingInstance>,
+}
+
+/// A service instance asleep, in `status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SleepingInstance {
+    pub name: String,
+    /// RFC 3339.
+    pub since: String,
 }
 
 /// One row of `php.list`: an installed version, or the default when it is not installed.
@@ -440,6 +451,9 @@ pub enum ServiceState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<YardError>,
     },
+    /// A state a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 impl ServiceState {
@@ -511,6 +525,16 @@ pub struct ServiceInfo {
     pub console: Option<String>,
     /// Sites whose `.yard` lists this instance.
     pub used_by: Vec<String>,
+    /// When it fell asleep (RFC 3339; protocol 2.8): set with `stopped` while it sleeps and
+    /// with `starting` while it wakes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleeping_since: Option<String>,
+    /// How long it may go unused before it sleeps; `None` when it never sleeps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep_after_secs: Option<u64>,
+    /// Where that setting comes from: `services_toml`, `yard_toml` or `default` (none).
+    #[serde(default)]
+    pub sleep_after_source: SettingSource,
 }
 
 /// One block of `env.print`: the `.env` lines for an instance.
@@ -853,12 +877,57 @@ mod tests {
             account: Account { user: Some("root".into()), password: Some(String::new()) },
             console: None,
             used_by: vec!["blog".into()],
+            sleeping_since: None,
+            sleep_after_secs: None,
+            sleep_after_source: SettingSource::Default,
         };
         let v = serde_json::to_value(&info).unwrap();
         assert_eq!(v["state"], "running");
         assert_eq!(v["account"], json!({"user":"root","password":""}));
         assert_eq!(v["ports"], json!([{"name":"mysql-8.4","port":3306}]));
         assert_eq!(serde_json::from_value::<ServiceInfo>(v).unwrap(), info);
+    }
+
+    #[test]
+    fn a_2_7_service_info_still_decodes() {
+        let v = json!({"name":"redis","engine":"redis","version":null,"formula":"redis",
+            "ports":[{"name":"redis","port":6380}],"state":"running","stopped_by_user":false,
+            "account":{"user":null,"password":null},"console":null,"used_by":[]});
+        let info: ServiceInfo = serde_json::from_value(v).unwrap();
+        assert_eq!(info.sleeping_since, None);
+        assert_eq!(info.sleep_after_secs, None);
+        assert_eq!(info.sleep_after_source, SettingSource::Default);
+    }
+
+    #[test]
+    fn a_sleeping_instance_is_stopped_with_since() {
+        let v = json!({"name":"redis","engine":"redis","version":null,"formula":"redis",
+            "ports":[],"state":"stopped","stopped_by_user":false,
+            "account":{"user":null,"password":null},"console":null,"used_by":[]});
+        let mut info: ServiceInfo = serde_json::from_value(v).unwrap();
+        info.sleeping_since = Some("2026-10-26T14:02:00Z".into());
+        info.sleep_after_secs = Some(900);
+        info.sleep_after_source = SettingSource::YardToml;
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!(v["state"], "stopped");
+        assert_eq!(v["sleeping_since"], "2026-10-26T14:02:00Z");
+        assert_eq!(v["sleep_after_secs"], 900);
+        assert_eq!(v["sleep_after_source"], "yard_toml");
+        assert_eq!(serde_json::from_value::<ServiceInfo>(v).unwrap(), info);
+    }
+
+    #[test]
+    fn an_unknown_unit_state_is_other() {
+        assert_eq!(
+            serde_json::from_value::<ServiceState>(json!("hibernating")).unwrap(),
+            ServiceState::Other
+        );
+    }
+
+    #[test]
+    fn status_lists_sleeping_instances_only_when_there_are_some() {
+        let s = SleepingInstance { name: "redis".into(), since: "2026-10-26T14:02:00Z".into() };
+        assert_eq!(serde_json::to_value(&s).unwrap(), json!({"name":"redis","since":"2026-10-26T14:02:00Z"}));
     }
 
     #[test]

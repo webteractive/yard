@@ -277,6 +277,9 @@ mod tests {
             account: engine.account("me"),
             console: None,
             used_by: vec![],
+            sleeping_since: None,
+            sleep_after_secs: None,
+            sleep_after_source: yard_proto::SettingSource::Default,
         }
     }
 

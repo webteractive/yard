@@ -255,6 +255,7 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
         units: ctx.supervisor().list(),
         sites: snapshot.as_ref().map_or(0, |s| s.resolution.sites.len()),
         config_error: ctx.reconciler.last_error().await,
+        sleeping: vec![],
     })
 }
 

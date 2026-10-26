@@ -45,6 +45,7 @@ pub fn state_name(state: &ServiceState) -> &'static str {
         ServiceState::Starting => "starting",
         ServiceState::Stopped => "stopped",
         ServiceState::Failed { .. } => "failed",
+        ServiceState::Other => "unknown",
     }
 }
 
@@ -280,7 +281,8 @@ async fn wait_up(ctx: &Ctx, mut info: ServiceInfo, stopped_ok: bool) -> Result<S
                 });
                 return Err(error.into());
             }
-            ServiceState::Starting => {}
+            // A state a newer yardd added: keep asking until it is one this client knows.
+            ServiceState::Starting | ServiceState::Other => {}
         }
         if Instant::now() >= deadline {
             return Err(YardError::new(

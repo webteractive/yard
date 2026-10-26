@@ -27,7 +27,7 @@ use yard_core::services::{
     DATABASE_START_TIMEOUT, Engine, READY_WAIT, candidate_names, instance_name, line_formula, resolve_line,
 };
 use yard_core::sources::tap_of;
-use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, UnitState, YardError};
+use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, SettingSource, UnitState, YardError};
 
 /// How long a service gets to stop after its stop signal before SIGKILL: a database
 /// finishes its checkpoint (spec §15).
@@ -195,6 +195,9 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
         account: engine.account(&macos_user()),
         console,
         used_by: used_by(snapshot, engine, name),
+        sleeping_since: None,
+        sleep_after_secs: None,
+        sleep_after_source: SettingSource::Default,
     })
 }
 
