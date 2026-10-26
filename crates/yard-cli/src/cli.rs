@@ -131,6 +131,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<PhpAction>,
     },
+    /// Node versions: list, install, remove, choose the default, or set a site's.
+    Node {
+        #[command(subcommand)]
+        action: Option<NodeAction>,
+    },
     /// PHP extensions: list, add, enable, disable and remove them.
     Ext {
         #[command(subcommand)]
@@ -291,6 +296,47 @@ pub enum PhpAction {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NodeAction {
+    /// Installed versions, the default and the sites on each; --available asks nodejs.org.
+    List {
+        /// Also list the newest release of each line on nodejs.org, or of one major.
+        #[arg(long, value_name = "MAJOR", num_args = 0..=1)]
+        available: Option<Option<u32>>,
+    },
+    /// Install a Node version (22, 22.17, 16.14.0, lts/iron, lts/*) with fnm; with none,
+    /// the version this directory asks for. Ctrl-C cancels.
+    Install {
+        /// The version; without one, the .yard, .nvmrc or .node-version here decides.
+        spec: Option<String>,
+    },
+    /// Remove an installed version, e.g. 16.14.0; refused while the default or a linked
+    /// site has no other version to run.
+    Uninstall {
+        /// An installed version, as yard node list shows it.
+        version: String,
+    },
+    /// Run sites and directories with no pin on this version; it must be installed.
+    Default {
+        /// The version, e.g. 22 or lts/iron.
+        spec: String,
+    },
+    /// Pin a site to a version, in its managed .yard or sites.toml.
+    Use {
+        /// The version, e.g. 22, 16.14.0 or lts/iron.
+        spec: String,
+        /// The site; defaults to the site that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
+    },
+    /// Remove a site's pin set with yard node use.
+    Unuse {
+        /// The site; defaults to the site that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
     },
 }
 

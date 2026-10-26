@@ -1,10 +1,11 @@
 //! `yard init`, and `settle`: installing what a project's `.yard` needs, after asking.
 //! `yard link` settles too, since linking a cloned project applies its file.
 
+use super::info::missing_node;
 use super::{Ctx, Outcome, confirm, cwd, finished, interactive, run_job, services, sources};
 use crate::client::CliError;
 use serde_json::{Value, json};
-use yard_proto::methods::{self, ExtAddParams, InitParams, PhpParams};
+use yard_proto::methods::{self, ExtAddParams, InitParams, NodeInstallParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
 /// A `major.minor` protocol version.
@@ -75,11 +76,15 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
 /// Installs what `site` needs once the user agrees (or with `yes`), and returns the site
 /// as it is afterwards. Without a terminal to ask on, and without `yes`, it is
 /// `NEEDS_INSTALL` and nothing is installed. A `.yard` that does not parse is its error.
+///
+/// A Node nothing installed matches is offered too, and installed last, but it never
+/// stops the site serving: alone, declining it leaves a hint and serves (M4c spec §8).
 pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, CliError> {
     if let Some(e) = &site.project_error {
         return Err(e.clone().into());
     }
-    if site.needs.is_empty() {
+    let node = missing_node(site.node.as_ref()).map(str::to_string);
+    if site.needs.is_empty() && node.is_none() {
         if !ctx.json {
             println!("Serving {}", site.url);
         }
@@ -90,8 +95,19 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         for need in &site.needs {
             println!("  {}  ({})", need.describe(), need.command());
         }
+        if let Some(spec) = &node {
+            println!("  Node {spec}  (yard node install {spec})");
+        }
     }
     let agreed = yes || (interactive(ctx) && confirm("Install these? [y/N] "));
+    if !agreed && site.needs.is_empty() {
+        let spec = node.as_deref().unwrap_or_default();
+        eprintln!("{} runs Node {spec}, which is not installed: yard node install {spec}", site.name);
+        if !ctx.json {
+            println!("Serving {}", site.url);
+        }
+        return Ok(site);
+    }
     if !agreed {
         return Err(YardError::new(
             ErrorCode::NeedsInstall,
@@ -152,6 +168,13 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         services::add_instance(ctx, engine, version.as_deref(), None).await?;
     }
     if !wanted.is_empty() {
+        site = refetch(ctx, &site.name).await?;
+    }
+    // Node last: the site already serves without it. The spec is the one first offered.
+    if let Some(spec) = &node {
+        let done = format!("Installed Node {spec}.\n");
+        let params = NodeInstallParams { spec: Some(spec.clone()), path: None };
+        finished(run_job(ctx, methods::NODE_INSTALL, params, || done).await)?;
         site = refetch(ctx, &site.name).await?;
     }
     if let Some(e) = &site.project_error {

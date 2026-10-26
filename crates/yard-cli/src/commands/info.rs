@@ -5,7 +5,7 @@ use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
 use yard_proto::{
-    ExtInfo, Need, ProjectFileKind, SettingSource, SiteDetail, SiteKind, SiteSource, YardError,
+    ExtInfo, Need, ProjectFileKind, SettingSource, SiteDetail, SiteKind, SiteNode, SiteSource, YardError,
 };
 
 /// The label column: `extensions` is the longest.
@@ -45,7 +45,12 @@ fn enabled(exts: &[ExtInfo]) -> Vec<String> {
 }
 
 fn source_name(detail: &SiteDetail, key: &str) -> &'static str {
-    match detail.sources.get(key) {
+    source_label(detail.sources.get(key))
+}
+
+/// How `yard info` and `yard node unuse` name where a setting comes from.
+pub(super) fn source_label(source: Option<&SettingSource>) -> &'static str {
+    match source {
         Some(SettingSource::ProjectFile) => ".yard",
         Some(SettingSource::ManagedFile) => "managed",
         Some(SettingSource::SitesToml) => "sites.toml",
@@ -54,6 +59,23 @@ fn source_name(detail: &SiteDetail, key: &str) -> &'static str {
         Some(SettingSource::NodeVersionFile) => ".node-version",
         Some(SettingSource::Other) => "elsewhere",
     }
+}
+
+/// The `node` row: the version and where its spec comes from, or why there is none. An
+/// unusable pin has no source to name; `problems` shows its error.
+fn node_row(node: &SiteNode) -> (String, Option<&'static str>) {
+    let source = Some(source_label(Some(&node.source)));
+    match (&node.spec, &node.version, &node.error) {
+        (_, _, Some(_)) | (None, _, _) => ("unusable pin".to_string(), None),
+        (Some(spec), Some(v), None) if spec == v => (v.clone(), source),
+        (Some(spec), Some(v), None) => (format!("{v} ({spec})"), source),
+        (Some(spec), None, None) => (format!("{spec}, not installed"), source),
+    }
+}
+
+/// The Node spec a site asks for that nothing installed matches.
+pub(super) fn missing_node(node: Option<&SiteNode>) -> Option<&str> {
+    node.filter(|n| n.error.is_none() && n.version.is_none()).and_then(|n| n.spec.as_deref())
 }
 
 /// `path` with the home directory as `~`.
@@ -80,7 +102,7 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
 
     // Each setting: its value and where it came from, aligned.
     let https = if site.secure { "on" } else { "off" };
-    let mut settings: Vec<(&str, String, &'static str)> = vec![];
+    let mut settings: Vec<(&str, String, Option<&'static str>)> = vec![];
     match &site.kind {
         SiteKind::Php { path, docroot, php } => {
             let shown_php = detail.php_full.clone().unwrap_or_else(|| php.clone());
@@ -97,15 +119,22 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
                 (None, _) => "none".to_string(),
             };
             out.push_str(&line("config", &config));
-            settings.push(("php", shown_php, source_name(detail, "php")));
-            settings.push(("docroot", shown_docroot, source_name(detail, "docroot")));
+            settings.push(("php", shown_php, Some(source_name(detail, "php"))));
+            if let Some(node) = &site.node {
+                let (value, source) = node_row(node);
+                settings.push(("node", value, source));
+            }
+            settings.push(("docroot", shown_docroot, Some(source_name(detail, "docroot"))));
         }
         SiteKind::Proxy { target } => out.push_str(&line("target", target)),
     }
-    settings.push(("https", https.to_string(), source_name(detail, "secure")));
+    settings.push(("https", https.to_string(), Some(source_name(detail, "secure"))));
     let width = settings.iter().map(|(_, v, _)| v.chars().count()).max().unwrap_or(0).max(VALUE);
     for (label, value, source) in &settings {
-        out.push_str(&line(label, &format!("{value:<width$}  from {source}")));
+        match source {
+            Some(source) => out.push_str(&line(label, &format!("{value:<width$}  from {source}"))),
+            None => out.push_str(&line(label, value)),
+        }
     }
     if let Some(exts) = extensions {
         let shown = if exts.is_empty() { "none".to_string() } else { exts.join(", ") };
@@ -164,18 +193,25 @@ fn services_block(detail: &SiteDetail) -> String {
     out
 }
 
-/// A `.yard` that does not parse, then the unmet needs with the command that fixes each.
+/// A `.yard` that does not parse and an unusable Node pin, then the unmet needs with the
+/// command that fixes each; a missing Node is one of them, though it never stops serving.
 fn problems(detail: &SiteDetail) -> String {
     let mut out = String::new();
-    if let Some(e) = &detail.site.project_error {
+    let node_error = detail.site.node.as_ref().and_then(|n| n.error.as_ref());
+    for e in detail.site.project_error.iter().chain(node_error) {
         out.push_str(&line("error", &e.message));
         if let Some(hint) = &e.hint {
             out.push_str(&line("", &format!("→ {hint}")));
         }
     }
-    let mut needs = detail.site.needs.iter().map(|n: &Need| format!("{}  ({})", n.describe(), n.command()));
+    let node = missing_node(detail.site.node.as_ref())
+        .map(|spec| format!("Node {spec}  (yard node install {spec})"));
+    let mut needs =
+        detail.site.needs.iter().map(|n: &Need| format!("{}  ({})", n.describe(), n.command())).chain(node);
     match needs.next() {
-        None if detail.site.project_error.is_none() => out.push_str(&line("needs", "nothing")),
+        None if detail.site.project_error.is_none() && node_error.is_none() => {
+            out.push_str(&line("needs", "nothing"))
+        }
         None => {}
         Some(first) => {
             out.push_str(&line("needs", &first));

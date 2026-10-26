@@ -71,6 +71,11 @@ impl MockDaemon {
         Self { root, requests }
     }
 
+    /// Every request's method, in the order they arrived.
+    pub fn methods(&self) -> Vec<String> {
+        self.requests.lock().unwrap().iter().map(|r| r.method.clone()).collect()
+    }
+
     /// The params of every request for `method`, in order.
     pub fn params(&self, method: &str) -> Vec<Value> {
         self.requests

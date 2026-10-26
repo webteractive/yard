@@ -8,6 +8,7 @@ mod helper;
 mod info;
 mod init;
 mod lifecycle;
+mod node;
 mod php;
 mod ports;
 mod services;
@@ -19,7 +20,8 @@ mod units;
 mod version;
 
 use crate::cli::{
-    Cli, Command, ExtAction, HelperAction, OnOff, PhpAction, PortsAction, ServiceAction, SourceAction,
+    Cli, Command, ExtAction, HelperAction, NodeAction, OnOff, PhpAction, PortsAction, ServiceAction,
+    SourceAction,
 };
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
@@ -116,6 +118,17 @@ pub async fn run(cli: Cli) -> i32 {
             php::set_default(&ctx, version).await
         }
         Command::Php { action: Some(PhpAction::Config { action }) } => php::config(&ctx, action).await,
+        Command::Node { action: None } => node::list(&ctx, None).await,
+        Command::Node { action: Some(NodeAction::List { available }) } => node::list(&ctx, available).await,
+        Command::Node { action: Some(NodeAction::Install { spec }) } => node::install(&ctx, spec).await,
+        Command::Node { action: Some(NodeAction::Uninstall { version }) } => {
+            node::uninstall(&ctx, version).await
+        }
+        Command::Node { action: Some(NodeAction::Default { spec }) } => node::set_default(&ctx, spec).await,
+        Command::Node { action: Some(NodeAction::Use { spec, site }) } => {
+            node::pin(&ctx, Some(spec), site).await
+        }
+        Command::Node { action: Some(NodeAction::Unuse { site }) } => node::pin(&ctx, None, site).await,
         Command::Ext { action: ExtAction::List { php } } => ext::list(&ctx, php).await,
         Command::Ext { action: ExtAction::Add { name, php } } => ext::add(&ctx, name, php).await,
         Command::Ext { action: ExtAction::Enable { name, php } } => ext::toggle(&ctx, name, php, true).await,

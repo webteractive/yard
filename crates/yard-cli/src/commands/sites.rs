@@ -1,6 +1,7 @@
 //! `yard sites`, `link`/`unlink`, `proxy`/`unproxy`, `docroot`, `isolate` and
 //! `secure`/`unsecure`.
 
+use super::info::missing_node;
 use super::{Ctx, Outcome, cwd, init};
 use crate::output::{for_agents, table};
 use serde_json::Value;
@@ -43,14 +44,15 @@ fn row(site: &SiteInfo) -> Vec<String> {
     vec![site.name.clone(), site.url.clone(), source.into(), target, php, status.into()]
 }
 
-/// A project with a `.yard` may need PHP or extensions installed first: `settle` asks.
+/// A project with a `.yard` may need PHP or extensions installed first, and any project
+/// may pin a Node that is not installed: `settle` asks.
 pub async fn link(ctx: &Ctx, name: Option<String>, yes: bool) -> Outcome {
     let dir = cwd()?;
     let name = name.map_or_else(|| name_of(&dir), Ok)?;
     let params = LinkParams { name, path: dir.display().to_string() };
     let site: SiteInfo = ctx.client().await?.call(methods::SITES_LINK, params).await?;
     let note = managed_note(&site);
-    if !site.needs_setup() {
+    if !site.needs_setup() && missing_node(site.node.as_ref()).is_none() {
         ctx.emit(&site, || format!("Linked {} → {}\n{note}", dir.display(), site.url));
         return Ok(0);
     }
@@ -78,7 +80,7 @@ fn managed_note(site: &SiteInfo) -> String {
 }
 
 /// ` (set in <file>)` for a site whose managed `.yard` the command edited, else nothing.
-fn set_in(site: &SiteInfo) -> String {
+pub(super) fn set_in(site: &SiteInfo) -> String {
     match (&site.project_file_kind, &site.project_file) {
         (Some(ProjectFileKind::Managed), Some(file)) => format!(" (set in {file})"),
         _ => String::new(),
@@ -130,7 +132,7 @@ pub async fn docroot(ctx: &Ctx, path: String, site: Option<String>) -> Outcome {
 
 /// The PHP site whose directory holds `dir`, the innermost when sites nest. `hint` is
 /// the command with `--site` for when there is none.
-fn containing(sites: &[SiteInfo], dir: &Path, hint: &str) -> Result<String, YardError> {
+pub(super) fn containing(sites: &[SiteInfo], dir: &Path, hint: &str) -> Result<String, YardError> {
     sites
         .iter()
         .filter_map(|s| match &s.kind {

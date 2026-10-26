@@ -12,6 +12,8 @@ struct ShimsInfo {
     line: String,
     /// The `php` the current PATH finds first, if any.
     first_php: Option<String>,
+    /// The `node` the current PATH finds first, if any.
+    first_node: Option<String>,
 }
 
 /// A double-quoted shell word that still expands `$PATH` after it.
@@ -32,23 +34,61 @@ fn first_on_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
+/// Whose `php` or `node` a path is, as ` (Herd's)`, or nothing when it is not a manager's.
+fn whose(path: &str) -> &'static str {
+    if path.contains("/Herd/") {
+        " (Herd's)"
+    } else if path.contains("/.nvm/") {
+        " (nvm's)"
+    } else if path.contains("/mise/") {
+        " (mise's)"
+    } else if path.contains("fnm_multishells") {
+        " (fnm's)"
+    } else if path.starts_with("/opt/homebrew/") {
+        " (brew's)"
+    } else {
+        ""
+    }
+}
+
 pub fn install(ctx: &Ctx) -> Outcome {
     let bin = ctx.paths.bin_dir();
     let line = export_line(&bin);
-    let first = first_on_path("php");
+    let (php, node) = (first_on_path("php"), first_on_path("node"));
     let info = ShimsInfo {
         bin: bin.display().to_string(),
         line: line.clone(),
-        first_php: first.as_ref().map(|p| p.display().to_string()),
+        first_php: php.as_ref().map(|p| p.display().to_string()),
+        first_node: node.as_ref().map(|p| p.display().to_string()),
     };
     ctx.emit(&info, || {
         format!("{line}\n\nAdd that line to your shell profile (~/.zshrc), then open a new terminal.\n")
     });
-    if !ctx.json
-        && let Some(php) = first.filter(|p| *p != bin.join("php"))
-    {
-        let herd = if php.to_string_lossy().contains("/Herd/") { " (Herd's)" } else { "" };
-        eprintln!("warning: php on your PATH is {}{herd} — Yard's bin must come before it", php.display());
+    if !ctx.json {
+        for (name, first) in [("php", php), ("node", node)] {
+            if let Some(path) = first.filter(|p| *p != bin.join(name)) {
+                let path = path.display().to_string();
+                eprintln!(
+                    "warning: {name} on your PATH is {path}{} — Yard's bin must come before it",
+                    whose(&path)
+                );
+            }
+        }
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::whose;
+
+    #[test]
+    fn whose_names_the_managers() {
+        assert_eq!(whose("/Users/me/Library/Application Support/Herd/bin/node"), " (Herd's)");
+        assert_eq!(whose("/Users/me/.nvm/versions/node/v20.11.0/bin/node"), " (nvm's)");
+        assert_eq!(whose("/Users/me/.local/share/mise/installs/node/22/bin/node"), " (mise's)");
+        assert_eq!(whose("/Users/me/.local/state/fnm_multishells/123_456/bin/node"), " (fnm's)");
+        assert_eq!(whose("/opt/homebrew/bin/node"), " (brew's)");
+        assert_eq!(whose("/usr/local/bin/node"), "");
+    }
 }

@@ -195,9 +195,9 @@ pub struct NodeListParams {
 /// directory whose pin is installed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeInstallParams {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
