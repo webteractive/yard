@@ -539,15 +539,20 @@ pub struct SourceInfo {
     pub formulae: Vec<SourceFormula>,
 }
 
-/// Where a setting of a site comes from (`sites.info`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Where a setting of a site (`sites.info`) or a service instance comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingSource {
     ProjectFile,
     /// The site's managed `.yard`, in Yard's data root.
     ManagedFile,
     SitesToml,
+    #[default]
     Default,
+    /// `yard.toml` (`service_sleep_after`, protocol 2.8).
+    YardToml,
+    /// The instance's entry in `services.toml` (`sleep_after`, protocol 2.8).
+    ServicesToml,
     /// The nearest `.nvmrc` (a site's Node).
     Nvmrc,
     /// The nearest `.node-version` (a site's Node).
@@ -611,6 +616,21 @@ mod tests {
         let s = UnitState::Backoff { retry_in_ms: 2000 };
         assert_eq!(serde_json::to_value(&s).unwrap(), json!({"state":"backoff","retry_in_ms":2000}));
         assert_eq!(serde_json::to_value(UnitState::Running).unwrap(), json!({"state":"running"}));
+    }
+
+    #[test]
+    fn setting_source_names() {
+        assert_eq!(serde_json::to_value(SettingSource::YardToml).unwrap(), json!("yard_toml"));
+        assert_eq!(serde_json::to_value(SettingSource::ServicesToml).unwrap(), json!("services_toml"));
+        assert_eq!(
+            serde_json::from_value::<SettingSource>(json!("yard_toml")).unwrap(),
+            SettingSource::YardToml
+        );
+        assert_eq!(
+            serde_json::from_value::<SettingSource>(json!("services_toml")).unwrap(),
+            SettingSource::ServicesToml
+        );
+        assert_eq!(SettingSource::default(), SettingSource::Default);
     }
 
     #[test]

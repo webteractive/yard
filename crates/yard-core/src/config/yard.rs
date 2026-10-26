@@ -2,6 +2,7 @@
 
 use super::{config_error, read_optional};
 use crate::node::NodeSpec;
+use crate::services::sleep::SleepAfter;
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -18,6 +19,8 @@ pub struct YardConfig {
     pub extensions: BTreeMap<PhpVersion, BTreeMap<String, ExtEntry>>,
     /// `yard node default`: what runs where nothing pins a Node version (M4c spec §5).
     pub default_node: Option<NodeSpec>,
+    /// How long a service instance may go unused before it sleeps (M4e spec §4).
+    pub service_sleep_after: Option<SleepAfter>,
 }
 
 /// Where an extension comes from. `bundled` is one PHP ships with (opcache), listed only
@@ -118,6 +121,7 @@ struct Raw {
     parked: Option<toml::Value>,
     default_php: Option<PhpVersion>,
     default_node: Option<NodeSpec>,
+    service_sleep_after: Option<SleepAfter>,
     tld: Option<toml::Spanned<String>>,
     #[serde(default)]
     secure_by_default: bool,
@@ -145,6 +149,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             parked: None,
             default_php: None,
             default_node: None,
+            service_sleep_after: None,
             tld: None,
             secure_by_default: false,
             php: BTreeMap::new(),
@@ -211,6 +216,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             secure_by_default: raw.secure_by_default,
             extensions,
             default_node: raw.default_node,
+            service_sleep_after: raw.service_sleep_after,
         },
         warnings,
     ))
@@ -270,6 +276,20 @@ mod tests {
         assert_eq!(data["file"], FILE);
         assert_eq!(data["line"], 1);
         assert!(e.message.contains("older than 16"), "{}", e.message);
+    }
+
+    #[test]
+    fn service_sleep_after_parses_and_a_bad_one_is_config_invalid() {
+        use crate::services::sleep::SleepAfter;
+        assert_eq!(
+            parse(Some("service_sleep_after = \"15m\"\n")).unwrap().service_sleep_after,
+            Some(SleepAfter::After(900))
+        );
+        assert_eq!(parse(Some("")).unwrap().service_sleep_after, None);
+        let e = parse(Some("service_sleep_after = \"5s\"\n")).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        assert_eq!(e.data.unwrap()["line"], 1);
+        assert!(e.message.contains("at least 60s"), "{}", e.message);
     }
 
     #[test]

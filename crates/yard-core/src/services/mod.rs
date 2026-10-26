@@ -6,6 +6,7 @@ pub mod brew_info;
 pub mod engine;
 pub mod render;
 pub mod reserved;
+pub mod sleep;
 
 use brew_info::Formula;
 use std::time::Duration;

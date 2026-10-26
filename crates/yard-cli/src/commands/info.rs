@@ -58,6 +58,8 @@ pub(super) fn source_label(source: Option<&SettingSource>) -> &'static str {
         Some(SettingSource::Default) | None => "default",
         Some(SettingSource::Nvmrc) => ".nvmrc",
         Some(SettingSource::NodeVersionFile) => ".node-version",
+        Some(SettingSource::YardToml) => "yard.toml",
+        Some(SettingSource::ServicesToml) => "services.toml",
         Some(SettingSource::Other) => "elsewhere",
     }
 }

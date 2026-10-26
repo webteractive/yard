@@ -195,6 +195,17 @@ impl Paths {
         self.root.join("run")
     }
 
+    /// yardd's wake socket, which nginx and the shims ask before a site's sleeping
+    /// services are needed (M4e spec §6.3).
+    pub fn wake_socket(&self) -> PathBuf {
+        self.run_dir().join("wake.sock")
+    }
+
+    /// The sites with a sleeping instance, one per line, for the shims (M4e spec §5.2).
+    pub fn sleeping_file(&self) -> PathBuf {
+        self.run_dir().join("sleeping")
+    }
+
     pub fn nginx_pid(&self) -> PathBuf {
         self.run_dir().join("nginx.pid")
     }
@@ -285,6 +296,13 @@ mod tests {
         assert_eq!(p.ca_key(), Path::new("/r/ca/yard-ca.key"));
         assert_eq!(p.cert("blog"), Path::new("/r/certs/blog.pem"));
         assert_eq!(p.cert_key("blog"), Path::new("/r/certs/blog.key"));
+    }
+
+    #[test]
+    fn sleep_paths_are_in_run() {
+        let p = Paths::new("/r");
+        assert_eq!(p.wake_socket(), Path::new("/r/run/wake.sock"));
+        assert_eq!(p.sleeping_file(), Path::new("/r/run/sleeping"));
     }
 
     #[test]

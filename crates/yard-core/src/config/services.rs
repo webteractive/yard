@@ -3,6 +3,7 @@
 
 use super::{config_error, read_optional};
 use crate::Paths;
+use crate::services::sleep::SleepAfter;
 use crate::services::{Engine, parse_instance};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -22,6 +23,8 @@ pub struct ServiceEntry {
     pub version: Option<String>,
     pub formula: String,
     pub stopped: bool,
+    /// Overrides `yard.toml`'s `service_sleep_after` (M4e spec §4).
+    pub sleep_after: Option<SleepAfter>,
 }
 
 pub fn load_services(paths: &Paths) -> Result<ServicesConfig, YardError> {
@@ -38,6 +41,7 @@ struct RawEntry {
     formula: String,
     #[serde(default)]
     stopped: bool,
+    sleep_after: Option<SleepAfter>,
 }
 
 #[derive(Deserialize)]
@@ -91,7 +95,13 @@ pub fn parse_services(text: Option<&str>, file: &Path) -> Result<ServicesConfig,
         }
         services.insert(
             instance.clone(),
-            ServiceEntry { engine, version: line, formula: entry.formula, stopped: entry.stopped },
+            ServiceEntry {
+                engine,
+                version: line,
+                formula: entry.formula,
+                stopped: entry.stopped,
+                sleep_after: entry.sleep_after,
+            },
         );
     }
     Ok(ServicesConfig { services })
@@ -131,6 +141,20 @@ mod tests {
         assert_eq!(c.services["redis"].version, None);
         assert!(!c.services["redis"].stopped);
         assert!(parse("[services.minio]\nengine = \"minio\"\nformula = \"minio/stable/minio\"\n").is_ok());
+    }
+
+    #[test]
+    fn sleep_after_on_an_instance() {
+        use crate::services::sleep::SleepAfter;
+        let c = parse("[services.redis]\nengine = \"redis\"\nformula = \"redis\"\nsleep_after = \"off\"\n")
+            .unwrap();
+        assert_eq!(c.services["redis"].sleep_after, Some(SleepAfter::Off));
+        let c = parse("[services.redis]\nengine = \"redis\"\nformula = \"redis\"\n").unwrap();
+        assert_eq!(c.services["redis"].sleep_after, None);
+        let e = parse("[services.redis]\nengine = \"redis\"\nformula = \"redis\"\nsleep_after = \"fast\"\n")
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        assert_eq!(e.data.as_ref().unwrap()["line"], 4);
     }
 
     #[test]
