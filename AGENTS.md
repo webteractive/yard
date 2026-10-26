@@ -49,7 +49,7 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
   path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node is
   designed in `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md` (approved
-  2026-10-26) and still needs a plan. The maintainer moved emailulator out of M4b into
+  2026-10-26) and planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md` (approved 2026-10-26, being built on main). The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
