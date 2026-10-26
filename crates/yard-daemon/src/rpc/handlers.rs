@@ -26,8 +26,8 @@ use yard_proto::methods::{
     ProxyParams, RangeParams, SiteParams, UnitParams,
 };
 use yard_proto::{
-    DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, StatusInfo, UnitState,
-    VersionInfo, YardError,
+    DoctorReport, ErrorCode, Holder, PROTOCOL_VERSION, PortInfo, Profile, SiteInfo, SleepingInstance,
+    StatusInfo, UnitState, VersionInfo, YardError,
 };
 
 pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value, YardError> {
@@ -255,7 +255,14 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
         units: ctx.supervisor().list(),
         sites: snapshot.as_ref().map_or(0, |s| s.resolution.sites.len()),
         config_error: ctx.reconciler.last_error().await,
-        sleeping: vec![],
+        sleeping: ctx
+            .sleeper
+            .asleep()
+            .into_iter()
+            .filter_map(|(name, since)| {
+                Some(SleepingInstance { name, since: crate::services::rfc3339(since)? })
+            })
+            .collect(),
     })
 }
 
@@ -418,6 +425,7 @@ async fn doctor(ctx: &Context, params: DoctorParams) -> DoctorReport {
         resolver_dir: &ctx.resolver_dir,
         security: &ctx.security,
         client_env: params.client_env,
+        sleeping: ctx.sleeper.asleep(),
     })
     .await
 }

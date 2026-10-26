@@ -49,6 +49,7 @@ async fn offline(ctx: &Ctx) -> DoctorReport {
         resolver_dir: Path::new(RESOLVER_DIR),
         security: &ctx.security,
         client_env: Default::default(),
+        sleeping: Default::default(),
     })
     .await
 }

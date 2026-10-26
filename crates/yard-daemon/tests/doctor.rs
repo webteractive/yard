@@ -70,6 +70,7 @@ impl Env {
             resolver_dir: self.resolver.path(),
             security: &self.fx.security,
             client_env: Default::default(),
+            sleeping: Default::default(),
         })
         .await
     }
@@ -139,6 +140,7 @@ async fn all_ok_on_healthy_fixture() {
         resolver_dir: e.resolver.path(),
         security: &e.fx.security,
         client_env: Default::default(),
+        sleeping: Default::default(),
     })
     .await;
     sup.shutdown().await;
@@ -248,6 +250,7 @@ async fn failed_unit_reports_last_lines() {
         resolver_dir: e.resolver.path(),
         security: &e.fx.security,
         client_env: Default::default(),
+        sleeping: Default::default(),
     })
     .await;
 
@@ -317,6 +320,7 @@ async fn failed_reconcile_fails_config_and_units() {
         resolver_dir: e.resolver.path(),
         security: &e.fx.security,
         client_env: Default::default(),
+        sleeping: Default::default(),
     })
     .await;
 
@@ -654,6 +658,7 @@ impl Env {
             resolver_dir: self.resolver.path(),
             security: &self.fx.security,
             client_env: client_env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            sleeping: Default::default(),
         })
         .await
     }

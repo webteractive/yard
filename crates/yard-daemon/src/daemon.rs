@@ -7,8 +7,9 @@ use crate::helper_client::HelperClient;
 use crate::jobs::Jobs;
 use crate::privileged::PrivilegedSockets;
 use crate::reconcile::Reconciler;
+use crate::sleep::{SleepConfig, Sleeper};
 use crate::supervisor::{Supervisor, SupervisorConfig};
-use crate::{portscan, rpc, services, watch};
+use crate::{portscan, rpc, services, sleep, watch};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
@@ -48,6 +49,8 @@ pub struct DaemonOptions {
     /// Where DBngin.app and Postgres.app would be installed. Their usual ports stay unpinned
     /// while either is, since a probe only sees a running server.
     pub app_dirs: Vec<PathBuf>,
+    /// How the idle loop samples service instances and keeps time (M4e).
+    pub sleep: SleepConfig,
 }
 
 impl DaemonOptions {
@@ -66,6 +69,7 @@ impl DaemonOptions {
             security: PathBuf::from("/usr/bin/security"),
             usual_ports: None,
             app_dirs: app_dirs(),
+            sleep: SleepConfig::production(),
         }
     }
 }
@@ -90,6 +94,8 @@ pub struct Context {
     /// `DaemonOptions.usual_ports` and `app_dirs`, which `services.add` allocates ports from.
     pub usual_ports: Option<BTreeMap<String, u16>>,
     pub app_dirs: Vec<PathBuf>,
+    /// Which service instances sleep; the reconciler holds the same one.
+    pub sleeper: Arc<Sleeper>,
 }
 
 impl Context {
@@ -118,6 +124,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let brew = Brew::new(&opts.brew_prefix);
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
+    let sleeper = Arc::new(Sleeper::default());
     let reconciler = Arc::new(
         Reconciler::new(
             opts.paths.clone(),
@@ -128,7 +135,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
             opts.resolver_dir.clone(),
         )?
         .with_shim(opts.shim.clone())
-        .with_services(opts.usual_ports.clone(), opts.app_dirs.clone()),
+        .with_services(opts.usual_ports.clone(), opts.app_dirs.clone())
+        .with_sleeper(sleeper.clone()),
     );
     let jobs = Jobs::new(bus.clone());
     let ctx = Arc::new(Context {
@@ -142,6 +150,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         security: opts.security.clone(),
         usual_ports: opts.usual_ports.clone(),
         app_dirs: opts.app_dirs.clone(),
+        sleeper,
     });
 
     claim(&socket).await?;
@@ -156,6 +165,11 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     for (instance, pid) in services::stop_orphans(&opts.paths, &ctx.brew).await {
         tracing::warn!("stopped {instance} (pid {pid}), which an earlier yardd left running");
     }
+    // Every instance starts awake (M4e spec §6.4), so a list a killed yardd left is stale.
+    let sleeping = opts.paths.sleeping_file();
+    if let Err(e) = yard_core::generated::write_atomic(&sleeping, "") {
+        tracing::warn!("cannot empty {}: {e}", sleeping.display());
+    }
     match ctx.reconciler.reconcile().await {
         Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),
         Err(e) => tracing::error!("first reconcile failed: {}", describe(&e)),
@@ -163,11 +177,13 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     // Docroots are rechecked on the port scan's cadence.
     let watcher = watch::spawn(ctx.clone(), opts.debounce, opts.port_scan_interval).await;
     let scan = portscan::spawn(ctx.clone(), opts.port_scan_interval);
+    let idle = sleep::spawn(ctx.clone(), opts.sleep);
 
     rpc::server::serve(listener, ctx.clone(), shutdown).await;
 
     watcher.abort();
     scan.abort();
+    idle.abort();
     ctx.supervisor().shutdown().await;
     // The port goes back to the system: the next yardd asks the helper again.
     ctx.supervisor().sockets().release_except(&[]);

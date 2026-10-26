@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use yard_core::Paths;
 use yard_core::config::TomlFile;
 use yard_daemon::daemon::{DaemonOptions, run};
+use yard_daemon::sleep::SleepConfig;
 use yard_proto::rpc::{Request, encode_line};
 use yard_proto::{PROTOCOL_VERSION, YardError};
 
@@ -50,6 +51,9 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         ),
         // No DBngin.app or Postgres.app here, whatever this machine has installed.
         app_dirs: vec![no_apps],
+        // A sample every 50 ms and a millisecond for each second of a `sleep_after`, so
+        // `"60s"` lasts 60 ms.
+        sleep: SleepConfig { sample_interval: Duration::from_millis(50), second: Duration::from_millis(1) },
     }
 }
 

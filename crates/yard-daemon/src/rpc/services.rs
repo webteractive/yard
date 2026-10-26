@@ -6,6 +6,7 @@
 use super::handlers::{reconcile, snapshot};
 use crate::daemon::Context;
 use crate::services::{self, Add, Resolved};
+use crate::sleep::Sleeper;
 use crate::sources::require_trusted;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
@@ -79,7 +80,7 @@ pub(super) async fn list(ctx: &Context) -> Result<Vec<ServiceInfo>, YardError> {
         .services
         .services
         .keys()
-        .filter_map(|name| services::service_info(&snap, supervisor, name))
+        .filter_map(|name| services::service_info(&snap, supervisor, &ctx.sleeper, name))
         .collect())
 }
 
@@ -117,15 +118,22 @@ const LOG_LINES: usize = 100;
 /// starting.
 async fn info(ctx: &Context, name: &str) -> Result<ServiceInfo, YardError> {
     let snap = snapshot(ctx).await?;
-    instance_info(&snap, ctx.supervisor(), name).ok_or_else(|| services::not_found(name))
+    instance_info(&snap, ctx.supervisor(), &ctx.sleeper, name).ok_or_else(|| services::not_found(name))
 }
 
 /// `service_info` with the state a caller can act on: see `info`. `None` for a name
-/// `services.toml` does not list.
-pub(super) fn instance_info(snap: &Snapshot, supervisor: &Supervisor, name: &str) -> Option<ServiceInfo> {
-    let mut info = services::service_info(snap, supervisor, name)?;
+/// `services.toml` does not list. An asleep instance stays `Stopped`, even while its unit is
+/// still stopping.
+pub(super) fn instance_info(
+    snap: &Snapshot,
+    supervisor: &Supervisor,
+    sleeper: &Sleeper,
+    name: &str,
+) -> Option<ServiceInfo> {
+    let mut info = services::service_info(snap, supervisor, sleeper, name)?;
     if info.state == ServiceState::Stopped
         && !info.stopped_by_user
+        && info.sleeping_since.is_none()
         && supervisor.list().iter().any(|u| u.name == name)
     {
         info.state = ServiceState::Starting;

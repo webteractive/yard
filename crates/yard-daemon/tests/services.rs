@@ -463,7 +463,7 @@ async fn service_info_reports_state_ports_console_and_users() {
     assert!(report.warnings.iter().all(|w| !w.contains("is missing")), "{:?}", report.warnings);
     let snapshot = rec.snapshot().await.unwrap();
 
-    let mysql_info = service_info(&snapshot, &sup, "mysql-8.4").unwrap();
+    let mysql_info = service_info(&snapshot, &sup, rec.sleeper(), "mysql-8.4").unwrap();
     assert_eq!(mysql_info.state, ServiceState::Stopped);
     assert!(mysql_info.stopped_by_user);
     assert_eq!(mysql_info.version.as_deref(), Some("8.4"));
@@ -473,16 +473,19 @@ async fn service_info_reports_state_ports_console_and_users() {
     assert_eq!(mysql_info.console, None);
     assert_eq!(mysql_info.used_by, ["blog"]);
 
-    let redis_info = service_info(&snapshot, &sup, "redis").unwrap();
+    let redis_info = service_info(&snapshot, &sup, rec.sleeper(), "redis").unwrap();
     assert!(!redis_info.stopped_by_user);
     assert_eq!(redis_info.used_by, ["blog", "shop"], "`true` means the one instance there is");
     let started = Instant::now();
-    while !matches!(service_info(&snapshot, &sup, "redis").unwrap().state, ServiceState::Running) {
+    while !matches!(
+        service_info(&snapshot, &sup, rec.sleeper(), "redis").unwrap().state,
+        ServiceState::Running
+    ) {
         assert!(started.elapsed() < Duration::from_secs(10), "redis runs");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    let minio_info = service_info(&snapshot, &sup, "minio").unwrap();
+    let minio_info = service_info(&snapshot, &sup, rec.sleeper(), "minio").unwrap();
     assert_eq!(
         minio_info.ports.iter().map(|p| (p.name.as_str(), p.port)).collect::<Vec<_>>(),
         [("minio", api), ("minio-console", console)]
@@ -493,13 +496,13 @@ async fn service_info_reports_state_ports_console_and_users() {
         "nginx's port, not the console's"
     );
     assert_eq!(minio_info.account.password.as_deref(), Some("minioadmin"));
-    assert!(service_info(&snapshot, &sup, "postgres-17").is_none());
+    assert!(service_info(&snapshot, &sup, rec.sleeper(), "postgres-17").is_none());
 
     // Under secure_by_default the console is https, on nginx's https port.
     std::fs::write(fx.paths.yard_toml(), "secure_by_default = true\n").unwrap();
     rec.reconcile().await.unwrap();
     let snapshot = rec.snapshot().await.unwrap();
-    let minio_info = service_info(&snapshot, &sup, "minio").unwrap();
+    let minio_info = service_info(&snapshot, &sup, rec.sleeper(), "minio").unwrap();
     assert_eq!(minio_info.console, Some(format!("https://minio.yard:{https}")));
 
     // A site named minio takes the host, so there is no console to point at.
@@ -510,7 +513,7 @@ async fn service_info_reports_state_ports_console_and_users() {
     file.save().unwrap();
     rec.reconcile().await.unwrap();
     let snapshot = rec.snapshot().await.unwrap();
-    assert_eq!(service_info(&snapshot, &sup, "minio").unwrap().console, None);
+    assert_eq!(service_info(&snapshot, &sup, rec.sleeper(), "minio").unwrap().console, None);
     sup.shutdown().await;
     assert!(sup.list().iter().all(|u| u.state == UnitState::Stopped));
 }

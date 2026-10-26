@@ -23,6 +23,7 @@ pub mod project;
 pub mod reconcile;
 pub mod rpc;
 pub mod services;
+pub mod sleep;
 pub mod sources;
 pub mod state;
 pub mod supervisor;

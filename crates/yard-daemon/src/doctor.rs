@@ -10,6 +10,7 @@ use crate::state::State;
 use crate::{holder, portscan, services, tls};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 use yard_core::brew::Brew;
 use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
@@ -47,6 +48,8 @@ pub struct DoctorInput<'a> {
     /// What the CLI's shell sets that brew reads (`DoctorParams::client_env`). Empty when
     /// doctor runs in the CLI itself: its environment is then yardd's too.
     pub client_env: BTreeMap<String, String>,
+    /// The service instances asleep and since when (M4e); empty without yardd.
+    pub sleeping: BTreeMap<String, OffsetDateTime>,
 }
 
 /// What the config-dependent checks read: yardd's last good snapshot, or the files.
@@ -261,6 +264,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             trust: &trust,
             units: &input.units,
             daemon_running: input.daemon_running,
+            sleeping: &input.sleeping,
         };
         checks.extend(service_checks(&ask, sites, &view.projects).await);
     }
@@ -486,6 +490,7 @@ struct ServiceView<'a> {
     trust: &'a Trust,
     units: &'a [UnitInfo],
     daemon_running: bool,
+    sleeping: &'a BTreeMap<String, OffsetDateTime>,
 }
 
 /// One group per instance (`service:<i>`, `service-data:<i>`, `service-line:<i>`), one
@@ -523,6 +528,12 @@ fn instance_state(view: &ServiceView<'_>, instance: &str, entry: &ServiceEntry) 
     if !view.daemon_running {
         return None;
     }
+    if let Some(since) = view.sleeping.get(instance) {
+        return Some(ok(
+            &id,
+            format!("{instance} is sleeping since {}; it wakes on use", local_time(*since)),
+        ));
+    }
     let unit = view.units.iter().find(|u| u.name == instance);
     Some(match unit.map(|u| &u.state) {
         Some(UnitState::Running) => ok(&id, format!("{instance} is running")),
@@ -545,6 +556,18 @@ fn instance_state(view: &ServiceView<'_>, instance: &str, entry: &ServiceEntry) 
             "yard ports check shows a port it could not have",
         ),
     })
+}
+
+/// `14:02` in the machine's time zone. The `time` crate refuses the local offset in a
+/// process with threads, so this asks libc, whose `localtime_r` is safe in one.
+fn local_time(time: OffsetDateTime) -> String {
+    let secs: libc::time_t = time.unix_timestamp();
+    // SAFETY: `tm` is plain data that `localtime_r` fills; both pointers are valid.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+        return format!("{:02}:{:02} UTC", time.hour(), time.minute());
+    }
+    format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
 /// `services/<i>/data/` for the engines whose init makes it. Yard never re-initializes

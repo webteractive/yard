@@ -7,6 +7,7 @@ use crate::jobs::JobCtx;
 use crate::orphans;
 use crate::probe::{self, Proto};
 use crate::reconcile::{Reconciler, serves_console};
+use crate::sleep::Sleeper;
 use crate::sources::{brew_stdout, require_trusted};
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
@@ -23,11 +24,12 @@ use yard_core::project::ServiceWant;
 use yard_core::services::brew_info::{self, Formula};
 use yard_core::services::render::{UnitCommand, command, init_command};
 use yard_core::services::reserved::reserved_ports;
+use yard_core::services::sleep::effective_sleep;
 use yard_core::services::{
     DATABASE_START_TIMEOUT, Engine, READY_WAIT, candidate_names, instance_name, line_formula, resolve_line,
 };
 use yard_core::sources::tap_of;
-use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, SettingSource, UnitState, YardError};
+use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, UnitState, YardError};
 
 /// How long a service gets to stop after its stop signal before SIGKILL: a database
 /// finishes its checkpoint (spec §15).
@@ -148,8 +150,15 @@ pub fn console_url(tld: &str, secure: bool, http: u16, https: u16) -> String {
 
 /// One instance of `services.toml` as the service methods report it, or `None` when
 /// `name` is not in it. The state comes from the supervised unit (`Stopped` with
-/// `stopped_by_user` when `services.toml` says `stopped`; a backoff counts as starting).
-pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) -> Option<ServiceInfo> {
+/// `stopped_by_user` when `services.toml` says `stopped`; a backoff counts as starting). An
+/// asleep instance is `Stopped` with `sleeping_since`, and one waking is `Starting` with it
+/// until its unit runs (M4e).
+pub fn service_info(
+    snapshot: &Snapshot,
+    supervisor: &Supervisor,
+    sleeper: &Sleeper,
+    name: &str,
+) -> Option<ServiceInfo> {
     let entry = snapshot.services.services.get(name)?;
     let engine = entry.engine;
     let ports: Vec<PortRef> = port_entries(engine, name)
@@ -159,7 +168,9 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
             Some(PortRef { name: entry_name, port })
         })
         .collect();
-    let state = if entry.stopped {
+    let asleep = sleeper.asleep().get(name).copied();
+    let waking = sleeper.waking_since(name);
+    let state = if entry.stopped || asleep.is_some() {
         ServiceState::Stopped
     } else {
         let unit = supervisor.list().into_iter().find(|u| u.name == name);
@@ -176,6 +187,13 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
             Some((UnitState::Stopped, _)) | None => ServiceState::Stopped,
         }
     };
+    let sleeping_since = match (&state, asleep, waking) {
+        (ServiceState::Stopped, Some(since), _) => Some(since),
+        (ServiceState::Starting, None, Some(since)) => Some(since),
+        _ => None,
+    };
+    let (sleep_after_secs, sleep_after_source) =
+        effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after);
     let port_of = |unit: &str, usual: u16| snapshot.registry.entries.get(unit).map_or(usual, |e| e.port);
     let console = (engine == Engine::Minio && serves_console(&snapshot.services, &snapshot.resolution.sites))
         .then(|| {
@@ -195,10 +213,15 @@ pub fn service_info(snapshot: &Snapshot, supervisor: &Supervisor, name: &str) ->
         account: engine.account(&macos_user()),
         console,
         used_by: used_by(snapshot, engine, name),
-        sleeping_since: None,
-        sleep_after_secs: None,
-        sleep_after_source: SettingSource::Default,
+        sleeping_since: sleeping_since.and_then(rfc3339),
+        sleep_after_secs,
+        sleep_after_source,
     })
+}
+
+/// A time as the wire carries it.
+pub fn rfc3339(time: time::OffsetDateTime) -> Option<String> {
+    time.format(&time::format_description::well_known::Rfc3339).ok()
 }
 
 /// Why the unit of `instance` failed, from the supervisor's `last_error`: a port someone else

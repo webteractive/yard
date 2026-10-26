@@ -5,6 +5,7 @@ use super::handlers::{not_found, snapshot};
 use super::services::instance_info;
 use crate::daemon::Context;
 use crate::services::{default_instance, not_found as service_not_found, service_info};
+use crate::sleep::Sleeper;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
 use std::collections::BTreeMap;
@@ -29,7 +30,7 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
     let supervisor = ctx.supervisor();
     if let Some(name) = &p.service {
         let engine = snap.services.services.get(name).map(|e| e.engine);
-        let info = service_info(&snap, supervisor, name);
+        let info = service_info(&snap, supervisor, &ctx.sleeper, name);
         return match (engine, info) {
             (Some(engine), Some(info)) => Ok(vec![instance_block(engine, &info)]),
             _ => Err(service_not_found(name)),
@@ -43,12 +44,14 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
         (None, None) => None,
     };
     let blocks = match site {
-        Some(site) => project_blocks(&snap, supervisor, site)?,
+        Some(site) => project_blocks(&snap, supervisor, &ctx.sleeper, site)?,
         None => snap
             .services
             .services
             .iter()
-            .filter_map(|(name, entry)| Some((entry.engine, service_info(&snap, supervisor, name)?)))
+            .filter_map(|(name, entry)| {
+                Some((entry.engine, service_info(&snap, supervisor, &ctx.sleeper, name)?))
+            })
             .map(|(engine, info)| (engine, instance_block(engine, &info)))
             .collect(),
     };
@@ -60,6 +63,7 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
 fn project_blocks(
     snap: &Snapshot,
     supervisor: &Supervisor,
+    sleeper: &Sleeper,
     site: &SiteInfo,
 ) -> Result<Vec<(Engine, EnvBlock)>, YardError> {
     let file = match snap.projects.get(&site.name).map(|l| &l.parsed) {
@@ -72,7 +76,7 @@ fn project_blocks(
         .iter()
         .map(|(&engine, want)| {
             let (line, name) = wanted_instance(snap, engine, want);
-            let block = match name.and_then(|n| service_info(snap, supervisor, &n)) {
+            let block = match name.and_then(|n| service_info(snap, supervisor, sleeper, &n)) {
                 Some(info) => instance_block(engine, &info),
                 None => missing_block(engine, line),
             };
@@ -208,7 +212,7 @@ pub(super) async fn site_detail(ctx: &Context, p: SiteDetailParams) -> Result<Si
                 SiteService {
                     engine: engine.key().to_string(),
                     want: line.map(str::to_string),
-                    service: name.and_then(|n| instance_info(&snap, supervisor, &n)),
+                    service: name.and_then(|n| instance_info(&snap, supervisor, &ctx.sleeper, &n)),
                 }
             })
             .collect(),

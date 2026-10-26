@@ -8,6 +8,7 @@ use crate::helper_client::HelperClient;
 use crate::nginx::NginxCommand;
 use crate::probe::{self, Proto};
 use crate::services;
+use crate::sleep::Sleeper;
 use crate::state::{Snapshot, State};
 use crate::supervisor::{Health, Reload, Supervisor, UnitSpec};
 use crate::tls;
@@ -69,6 +70,8 @@ pub struct Reconciler {
     usual_ports: Option<BTreeMap<String, u16>>,
     /// Where DBngin.app and Postgres.app would be, for the ports they keep.
     app_dirs: Vec<PathBuf>,
+    /// The instances asleep, which get no unit (M4e).
+    sleeper: Arc<Sleeper>,
 }
 
 const HERD_APP: &str = "/Applications/Herd.app";
@@ -100,6 +103,7 @@ impl Reconciler {
             shim: None,
             usual_ports: None,
             app_dirs: Vec::new(),
+            sleeper: Arc::new(Sleeper::default()),
         })
     }
 
@@ -113,6 +117,16 @@ impl Reconciler {
         self.usual_ports = usual_ports;
         self.app_dirs = app_dirs;
         self
+    }
+
+    /// The sleep state yardd's `Context` shares.
+    pub fn with_sleeper(mut self, sleeper: Arc<Sleeper>) -> Self {
+        self.sleeper = sleeper;
+        self
+    }
+
+    pub fn sleeper(&self) -> &Arc<Sleeper> {
+        &self.sleeper
     }
 
     pub fn with_shim(mut self, shim: Option<PathBuf>) -> Self {
@@ -488,7 +502,9 @@ impl Reconciler {
                 pid_file: None,
             });
         }
-        for (instance, entry) in services_cfg.services.iter().filter(|(_, e)| !e.stopped) {
+        // An asleep instance keeps its ports and gets no unit, which stops a running one.
+        let awake = |instance: &str| !self.sleeper.is_asleep(instance);
+        for (instance, entry) in services_cfg.services.iter().filter(|(i, e)| !e.stopped && awake(i)) {
             let Some(ports) = service_ports.get(instance) else { continue };
             let cmd =
                 services::unit_command(&state.brew, &paths, entry.engine, instance, &entry.formula, ports);
