@@ -3,12 +3,18 @@
 //! `node.list --available` do.
 
 use crate::project::read_project_file;
+use crate::sources::BREW_TIMEOUT;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use yard_core::Paths;
+use yard_core::brew::Brew;
 use yard_core::config::{SitesConfig, YardConfig, load_sites, load_yard};
-use yard_core::node::{LtsMap, NodeSpec, NodeVersion, parse_spec, pick};
-use yard_core::shim::{NodeSource, resolve_node, uses_node};
-use yard_proto::{ErrorCode, SettingSource, SiteInfo, SiteKind, SiteNode, YardError};
+use yard_core::node::{
+    DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, lts_from, matches, newest_per_line, parse_ls_remote,
+    parse_spec, pick,
+};
+use yard_core::shim::{NodeSource, child_path, resolve_node, uses_node};
+use yard_proto::{ErrorCode, NodeRelease, SettingSource, SiteInfo, SiteKind, SiteNode, YardError};
 
 /// The versions fnm has fully installed under `node/`, oldest first.
 pub fn installed(paths: &Paths) -> Vec<NodeVersion> {
@@ -105,4 +111,96 @@ fn setting(source: NodeSource) -> (SettingSource, Option<PathBuf>) {
 /// The spec of a site whose `node` has one.
 pub fn uses(site: &SiteInfo) -> Option<NodeSpec> {
     parse_spec(site.node.as_ref()?.spec.as_deref()?).ok()
+}
+
+/// What fnm runs with: Yard's `node/` as its directory, and no colour or progress noise.
+pub fn fnm_env(paths: &Paths) -> Vec<(String, String)> {
+    vec![
+        ("FNM_DIR".to_string(), paths.node_dir().display().to_string()),
+        ("FNM_LOGLEVEL".to_string(), "info".to_string()),
+    ]
+}
+
+/// Records the LTS codenames a release listing named, for shims to resolve `lts/<name>`.
+pub fn write_lts(paths: &Paths, map: &LtsMap) -> std::io::Result<()> {
+    yard_core::generated::write_atomic(&paths.lts_toml(), &map.render())
+}
+
+/// `node.list --available`: the newest release of each line on nodejs.org, from
+/// `fnm ls-remote`, run outside a job since it only reads. Refreshes `lts.toml`.
+pub async fn available(
+    brew: &Brew,
+    paths: &Paths,
+    major: Option<u32>,
+) -> Result<Vec<NodeRelease>, YardError> {
+    let fnm = brew.fnm_bin();
+    if !fnm.exists() {
+        return Err(YardError::new(ErrorCode::FormulaMissing, "fnm is not installed")
+            .with_hint("brew install fnm, or yard node install 22, which installs it"));
+    }
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut cmd = tokio::process::Command::new(&fnm);
+    cmd.arg("ls-remote")
+        .envs(fnm_env(paths))
+        .env("PATH", child_path(None, &inherited))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    // SAFETY: the hook makes only async-signal-safe calls.
+    unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+    crate::fds::settle_before_fork();
+    let out = tokio::time::timeout(BREW_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| YardError::new(ErrorCode::JobFailed, "fnm ls-remote did not answer within 30 s"))?
+        .map_err(|e| YardError::new(ErrorCode::JobFailed, format!("cannot run {}: {e}", fnm.display())))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let tail = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output");
+        return Err(YardError::new(ErrorCode::JobFailed, format!("fnm ls-remote failed: {tail}"))
+            .with_hint("check the network; nodejs.org lists the releases"));
+    }
+    let releases = parse_ls_remote(&String::from_utf8_lossy(&out.stdout));
+    if let Err(e) = write_lts(paths, &lts_from(&releases)) {
+        tracing::warn!("cannot write {}: {e}", paths.lts_toml().display());
+    }
+    Ok(newest_per_line(&releases, major)
+        .into_iter()
+        .map(|r| NodeRelease { version: r.version.to_string(), lts: r.lts })
+        .collect())
+}
+
+/// `NODE_IN_USE` when `v` is the only installed version the default spec, or the spec of a
+/// linked site that uses Node, matches: removing it would leave them nothing to run. `sites`
+/// is the snapshot's; their Node part is filled here.
+pub fn in_use(v: NodeVersion, mut sites: Vec<SiteInfo>, paths: &Paths) -> Result<(), YardError> {
+    fill_node(&mut sites, paths);
+    let (installed, lts) = (installed(paths), lts(paths));
+    let only_v = |spec: &NodeSpec| {
+        let matching: Vec<&NodeVersion> = installed.iter().filter(|i| matches(spec, **i, &lts)).collect();
+        matching == [&v]
+    };
+    let default = load_yard(paths)?.0.default_node.unwrap_or(DEFAULT_SPEC);
+    if only_v(&default) {
+        let hint = match installed.iter().rev().find(|o| **o != v) {
+            Some(other) => format!("yard node default {other}"),
+            None => "yard node list --available".to_string(),
+        };
+        return Err(YardError::new(
+            ErrorCode::NodeInUse,
+            format!("Node {v} is the only Node the default ({default}) runs"),
+        )
+        .with_hint(hint));
+    }
+    let using: Vec<&SiteInfo> = sites.iter().filter(|s| uses(s).is_some_and(|spec| only_v(&spec))).collect();
+    let Some(first) = using.first() else { return Ok(()) };
+    let names: Vec<&str> = using.iter().map(|s| s.name.as_str()).collect();
+    let node = first.node.as_ref();
+    let hint = match (node.map(|n| n.source), node.and_then(|n| n.file.as_deref())) {
+        (Some(SettingSource::SitesToml | SettingSource::ManagedFile), _) | (_, None) => {
+            format!("yard node unuse --site {}", first.name)
+        }
+        (_, Some(file)) => format!("edit {file}"),
+    };
+    Err(YardError::new(ErrorCode::NodeInUse, format!("Node {v} runs {}", names.join(", "))).with_hint(hint))
 }

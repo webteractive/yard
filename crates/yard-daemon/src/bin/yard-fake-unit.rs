@@ -1,5 +1,5 @@
-//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, security and the service
-//! engines (mysqld, postgres, initdb, redis-server, minio), chosen by `argv[0]`. Each reads the
+//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, fnm, security and the
+//! service engines (mysqld, postgres, initdb, redis-server, minio), chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
 use std::io::Write;
@@ -19,6 +19,7 @@ fn main() -> ExitCode {
         Some("dnsmasq") => dnsmasq(&args),
         Some("php-fpm") => php_fpm(&args),
         Some("brew") => brew(Path::new(&argv0), &args),
+        Some("fnm") => fnm(Path::new(&argv0), &args),
         Some("php") => php(&args),
         Some("pecl") => pecl(Path::new(&argv0), &args),
         Some("security") => security(Path::new(&argv0), &args),
@@ -208,7 +209,13 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     };
     let me = std::env::current_exe().unwrap_or_default();
     let service = (verb == "install").then(|| fake_formula(prefix, formula)).flatten();
-    let result = if let Some(entry) = service {
+    let result = if verb == "install" && formula == "fnm" {
+        let dst = prefix.join("bin/fnm");
+        std::fs::create_dir_all(prefix.join("bin")).and_then(|()| {
+            let _ = std::fs::remove_file(&dst);
+            std::os::unix::fs::symlink(&me, &dst)
+        })
+    } else if let Some(entry) = service {
         let name = entry["name"].as_str().unwrap_or_default();
         (|| {
             for bin in engine_bins(name) {
@@ -260,6 +267,71 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(format!("fake brew {line}: {e}")),
+    }
+}
+
+/// What `fnm ls-remote` prints when `<prefix>/fake-fnm-remote` does not say otherwise.
+const FAKE_REMOTE: &str = "v14.21.3 (Fermium)\nv16.14.0\nv16.20.2 (Gallium)\nv20.19.4 (Iron)\nv22.17.1\nv22.18.0 (Jod)\nv24.5.0 (Krypton)\nv25.1.0\n";
+
+/// brew's fnm, at `<prefix>/bin/fnm`. Each call is appended to `<prefix>/fake-fnm.log` with
+/// the `FNM_DIR` it saw. `ls-remote` fails while `fake-fnm-offline` exists, and prints
+/// `fake-fnm-remote` or `FAKE_REMOTE`. `install --progress never v<x>` leaves an empty
+/// version directory and fails when `fake-fnm-fail` holds `v<x>`, as a cancelled download
+/// does; else it installs empty `node`, `npm` and `npx`. `uninstall v<x>` removes it.
+fn fnm(argv0: &Path, args: &[String]) -> ExitCode {
+    let Some(prefix) = argv0.parent().and_then(Path::parent) else {
+        return fail(format!("fnm at {} has no prefix", argv0.display()));
+    };
+    let fnm_dir = std::env::var("FNM_DIR").unwrap_or_default();
+    let log = prefix.join("fake-fnm.log");
+    let logged = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::write(&log, format!("{logged}{} FNM_DIR={fnm_dir}\n", args.join(" ")));
+    let version_dir = |v: &str| Path::new(&fnm_dir).join("node-versions").join(v);
+    let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
+    match arg(0) {
+        "ls-remote" if prefix.join("fake-fnm-offline").exists() => {
+            eprintln!("error: fake network failure");
+            ExitCode::from(1)
+        }
+        "ls-remote" => {
+            print!(
+                "{}",
+                std::fs::read_to_string(prefix.join("fake-fnm-remote")).unwrap_or(FAKE_REMOTE.into())
+            );
+            ExitCode::SUCCESS
+        }
+        "install" if arg(1) == "--progress" && arg(2) == "never" => {
+            let v = arg(3);
+            let dir = version_dir(v);
+            if std::fs::read_to_string(prefix.join("fake-fnm-fail")).is_ok_and(|f| f.trim() == v) {
+                let _ = std::fs::create_dir_all(&dir);
+                eprintln!("error: fake download failure for {v}");
+                return ExitCode::from(1);
+            }
+            let bin = dir.join("installation/bin");
+            let made = std::fs::create_dir_all(&bin).and_then(|()| {
+                for name in ["node", "npm", "npx"] {
+                    std::fs::write(bin.join(name), "")?;
+                    std::fs::set_permissions(
+                        bin.join(name),
+                        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+                    )?;
+                }
+                Ok(())
+            });
+            match made {
+                Ok(()) => {
+                    println!("Installing Node {v}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(format!("fake fnm install {v}: {e}")),
+            }
+        }
+        "uninstall" => match std::fs::remove_dir_all(version_dir(arg(1))) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(format!("fake fnm uninstall {}: {e}", arg(1))),
+        },
+        other => fail(format!("fake fnm has no {other}")),
     }
 }
 

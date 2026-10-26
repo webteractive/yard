@@ -94,6 +94,13 @@ impl Fixture {
 }
 
 impl Fixture {
+    /// brew's `fnm`, as the fake brew's `install fnm` leaves it: the fake, at `bin/fnm`.
+    pub fn add_fnm(&self) {
+        place(&self.brew.path().join("bin/fnm"), |dst| symlink(&self.fake, dst));
+    }
+}
+
+impl Fixture {
     /// A brew keg `opt/<name>` for a service formula (`mysql@8.4`, `postgresql@17`, `redis`,
     /// `minio`) whose binaries are the fake, as the fake brew's `install` leaves it.
     pub fn add_formula(&self, name: &str) {
