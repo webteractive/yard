@@ -20,8 +20,8 @@ const LSOF_TIMEOUT: Duration = Duration::from_secs(5);
 /// or does not finish.
 pub fn client_connections(pid: u32) -> Result<usize, String> {
     let pids = tree(pid).iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-    let tcp = lsof(&["-nP", "-a", "-p", &pids, "-iTCP", "-sTCP:ESTABLISHED", "-F", "n"])?;
-    let unix = lsof(&["-nP", "-a", "-p", &pids, "-U", "-F", "n"])?;
+    let tcp = lsof(&["-nP", "-a", "-p", &pids, "-iTCP", "-sTCP:ESTABLISHED", "-F", "dn"])?;
+    let unix = lsof(&["-nP", "-a", "-p", &pids, "-U", "-F", "dn"])?;
     Ok(count_tcp(&tcp) + count_unix(&unix))
 }
 
@@ -78,21 +78,40 @@ fn lsof(args: &[&str]) -> Result<String, String> {
     reader.join().map_err(|_| "cannot read lsof's output".to_string())
 }
 
-/// Established TCP connections in `lsof -F n` output: `n127.0.0.1:3307->127.0.0.1:50000`.
+/// Established TCP connections in `lsof -F dn` output (`n127.0.0.1:3307->127.0.0.1:50000`),
+/// each socket once: a backend may hold its connection on two descriptors, and a postmaster
+/// holds a copy until it has handed it over.
 fn count_tcp(out: &str) -> usize {
-    names(out).filter(|name| name.contains("->")).count()
+    sockets(out)
+        .filter(|(_, name)| name.contains("->"))
+        .map(|(socket, _)| socket)
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
-/// Accepted unix-socket connections in `lsof -U -F n` output. An accepted socket shows its
-/// listener's path, as the listener itself does, so each path's first line is the listener;
-/// `->0x…` lines are the process's own client ends and are not counted.
+/// Accepted unix-socket connections in `lsof -U -F dn` output. An accepted socket shows its
+/// listener's path, as the listener itself does, so of the sockets naming a path, one per
+/// path is the listener; `->0x…` names are the process's own client ends and are not counted.
 fn count_unix(out: &str) -> usize {
-    let paths: Vec<&str> = names(out).filter(|name| name.starts_with('/')).collect();
-    paths.len() - paths.iter().collect::<BTreeSet<_>>().len()
+    let named: BTreeSet<(&str, &str)> = sockets(out).filter(|(_, name)| name.starts_with('/')).collect();
+    let paths: BTreeSet<&str> = named.iter().map(|(_, name)| *name).collect();
+    named.len() - paths.len()
 }
 
-fn names(out: &str) -> impl Iterator<Item = &str> {
-    out.lines().filter_map(|line| line.strip_prefix('n'))
+/// Each descriptor's `(socket, name)`: the `d` field is the socket's kernel address, which a
+/// descriptor duplicated or inherited shares.
+fn sockets(out: &str) -> impl Iterator<Item = (&str, &str)> {
+    let mut socket = "";
+    out.lines().filter_map(move |line| {
+        if let Some(address) = line.strip_prefix('d') {
+            socket = address;
+        } else if line.starts_with('f') {
+            socket = "";
+        } else if let Some(name) = line.strip_prefix('n') {
+            return Some((socket, name));
+        }
+        None
+    })
 }
 
 #[cfg(test)]
@@ -101,16 +120,24 @@ mod tests {
 
     #[test]
     fn count_tcp_counts_established_lines() {
-        let out = "p1\nf7\nn127.0.0.1:3307->127.0.0.1:50000\nf8\nn127.0.0.1:3307->127.0.0.1:50001\n";
+        let out =
+            "p1\nf7\nd0xa\nn127.0.0.1:3307->127.0.0.1:50000\nf8\nd0xb\nn127.0.0.1:3307->127.0.0.1:50001\n";
         assert_eq!(count_tcp(out), 2);
         assert_eq!(count_tcp("p1\n"), 0);
     }
 
     #[test]
+    fn a_socket_on_two_descriptors_counts_once() {
+        // A backend holding its connection as stdin and stdout, and a postmaster that has not
+        // closed its copy yet.
+        let out = "p1\nf9\nd0xa\nn127.0.0.1:5433->127.0.0.1:50000\np2\nf0\nd0xa\nn127.0.0.1:5433->127.0.0.1:50000\nf1\nd0xa\nn127.0.0.1:5433->127.0.0.1:50000\n";
+        assert_eq!(count_tcp(out), 1);
+    }
+
+    #[test]
     fn count_unix_skips_listeners_and_client_ends() {
-        let out =
-            "p1\nf3\nn/r/run/mysql.sock\nf5\nn->0xabc\nf6\nn/r/run/mysql.sock\nf7\nn/r/run/mysql.sock\n";
+        let out = "p1\nf3\nd0x1\nn/r/run/mysql.sock\nf5\nd0x2\nn->0xabc\nf6\nd0x3\nn/r/run/mysql.sock\nf7\nd0x4\nn/r/run/mysql.sock\nf8\nd0x4\nn/r/run/mysql.sock\n";
         assert_eq!(count_unix(out), 2);
-        assert_eq!(count_unix("p1\nf3\nn/r/run/mysql.sock\n"), 0);
+        assert_eq!(count_unix("p1\nf3\nd0x1\nn/r/run/mysql.sock\n"), 0);
     }
 }
