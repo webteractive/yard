@@ -848,7 +848,7 @@ Each milestone is usable on its own and gets its own implementation plan.
    - **M4c Node:** the fnm wrapper and the file's `node`. Designed in
      `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md`, which refines §8.1, and
      planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md`; built on main on
-     2026-10-26. `scripts/e2e-m4c.sh` is its real-machine check, not run yet.
+     2026-10-26, and verified with `scripts/e2e-m4c.sh` on the maintainer's machine on 2026-10-26.
    - **M4d emailulator** (moved out of M4b by the maintainer on 2026-10-23): emailulator as a
      service, `mail.<tld>`, its `MAIL_*` lines and `emailulator = true` in the file.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in

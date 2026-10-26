@@ -49,8 +49,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
   path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node is
   designed in `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md` (approved
-  2026-10-26) and planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md` (approved 2026-10-26); it is built on main (2026-10-26), and `scripts/e2e-m4c.sh` has not
-  run on this machine yet (it needs `brew install fnm`, so the maintainer decides when). The maintainer moved emailulator out of M4b into
+  2026-10-26) and planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md` (approved 2026-10-26); it is built on main and verified on this machine on 2026-10-26 with `scripts/e2e-m4c.sh`
+  passing on its first run (maintainer approved the run and `brew install fnm`). The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
@@ -165,6 +165,13 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   installed. Under launchd yardd has no locale, and postgres on macOS then exits at startup
   ("postmaster became multithreaded during startup"), so Yard runs `postgres` and `initdb`
   with `LC_ALL=en_US.UTF-8`.
+- For M4c (2026-10-26) the maintainer approved `brew install fnm` (1.39.0), which stays installed.
+  `~/.yard/node` holds fnm's `aliases/`, `node-versions/` and Yard's `lts.toml`; the e2e
+  removes the versions it installs. This machine has a `~/.nvmrc` pinning 22, so a linked
+  site with a `package.json` in its root (eepower, yard-site) runs and reports Node 22 from
+  it, and one without (control, whose `package.json` is in `site/`) has no Node. brew's
+  `python3` is 3.15, which has no `distutils`, so Node 16's node-gyp needs
+  `npm_config_python=/usr/bin/python3` (Apple's 3.9) to build a native module.
 
 ## Build & test
 
