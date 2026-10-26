@@ -6,12 +6,15 @@ paths:
   - "crates/yard-core/src/sources.rs"
   - "crates/yard-daemon/src/sources.rs"
   - "crates/yard-daemon/src/rpc/sources.rs"
+  - "crates/yard-daemon/src/node.rs"
+  - "crates/yard-daemon/src/rpc/node.rs"
 commands:
   - "brew "
 triggers:
   - installing or locating a PHP version, extension, nginx or dnsmasq
   - launching a brew-installed binary
   - gating an install on brew's trust, or trusting a tap or formula
+  - installing Node or running fnm
 ---
 
 # Homebrew is a package source, never a source of truth
@@ -105,5 +108,11 @@ triggers:
   MinIO's `minio/stable/minio` counts as installed only when `opt/minio` exists and a MinIO instance
   in `services.toml` records that formula, or, with no instance, `brew info --json=v2 minio` says the
   keg is the tap's. `opt/minio` alone is not enough: homebrew/core's `minio` shares it.
+- **fnm (M4c).** Run it only by absolute path (`Brew::fnm_bin`, `<prefix>/bin/fnm`) with
+  `node::fnm_env` (`FNM_DIR=<root>/node`, `FNM_LOGLEVEL=info`), never a bare `fnm` and never
+  fnm's own directory. brew installs fnm only inside a `node.install` job, when the binary is
+  missing; it is homebrew/core's, so no trust gate. `node.list --available` runs `fnm
+  ls-remote` outside a job under the 30 s `BREW_TIMEOUT`. Nothing else runs fnm: doctor and the
+  shims only look at `node/node-versions`, and never nvm's or Herd's Node.
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)
   gets the hint `brew reinstall <formula>`, not `brew install`.

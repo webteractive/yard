@@ -24,6 +24,9 @@ triggers:
 - An enum a newer daemon may extend in a minor version carries a `#[serde(other)]` variant
   the daemon never sends (`SettingSource::Other`, shown as `elsewhere`), so an older client
   still reads the answer instead of failing on an unknown variant.
+- The `node.*` methods (protocol 2.7, M4c): `node.list` (`NodeListParams`, `null` is the
+  defaults), `node.install` and `node.uninstall` (jobs), `node.default`, `node.use` and
+  `node.unuse`; `SiteInfo.node` is filled per request, not in reconcile's snapshot.
 - Adding a method touches, in one change: the `yard-proto` const and params, the daemon
   handler, the CLI command, the CLI tests' `MockDaemon`, and the method list in spec §6.2.
 - Mutations go through `TomlFile` and then `reconcile`. Handlers never write generated

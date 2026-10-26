@@ -82,7 +82,7 @@ docroot = "public"
 secure = true
 extensions = ["redis", "imagick"]
 
-# From M4:
+# From M4c:
 node = "20"
 
 [services]
@@ -98,7 +98,7 @@ minio = true
 | `docroot` | path, relative to the project | what nginx serves | the docroot `yard link` detects |
 | `secure` | bool | HTTPS | `yard secure` / `unsecure` |
 | `extensions` | list of names | must be installed and enabled for the site's PHP version | `yard ext add --php` |
-| `node` | major version (M4) | the Node the site's shims use | none yet |
+| `node` | a Node spec (M4c): `"22"`, `"22.17"`, `"16.14.0"`, `"lts/iron"`, `"lts/*"` | the Node the site's shims use | `yard node use` |
 | `[services]` | engine → release line or `true` (M4b) | service instances that must exist | `yard service add` |
 
 - Unknown keys are an error naming the file and the key, as in `sites.toml`
@@ -161,8 +161,10 @@ minio = true
   that `.yard-php` is ignored. A directory with only `.yard-php` works as today. A
   `.yard` that does not parse is an error naming the file, like a bad `.yard-php`; one
   whose PHP is not installed is `FORMULA_MISSING`, hint `yard init`.
-- **Node (M4).** The order is `.yard`'s `node`, then `.nvmrc` / `.node-version`, then
-  the default **(builder's call)**.
+- **Node (M4c).** The order is `.yard`'s `node`, then the site's own setting (its managed
+  `.yard`, else `sites.toml`), then `.nvmrc` / `.node-version`, then the default
+  (M4c spec §5). A `.yard` without `node` falls through to `.nvmrc`. A Node that is not
+  installed never puts a site on the setup page: `init` and `link` offer it instead.
 - **Watching.** yardd watches each linked project's `.yard` the way it watches the TOMLs,
   and reconciles on a change. Reconcile never installs anything.
 - **A site whose `.yard` cannot be met serves a setup page (maintainer).** When the file asks for
@@ -266,8 +268,9 @@ docroot = "public"
 Part of **M4 Node and services (builder's call)**. M4 was split on 2026-10-22: **M4a**
 landed `.yard` with `php`, `docroot`, `secure` and `extensions`, the setup page, the
 shims following the file, and `yard init`; **M4b** adds `[services]` with the services
-themselves, and **M4c** adds `node` with the fnm wrapper. Until M4c, `node` is an unknown
-key, so a file that has it is `PROJECT_FILE_INVALID`.
+themselves, and **M4c** adds `node` with the fnm wrapper (M4c spec,
+`2026-10-25-yard-m4c-node-design.md`). Before M4c, `node` was an unknown key, so a file
+that had it was `PROJECT_FILE_INVALID`.
 
 When built, the same change updates the main spec (§4.5 resolution, §5.1 sites, the
 "nothing is written into the project" decision, which gains the `yard init` exception,

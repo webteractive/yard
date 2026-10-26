@@ -49,7 +49,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
   path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node is
   designed in `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md` (approved
-  2026-10-26) and planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md` (approved 2026-10-26, being built on main). The maintainer moved emailulator out of M4b into
+  2026-10-26) and planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md` (approved 2026-10-26); it is built on main (2026-10-26), and `scripts/e2e-m4c.sh` has not
+  run on this machine yet (it needs `brew install fnm`, so the maintainer decides when). The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
@@ -110,6 +111,10 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - **Never Herd's PHP** (maintainer, 2026-10-20): every PHP command Yard runs or a shim
   `exec`s is an absolute brew keg path, and its PATH comes from `shim::child_path`
   (the keg's `bin` first, every `Herd` directory removed).
+- **Never nvm's or Herd's Node** (M4c spec, 2026-10-26): Node comes only from brew's `fnm`,
+  run by absolute path with `FNM_DIR=~/.yard/node`. Yard never reads, runs or changes
+  `~/.nvm`, Herd's `config/nvm` or fnm's own directory, and the `node`/`npm`/`npx` shims
+  never download: a missing version is `NODE_MISSING` with the `yard node install` hint.
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
 - **v1 scope:** core serving, multi-PHP + isolate, HTTPS, Node + services.
@@ -203,6 +208,15 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   anything if one of the four instances already exists, backs up and restores `services.toml`,
   `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and 6379 or Herd's
   resolver changed. `shellcheck scripts/e2e-m4b.sh` stays clean.
+- `scripts/e2e-m4c.sh` — real-machine M4c check after `e2e-m1.sh`: in a scratch project under
+  `$TMPDIR` whose `.nvmrc` pins 16.14.0, `yard link --yes` installs it and `node -v` and an
+  `npm run` script both report it; `npm install --build-from-source bufferutil` builds; after
+  `yard init`, `yard node use 22` beats the `.nvmrc`; a pin that is not installed fails with
+  the install hint; and `yard node uninstall 16.14.0` is refused while the site pins it. It
+  needs yardd running and `fnm` from brew, and downloads Node, so ask the maintainer first. It backs up
+  and restores `yard.toml` and `sites.toml`, uninstalls only the versions it installed, and
+  fails if a listing of `~/.nvm/versions/node` or Herd's `config/nvm` changed.
+  `shellcheck scripts/e2e-m4c.sh` stays clean.
 
 ## Verifying a change on this machine
 
@@ -265,9 +279,9 @@ Rule files are in `.hydra/rules`.
 | Applies when | Matches (path glob / command) | Rule |
 | --- | --- | --- |
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
-| adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` | config-ownership.md |
+| adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` | config-ownership.md |
 | running yard against the real data root on this machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
-| installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary · gating an install on brew's trust, or trusting a tap or formula | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `crates/yard-core/src/sources.rs` · `crates/yard-daemon/src/sources.rs` · `crates/yard-daemon/src/rpc/sources.rs` · `brew ` | homebrew.md |
+| installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary · gating an install on brew's trust, or trusting a tap or formula · installing Node or running fnm | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `crates/yard-core/src/sources.rs` · `crates/yard-daemon/src/sources.rs` · `crates/yard-daemon/src/rpc/sources.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` · `brew ` | homebrew.md |
 | a unit needs a TCP or UDP port · adding a service or proxy that listens on or targets a port | `crates/yard-core/src/ports/**` · `crates/yard-daemon/src/probe.rs` · `crates/yard-daemon/src/holder.rs` · `crates/yard-daemon/src/portscan.rs` | port-registry.md |
 | adding or changing a privileged operation · installing or uninstalling the root helper | `crates/yard-helper/**` · `crates/yard-daemon/src/helper_client.rs` · `sudo ` · `launchctl` | root-helper.md |
 | adding or changing a daemon API method, event or error code | `crates/yard-proto/**` · `crates/yard-daemon/src/rpc/**` · `crates/yard-cli/src/client.rs` | rpc-protocol.md |

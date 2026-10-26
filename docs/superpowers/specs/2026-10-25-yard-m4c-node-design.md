@@ -248,8 +248,12 @@ They go into one new protocol minor version **(builder's call: which number)**.
 
 ## 9. `yard info`, `yard doctor` and `install-shims`
 
-- `yard info` adds a `node` line: `node 16.14.0 (.nvmrc)`, or
-  `node 16.14.0 — not installed (yard node install 16.14.0)`.
+- `yard info` adds a `node` row after `php`, in the style of its other settings:
+  `node  16.14.0  from .nvmrc`, `node  22.18.0 (22)  from .nvmrc` when the spec is not the
+  version, or `node  16.14.0, not installed  from .nvmrc`, with
+  `Node 16.14.0  (yard node install 16.14.0)` under `needs`. An unusable pin shows
+  `unusable pin`, and its message and hint go in the error lines (changed while building,
+  2026-10-26, to match the rows beside it).
 - `yard doctor` adds:
   - `node:<site>` (warn): a site that uses Node (§5) whose version is not installed, with
     the install hint;

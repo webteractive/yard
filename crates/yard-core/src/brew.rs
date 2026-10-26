@@ -50,7 +50,7 @@ impl Brew {
         self.prefix.join("bin/brew")
     }
 
-    /// brew's `fnm`, which installs Node versions into Yard's `node/` (M4c spec §6).
+    /// brew's `fnm`, which installs Node versions into Yard's `node/` (M4c spec §3).
     pub fn fnm_bin(&self) -> PathBuf {
         self.prefix.join("bin/fnm")
     }

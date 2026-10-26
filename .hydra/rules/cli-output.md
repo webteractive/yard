@@ -30,7 +30,7 @@ triggers:
 - Offline commands (no daemon needed): `start`, `stop`, `version`, `doctor`,
   `ports check`, `install-shims`, `helper install|uninstall`. Everything else talks to `yardd`.
 - A command that would install something asks first (`yard init`, and `yard link` for a
-  project whose `.yard` needs a PHP, extension or service): it lists each need as
+  project whose `.yard` needs a PHP, extension or service, or whose pinned Node is missing): it lists each need as
   `  <what>  (<command>)` and asks `Install these? [y/N] ` only when stdin and stdout are
   terminals and `--json` is off. `--yes` skips the question. Otherwise it installs
   nothing and fails with `NEEDS_INSTALL`, hint `yard init --yes`, and the needs in
@@ -38,6 +38,10 @@ triggers:
   before moving a site onto a directory with its own `.yard` (`Replace it with this
   directory? [y/N] `, `--replace`, else `SITE_NAME_TAKEN`); it never asks when there
   is no `.yard` yet, since codifying the running site is what init is for.
+- A missing Node is offered by `settle` as `  Node <spec>  (yard node install <spec>)` and
+  installed last, but it is never a `Need`: when it is the only thing missing and nobody
+  agrees, `settle` prints `<site> runs Node <spec>, which is not installed: yard node install
+  <spec>` on stderr and still serves, with no `NEEDS_INSTALL`.
 - `yard init` without `--local` refuses a yardd older than protocol 2.6, which would write
   `.yard` into the project (`PROTOCOL_MISMATCH`, hint `yard stop && yard start`).
 - `yard init` writes the managed `.yard` (Yard's data root) unless `--local`; it prints
@@ -45,10 +49,11 @@ triggers:
   `Kept the old file as <backup>.` after a `--replace` over another project's managed file.
   `yard link` ends with `Using <file>` when it adopts a managed file, or
   `<file> is for <project>, so it is not used here.` `isolate`, `unisolate`, `secure`,
-  `unsecure` and `docroot` end their line with ` (set in <file>)` when they edited a managed
+  `unsecure`, `docroot` and `node use` end their line with ` (set in <file>)` when they edited a managed
   file. `yard info` shows `config  managed (<~ path>)` and `from managed` for its settings.
 - Yard never edits dotfiles. Shell setup is printed for the user to paste
-  (`yard install-shims`, M2).
+  (`yard install-shims`, M2). It warns on stderr when the first `php` or `node` on PATH is
+  not Yard's, naming whose it is (`shims::whose`: Herd's, nvm's, mise's, fnm's, brew's).
 - A command that asks about **trust** goes through `commands/sources.rs` `with_trust`: when
   yardd answers an install with `FORMULA_UNTRUSTED` and stdin and stdout are terminals
   (and `--json` is off), it asks `Trust <formula> (from the <tap> tap)? [y/N] `, and yes

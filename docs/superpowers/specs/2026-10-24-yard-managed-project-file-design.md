@@ -38,8 +38,8 @@ file.
   into the project (maintainer).** This reverses the project-file spec's "`yard init` writes it"
   as far as where it writes. `init` in a project that already has a committed `.yard`
   still writes nothing and applies that file, as today.
-- **For a site using a managed file, `yard isolate`, `unisolate`, `secure`, `unsecure` and
-  `docroot` edit that file instead of being refused (maintainer).** The file is in Yard's own
+- **For a site using a managed file, `yard isolate`, `unisolate`, `secure`, `unsecure`,
+  `docroot` and (M4c) `node use`/`unuse` edit that file instead of being refused (maintainer).** The file is in Yard's own
   folder, so the commands keep working the way they do for a site without any `.yard`.
   They are still refused with `SITE_HAS_PROJECT_FILE` when the project has a committed
   `.yard` (§4).
@@ -101,7 +101,8 @@ For a site whose file in use is its managed `.yard` (maintainer, §2):
 | `yard secure`         | sets `secure = true`                 |
 | `yard unsecure`       | sets `secure = false`                |
 | `yard docroot <path>` | sets `docroot = "<path>"`            |
-| `yard node use --site` (M4c) | sets `node`                   |
+| `yard node use <spec>` (M4c) | sets `node = "<spec>"`      |
+| `yard node unuse` (M4c) | removes `node`                     |
 
 - **How it edits.** Each edit goes through `toml_edit`, so every other key, comment and
   the key order survive. It is done under the same process-wide lock as

@@ -118,7 +118,7 @@ yard/
     yard-daemon/             # yardd binary: supervisor, registry, RPC server
     yard-helper/             # root helper binary
     yard-cli/                # yard binary
-    yard-shim/               # php/composer/pecl/phpize/php-config shims (one multicall binary)
+    yard-shim/               # php/composer/pecl/phpize/php-config and node/npm/npx shims (one multicall binary)
   app/                       # Swift package/Xcode project for Yard.app
   docs/
 ```
@@ -134,8 +134,8 @@ yardd keeps the root `0700` at every start, since a home folder is often readabl
 local users and the old location inherited `~/Library`'s `0700`.
 
 ```
-yard.toml                     # global: default php, tld override, secure_by_default, [php."<ver>".extensions]
-sites.toml                    # links, per-site php, secure flag, docroot overrides, proxies
+yard.toml                     # global: default php, default_node, tld override, secure_by_default, [php."<ver>".extensions]
+sites.toml                    # links, per-site php and node, secure flag, docroot overrides, proxies
 ports.toml                    # port registry and active profile (§7)
 services.toml                 # the service instances (§8.2), one [services."<instance>"] table each
 state/hashes.json             # hash of every generated file as Yard last wrote it
@@ -163,6 +163,8 @@ services/<instance>/overrides.conf  # USER-OWNED, created once, included by my.c
 logs/                         # rotated logs per unit
 run/                          # sockets, pid files (run/<instance>.pid for a service)
 bin/                          # shims: php, composer, pecl, phpize, php-config, node, npm, npx
+node/                         # FNM_DIR (M4c): written only by fnm, which Yard runs to install and uninstall
+node/lts.toml                 # generated: LTS codename → major, refreshed on each install
 yardd.sock
 ```
 
@@ -333,7 +335,8 @@ and a pool no site resolves to stops.
 Shims in `bin/` (`php`, `composer`, `pecl`, `phpize`, `php-config`) are small
 Rust binaries (one multicall binary, dispatch on `argv[0]`) that resolve the
 version and `exec` the brew binary. `composer` runs the composer phar under the
-resolved PHP. `yard install-shims` prints the PATH line for the user's shell
+resolved PHP. `node`, `npm` and `npx` are the same binary and run the Node a directory
+pins (§8.1). `yard install-shims` prints the PATH line for the user's shell
 profile; Yard does not edit dotfiles.
 
 - The shim reads `yard.toml` and `sites.toml` itself, with no daemon. The containing
@@ -364,7 +367,8 @@ profile; Yard does not edit dotfiles.
   `yardd`. A link to another `yard-shim` is moved; any other file there is left alone
   and reported.
 - `yard install-shims` (offline) prints `export PATH="<root>/bin:$PATH"` and warns
-  when the first `php` on the current PATH is not Yard's, naming Herd's.
+  when the first `php` or `node` on the current PATH is not Yard's, naming whose it is
+  (Herd's, nvm's, mise's, fnm's or brew's) when it can tell.
 
 ## 5. Serving, DNS, HTTPS
 
@@ -453,7 +457,8 @@ profile; Yard does not edit dotfiles.
   when a secured site's cert is due, so expiry and a deleted file are caught without
   a config change.
 - `yard doctor` warns while a secured site's CA is untrusted (hint `yard trust`), and
-  prints `NODE_EXTRA_CA_CERTS=<path>` for Node and, when Firefox is installed, the
+  prints `NODE_EXTRA_CA_CERTS=<path>` for Node that does not run through Yard's shims (the
+  shims set it themselves when it is unset, M4c spec §6) and, when Firefox is installed, the
   `security.enterprise_roots.enabled` setting to turn on. It edits neither.
 
 ### 5.5 Herd coexistence and migration
@@ -544,7 +549,7 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`,
 `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`,
 `PROJECT_FILE_EXISTS`, `SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
-`FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`. The CLI prints message and hint;
+`FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`, `NODE_MISSING`, `NODE_IN_USE` (M4c). The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI
@@ -641,10 +646,22 @@ proxies and `mail.<tld>`). `yard env` always prints the actual assigned ports.
 
 ### 8.1 Node
 
-- Wraps brew `fnm`. `yard node install <ver>`, `yard node list`,
-  `yard node use <ver> [--site <name>]`.
-- `node`/`npm`/`npx` shims resolve: site setting → `.nvmrc` / `.node-version`
-  in cwd or parents → global default.
+Designed in `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md`, which this
+section only summarizes.
+
+- Node comes from brew's `fnm`, run by absolute path with `FNM_DIR=<root>/node`; Yard never
+  uses fnm's own directory, nvm's or Herd's. brew installs fnm the first time a
+  `node.install` job needs it.
+- `yard node list [--available [<major>]]`, `install [<spec>]`, `uninstall <version>`,
+  `default <spec>`, `use <spec> [--site <name>]` and `unuse [--site <name>]`. A spec is a
+  major (`22`), a major.minor, an exact version or an LTS name (`lts/iron`, `lts/*`); the
+  default is `22`.
+- The `node`/`npm`/`npx` shims resolve: the nearest `.yard`'s `node` → the containing
+  site's setting (its managed `.yard`, else `sites.toml`) → `.nvmrc` / `.node-version` in
+  the cwd or parents → `default_node`. They run the newest installed version the spec
+  matches and never download; a missing one is `NODE_MISSING` with the install hint.
+- A missing Node never stops a site serving. `yard link` and `yard init` offer to install it,
+  and `yard info` and `yard doctor` name it.
 
 ### 8.2 Services
 
@@ -828,7 +845,10 @@ Each milestone is usable on its own and gets its own implementation plan.
      and §8.2 for services, and planned in
      `docs/superpowers/plans/2026-10-23-yard-m4b-services.md`. Built and verified with
      `scripts/e2e-m4b.sh` on the maintainer's machine on 2026-10-24, and merged into main.
-   - **M4c Node:** the fnm wrapper and the file's `node`.
+   - **M4c Node:** the fnm wrapper and the file's `node`. Designed in
+     `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md`, which refines §8.1, and
+     planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md`; built on main, and
+     checked on the maintainer's machine by `scripts/e2e-m4c.sh`.
    - **M4d emailulator** (moved out of M4b by the maintainer on 2026-10-23): emailulator as a
      service, `mail.<tld>`, its `MAIL_*` lines and `emailulator = true` in the file.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in

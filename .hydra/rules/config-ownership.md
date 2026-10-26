@@ -9,6 +9,8 @@ paths:
   - "crates/yard-daemon/src/project.rs"
   - "crates/yard-daemon/src/rpc/project.rs"
   - "crates/yard-daemon/src/managed.rs"
+  - "crates/yard-daemon/src/node.rs"
+  - "crates/yard-daemon/src/rpc/node.rs"
 triggers:
   - adding a generated config file
   - writing to a user's toml or override file
@@ -115,4 +117,12 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   and `TomlFile::remove` moves them onto the item that follows in the same table, else
   onto what follows that table, else to the start of the file's trailing comments (where a
   managed `.yard`'s commented `[services]` block is). Removing never deletes a comment.
+- **Node (M4c spec §10).** `<root>/node/` is fnm's (`FNM_DIR`): Yard writes nothing inside it
+  except through `fnm install`/`uninstall`, never deletes the directory, and removes only a
+  `node-versions/v<x>` with no `bin/node` (a failed download) before retrying. `node/lts.toml`
+  is generated (`write_lts`, header and all) from each `fnm ls-remote`. `default_node` in
+  `yard.toml`, a site's `node` in `sites.toml` and the `node` key of a `.yard` are the user's,
+  edited only by `yard node default` and `use`/`unuse` through `TomlFile` or
+  `managed::edit_managed`, and `use`/`unuse` are refused for a committed `.yard`. A project's
+  `.nvmrc` and `.node-version` are read only (at most 64 KiB, regular files).
 - Yard never writes project `.env` files (spec non-goal).
