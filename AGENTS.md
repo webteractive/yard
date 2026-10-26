@@ -47,8 +47,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `yard unisolate` dropped the comment above a last key, fixed in 05c77dd). Until the first
   release, work happens on main, with no feature branches (maintainer, 2026-10-25). The data root
   moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
-  path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node still
-  needs a plan. The maintainer moved emailulator out of M4b into
+  path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node is
+  designed in `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md` (approved
+  2026-10-26) and still needs a plan. The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
