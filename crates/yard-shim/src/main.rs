@@ -13,7 +13,7 @@ use std::process::{Command, ExitCode};
 use yard_core::brew::Brew;
 use yard_core::config::yard::parse_yard;
 use yard_core::config::{SitesConfig, load_sites, load_yard};
-use yard_core::node::{LtsMap, installed, pick};
+use yard_core::node::{LtsMap, install_hint, installed, pick};
 use yard_core::shim::{NODE_SHIMS, Source, command, node_command, resolve_node, resolve_version};
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
@@ -145,7 +145,7 @@ fn run_node(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     let exists = |p: &Path| p.exists();
     let v = pick(&spec, &installed(&paths.node_versions_dir(), &list, &exists), &lts).ok_or_else(|| {
         YardError::new(ErrorCode::NodeMissing, format!("Node {spec} is not installed ({source})"))
-            .with_hint(format!("yard node install {spec}"))
+            .with_hint(install_hint(&spec))
     })?;
     if std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1") {
         eprintln!("yard-shim: {name} runs Node {v} ({spec} from {source})");

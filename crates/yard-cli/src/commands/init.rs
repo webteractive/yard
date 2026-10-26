@@ -5,6 +5,7 @@ use super::info::missing_node;
 use super::{Ctx, Outcome, confirm, cwd, finished, interactive, run_job, services, sources};
 use crate::client::CliError;
 use serde_json::{Value, json};
+use yard_core::node::install_hint;
 use yard_proto::methods::{self, ExtAddParams, InitParams, NodeInstallParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
@@ -96,13 +97,13 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
             println!("  {}  ({})", need.describe(), need.command());
         }
         if let Some(spec) = &node {
-            println!("  Node {spec}  (yard node install {spec})");
+            println!("  Node {spec}  ({})", install_hint(spec));
         }
     }
     let agreed = yes || (interactive(ctx) && confirm("Install these? [y/N] "));
     if !agreed && site.needs.is_empty() {
         let spec = node.as_deref().unwrap_or_default();
-        eprintln!("{} runs Node {spec}, which is not installed: yard node install {spec}", site.name);
+        eprintln!("{} runs Node {spec}, which is not installed: {}", site.name, install_hint(&spec));
         if !ctx.json {
             println!("Serving {}", site.url);
         }
@@ -170,12 +171,23 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     if !wanted.is_empty() {
         site = refetch(ctx, &site.name).await?;
     }
-    // Node last: the site already serves without it. The spec is the one first offered.
+    // Node last: the site already serves without it, so a failed install (nodejs.org out of
+    // reach, say) is a warning and the command still succeeds. The spec is the one offered.
     if let Some(spec) = &node {
         let done = format!("Installed Node {spec}.\n");
         let params = NodeInstallParams { spec: Some(spec.clone()), path: None };
-        finished(run_job(ctx, methods::NODE_INSTALL, params, || done).await)?;
-        site = refetch(ctx, &site.name).await?;
+        match run_job(ctx, methods::NODE_INSTALL, params, || done).await {
+            Err(CliError::Yard(e)) => {
+                eprintln!("warning: {}", e.message);
+                if let Some(hint) = &e.hint {
+                    eprintln!("  hint: {hint}");
+                }
+            }
+            outcome => {
+                finished(outcome)?;
+                site = refetch(ctx, &site.name).await?;
+            }
+        }
     }
     if let Some(e) = &site.project_error {
         return Err(e.clone().into());

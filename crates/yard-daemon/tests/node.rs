@@ -54,6 +54,26 @@ async fn a_php_only_site_has_no_node() {
 }
 
 #[tokio::test]
+async fn an_invalid_yard_is_the_project_error_not_a_node_error() {
+    let d = prepared("").await;
+    let plain = d.project("plain");
+    let app = d.project("app");
+    write(&plain, ".yard", "phpp = \"8.4\"\n");
+    write(&app, ".yard", "node = \"latest\"\n");
+    write(&app, "package.json", "{}");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    for name in ["plain", "app"] {
+        let s = site(&mut c, name).await;
+        assert!(s["project_error"].is_object(), "{s}");
+        assert!(s.get("node").is_none(), "{s}");
+    }
+    let doctor = c.call("doctor", Value::Null).await.unwrap().to_string();
+    assert!(!doctor.contains("node-spec:"), "{doctor}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_deleted_project_does_not_break_the_list() {
     let d = prepared("").await;
     let gone = d.project("gone");

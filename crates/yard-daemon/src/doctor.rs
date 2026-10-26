@@ -14,7 +14,7 @@ use yard_core::brew::Brew;
 use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
-use yard_core::node::{DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, pick};
+use yard_core::node::{DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, install_hint, pick};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::project::{Loaded, Projects, ServiceWant};
@@ -303,7 +303,7 @@ fn node_checks(
             checks.push(warn(
                 &format!("node:{}", site.name),
                 format!("{} needs Node {spec} ({from}), which is not installed", site.name),
-                format!("yard node install {spec}"),
+                install_hint(&spec),
             ));
         }
     }
@@ -311,7 +311,7 @@ fn node_checks(
         checks.push(warn(
             "node-default",
             format!("the default Node ({default}) is not installed, and {} use it", on_default.join(", ")),
-            format!("yard node install {default}"),
+            install_hint(&default),
         ));
     }
     checks

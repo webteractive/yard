@@ -50,7 +50,7 @@ pub enum Command {
     Link {
         /// The site name; defaults to the current directory's name.
         name: Option<String>,
-        /// Install what the project's .yard needs without asking.
+        /// Install what the project's .yard needs, and the Node it pins, without asking.
         #[arg(long)]
         yes: bool,
     },
@@ -67,7 +67,7 @@ pub enum Command {
         /// proxy. Without a .yard here, init moves it without asking.
         #[arg(long)]
         replace: bool,
-        /// Install what the .yard needs without asking.
+        /// Install what the .yard needs, and the Node the project pins, without asking.
         #[arg(long)]
         yes: bool,
         /// Write .yard into the project instead of Yard's data root (sites/<name>/.yard).
@@ -148,8 +148,9 @@ pub enum Command {
         #[arg(long)]
         php: Option<String>,
     },
-    /// Print the PATH line that puts Yard's php, composer and pecl shims first, for your
-    /// shell profile; warns when another php (Herd's) would still win. Edits nothing.
+    /// Print the PATH line that puts Yard's php, composer, pecl, node, npm and npx shims
+    /// first, for your shell profile; warns when another php or node (Herd's, nvm's, …)
+    /// would still win. Edits nothing.
     InstallShims,
     /// List the service instances (MySQL, PostgreSQL, Redis, MinIO), their ports and logins.
     Services,

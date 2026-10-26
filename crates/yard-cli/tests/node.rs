@@ -189,3 +189,24 @@ fn info_shows_the_node_line() {
 
     assert!(node_line(&info(Value::Null)).is_none());
 }
+
+#[test]
+fn link_yes_still_serves_when_the_node_install_fails() {
+    let failed = json!({"code": "JOB_FAILED", "message": "fnm ls-remote failed, so Node 22 cannot be resolved to a version", "hint": "yard node install 22"});
+    let d = MockDaemon::start_with_events(
+        &[
+            ("sites.link", Ok(site("/Users/me/code/blog", json!([]), missing("22")))),
+            ("subscribe", Ok(json!(null))),
+            ("node.install", Ok(json!({"job_id": "node-install-1"}))),
+        ],
+        &[(
+            "node.install",
+            vec![json!({"type": "job_finished", "job_id": "node-install-1", "error": failed})],
+        )],
+    );
+    let out = d.yard().args(["link", "blog", "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("fnm ls-remote failed") && err.contains("yard node install 22"), "{err}");
+    assert!(stdout(&out).ends_with("Serving http://blog.yard:8080/\n"), "{}", stdout(&out));
+}

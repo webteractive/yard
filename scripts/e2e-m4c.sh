@@ -60,6 +60,8 @@ cp -R "$fixtures/hello-php" "$project"
 printf '16.14.0\n' >"$project/.nvmrc"
 printf '{"name": "hello-node", "private": true, "scripts": {"v": "node -v"}}\n' >"$project/package.json"
 export npm_config_cache="$work/npm-cache" npm_config_devdir="$work/node-gyp"
+# Node 16's node-gyp imports distutils, which Python 3.12 removed; Apple's python3 is 3.9.
+if [[ -x /usr/bin/python3 ]]; then export npm_config_python=/usr/bin/python3; fi
 for f in yard.toml sites.toml; do
   if [[ -f $data/$f ]]; then cp -p "$data/$f" "$work/$f.bak"; fi
 done

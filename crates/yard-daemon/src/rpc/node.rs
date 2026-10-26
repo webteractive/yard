@@ -9,7 +9,7 @@ use toml_edit::value;
 use yard_core::brew::Brew;
 use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::node::{
-    DEFAULT_SPEC, NodeSpec, NodeVersion, lts_from, newest, parse_ls_remote, parse_spec, pick,
+    DEFAULT_SPEC, NodeSpec, NodeVersion, install_hint, lts_from, newest, parse_ls_remote, parse_spec, pick,
 };
 use yard_proto::methods::{
     NodeInstallParams, NodeListParams, NodeSpecParams, NodeUseParams, NodeVersionParams, SiteParams,
@@ -156,7 +156,7 @@ pub(super) async fn set_default(ctx: &Context, p: NodeSpecParams) -> Result<(), 
     let spec = spec_arg(&p.spec, "yard node default 22")?;
     if pick(&spec, &installed(&ctx.paths), &lts(&ctx.paths)).is_none() {
         return Err(YardError::new(ErrorCode::NodeMissing, format!("Node {spec} is not installed"))
-            .with_hint(format!("yard node install {spec}")));
+            .with_hint(install_hint(&spec)));
     }
     TomlFile::edit(&ctx.paths.yard_toml(), |file| {
         file.set(&["default_node"], value(spec.to_string()));

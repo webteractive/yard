@@ -181,7 +181,9 @@ The shims (and `yard info` for a site) take the first of these, starting from th
   ```
 
   The error code is `NODE_MISSING`, new. When the spec came from the default, the message
-  says `(the default)`. The shim never runs fnm and never downloads anything **(Claude's
+  says `(the default)`. Every `yard node install` hint single-quotes a spec with a glob
+  character (`yard node install 'lts/*'`), so it pastes into zsh (added in the final
+  review, 2026-10-26). The shim never runs fnm and never downloads anything **(Claude's
   call, the maintainer asked Claude to decide)**.
 - `YARD_SHIM_DEBUG=1` prints the version and where its spec came from, as it does for PHP.
 

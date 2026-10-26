@@ -285,10 +285,30 @@ pub fn installed(
     found
 }
 
+/// `word` as the shell reads it back: single-quoted when it holds a glob character, so
+/// zsh does not refuse `lts/*` with "no matches found". Specs hold no quote to escape.
+pub fn shell_word(word: &str) -> String {
+    if word.contains(['*', '?', '[', ']']) { format!("'{word}'") } else { word.to_string() }
+}
+
+/// The command that installs `spec`, ready to paste: every hint and offer uses it.
+pub fn install_hint(spec: &impl fmt::Display) -> String {
+    format!("yard node install {}", shell_word(&spec.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn install_hints_quote_a_glob_for_the_shell() {
+        assert_eq!(install_hint(&"lts/*"), "yard node install 'lts/*'");
+        assert_eq!(install_hint(&NodeSpec::LtsLatest), "yard node install 'lts/*'");
+        assert_eq!(install_hint(&"lts/iron"), "yard node install lts/iron");
+        assert_eq!(install_hint(&"16.14.0"), "yard node install 16.14.0");
+        assert_eq!(shell_word("22"), "22");
+    }
 
     #[test]
     fn specs_parse_to_their_normal_form() {

@@ -5,6 +5,7 @@ use super::sites::{containing, set_in};
 use super::{Ctx, Outcome, cwd, cwd_absolute, run_job};
 use crate::output::{for_agents, table};
 use serde_json::Value;
+use yard_core::node::{install_hint, shell_word};
 use yard_proto::methods::{
     self, NodeInstallParams, NodeListParams, NodeSpecParams, NodeUseParams, NodeVersionParams, SiteParams,
 };
@@ -16,7 +17,7 @@ pub async fn list(ctx: &Ctx, available: Option<Option<u32>>) -> Outcome {
     let list: NodeList = ctx.client().await?.call(methods::NODE_LIST, params).await?;
     ctx.emit(&list, || {
         let mut out = if list.versions.is_empty() {
-            format!("No Node installed. yard node install {0} installs the default.\n", list.default)
+            format!("No Node installed. {} installs the default.\n", install_hint(&list.default))
         } else {
             let rows: Vec<Vec<String>> = list
                 .versions
@@ -77,7 +78,7 @@ pub async fn pin(ctx: &Ctx, spec: Option<String>, site: Option<String>) -> Outco
         None => {
             let sites: Vec<SiteInfo> = client.call(methods::SITES_LIST, Value::Null).await?;
             let hint = match &spec {
-                Some(s) => format!("yard node use {s} --site <name>"),
+                Some(s) => format!("yard node use {} --site <name>", shell_word(s)),
                 None => "yard node unuse --site <name>".to_string(),
             };
             containing(&sites, &cwd()?, &hint)?
@@ -94,7 +95,7 @@ pub async fn pin(ctx: &Ctx, spec: Option<String>, site: Option<String>) -> Outco
             (Some(spec), _) => {
                 let mut out = format!("{name} now runs Node {spec}{}\n", set_in(&updated));
                 if node.is_some_and(|n| n.version.is_none()) {
-                    out.push_str(&format!("Node {spec} is not installed: yard node install {spec}\n"));
+                    out.push_str(&format!("Node {spec} is not installed: {}\n", install_hint(spec)));
                 }
                 out
             }

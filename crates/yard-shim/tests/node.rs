@@ -151,3 +151,13 @@ fn debug_names_the_spec_and_its_file() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn an_lts_star_hint_can_be_pasted_into_zsh() {
+    let s = setup();
+    std::fs::write(s.project.join(".nvmrc"), "lts/*\n").unwrap();
+    let out = run(&s, "node", &["-v"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.ends_with("  hint: yard node install 'lts/*'\n"), "{err}");
+}

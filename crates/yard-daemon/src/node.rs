@@ -61,7 +61,8 @@ pub fn resolve_at(
 
 /// Fills `node` on each linked PHP site whose root exists and uses Node: it has a
 /// `package.json`, or a pin from anywhere but the default. A pin that cannot be read is
-/// the site's `node.error`. Nothing is filled while `yard.toml` or `sites.toml` does not
+/// the site's `node.error`, except a `.yard` that does not parse when the site already
+/// reports it or has no `package.json`. Nothing is filled while `yard.toml` or `sites.toml` does not
 /// parse; doctor reports those.
 pub fn fill_node(sites: &mut [SiteInfo], paths: &Paths) {
     let (Ok((yard, _)), Ok(config)) = (load_yard(paths), load_sites(paths)) else { return };
@@ -73,8 +74,9 @@ pub fn fill_node(sites: &mut [SiteInfo], paths: &Paths) {
         if !root.is_dir() {
             continue;
         }
+        let has_package_json = root.join("package.json").is_file();
         site.node = match resolve_at(&root, &yard, &config, paths) {
-            Ok((spec, source)) if uses_node(&source, root.join("package.json").is_file()) => {
+            Ok((spec, source)) if uses_node(&source, has_package_json) => {
                 let (source, file) = setting(source);
                 Some(SiteNode {
                     version: pick(&spec, &installed, &lts).map(|v| v.to_string()),
@@ -85,6 +87,14 @@ pub fn fill_node(sites: &mut [SiteInfo], paths: &Paths) {
                 })
             }
             Ok(_) => None,
+            // A `.yard` that does not parse is the site's `project_error` already, and says
+            // nothing about Node to a site without a `package.json`.
+            Err(e)
+                if e.code == ErrorCode::ProjectFileInvalid
+                    && (site.project_error.is_some() || !has_package_json) =>
+            {
+                None
+            }
             // The error names the file at fault; `source` has nothing better to say.
             Err(e) => Some(SiteNode {
                 spec: None,

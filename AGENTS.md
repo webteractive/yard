@@ -246,7 +246,7 @@ change to serving, the helper or reconcile is only observable there, through `ya
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
 - `crates/yard-cli` — the `yard` binary.
-- `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` shims, one binary
+- `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` and `node`/`npm`/`npx` shims, one binary
   dispatching on `argv[0]`; it reads the TOMLs itself and needs no daemon.
 - `app/` — Yard.app (M6).
 

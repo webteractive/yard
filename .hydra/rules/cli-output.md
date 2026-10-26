@@ -41,7 +41,9 @@ triggers:
 - A missing Node is offered by `settle` as `  Node <spec>  (yard node install <spec>)` and
   installed last, but it is never a `Need`: when it is the only thing missing and nobody
   agrees, `settle` prints `<site> runs Node <spec>, which is not installed: yard node install
-  <spec>` on stderr and still serves, with no `NEEDS_INSTALL`.
+  <spec>` on stderr and still serves, with no `NEEDS_INSTALL`; a Node install that fails is a
+  `warning:` with its hint, and the command still exits 0. Every printed `yard node install`
+  goes through `node::install_hint`, which quotes `'lts/*'` so zsh does not glob it.
 - `yard init` without `--local` refuses a yardd older than protocol 2.6, which would write
   `.yard` into the project (`PROTOCOL_MISMATCH`, hint `yard stop && yard start`).
 - `yard init` writes the managed `.yard` (Yard's data root) unless `--local`; it prints

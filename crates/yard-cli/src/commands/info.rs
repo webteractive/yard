@@ -3,6 +3,7 @@
 use super::services::{account_parts, address, failure_line, state_name};
 use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
+use yard_core::node::install_hint;
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
 use yard_proto::{
     ExtInfo, Need, ProjectFileKind, SettingSource, SiteDetail, SiteKind, SiteNode, SiteSource, YardError,
@@ -204,8 +205,8 @@ fn problems(detail: &SiteDetail) -> String {
             out.push_str(&line("", &format!("→ {hint}")));
         }
     }
-    let node = missing_node(detail.site.node.as_ref())
-        .map(|spec| format!("Node {spec}  (yard node install {spec})"));
+    let node =
+        missing_node(detail.site.node.as_ref()).map(|spec| format!("Node {spec}  ({})", install_hint(&spec)));
     let mut needs =
         detail.site.needs.iter().map(|n: &Need| format!("{}  ({})", n.describe(), n.command())).chain(node);
     match needs.next() {
