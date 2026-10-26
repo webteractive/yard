@@ -54,6 +54,22 @@ async fn a_php_only_site_has_no_node() {
 }
 
 #[tokio::test]
+async fn a_pin_above_a_php_only_site_does_not_make_it_use_node() {
+    let d = prepared("").await;
+    let dir = d.project("plain");
+    write(dir.parent().unwrap(), ".nvmrc", "20\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "plain").await;
+    assert!(s.get("node").is_none(), "{s}");
+    // Once the site does use Node, that pin is the version it runs, as the shim's is.
+    write(&dir, "package.json", "{}");
+    let node = site(&mut c, "plain").await["node"].clone();
+    assert_eq!((node["spec"].as_str(), node["source"].as_str()), (Some("20"), Some("nvmrc")), "{node}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn an_invalid_yard_is_the_project_error_not_a_node_error() {
     let d = prepared("").await;
     let plain = d.project("plain");

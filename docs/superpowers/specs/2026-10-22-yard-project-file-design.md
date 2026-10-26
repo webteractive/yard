@@ -161,8 +161,9 @@ minio = true
   that `.yard-php` is ignored. A directory with only `.yard-php` works as today. A
   `.yard` that does not parse is an error naming the file, like a bad `.yard-php`; one
   whose PHP is not installed is `FORMULA_MISSING`, hint `yard init`.
-- **Node (M4c).** The order is `.yard`'s `node`, then the site's own setting (its managed
-  `.yard`, else `sites.toml`), then `.nvmrc` / `.node-version`, then the default
+- **Node (M4c).** The nearest pin wins, from the cwd upwards; in one directory the order is
+  `.yard`'s `node`, then (in the site's root) the site's own setting (its managed `.yard`,
+  else `sites.toml`), then `.nvmrc`, then `.node-version`, and with none the default
   (M4c spec §5). A `.yard` without `node` falls through to `.nvmrc`. A Node that is not
   installed never puts a site on the setup page: `init` and `link` offer it instead.
 - **Watching.** yardd watches each linked project's `.yard` the way it watches the TOMLs,

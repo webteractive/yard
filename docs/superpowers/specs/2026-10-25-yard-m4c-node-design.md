@@ -121,12 +121,14 @@ A **spec** is what a file or command names. A **version** is an installed `x.y.z
 
 ## 5. Which spec a directory gets
 
-The shims (and `yard info` for a site) take the first of these, starting from the cwd
-**(Claude's call; the order follows main spec §8.1 and project-file spec §5)**:
+The shims (and `yard info` for a site) walk up from the cwd, and **the nearest pin wins**
+(maintainer left it to Claude on 2026-10-26, after the final M4c review; nvm, fnm and mise all let
+a nearer file win). In one directory they take the first of these **(Claude's call; the
+order follows main spec §8.1 and project-file spec §5)**:
 
-1. **The nearest `.yard` that sets `node`**, from the cwd upwards. A `.yard` without `node`
-   is passed over, and the walk goes on to its parents.
-2. **The site's setting**: for the innermost linked site containing the cwd, either
+1. **A `.yard` that sets `node`.** A `.yard` without `node` is passed over, and the walk goes
+   on.
+2. **The site's setting**, in the root of the innermost linked site containing the cwd: either
    - the `node` of its managed `.yard`, when that file is for the site's path (the same
      rules as PHP, managed-file spec §4), or
    - its own `node` in `sites.toml` (set by `yard node use`, §7).
@@ -134,10 +136,18 @@ The shims (and `yard info` for a site) take the first of these, starting from th
    This step is skipped when the site's project root has a committed `.yard`. A committed
    file always wins, and `yard node use` is refused for such a site, so a `node` left in
    `sites.toml` from before the file was committed is ignored, as a left-over `php` is.
-3. **The nearest `.nvmrc` or `.node-version`**, from the cwd upwards. In one directory,
-   `.nvmrc` wins.
-4. **The default**: `default_node` in `yard.toml`. When that is unset, the built-in default
-   is `22` **(Claude's call: most of the maintainer's pinned projects use 22)**.
+3. **`.nvmrc`**, then **`.node-version`**.
+
+With nothing found up to `/`, it is **the default**: `default_node` in `yard.toml`. When that
+is unset, the built-in default is `22` **(Claude's call: most of the maintainer's pinned projects use
+22)**.
+
+- **Nearer beats kind.** A monorepo's `frontend/.nvmrc` wins in `frontend/` over the root's
+  `.yard` `node` and over `yard node use`, which still beat an `.nvmrc` beside them in the
+  root, and the site's setting beats a `.yard` above the site. The first build ranked kinds
+  first (any `.yard` before the site's setting before any `.nvmrc`), which silently ran the
+  wrong Node in such a subfolder; the only way out was a nested `.yard`, which also moves
+  that folder's PHP to the default.
 
 - **A `.yard` with no `node` passes over, and does not mean the default.** This differs from
   PHP, where a `.yard` with no `php` means the default PHP. Almost every project pins Node
@@ -145,8 +155,11 @@ The shims (and `yard info` for a site) take the first of these, starting from th
   **(Claude's call)**. The same holds for a managed `.yard` with no `node`: step 2 then
   looks at nothing else, and the walk goes on to step 3.
 - **Whether a site uses Node.** The shims always resolve a version, since running `node` asks
-  for one. A *linked site*, though, uses Node only when its root has a `package.json`, or
-  one of steps 1–3 gives it a spec **(Claude's call)**. A PHP-only site has no Node:
+  for one. A *linked site*, though, uses Node only when its root has a `package.json`, its
+  own setting gives it a spec, or a pin file in its root does **(Claude's call)**. A pin
+  above the root, such as `~/.nvmrc`, still decides the version of a site that uses Node,
+  but alone does not make one (Claude, 2026-10-26: otherwise one `~/.nvmrc` gave every
+  PHP-only site install offers and doctor warnings). A PHP-only site has no Node:
   - `link` and `init` offer it no Node install;
   - `yard doctor` gives it no `node:<site>` warning;
   - `yard info` shows no `node` line for it;

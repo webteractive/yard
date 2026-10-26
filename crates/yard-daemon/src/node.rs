@@ -60,7 +60,7 @@ pub fn resolve_at(
 }
 
 /// Fills `node` on each linked PHP site whose root exists and uses Node: it has a
-/// `package.json`, or a pin from anywhere but the default. A pin that cannot be read is
+/// `package.json`, its own setting, or a pin file in its root ([`uses_node`]). A pin that cannot be read is
 /// the site's `node.error`, except a `.yard` that does not parse when the site already
 /// reports it or has no `package.json`. Nothing is filled while `yard.toml` or `sites.toml` does not
 /// parse; doctor reports those.
@@ -76,7 +76,7 @@ pub fn fill_node(sites: &mut [SiteInfo], paths: &Paths) {
         }
         let has_package_json = root.join("package.json").is_file();
         site.node = match resolve_at(&root, &yard, &config, paths) {
-            Ok((spec, source)) if uses_node(&source, has_package_json) => {
+            Ok((spec, source)) if uses_node(&source, &root, has_package_json) => {
                 let (source, file) = setting(source);
                 Some(SiteNode {
                     version: pick(&spec, &installed, &lts).map(|v| v.to_string()),

@@ -656,9 +656,9 @@ section only summarizes.
   `default <spec>`, `use <spec> [--site <name>]` and `unuse [--site <name>]`. A spec is a
   major (`22`), a major.minor, an exact version or an LTS name (`lts/iron`, `lts/*`); the
   default is `22`.
-- The `node`/`npm`/`npx` shims resolve: the nearest `.yard`'s `node` → the containing
-  site's setting (its managed `.yard`, else `sites.toml`) → `.nvmrc` / `.node-version` in
-  the cwd or parents → `default_node`. They run the newest installed version the spec
+- The `node`/`npm`/`npx` shims walk up from the cwd and the nearest pin wins; in one
+  directory, a `.yard`'s `node` → the containing site's setting in its root (its managed
+  `.yard`, else `sites.toml`) → `.nvmrc` → `.node-version`. With none, `default_node`. They run the newest installed version the spec
   matches and never download; a missing one is `NODE_MISSING` with the install hint.
 - A missing Node never stops a site serving. `yard link` and `yard init` offer to install it,
   and `yard info` and `yard doctor` name it.

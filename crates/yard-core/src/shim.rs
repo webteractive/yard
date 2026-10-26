@@ -148,9 +148,10 @@ impl fmt::Display for NodeSource {
     }
 }
 
-/// The Node spec a shim runs in `cwd` (M4c spec §5): the nearest `.yard` that sets `node`,
-/// else the innermost linked site's own setting (its managed `.yard` when that is for the
-/// site's path, else `sites.toml`), else the nearest `.nvmrc` or `.node-version`, else the
+/// The Node spec a shim runs in `cwd` (M4c spec §5): the nearest pin wins, walking up from
+/// `cwd`. In one directory a `.yard` that sets `node` comes first, then, in the innermost
+/// linked site's root, the site's own setting (its managed `.yard` when that is for the
+/// site's path, else `sites.toml`), then `.nvmrc`, then `.node-version`; with none, the
 /// default. A committed `.yard` at the site's root skips the site's setting even without
 /// `node`, as it overrules both; a managed file for the site that has no `node` gives
 /// nothing, so `sites.toml` is not consulted behind it.
@@ -165,6 +166,8 @@ pub fn resolve_node(
     read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
     canonical: &dyn Fn(&Path) -> PathBuf,
 ) -> Result<(NodeSpec, NodeSource), YardError> {
+    let innermost = innermost(cwd, sites, canonical);
+    let mut site_root = innermost.last().map(|(.., path)| (*path, canonical(path)));
     for dir in cwd.ancestors() {
         let file = dir.join(project::FILE);
         if let Some(text) = read(&file)
@@ -172,11 +175,12 @@ pub fn resolve_node(
         {
             return Ok((spec, NodeSource::Project(file)));
         }
-    }
-    if let Some(found) = site_node(cwd, sites, paths, read, canonical)? {
-        return Ok(found);
-    }
-    for dir in cwd.ancestors() {
+        if site_root.as_ref().is_some_and(|(path, real)| dir == *path || canonical(dir) == *real) {
+            site_root = None;
+            if let Some(found) = site_node(&innermost, paths, read)? {
+                return Ok(found);
+            }
+        }
         for (name, source) in [
             (".nvmrc", NodeSource::Nvmrc as fn(PathBuf) -> NodeSource),
             (".node-version", NodeSource::NodeVersionFile),
@@ -187,18 +191,21 @@ pub fn resolve_node(
             }
         }
     }
+    // The walk never met the site's root (a path only its canonical form contains).
+    if site_root.is_some()
+        && let Some(found) = site_node(&innermost, paths, read)?
+    {
+        return Ok(found);
+    }
     Ok((yard.default_node.clone().unwrap_or(DEFAULT_SPEC), NodeSource::Default))
 }
 
-/// Step 2 of [`resolve_node`]: `None` when the innermost site sets nothing.
+/// The site's own setting in [`resolve_node`]: `None` when the innermost site sets nothing.
 fn site_node(
-    cwd: &Path,
-    sites: &SitesConfig,
+    innermost: &[(&String, &SiteEntry, &Path)],
     paths: &Paths,
     read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
-    canonical: &dyn Fn(&Path) -> PathBuf,
 ) -> Result<Option<(NodeSpec, NodeSource)>, YardError> {
-    let innermost = innermost(cwd, sites, canonical);
     let Some((name, entry, path)) = innermost.last() else { return Ok(None) };
     if read(&path.join(project::FILE)).is_some() {
         return Ok(None);
@@ -229,9 +236,18 @@ fn pin_file_spec(text: &str, file: &Path) -> Result<NodeSpec, YardError> {
         .with_hint(format!("put a version such as 22 in {}", file.display())))
 }
 
-/// Whether a site shows a Node part: a `package.json`, or a pin from anywhere but the default.
-pub fn uses_node(source: &NodeSource, has_package_json: bool) -> bool {
-    has_package_json || *source != NodeSource::Default
+/// Whether the site at `root` shows a Node part: a `package.json`, its own setting, or a pin
+/// file in its root. A pin above the root, such as `~/.nvmrc`, still picks the version, but
+/// alone does not make a PHP-only site a Node one.
+pub fn uses_node(source: &NodeSource, root: &Path, has_package_json: bool) -> bool {
+    has_package_json
+        || match source {
+            NodeSource::Site(_) | NodeSource::Managed(_) => true,
+            NodeSource::Project(f) | NodeSource::Nvmrc(f) | NodeSource::NodeVersionFile(f) => {
+                f.parent() == Some(root)
+            }
+            NodeSource::Default => false,
+        }
 }
 
 /// What a shim `exec`s: the program, the arguments to put before the user's, and the
@@ -572,10 +588,48 @@ path = "/code/plain"
     }
 
     #[test]
+    fn the_nearest_pin_wins_and_in_one_dir_yard_then_site_then_nvmrc() {
+        let (yard, sites) = configs(NODE_SITES);
+        let mut files = BTreeMap::from([
+            (PathBuf::from("/code/old/.nvmrc"), "16\n".to_string()),
+            (PathBuf::from("/code/old/web/.nvmrc"), "20\n".to_string()),
+        ]);
+        let web = (spec("20"), NodeSource::Nvmrc("/code/old/web/.nvmrc".into()));
+        // In the site's root its own setting beats the .nvmrc beside it, and a subdirectory's
+        // own .nvmrc is nearer than both.
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/old/x").unwrap(),
+            (spec("18"), NodeSource::Site("old".into()))
+        );
+        assert_eq!(node_at(&files, &yard, &sites, "/code/old/web/x").unwrap(), web);
+        files.insert(PathBuf::from("/code/old/.yard"), "node = \"25\"\n".to_string());
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/old/x").unwrap(),
+            (spec("25"), NodeSource::Project("/code/old/.yard".into()))
+        );
+        assert_eq!(node_at(&files, &yard, &sites, "/code/old/web/x").unwrap(), web);
+        // A .yard above the site is farther than the site's setting.
+        files.remove(Path::new("/code/old/.yard"));
+        files.remove(Path::new("/code/old/web/.nvmrc"));
+        files.insert(PathBuf::from("/code/.yard"), "node = \"24\"\n".to_string());
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/old/web/x").unwrap(),
+            (spec("18"), NodeSource::Site("old".into()))
+        );
+    }
+
+    #[test]
     fn uses_node_table() {
-        assert!(!uses_node(&NodeSource::Default, false));
-        assert!(uses_node(&NodeSource::Default, true));
-        assert!(uses_node(&NodeSource::Nvmrc("/p/.nvmrc".into()), false));
+        let root = Path::new("/p");
+        assert!(!uses_node(&NodeSource::Default, root, false));
+        assert!(uses_node(&NodeSource::Default, root, true));
+        assert!(uses_node(&NodeSource::Nvmrc("/p/.nvmrc".into()), root, false));
+        assert!(uses_node(&NodeSource::Site("p".into()), root, false));
+        assert!(uses_node(&NodeSource::Managed("/r/sites/p/.yard".into()), root, false));
+        // A pin above the root picks the version, but alone does not make a Node site.
+        assert!(!uses_node(&NodeSource::Nvmrc("/.nvmrc".into()), root, false));
+        assert!(!uses_node(&NodeSource::Project("/.yard".into()), root, false));
+        assert!(uses_node(&NodeSource::Nvmrc("/.nvmrc".into()), root, true));
     }
 
     #[test]
