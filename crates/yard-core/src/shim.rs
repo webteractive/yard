@@ -2,7 +2,8 @@
 //! Herd puts its own `php` and `composer` on PATH, so nothing Yard starts may find them.
 
 use crate::brew::Brew;
-use crate::config::{SitesConfig, YardConfig};
+use crate::config::{SiteEntry, SitesConfig, YardConfig};
+use crate::node::{DEFAULT_SPEC, NodeSpec, parse_spec, spec_line};
 use crate::{Paths, PhpVersion, project};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -64,19 +65,8 @@ pub fn resolve_version(
             return Ok((php.unwrap_or(yard.default_php), Source::Project(file)));
         }
     }
-    let containing: Vec<_> = sites
-        .sites
-        .iter()
-        .filter(|(name, _)| crate::sites::is_site_name(name))
-        .filter_map(|(name, e)| Some((name, e, e.path.as_deref()?)))
-        .filter_map(|(name, e, path)| {
-            let depth = canonical(path).components().count();
-            (cwd.starts_with(canonical(path)) || cwd.starts_with(path)).then_some((name, e, path, depth))
-        })
-        .collect();
-    let deepest = containing.iter().map(|(.., depth)| *depth).max();
-    let innermost: Vec<_> = containing.iter().filter(|(.., depth)| Some(*depth) == deepest).collect();
-    for (name, _, path, _) in innermost.iter().rev() {
+    let innermost = innermost(cwd, sites, canonical);
+    for (name, _, path) in innermost.iter().rev() {
         let file = paths.managed_project_file(name);
         if let Some(text) = read(&file) {
             let (managed, project) = project::parse_managed(&text?, &file)?;
@@ -85,7 +75,7 @@ pub fn resolve_version(
             }
         }
     }
-    if let Some((name, entry, ..)) = innermost.last()
+    if let Some((name, entry, _)) = innermost.last()
         && let Some(v) = entry.php
     {
         return Ok((v, Source::Site((*name).clone())));
@@ -101,6 +91,144 @@ pub fn resolve_version(
         }
     }
     Ok((yard.default_php, Source::Default))
+}
+
+/// The linked sites whose path holds `cwd` most closely, in `sites.toml`'s order. Several
+/// only when they share that path.
+fn innermost<'a>(
+    cwd: &Path,
+    sites: &'a SitesConfig,
+    canonical: &dyn Fn(&Path) -> PathBuf,
+) -> Vec<(&'a String, &'a SiteEntry, &'a Path)> {
+    let containing: Vec<_> = sites
+        .sites
+        .iter()
+        .filter(|(name, _)| crate::sites::is_site_name(name))
+        .filter_map(|(name, e)| Some((name, e, e.path.as_deref()?)))
+        .filter_map(|(name, e, path)| {
+            let depth = canonical(path).components().count();
+            (cwd.starts_with(canonical(path)) || cwd.starts_with(path)).then_some((name, e, path, depth))
+        })
+        .collect();
+    let deepest = containing.iter().map(|(.., depth)| *depth).max();
+    containing
+        .into_iter()
+        .filter(|(.., depth)| Some(*depth) == deepest)
+        .map(|(name, e, path, _)| (name, e, path))
+        .collect()
+}
+
+/// Why a Node shim chose a spec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeSource {
+    /// The nearest `.yard` that sets `node`.
+    Project(PathBuf),
+    /// The managed `.yard` of the linked site containing the cwd.
+    Managed(PathBuf),
+    /// `yard node use`, in `sites.toml`.
+    Site(String),
+    Nvmrc(PathBuf),
+    NodeVersionFile(PathBuf),
+    Default,
+}
+
+impl fmt::Display for NodeSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeSource::Project(file)
+            | NodeSource::Managed(file)
+            | NodeSource::Nvmrc(file)
+            | NodeSource::NodeVersionFile(file) => write!(f, "{}", file.display()),
+            NodeSource::Site(name) => write!(f, "site {name} uses it"),
+            NodeSource::Default => write!(f, "the default"),
+        }
+    }
+}
+
+/// The Node spec a shim runs in `cwd` (M4c spec §5): the nearest `.yard` that sets `node`,
+/// else the innermost linked site's own setting (its managed `.yard` when that is for the
+/// site's path, else `sites.toml`), else the nearest `.nvmrc` or `.node-version`, else the
+/// default. A committed `.yard` at the site's root skips the site's setting even without
+/// `node`, as it overrules both; a managed file for the site that has no `node` gives
+/// nothing, so `sites.toml` is not consulted behind it.
+///
+/// `read` and `canonical` are [`resolve_version`]'s. A file that cannot be used stops the
+/// search: a shim never falls through a pin it cannot meet.
+pub fn resolve_node(
+    cwd: &Path,
+    yard: &YardConfig,
+    sites: &SitesConfig,
+    paths: &Paths,
+    read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
+    canonical: &dyn Fn(&Path) -> PathBuf,
+) -> Result<(NodeSpec, NodeSource), YardError> {
+    for dir in cwd.ancestors() {
+        let file = dir.join(project::FILE);
+        if let Some(text) = read(&file)
+            && let Some(spec) = project::parse(&text?, &file)?.node
+        {
+            return Ok((spec, NodeSource::Project(file)));
+        }
+    }
+    if let Some(found) = site_node(cwd, sites, paths, read, canonical)? {
+        return Ok(found);
+    }
+    for dir in cwd.ancestors() {
+        for (name, source) in [
+            (".nvmrc", NodeSource::Nvmrc as fn(PathBuf) -> NodeSource),
+            (".node-version", NodeSource::NodeVersionFile),
+        ] {
+            let file = dir.join(name);
+            if let Some(text) = read(&file) {
+                return Ok((pin_file_spec(&text?, &file)?, source(file)));
+            }
+        }
+    }
+    Ok((yard.default_node.clone().unwrap_or(DEFAULT_SPEC), NodeSource::Default))
+}
+
+/// Step 2 of [`resolve_node`]: `None` when the innermost site sets nothing.
+fn site_node(
+    cwd: &Path,
+    sites: &SitesConfig,
+    paths: &Paths,
+    read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
+    canonical: &dyn Fn(&Path) -> PathBuf,
+) -> Result<Option<(NodeSpec, NodeSource)>, YardError> {
+    let innermost = innermost(cwd, sites, canonical);
+    let Some((name, entry, path)) = innermost.last() else { return Ok(None) };
+    if read(&path.join(project::FILE)).is_some() {
+        return Ok(None);
+    }
+    for (name, _, path) in innermost.iter().rev() {
+        let file = paths.managed_project_file(name);
+        if let Some(text) = read(&file) {
+            let (managed, project) = project::parse_managed(&text?, &file)?;
+            if project.as_deref() == Some(*path) {
+                return Ok(managed.node.map(|spec| (spec, NodeSource::Managed(file))));
+            }
+        }
+    }
+    Ok(entry.node.clone().map(|spec| (spec, NodeSource::Site((*name).clone()))))
+}
+
+/// The spec in an `.nvmrc` or `.node-version`, `INVALID_ARGUMENT` naming the file when it
+/// has none Yard accepts.
+fn pin_file_spec(text: &str, file: &Path) -> Result<NodeSpec, YardError> {
+    let message = match spec_line(text) {
+        None => format!("{} names no version", file.display()),
+        Some((line, spec)) => match parse_spec(spec) {
+            Ok(spec) => return Ok(spec),
+            Err(why) => format!("{} line {line}: {why}", file.display()),
+        },
+    };
+    Err(YardError::new(ErrorCode::InvalidArgument, message)
+        .with_hint(format!("put a version such as 22 in {}", file.display())))
+}
+
+/// Whether a site shows a Node part: a `package.json`, or a pin from anywhere but the default.
+pub fn uses_node(source: &NodeSource, has_package_json: bool) -> bool {
+    has_package_json || *source != NodeSource::Default
 }
 
 /// What a shim `exec`s: the program, the arguments to put before the user's, and the
@@ -168,9 +296,10 @@ mod tests {
     use crate::brew::Brew;
     use crate::config::sites::parse_sites;
     use crate::config::yard::parse_yard;
+    use crate::node::NodeSpec;
     use crate::{Paths, PhpVersion};
     use std::collections::BTreeMap;
-    use yard_proto::ErrorCode;
+    use yard_proto::{ErrorCode, YardError};
 
     /// No symlinks: every path is its own canonical form.
     fn same(p: &Path) -> PathBuf {
@@ -286,6 +415,136 @@ php = "7.4"
         // One without php is the default.
         files.insert(PathBuf::from("/r/sites/old/.yard"), "project = \"/code/old\"\n".to_string());
         assert_eq!(at(&files, "/code/old/app"), (v("8.4"), Source::Managed("/r/sites/old/.yard".into())));
+    }
+
+    const NODE_SITES: &str = r#"
+[sites.old]
+path = "/code/old"
+node = "18"
+[sites.plain]
+path = "/code/plain"
+"#;
+
+    fn spec(s: &str) -> NodeSpec {
+        crate::node::parse_spec(s).unwrap()
+    }
+
+    fn node_at(
+        files: &BTreeMap<PathBuf, String>,
+        yard: &crate::config::YardConfig,
+        sites: &crate::config::SitesConfig,
+        cwd: &str,
+    ) -> Result<(NodeSpec, NodeSource), YardError> {
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        resolve_node(Path::new(cwd), yard, sites, &Paths::new("/r"), &read, &same)
+    }
+
+    #[test]
+    fn node_resolution_order() {
+        let (yard, sites) = configs(NODE_SITES);
+        let mut files = BTreeMap::from([
+            (PathBuf::from("/code/.nvmrc"), "16.14.0\n".to_string()),
+            (PathBuf::from("/code/old/.yard"), "php = \"7.1\"\n".to_string()),
+            (PathBuf::from("/r/sites/plain/.yard"), "project = \"/code/plain\"\nnode = \"20\"\n".to_string()),
+        ]);
+        // old's .yard has no node, so step 1 passes over it; that the file exists at all
+        // skips old's sites.toml setting, which the committed file overrules.
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/old/app").unwrap(),
+            (spec("16.14.0"), NodeSource::Nvmrc("/code/.nvmrc".into()))
+        );
+        files.remove(Path::new("/code/old/.yard"));
+        let got = node_at(&files, &yard, &sites, "/code/old/app").unwrap();
+        assert_eq!(got, (spec("18"), NodeSource::Site("old".into())));
+        assert_eq!(got.1.to_string(), "site old uses it");
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/plain/src").unwrap(),
+            (spec("20"), NodeSource::Managed("/r/sites/plain/.yard".into()))
+        );
+        let got = node_at(&files, &yard, &sites, "/elsewhere").unwrap();
+        assert_eq!(got, (spec("22"), NodeSource::Default));
+        assert_eq!(got.1.to_string(), "the default");
+        let (yard24, _) = parse_yard(Some("default_node = \"24\"\n"), Path::new("/r/yard.toml")).unwrap();
+        assert_eq!(node_at(&files, &yard24, &sites, "/elsewhere").unwrap().0, spec("24"));
+    }
+
+    #[test]
+    fn a_managed_file_without_node_hides_sites_toml() {
+        let (yard, sites) = configs(NODE_SITES);
+        let files = BTreeMap::from([
+            (PathBuf::from("/code/.nvmrc"), "16.14.0\n".to_string()),
+            (PathBuf::from("/r/sites/old/.yard"), "php = \"7.1\"\nproject = \"/code/old\"\n".to_string()),
+        ]);
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/old/app").unwrap(),
+            (spec("16.14.0"), NodeSource::Nvmrc("/code/.nvmrc".into()))
+        );
+    }
+
+    #[test]
+    fn a_yard_with_node_beats_everything() {
+        let (yard, sites) = configs(NODE_SITES);
+        let files = BTreeMap::from([
+            (PathBuf::from("/code/.nvmrc"), "16.14.0\n".to_string()),
+            (PathBuf::from("/code/old/.yard"), "node = \"25\"\n".to_string()),
+        ]);
+        let got = node_at(&files, &yard, &sites, "/code/old/app").unwrap();
+        assert_eq!(got, (spec("25"), NodeSource::Project("/code/old/.yard".into())));
+        assert_eq!(got.1.to_string(), "/code/old/.yard");
+    }
+
+    #[test]
+    fn nvmrc_beats_node_version_in_one_dir_and_nearer_wins() {
+        let (yard, sites) = configs("");
+        let mut files = BTreeMap::from([
+            (PathBuf::from("/code/a/.nvmrc"), "20\n".to_string()),
+            (PathBuf::from("/code/a/.node-version"), "18\n".to_string()),
+        ]);
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/a/x").unwrap(),
+            (spec("20"), NodeSource::Nvmrc("/code/a/.nvmrc".into()))
+        );
+        files.insert(PathBuf::from("/code/a/sub/.node-version"), "24\n".to_string());
+        assert_eq!(
+            node_at(&files, &yard, &sites, "/code/a/sub/x").unwrap(),
+            (spec("24"), NodeSource::NodeVersionFile("/code/a/sub/.node-version".into()))
+        );
+    }
+
+    #[test]
+    fn an_unusable_nvmrc_stops_the_search() {
+        let (yard, sites) = configs("");
+        let with = |text: &str| {
+            BTreeMap::from([
+                (PathBuf::from("/code/.nvmrc"), text.to_string()),
+                (PathBuf::from("/.node-version"), "20\n".to_string()),
+            ])
+        };
+        assert_eq!(node_at(&with("lts/*\n"), &yard, &sites, "/code/x").unwrap().0, NodeSpec::LtsLatest);
+        for bad in ["node\n", "# x\n"] {
+            let e = node_at(&with(bad), &yard, &sites, "/code/x").unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidArgument, "{bad}");
+            assert!(e.message.contains("/code/.nvmrc"), "{}", e.message);
+            assert_eq!(e.hint.as_deref(), Some("put a version such as 22 in /code/.nvmrc"));
+        }
+        let files = with("20\n");
+        let read = |p: &Path| {
+            if p == Path::new("/code/.nvmrc") {
+                Some(Err(YardError::new(ErrorCode::InvalidArgument, "/code/.nvmrc is a FIFO")))
+            } else {
+                files.get(p).cloned().map(Ok)
+            }
+        };
+        let e =
+            resolve_node(Path::new("/code/x"), &yard, &sites, &Paths::new("/r"), &read, &same).unwrap_err();
+        assert_eq!(e.message, "/code/.nvmrc is a FIFO");
+    }
+
+    #[test]
+    fn uses_node_table() {
+        assert!(!uses_node(&NodeSource::Default, false));
+        assert!(uses_node(&NodeSource::Default, true));
+        assert!(uses_node(&NodeSource::Nvmrc("/p/.nvmrc".into()), false));
     }
 
     #[test]
