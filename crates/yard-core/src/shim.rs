@@ -13,6 +13,9 @@ use yard_proto::{ErrorCode, YardError};
 
 pub const PHP_SHIMS: [&str; 5] = ["php", "composer", "pecl", "phpize", "php-config"];
 pub const NODE_SHIMS: [&str; 3] = ["node", "npm", "npx"];
+/// The shims that wake their site's sleeping services before they run (M4e spec §5.2):
+/// what talks to a database. pecl, phpize, php-config and Node never do.
+pub const WAKE_SHIMS: [&str; 2] = ["php", "composer"];
 /// The commands `bin/` holds, each a link to the one `yard-shim` binary.
 pub const SHIMS: [&str; 8] = ["php", "composer", "pecl", "phpize", "php-config", "node", "npm", "npx"];
 
@@ -95,6 +98,11 @@ pub fn resolve_version(
         }
     }
     Ok((yard.default_php, Source::Default))
+}
+
+/// The linked site whose path holds `cwd` most closely: the last of [`innermost`].
+pub fn site_at(cwd: &Path, sites: &SitesConfig, canonical: &dyn Fn(&Path) -> PathBuf) -> Option<String> {
+    innermost(cwd, sites, canonical).last().map(|(name, ..)| (*name).clone())
 }
 
 /// The linked sites whose path holds `cwd` most closely, in `sites.toml`'s order. Several
@@ -676,6 +684,20 @@ path = "/code/plain"
         assert!(!env_of(Some(OsStr::new("/mine.pem")), &ca).contains_key("NODE_EXTRA_CA_CERTS"));
         assert_eq!(env_of(Some(OsStr::new("")), &ca)["NODE_EXTRA_CA_CERTS"], "/r/ca/yard-ca.pem");
         assert!(!env_of(None, &|_| false).contains_key("NODE_EXTRA_CA_CERTS"));
+    }
+
+    #[test]
+    fn site_at_is_the_innermost_site() {
+        let (_, sites) =
+            configs("[sites.old]\npath = \"/code/old\"\n[sites.api]\npath = \"/code/old/api\"\n");
+        assert_eq!(site_at(Path::new("/code/old/api/src"), &sites, &same).as_deref(), Some("api"));
+        assert_eq!(site_at(Path::new("/code/old/x"), &sites, &same).as_deref(), Some("old"));
+        assert_eq!(site_at(Path::new("/elsewhere"), &sites, &same), None);
+    }
+
+    #[test]
+    fn wake_shims_are_php_shims() {
+        assert!(WAKE_SHIMS.iter().all(|s| PHP_SHIMS.contains(s)));
     }
 
     #[test]

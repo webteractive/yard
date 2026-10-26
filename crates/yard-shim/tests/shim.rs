@@ -1,8 +1,11 @@
 //! The shim binary end to end: a temp data root and brew prefix whose `php` is a script.
 
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 const SHIM: &str = env!("CARGO_BIN_EXE_yard-shim");
@@ -202,4 +205,94 @@ fn a_directory_named_yard_is_not_a_project_file() {
     let out = run(&s, &[], false);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("php@7.1/bin/php"));
+}
+
+/// Runs the shim as `name` in the project's `app/`.
+fn run_as(s: &Setup, name: &str, args: &[&str]) -> Output {
+    let link = s.tmp.path().join("shims").join(name);
+    if !link.exists() {
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        symlink(SHIM, &link).unwrap();
+    }
+    Command::new(&link)
+        .args(args)
+        .current_dir(s.project.join("app"))
+        .env("YARD_ROOT", &s.root)
+        .env("YARD_BREW_PREFIX", &s.brew)
+        .env("PATH", format!("{}:/usr/bin:/bin", s.herd_bin.display()))
+        .output()
+        .unwrap()
+}
+
+fn write_sleeping(s: &Setup, text: &str) {
+    std::fs::create_dir_all(s.root.join("run")).unwrap();
+    std::fs::write(s.root.join("run/sleeping"), text).unwrap();
+}
+
+/// A wake.sock that records each request line and answers 204.
+fn fake_wake(s: &Setup) -> Arc<Mutex<Vec<String>>> {
+    std::fs::create_dir_all(s.root.join("run")).unwrap();
+    let listener = UnixListener::bind(s.root.join("run/wake.sock")).unwrap();
+    let seen = Arc::new(Mutex::new(vec![]));
+    let record = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut line);
+            record.lock().unwrap().push(line.trim_end().to_string());
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+        }
+    });
+    seen
+}
+
+#[test]
+fn php_wakes_a_listed_site() {
+    let s = setup();
+    write_sleeping(&s, "old\n");
+    let seen = fake_wake(&s);
+    let out = run_as(&s, "php", &["-v"]);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{stderr}");
+    assert_eq!(*seen.lock().unwrap(), ["GET /wake/old?wait=30 HTTP/1.1"]);
+    assert!(stdout.contains("php@7.1/bin/php") && stdout.contains("arg:-v"), "{stdout}");
+    assert!(stderr.contains("yard: waking the services old uses"), "{stderr}");
+}
+
+#[test]
+fn php_does_not_connect_when_the_site_is_not_listed() {
+    let s = setup();
+    write_sleeping(&s, "other\n");
+    let seen = fake_wake(&s);
+    let out = run_as(&s, "php", &["-v"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(!stderr.contains("waking"), "{stderr}");
+}
+
+#[test]
+fn a_dead_socket_still_runs_php() {
+    let s = setup();
+    write_sleeping(&s, "old\n");
+    let out = run_as(&s, "php", &["-v"]);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stdout.contains("php@7.1/bin/php"), "{stdout}");
+    assert!(stderr.contains("yard: could not wake old's services ("), "{stderr}");
+    assert!(stderr.contains("); running anyway"), "{stderr}");
+}
+
+#[test]
+fn node_never_wakes() {
+    let s = setup();
+    write_sleeping(&s, "old\n");
+    let seen = fake_wake(&s);
+    let out = run_as(&s, "node", &["-v"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("is not installed"), "{stderr}");
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(!stderr.contains("waking"), "{stderr}");
 }

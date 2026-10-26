@@ -1,20 +1,27 @@
 //! `yard-shim`: `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx`
 //! in Yard's `bin/`, chosen by `argv[0]` (spec §4.5, M4c spec §6). It resolves the version
 //! for the current directory from `yard.toml`, `sites.toml` and the project's files, with no
-//! daemon. A PHP shim `exec`s brew's binary with Yard's ini; a Node shim `exec`s the version
-//! fnm installed into Yard's `node/`, and never runs fnm or downloads anything. Neither
-//! PATH reaches Herd's `php` or `node`.
+//! daemon. A PHP shim `exec`s brew's binary with Yard's ini, and `php` and `composer` first
+//! ask yardd to wake their site's services when `run/sleeping` lists it (M4e spec §5.2). A
+//! Node shim `exec`s the version fnm installed into Yard's `node/`, and never runs fnm or
+//! downloads anything. Neither PATH reaches Herd's `php` or `node`.
 
 use std::convert::Infallible;
 use std::ffi::OsString;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, ExitCode};
+use std::time::Duration;
 use yard_core::brew::Brew;
 use yard_core::config::yard::parse_yard;
 use yard_core::config::{SitesConfig, load_sites, load_yard};
 use yard_core::node::{LtsMap, install_hint, installed, pick};
-use yard_core::shim::{NODE_SHIMS, Source, command, node_command, resolve_node, resolve_version};
+use yard_core::services::sleep::lists_site;
+use yard_core::shim::{
+    NODE_SHIMS, Source, WAKE_SHIMS, command, node_command, resolve_node, resolve_version, site_at,
+};
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
 
@@ -112,8 +119,34 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     })?;
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let (program, pre, env) = command(name, v, &opt, &brew, &paths, &inherited, &exists)?;
+    if WAKE_SHIMS.contains(&name)
+        && let Some(site) = site_at(&cwd, &sites, &canonical)
+        && read_small(&paths.sleeping_file()).and_then(Result::ok).is_some_and(|t| lists_site(&t, &site))
+    {
+        wake(&paths, &site);
+    }
     let e = Command::new(&program).args(pre).args(args).envs(env).exec();
     Err(YardError::new(ErrorCode::Internal, format!("cannot run {}: {e}", program.display())))
+}
+
+/// How long a shim waits for yardd to wake a site's services: yardd's own cap is 30 s.
+const WAKE_TIMEOUT: Duration = Duration::from_secs(31);
+
+/// Asks yardd to wake the services `site` uses and waits until they run or yardd gives up
+/// (M4e spec §5.2). PHP runs either way: a wake that fails is the service's own error.
+fn wake(paths: &Paths, site: &str) {
+    eprintln!("yard: waking the services {site} uses …");
+    let ask = || -> std::io::Result<()> {
+        let mut stream = UnixStream::connect(paths.wake_socket())?;
+        stream.set_read_timeout(Some(WAKE_TIMEOUT))?;
+        stream.set_write_timeout(Some(WAKE_TIMEOUT))?;
+        write!(stream, "GET /wake/{site}?wait=30 HTTP/1.1\r\nHost: yard\r\nConnection: close\r\n\r\n")?;
+        stream.read_to_end(&mut Vec::new())?;
+        Ok(())
+    };
+    if let Err(e) = ask() {
+        eprintln!("yard: could not wake {site}'s services ({e}); running anyway");
+    }
 }
 
 fn run_node(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
