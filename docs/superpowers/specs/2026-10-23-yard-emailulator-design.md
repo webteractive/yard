@@ -1,7 +1,9 @@
 # emailulator as a Yard service — design spec
 
 Date: 2026-10-23
-Status: draft for the maintainer's review. One question is **open — the maintainer to decide** (§4). It extends
+Status: approved by the maintainer on 2026-10-26. §4's question, who runs emailulator, is decided: **option B**,
+emailulator keeps its own LaunchAgent (2026-10-26, Claude's call; the maintainer asked Claude to decide).
+It extends
 `2026-10-19-yard-design.md` (the main spec, §2, §7 and §8.2) and
 `2026-10-22-yard-project-file-design.md` (the `.yard` spec, §4), and builds on M4b
 (services), whose plan is being written in parallel. §14 lists every M4b interface this
@@ -94,11 +96,13 @@ Made here **(builder's call)**, each argued where it appears:
 - Yard never deletes emailulator's message store, `--keep-data` or not.
 - Yard never runs a second emailulator server beside the agent.
 
-## 4. Open question — the maintainer to decide: who runs emailulator?
+## 4. Who runs emailulator? Decided: B
 
-**Status: open — the maintainer to decide.** The main spec today describes option A. Nothing below
-this section depends on the answer except §7's command table, and the plan builds the
-shared parts first, so either answer costs no rework.
+**Status: decided, option B (2026-10-26, Claude's call; the maintainer asked Claude to decide).** The
+recommendation below stands; the main spec §1, §3.1 and §8.2 were reworded in the same change.
+Where a table below has a column for each option, only B's is built; A's is kept as the path
+to adding A later. Nothing below this section depended on the answer except §7's command
+table.
 
 ### Option A — Yard runs it as a yardd unit, and defers to the agent (the main spec today)
 
@@ -155,9 +159,8 @@ Recommended, for these reasons:
    the binary, reading the agent, external entries, the proxy, `yard env`, doctor, `.yard`)
    is the shared part of the plan. Adding A later is the plan's Task 7 alone.
 
-If the maintainer picks A, the main spec stays as it is. If he picks B, the same change rewords
-main spec §1 (success criteria), §3.1 (yardd's supervised units) and §8.2's emailulator
-bullets.
+With B chosen, the same change reworded main spec §1 (success criteria), §3.1 (yardd's
+supervised units) and §8.2's emailulator bullets.
 
 ## 5. Finding emailulator
 

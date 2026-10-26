@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Before execution, two gates.** (1) the maintainer decides the open question in spec §4: who runs
-> emailulator (A, Yard's unit deferring to the agent, or B, the agent only). Task 7 is
-> built only for A, Task 8 only for B; every other task is built either way. (2) This
+> **Approved by the maintainer on 2026-10-26.** M4e may be built first (its plan says so).
+>
+> **Before execution, two gates.** (1) Spec §4, who runs emailulator, is decided: **B, the
+> agent only** (2026-10-26, Claude's call; the maintainer asked Claude to decide). Task 8 is built and
+> Task 7 is not; every other task is built either way. (2) This
 > plan was written before the M4b plan exists. Every name marked **(M4b)** in an
 > Interfaces block is an assumption (spec §14). Re-check each one against the approved
 > M4b plan and rename here before Task 1 starts.
@@ -200,7 +202,7 @@
 - [ ] **Step 4: Run** `cargo test --workspace` — Expected: PASS.
 - [ ] **Step 5: Commit** `emailulator = true in .yard, met by any emailulator Yard can reach`
 
-### Task 7 (option A only): Yard's emailulator unit
+### Task 7 (option A only, not built: B was chosen): Yard's emailulator unit
 
 **Files:**
 - Modify **(M4b)**: `crates/yard-daemon/src/rpc/services.rs`, the service-unit builder in `reconcile.rs`, `crates/yard-daemon/src/supervisor/mod.rs` (`UnitSpec.port` → `ports: Vec<(u16, Proto)>`, if M4b did not)
@@ -291,7 +293,7 @@
 
 **Files:**
 - Create: `scripts/e2e-m4d.sh`
-- Modify: main spec §3.3, §6.3, §7 (the emailulator example entries), §8.2, §10, §12 (and §1, §3.1 if the maintainer picked B); the `.yard` spec §4; the emailulator spec's status line; `README.md`; `AGENTS.md` (status, e2e list); `.hydra/rules/port-registry.md` (external entries follow the agent), `.hydra/rules/cli-output.md` (`Manual` needs and `SERVICE_EXTERNAL`).
+- Modify: main spec §3.3, §6.3, §7 (the emailulator example entries), §8.2, §10, §12 (§1 and §3.1 were reworded for B when it was chosen); the `.yard` spec §4; the emailulator spec's status line; `README.md`; `AGENTS.md` (status, e2e list); `.hydra/rules/port-registry.md` (external entries follow the agent), `.hydra/rules/cli-output.md` (`Manual` needs and `SERVICE_EXTERNAL`).
 
 **Interfaces:**
 - `scripts/e2e-m4d.sh`, after `e2e-m1.sh`, against the real data root, read-only towards emailulator: it never installs, uninstalls, starts or stops the agent.

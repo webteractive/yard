@@ -52,12 +52,15 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   2026-10-26) and planned in `docs/superpowers/plans/2026-10-26-yard-m4c-node.md` (approved 2026-10-26); it is built on main and verified on this machine on 2026-10-26 with `scripts/e2e-m4c.sh`
   passing on its first run (maintainer approved the run and `brew install fnm`). The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
-  and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
-  approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
+  and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, both
+  approved 2026-10-26, not built yet; emailulator keeps its own LaunchAgent and Yard only points at it (option B,
+  decided 2026-10-26: the maintainer asked Claude to decide).
   M4e, on-demand services (instances sleep when idle and wake on use), is drafted in
   `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
   written in another session and checked against the code; the maintainer answered its §13 questions
-  and approved it on 2026-10-26: sleeping is opt-in, and M4e follows M4d; no plan yet).
+  and approved it on 2026-10-26: sleeping is opt-in, and M4e follows M4d). Planned in
+  `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26; being
+  built on main).
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels

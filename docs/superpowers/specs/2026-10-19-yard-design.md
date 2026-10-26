@@ -27,7 +27,8 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   (on 443 with the `privileged` profile, on 8443 without it).
 - A PHP 7.1 legacy site and a PHP 8.4 site run side by side.
 - `yard ext add redis --php 7.1` and `yard ext add xdebug --php 8.4` work.
-- MySQL, Redis and emailulator run under Yard with no paid tier.
+- MySQL and Redis run under Yard, and emailulator is reachable through Yard, with no paid
+  tier.
 - Herd can be uninstalled with no loss of function.
 
 ### Non-goals (v1)
@@ -61,7 +62,7 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
  yard (CLI) ─┐
              ├─ JSON-RPC over unix socket ─▶ yardd (LaunchAgent, runs as user)
  Yard.app ───┘                                  │  supervises: nginx, php-fpm pools, dnsmasq,
-                                                │  services (mysql, redis, emailulator, …)
+                                                │  services (mysql, postgres, redis, minio)
                                                 │
                                                 └─ narrow socket ─▶ yard-helper
                                                                     (LaunchDaemon, root)
@@ -583,8 +584,8 @@ nginx-https  = { port = 8443,  mode = "pinned" }
 dnsmasq      = { port = 53535, mode = "pinned" }
 "mysql-8.4"  = { port = 3307,  mode = "pinned" }   # a service: allocated once, at `yard service add`
 redis        = { port = 6380,  mode = "pinned" }
-emailulator-smtp = { port = 1025,  mode = "preferred", preferred = 1025 }
-emailulator-http = { port = 33001, mode = "auto" }
+emailulator-smtp = { port = 1025,  mode = "external" }   # emailulator's own LaunchAgent (M4d)
+emailulator-http = { port = 8025,  mode = "external" }
 "proxy:api"  = { port = 3000,  mode = "external" }
 ```
 
@@ -675,7 +676,7 @@ port(s) in the registry, listed in `services.toml` (M4b design:
 | `postgres-<line>` (`15`–`18`) | `postgresql@<line>` | the macOS user, no password |
 | `redis` | `redis` | no auth |
 | `minio` | `minio/stable/minio` (a homebrew/core `minio` already installed is used as it is) | `minioadmin`; console proxied at `minio.<tld>` |
-| emailulator | not brew (see below) | SMTP and HTTP on registry ports; web UI proxied at `mail.<tld>` (M4d, not built) |
+| emailulator | not brew; runs as its own LaunchAgent (see below) | SMTP and HTTP on the agent's ports, recorded `external`; web UI proxied at `mail.<tld>` (M4d, not built) |
 
 The lines are brew's: `add` runs `brew search --formula "/^<base>(@|$)/"` and `brew info
 --json=v2` for each name found, once per add. A formula brew reports as disabled is not a
@@ -724,15 +725,17 @@ web UI, a REST API and an MCP server, so agents can read the mail a site sent.
 
 - `yard service add emailulator` needs `emailulator` on the user's PATH; without it, it fails
   with a hint naming emailulator's installer. Yard never downloads it (§2).
-- It runs as `emailulator run --smtp-addr 127.0.0.1:<smtp> --http-addr 127.0.0.1:<http>`, the
-  ports from the registry entries `emailulator-smtp` and `emailulator-http`. It keeps
-  emailulator's own message store, not `services/emailulator/data/`, so `emailulator app`,
-  `emailulator mcp` and `emailulator inbox|key` see the same mail.
-- emailulator can run itself as a LaunchAgent (`emailulator service install`, label
-  `com.webteractive.emailulator`), and while it does, `emailulator run` refuses to start a
-  second server. Yard then runs no unit: it records the agent's two ports as `external`
-  entries and points `mail.<tld>` and `yard env` at them. `yard doctor` says which of the two
-  is serving mail.
+- **emailulator runs itself; Yard never runs it (M4d spec §4, option B, decided
+  2026-10-26).** It runs as its own LaunchAgent (`emailulator service install`, label
+  `com.webteractive.emailulator`), built around being the one server on the Mac, and keeps
+  catching mail while yardd is stopped, for Herd's sites too. Yard records the agent's two
+  ports as `external` entries and points `mail.<tld>` and `yard env` at them, and
+  `yard doctor` says whether it is serving mail. When no agent is installed,
+  `yard service add emailulator` runs `emailulator service install` after a yes.
+  `yard service start|stop|restart|remove|port emailulator` are refused with
+  `SERVICE_EXTERNAL`, hinting emailulator's own command.
+- emailulator keeps its own message store, so `emailulator app`, `emailulator mcp` and
+  `emailulator inbox|key` see the same mail.
 - `yard env` prints `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1` and `MAIL_PORT=<smtp>`.
 
 Commands: `yard services` (list), `yard service add <engine> [--version] [--port] [--yes]`,
@@ -852,13 +855,15 @@ Each milestone is usable on its own and gets its own implementation plan.
    - **M4d emailulator** (moved out of M4b by the maintainer on 2026-10-23): emailulator as a
      service, `mail.<tld>`, its `MAIL_*` lines and `emailulator = true` in the file.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in
-     `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; whether Yard or
-     emailulator's own LaunchAgent runs it is open for the maintainer.
+     `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; emailulator keeps its own
+     LaunchAgent and Yard only points at it (option B, decided 2026-10-26). Spec and plan
+     approved 2026-10-26.
    - **M4e on-demand services** (approved 2026-10-26, the fifth plan, after M4d): service
      instances that opt in sleep when idle and wake on a PHP request, a shim or
      `yard service start`. Designed in
      `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md`, whose §13
-     records the maintainer's answers to its open questions.
+     records the maintainer's answers to its open questions, and planned in
+     `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26).
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.
