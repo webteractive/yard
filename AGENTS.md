@@ -54,6 +54,10 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, neither
   approved yet; whether Yard or emailulator's own LaunchAgent runs it is open for the maintainer.
+  M4e, on-demand services (instances sleep when idle and wake on use), is drafted in
+  `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
+  written in another session and checked against the code; not approved, its §13 lists
+  what is open for the maintainer).
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels

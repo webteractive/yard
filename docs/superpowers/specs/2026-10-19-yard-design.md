@@ -854,6 +854,11 @@ Each milestone is usable on its own and gets its own implementation plan.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in
      `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; whether Yard or
      emailulator's own LaunchAgent runs it is open for the maintainer.
+   - **M4e on-demand services** (drafted 2026-10-26, not approved, so not yet one of the
+     four plans): service instances sleep when idle and wake on a PHP request, a shim or
+     `yard service start`. Drafted in
+     `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md`, whose §13
+     lists what is open for the maintainer.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.
