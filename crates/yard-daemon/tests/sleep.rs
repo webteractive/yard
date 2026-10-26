@@ -425,3 +425,84 @@ async fn sleep_set_writes_and_clears_the_key() {
     assert_eq!(e.code, yard_proto::ErrorCode::ServiceNotFound);
     d.shutdown().await.unwrap();
 }
+
+// ---- Final review fixes ----
+
+/// A daemon whose `redis`, which `blog` needs, takes `delay_ms` to stop, and has just begun
+/// to stop on falling asleep.
+async fn stopping_slowly(delay_ms: u64) -> (Daemon, Client) {
+    let d = with_redis(free_port(), "service_sleep_after = \"60s\"\n", "").await;
+    write_yard(&d.project("blog"), "[services]\nredis = true\n");
+    std::fs::write(d.fx.brew.path().join("fake-stop-delay"), delay_ms.to_string()).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let log = d.fx.paths.log("redis");
+    let stopping = || std::fs::read_to_string(&log).is_ok_and(|t| t.contains("fake stopping"));
+    assert!(wait_until(stopping, Duration::from_secs(5)).await, "redis began to stop");
+    (d, c)
+}
+
+#[tokio::test]
+async fn an_ask_does_not_wait_on_another_stop() {
+    let (d, _c) = stopping_slowly(3000).await;
+    // `shop` needs nothing asleep: its answer must not wait for redis's 3 s stop.
+    write_yard(&d.project("shop"), "");
+    let (status, took) = ask(&d, "shop", 5).await;
+    assert_eq!(status, NO_CONTENT);
+    assert!(took < Duration::from_millis(1000), "took {took:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn wait_bounds_an_ask_during_a_stop() {
+    let (d, _c) = stopping_slowly(3000).await;
+    let (status, took) = ask(&d, "blog", 1).await;
+    assert_eq!(status, NO_CONTENT);
+    assert!(took < Duration::from_millis(1800), "wait=1 answered after {took:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn turning_sleep_off_wakes_it() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    std::fs::write(d.fx.paths.yard_toml(), "").unwrap();
+    let info = redis_until(&mut c, Duration::from_secs(5), running).await;
+    assert!(info.get("sleeping_since").is_none(), "{info}");
+    assert_eq!(sleeping_file(&d), "");
+
+    std::fs::write(d.fx.paths.yard_toml(), "service_sleep_after = \"60s\"\n").unwrap();
+    redis_until(&mut c, Duration::from_secs(5), asleep).await;
+    c.call("services.sleep.set", json!({"name": "redis", "after": "off"})).await.unwrap();
+    redis_until(&mut c, Duration::from_secs(5), running).await;
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn run_sleeping_follows_links_and_hand_edits() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    assert_eq!(sleeping_file(&d), "blog\n");
+    write_yard(&d.project("shop"), "[services]\nredis = true\n");
+    let both = || sleeping_file(&d) == "blog\nshop\n";
+    assert!(
+        wait_until(both, Duration::from_secs(5)).await,
+        "a newly linked site is listed: {:?}",
+        sleeping_file(&d)
+    );
+
+    let file = d.fx.paths.services_toml();
+    let text = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace("formula = \"redis\"\n", "formula = \"redis\"\nstopped = true\n");
+    std::fs::write(&file, text).unwrap();
+    let empty = || sleeping_file(&d).is_empty();
+    assert!(
+        wait_until(empty, Duration::from_secs(5)).await,
+        "a stopped instance lists nothing: {:?}",
+        sleeping_file(&d)
+    );
+    let info = redis(&mut c).await;
+    assert!(info.get("sleeping_since").is_none(), "{info}");
+    d.shutdown().await.unwrap();
+}

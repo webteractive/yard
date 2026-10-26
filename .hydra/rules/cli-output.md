@@ -77,7 +77,7 @@ triggers:
   `yard service port <i> <port>`; else `JOB_FAILED`, hint `yard service logs <i>`). Its last log
   lines go to stderr first, except for a held port or a missing keg, where the process never ran.
   `yard services` and `yard info` print `<i> failed: <reason>  (<hint>)` under their tables.
-  `start` and `restart` succeed only on `running`; `port` also on `stopped` by the user. A
+  `start` and `restart` succeed only on `running`; `port` also on `stopped` by the user, or asleep (`<i> will listen on <addr> when it wakes.`). A
   `stopped` the user did not set means yardd runs nothing for it, and is an error.
 - A command that follows a stream (`yard service logs -f`) subscribes before it fetches the
   tail, registers its SIGINT handler before printing, and exits 0 on Ctrl-C.

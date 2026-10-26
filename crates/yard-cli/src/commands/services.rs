@@ -267,6 +267,10 @@ pub async fn port(ctx: &Ctx, instance: String, port: u16) -> Outcome {
     let info: ServiceInfo = ctx.client().await?.call(methods::SERVICES_PORT, params).await?;
     let info = wait_up(ctx, info, true).await?;
     ctx.emit(&info, || match info.state {
+        // A sleeping instance keeps the new port and takes it when something wakes it.
+        ServiceState::Stopped if info.sleeping_since.is_some() => {
+            format!("{} will listen on {} when it wakes.\n", info.name, address(&info))
+        }
         ServiceState::Stopped => format!(
             "{0} will listen on {1} once it is started: yard service start {0}\n",
             info.name,
@@ -291,7 +295,7 @@ pub async fn sleep_after(ctx: &Ctx, instance: String, after: String) -> Outcome 
 
 /// `start`, `restart` and `port` answer while the instance is still `starting`: polls
 /// `services.list` until it is `running`, or, with `stopped_ok` (`port`), `stopped` by the
-/// user, which a port move on a stopped instance leaves it. A `failed` instance is the command's error, with its last log
+/// user or asleep, which a port move on such an instance leaves it. A `failed` instance is the command's error, with its last log
 /// lines printed first, and so is one `stopped` that the user did not stop, which yardd runs
 /// nothing for: nothing here ever reports an instance up that is not `running`. One still
 /// starting after `UP_WAIT` is an error too.
@@ -301,7 +305,11 @@ async fn wait_up(ctx: &Ctx, mut info: ServiceInfo, stopped_ok: bool) -> Result<S
     loop {
         match &info.state {
             ServiceState::Running => return Ok(info),
-            ServiceState::Stopped if stopped_ok && info.stopped_by_user => return Ok(info),
+            ServiceState::Stopped
+                if stopped_ok && (info.stopped_by_user || info.sleeping_since.is_some()) =>
+            {
+                return Ok(info);
+            }
             ServiceState::Stopped => {
                 return Err(YardError::new(
                     ErrorCode::JobFailed,

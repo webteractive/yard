@@ -8,7 +8,7 @@ use crate::helper_client::HelperClient;
 use crate::nginx::NginxCommand;
 use crate::probe::{self, Proto};
 use crate::services;
-use crate::sleep::Sleeper;
+use crate::sleep::{Sleeper, instances_for, write_sleeping};
 use crate::state::{Snapshot, State};
 use crate::supervisor::{Health, Reload, Supervisor, UnitSpec};
 use crate::tls;
@@ -32,6 +32,7 @@ use yard_core::render::nginx::{default_index, nginx_main, nginx_site, service_si
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::services::Engine;
 use yard_core::services::render::{config_file, user_overrides};
+use yard_core::services::sleep::effective_sleep;
 use yard_core::shim::SHIMS;
 use yard_core::sites;
 use yard_core::tls::{LEAF_DAYS, needs_issue};
@@ -55,6 +56,9 @@ pub struct ReconcileReport {
 
 pub struct Reconciler {
     state: Mutex<State>,
+    /// The last good snapshot, read without the state lock, which a reconcile holds while it
+    /// stops units one at a time: a wake ask or an RPC never waits on that.
+    published: std::sync::RwLock<Option<Snapshot>>,
     supervisor: Arc<Supervisor>,
     helper: HelperClient,
     bus: EventBus,
@@ -95,6 +99,7 @@ impl Reconciler {
         Ok(Self {
             nginx: NginxCommand::new(&paths, &brew),
             state: Mutex::new(State::new(paths, brew)?),
+            published: std::sync::RwLock::new(None),
             supervisor,
             helper,
             bus,
@@ -138,8 +143,9 @@ impl Reconciler {
         &self.supervisor
     }
 
+    /// The last good snapshot, without waiting for a reconcile in progress.
     pub async fn snapshot(&self) -> Option<Snapshot> {
-        self.state.lock().await.snapshot.clone()
+        self.published.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub async fn last_error(&self) -> Option<YardError> {
@@ -328,11 +334,22 @@ impl Reconciler {
         rendered.insert(paths.nginx_conf(), nginx_main(&ctx));
         rendered.insert(paths.nginx_default_index(), default_index(&ctx, &resolution.sites));
         rendered.insert(paths.dnsmasq_conf(), dnsmasq_conf(&ctx, dns));
+        // Sleep follows the files: an instance stopped, removed or no longer set to sleep is
+        // not asleep, so this pass starts it and its sites leave `run/sleeping`.
+        let may_sleep = |instance: &str| {
+            services_cfg.services.get(instance).is_some_and(|e| {
+                !e.stopped && effective_sleep(e.sleep_after, yard.service_sleep_after).0.is_some()
+            })
+        };
+        for name in self.sleeper.asleep().keys().filter(|name| !may_sleep(name)) {
+            self.sleeper.forget(name);
+        }
         for site in &resolution.sites {
-            // A PHP site whose `.yard` lists services asks yardd to wake them (M4e spec §5.1).
+            // A PHP site that needs an instance which may sleep asks yardd to wake it (M4e spec
+            // §5.1); with sleeping off, no request reaches yardd.
             let wake = matches!(site.kind, SiteKind::Php { .. })
                 && !site.needs_setup()
-                && projects.get(&site.name).and_then(|l| l.ok()).is_some_and(|f| !f.services.is_empty());
+                && instances_for(&services_cfg, &projects, &site.name).iter().any(|i| may_sleep(i));
             rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site, wake));
             if site.needs_setup() {
                 rendered.insert(paths.nginx_setup_page(&site.name), setup_page(&ctx, site));
@@ -596,7 +613,7 @@ impl Reconciler {
         }
         // A stopped instance runs nothing on purpose; only the others were left out.
         left_out.retain(|instance, _| services_cfg.services.get(instance).is_some_and(|e| !e.stopped));
-        state.snapshot = Some(Snapshot {
+        let snapshot = Snapshot {
             yard,
             sites_cfg,
             services: services_cfg,
@@ -606,7 +623,10 @@ impl Reconciler {
             tld,
             resolution,
             left_out,
-        });
+        };
+        write_sleeping(&paths, &snapshot, &self.sleeper);
+        *self.published.write().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
+        state.snapshot = Some(snapshot);
         Ok(report)
     }
 

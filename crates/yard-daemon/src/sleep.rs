@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use yard_core::Paths;
-use yard_core::project::ServiceWant;
+use yard_core::config::ServicesConfig;
+use yard_core::project::{Projects, ServiceWant};
 use yard_core::services::instance_name;
 use yard_core::services::sleep::{effective_sleep, sleeping_text};
 use yard_proto::UnitState;
@@ -121,19 +122,26 @@ impl Sleeper {
 /// The instances in `services.toml` that `site`'s `.yard` asks for: by line, or the one
 /// `true` means. The inverse of `services::used_by`.
 pub fn needed_by(snapshot: &Snapshot, site: &str) -> Vec<String> {
-    let Some(project) = snapshot.projects.get(site).and_then(|loaded| loaded.ok()) else { return vec![] };
+    instances_for(&snapshot.services, &snapshot.projects, site)
+}
+
+/// [`needed_by`] from the parts a reconcile has before it makes the snapshot.
+pub fn instances_for(services: &ServicesConfig, projects: &Projects, site: &str) -> Vec<String> {
+    let Some(project) = projects.get(site).and_then(|loaded| loaded.ok()) else { return vec![] };
     project
         .services
         .iter()
         .filter_map(|(&engine, want)| match want {
             ServiceWant::Line(line) => Some(instance_name(engine, Some(line))),
-            ServiceWant::Default => default_instance(&snapshot.services, engine).map(str::to_string),
+            ServiceWant::Default => default_instance(services, engine).map(str::to_string),
         })
-        .filter(|name| snapshot.services.services.contains_key(name))
+        .filter(|name| services.services.contains_key(name))
         .collect()
 }
 
-/// `run/sleeping`: the linked sites that need an asleep instance, which the shims read.
+/// `run/sleeping`: the linked sites that need an asleep instance, which the shims read. The
+/// reconcile writes it after each pass, under its lock, so it is the file's only writer once
+/// yardd runs; an unchanged list is not rewritten.
 pub fn write_sleeping(paths: &Paths, snapshot: &Snapshot, sleeper: &Sleeper) {
     let sites: BTreeSet<String> = snapshot
         .resolution
@@ -143,7 +151,11 @@ pub fn write_sleeping(paths: &Paths, snapshot: &Snapshot, sleeper: &Sleeper) {
         .map(|site| site.name.clone())
         .collect();
     let file = paths.sleeping_file();
-    if let Err(e) = yard_core::generated::write_atomic(&file, &sleeping_text(&sites)) {
+    let text = sleeping_text(&sites);
+    if std::fs::read_to_string(&file).is_ok_and(|old| old == text) {
+        return;
+    }
+    if let Err(e) = yard_core::generated::write_atomic(&file, &text) {
         tracing::warn!(
             "cannot write {}: {e}; php and composer will not wake sleeping services",
             file.display()
@@ -167,28 +179,23 @@ pub fn spawn(ctx: Arc<Context>, cfg: SleepConfig) -> JoinHandle<()> {
 async fn sample(ctx: &Context, cfg: &SleepConfig) {
     let Some(snapshot) = ctx.reconciler.snapshot().await else { return };
     let sleeper = &ctx.sleeper;
-    // An instance stopped or removed by editing the file wakes with its next start.
-    for name in sleeper.asleep().keys() {
-        if snapshot.services.services.get(name).is_none_or(|e| e.stopped) {
-            sleeper.forget(name);
-        }
-    }
     let units = ctx.supervisor().list();
     let mut fell = vec![];
     for (name, entry) in &snapshot.services.services {
         if entry.stopped || sleeper.is_asleep(name) {
             continue;
         }
-        let (Some(secs), _) = effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after) else {
-            continue;
-        };
         let Some(pid) =
             units.iter().find(|u| u.name == *name && u.state == UnitState::Running).and_then(|u| u.pid)
         else {
             continue;
         };
-        sleeper.seen(name);
+        // Running, so it is no longer waking, whether or not it may still sleep.
         sleeper.clear_waking(name);
+        let (Some(secs), _) = effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after) else {
+            continue;
+        };
+        sleeper.seen(name);
         match tokio::task::spawn_blocking(move || client_connections(pid)).await {
             Ok(Ok(0)) => {}
             Ok(Ok(_)) => sleeper.touch(name),
@@ -211,12 +218,11 @@ async fn sample(ctx: &Context, cfg: &SleepConfig) {
         return;
     }
     tracing::info!("{} unused for their sleep_after: putting them to sleep", fell.join(", "));
-    // The reconcile leaves them out, which stops their units gracefully.
+    // The reconcile leaves them out, which stops their units gracefully, and then lists their
+    // sites in `run/sleeping`.
     if let Err(e) = ctx.reconciler.reconcile().await {
         tracing::warn!("putting {} to sleep: {}", fell.join(", "), crate::describe(&e));
     }
-    let snapshot = ctx.reconciler.snapshot().await.unwrap_or(snapshot);
-    write_sleeping(&ctx.paths, &snapshot, sleeper);
 }
 
 /// How often a wake checks whether the instances it woke run yet.
@@ -224,9 +230,11 @@ const WAKE_POLL: Duration = Duration::from_millis(20);
 
 /// Counts as use of each of `instances` and wakes the asleep ones, then waits up to `wait`
 /// until each one woken or still waking runs, has failed, or has no unit coming. An instance
-/// the user stopped is never woken. It returns either way: a wake that fails is the unit's own
-/// `failed` state (spec §6.1).
+/// the user stopped is never woken. It returns either way, within `wait` even while the
+/// reconcile that starts the units queues behind another (a stop in progress holds it): a
+/// wake that fails is the unit's own `failed` state (spec §6.1).
 pub async fn wake(ctx: &Context, instances: &[String], wait: Duration) {
+    let deadline = Instant::now() + wait;
     let Some(snapshot) = ctx.reconciler.snapshot().await else { return };
     let sleeper = &ctx.sleeper;
     let instances: Vec<&String> =
@@ -238,14 +246,19 @@ pub async fn wake(ctx: &Context, instances: &[String], wait: Duration) {
     }
     if woke {
         tracing::info!("waking {}", instances.iter().map(|i| i.as_str()).collect::<Vec<_>>().join(", "));
-        if let Err(e) = ctx.reconciler.reconcile().await {
-            tracing::warn!("waking: {}", crate::describe(&e));
+        // Spawned, so giving up at the deadline never cancels a reconcile halfway through.
+        let reconciler = ctx.reconciler.clone();
+        let mut run = tokio::spawn(async move { reconciler.reconcile().await });
+        tokio::select! {
+            done = &mut run => {
+                if let Ok(Err(e)) = done {
+                    tracing::warn!("waking: {}", crate::describe(&e));
+                }
+            }
+            _ = tokio::time::sleep_until(deadline.into()) => return,
         }
-        let snapshot = ctx.reconciler.snapshot().await.unwrap_or(snapshot);
-        write_sleeping(&ctx.paths, &snapshot, sleeper);
     }
     let waiting: Vec<&String> = instances.into_iter().filter(|i| sleeper.waking_since(i).is_some()).collect();
-    let deadline = Instant::now() + wait;
     loop {
         let snapshot = ctx.reconciler.snapshot().await;
         let units = ctx.supervisor().list();

@@ -117,7 +117,8 @@ a site whose `.yard` lists it, when `php` or `composer` runs in that site (they 
 `yard service start <instance>`. A GUI client or a `mysql` run outside a site cannot wake one
 and gets "connection refused": start it, or set `off` for an instance used that way.
 `yard services` shows `sleeping 2h` and the SLEEP setting, and every instance starts awake
-with yardd.
+with yardd. Setting it back to `off`, or removing the key, wakes an instance that sleeps.
+While nothing may sleep, PHP requests never ask yardd anything.
 
 ## Commands
 

@@ -118,7 +118,7 @@ fn listing(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[tokio::test]
-async fn only_sites_with_services_ask() {
+async fn only_sites_whose_services_can_sleep_ask() {
     let e = env().await;
     let ports = std::fs::read_to_string(e.fx.paths.ports_toml()).unwrap();
     let pin = format!("\"redis\" = {{ port = {}, mode = \"pinned\" }}\n", free_port());
@@ -128,6 +128,12 @@ async fn only_sites_with_services_ask() {
     std::fs::write(e.site("shop").join(".yard"), "[services]\nredis = true\n").unwrap();
     e.site("blog");
 
+    // With sleeping off (the default) nothing can be asleep, so no request asks yardd.
+    e.rec.reconcile().await.unwrap();
+    let shop = std::fs::read_to_string(e.conf("shop")).unwrap();
+    assert!(!shop.contains("__yard_wake"), "{shop}");
+
+    std::fs::write(e.fx.paths.yard_toml(), "service_sleep_after = \"15m\"\n").unwrap();
     e.rec.reconcile().await.unwrap();
     let shop = std::fs::read_to_string(e.conf("shop")).unwrap();
     assert!(shop.contains("auth_request /__yard_wake;"), "{shop}");

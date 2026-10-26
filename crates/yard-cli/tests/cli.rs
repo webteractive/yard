@@ -2292,3 +2292,13 @@ fn service_help_mentions_sleep() {
         assert!(text.contains("GUI clients cannot wake one."), "{args:?}: {text}");
     }
 }
+
+#[test]
+fn port_on_a_sleeping_instance_succeeds() {
+    let mut moved = sleeping_mysql();
+    moved["ports"] = json!([{"name": "mysql-8.4", "port": 3310}]);
+    let d = MockDaemon::start(&[("services.port", Ok(moved))]);
+    let out = d.yard().args(["service", "port", "mysql-8.4", "3310"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "mysql-8.4 will listen on 127.0.0.1:3310 when it wakes.\n");
+}

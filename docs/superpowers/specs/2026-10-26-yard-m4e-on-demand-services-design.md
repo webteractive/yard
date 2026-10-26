@@ -132,7 +132,10 @@ sleep_after = "off"     # this instance never sleeps; or a duration, e.g. "1h"
   `service_sleep_after = "15m"` for every instance, or `sleep_after` on one. Sleeping on for
   everyone would break every GUI client after 15 idle minutes until its user learned why
   (§5.3). When turned on, it applies to every engine alike, Redis included; `sleep_after =
-  "off"` on an instance keeps that one up.
+  "off"` on an instance keeps that one up. **Turning it off undoes it (built):** an asleep
+  instance whose setting becomes `off` or goes away, or that is stopped or removed, is
+  forgotten by the next reconcile, which starts it (unless stopped) and drops its sites from
+  `run/sleeping`.
 - `yard service sleep-after <instance> <duration|off|default>` edits the instance key
   (`default` removes it) **(builder's call on the name)**. The machine-wide key is edited by
   hand, like `default_node`'s neighbours, or by a `yard config` command if one exists by then.
@@ -176,7 +179,10 @@ location @yard_wake_skipped {
   never wake one, and an asset-heavy page costs one ask, not fifty **(builder's call)**.
 - **Sites without services never ask.** The block is rendered only for a site whose `.yard`
   lists at least one service. A site without a `.yard`, or with no `[services]`, renders
-  exactly as today **(builder's call)**.
+  exactly as today **(builder's call)**. Nor does a site whose instances cannot sleep: the
+  block is rendered only when the site needs an instance that is not stopped and whose
+  effective `sleep_after` is set, so with sleeping off no request reaches yardd and Yard
+  serves as M4b did (§4) **(built, after the final review)**.
 - **yardd answers `204` once every instance the site needs is awake and healthy**, or
   immediately when none is asleep. It answers `204` too when it gives up (§6.3), so the app
   shows its own connection error rather than nginx showing a 500.
@@ -217,8 +223,9 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
   name, and it never reads `services.toml`, which turning `redis = true` into an instance
   name needs. So the shim finds the innermost linked site containing the cwd, as it already
   does for PHP, and asks for that site.
-- It reads `run/sleeping`, a small file yardd rewrites atomically whenever an instance falls
-  asleep or wakes, listing **the linked sites that need a sleeping instance**, one per line
+- It reads `run/sleeping`, a small file yardd rewrites atomically at the end of every
+  reconcile when it changed (so a site linked, or a `.yard` edited, while an instance sleeps
+  is listed too; built), listing **the linked sites that need a sleeping instance**, one per line
   (code check: yardd knows which instances each site needs; the shim does not). When the
   site is not listed, the shim does nothing more: an awake machine costs one small file
   read, and no socket connect **(builder's call)**.
@@ -293,6 +300,12 @@ to a `YardError`, and `services.start` and `restart` refuse with whatever it hol
   `Sleeper` (`sleep.rs`: per instance, the last use, since when it sleeps, and whether it is
   waking), runtime state beside the snapshot rather than in it **(built)**; `services.list`
   and `yard info` report `sleeping` from it rather than `failed`.
+- **Readers never wait on a stop (built, after the final review).** The reconcile holds its
+  state lock through `apply`, which stops units one at a time, so it publishes each snapshot
+  where `Reconciler::snapshot` reads it without that lock: a wake ask, `yard status` or
+  `yard services` answers from the last good snapshot while a stop is in progress. A wake
+  sets its deadline before anything else and waits on its (spawned) reconcile only until
+  then, so `wait` bounds the answer even when that reconcile queues behind a stop.
 - `apply` deletes a unit that is no longer wanted from the supervisor's table, so `yard status`
   (which lists that table) would lose a sleeping instance; status reads the sleeping set too
   (§9, §11).

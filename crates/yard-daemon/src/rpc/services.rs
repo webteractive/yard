@@ -6,11 +6,10 @@
 use super::handlers::{reconcile, snapshot};
 use crate::daemon::Context;
 use crate::services::{self, Add, Resolved};
-use crate::sleep::{self, Sleeper};
+use crate::sleep::Sleeper;
 use crate::sources::require_trusted;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
-use std::time::Duration;
 use yard_core::config::load_services;
 use yard_core::services::sleep::SleepAfter;
 use yard_core::services::{Engine, instance_name};
@@ -110,18 +109,16 @@ pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), 
         }
         return Err(refused);
     }
+    // Its reconcile forgets the instance's sleep and drops its sites from `run/sleeping`.
     services::remove(&ctx.paths, &ctx.reconciler, entry.engine, &p.name, p.keep_data).await?;
-    forget_sleep(ctx, &p.name).await;
     Ok(())
 }
 
-/// A stopped or removed instance does not sleep: it wakes with its next start, and
-/// `run/sleeping` stops naming the sites that need it.
-async fn forget_sleep(ctx: &Context, name: &str) {
-    ctx.sleeper.forget(name);
-    if let Some(snap) = ctx.reconciler.snapshot().await {
-        sleep::write_sleeping(&ctx.paths, &snap, &ctx.sleeper);
-    }
+/// Wakes an asleep instance for `services.start` or `restart`: the caller's reconcile then
+/// starts its unit.
+fn wake_for_start(ctx: &Context, name: &str) {
+    ctx.sleeper.touch(name);
+    ctx.sleeper.wake(name);
 }
 
 /// The lines `services.logs` returns when the caller names no count.
@@ -170,16 +167,13 @@ pub(super) async fn set_stopped(
 ) -> Result<ServiceInfo, YardError> {
     engine_of(ctx, &p.name)?;
     services::set_stopped(&ctx.paths, &p.name, stopped)?;
-    if stopped {
-        ctx.sleeper.forget(&p.name);
-    } else if ctx.sleeper.is_asleep(&p.name) {
+    if !stopped && ctx.sleeper.is_asleep(&p.name) {
         // A start of an asleep instance wakes it; the CLI waits for it as for any start.
-        sleep::wake(ctx, std::slice::from_ref(&p.name), Duration::ZERO).await;
+        wake_for_start(ctx, &p.name);
     }
+    // A stop's reconcile forgets the instance's sleep: it wakes with its next start.
     reconcile(ctx).await?;
-    if stopped {
-        forget_sleep(ctx, &p.name).await;
-    } else {
+    if !stopped {
         refuse_left_out(ctx, &p.name).await?;
     }
     info(ctx, &p.name).await
@@ -211,7 +205,8 @@ pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceIn
     refuse_left_out(ctx, &p.name).await?;
     // An asleep instance has no unit to restart: waking it starts it afresh (spec §5.3).
     if ctx.sleeper.is_asleep(&p.name) {
-        sleep::wake(ctx, std::slice::from_ref(&p.name), Duration::ZERO).await;
+        wake_for_start(ctx, &p.name);
+        reconcile(ctx).await?;
         refuse_left_out(ctx, &p.name).await?;
         return info(ctx, &p.name).await;
     }
