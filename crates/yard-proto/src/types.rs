@@ -99,7 +99,8 @@ pub struct SiteNode {
     /// `None` only with `error`.
     pub spec: Option<String>,
     pub source: SettingSource,
-    /// The `.yard`, `.nvmrc` or `.node-version` the spec comes from.
+    /// The `.yard`, `.nvmrc` or `.node-version` the spec comes from, or with `error` the
+    /// one that cannot be used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     /// `None` while nothing installed matches.

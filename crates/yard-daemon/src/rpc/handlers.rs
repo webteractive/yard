@@ -6,6 +6,7 @@ use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::managed::edit_managed;
 use crate::project::read_project_file;
+use crate::reconcile::Reconciler;
 use crate::state::Snapshot;
 use crate::{holder, portscan, probe};
 use serde::Serialize;
@@ -141,10 +142,14 @@ pub(super) fn json<T: Serialize>(result: Result<T, YardError>) -> Result<Value, 
 
 /// The last good state, or why there is none yet.
 pub(super) async fn snapshot(ctx: &Context) -> Result<Snapshot, YardError> {
-    match ctx.reconciler.snapshot().await {
+    snapshot_of(&ctx.reconciler).await
+}
+
+/// [`snapshot`] for a job, which holds the reconciler rather than the context.
+pub(super) async fn snapshot_of(reconciler: &Reconciler) -> Result<Snapshot, YardError> {
+    match reconciler.snapshot().await {
         Some(s) => Ok(s),
-        None => Err(ctx
-            .reconciler
+        None => Err(reconciler
             .last_error()
             .await
             .unwrap_or_else(|| YardError::internal("yardd has not finished its first reconcile"))),

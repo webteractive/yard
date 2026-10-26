@@ -3,17 +3,11 @@
 
 use super::info::missing_node;
 use super::{Ctx, Outcome, confirm, cwd, finished, interactive, run_job, services, sources};
-use crate::client::CliError;
+use crate::client::{CliError, protocol_version};
 use serde_json::{Value, json};
 use yard_core::node::install_hint;
 use yard_proto::methods::{self, ExtAddParams, InitParams, NodeInstallParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
-
-/// A `major.minor` protocol version.
-fn version(protocol: &str) -> Option<(u32, u32)> {
-    let (major, minor) = protocol.split_once('.')?;
-    Some((major.parse().ok()?, minor.parse().ok()?))
-}
 
 /// `yard init`'s flags.
 pub struct InitArgs {
@@ -30,7 +24,7 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
     let mut client = ctx.client().await?;
     // A yardd before 2.6 knows no managed .yard and would write this one into the project.
     let protocol = &client.hello.protocol;
-    if !local && version(protocol) < Some((2, 6)) {
+    if !local && protocol_version(protocol) < Some((2, 6)) {
         return Err(YardError::new(
             ErrorCode::ProtocolMismatch,
             format!("yardd speaks protocol {protocol}, so yard init would write .yard into the project"),

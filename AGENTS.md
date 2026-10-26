@@ -221,8 +221,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   resolver changed. `shellcheck scripts/e2e-m4b.sh` stays clean.
 - `scripts/e2e-m4c.sh` — real-machine M4c check after `e2e-m1.sh`: in a scratch project under
   `$TMPDIR` whose `.nvmrc` pins 16.14.0, `yard link --yes` installs it and `node -v` and an
-  `npm run` script both report it; `npm install --build-from-source bufferutil` builds; after
-  `yard init`, `yard node use 22` beats the `.nvmrc`; a pin that is not installed fails with
+  `npm run` script both report it; `npm install --build-from-source bufferutil` builds;
+  `yard node install 22` leaves `jod = 22` in `lts.toml`; after `yard init`, `yard node use 22`
+  beats the `.nvmrc`; a pin that is not installed fails with
   the install hint; and `yard node uninstall 16.14.0` is refused while the site pins it. It
   needs yardd running and `fnm` from brew, and downloads Node, so ask the maintainer first. It backs up
   and restores `yard.toml` and `sites.toml`, uninstalls only the versions it installed, and

@@ -102,7 +102,8 @@ A **spec** is what a file or command names. A **version** is an installed `x.y.z
   Whoever wrote `16.14.0` chose it on purpose, often for an old native module, and teammates
   on nvm run exactly that version. Each extra patch version costs about 100 MB of disk.
 - A leading `v` is accepted (`v22.17.1`). Surrounding whitespace is ignored. In `.nvmrc` and
-  `.node-version`, the first line that is neither empty nor a `#` comment is the spec.
+  `.node-version`, the first line that is neither empty nor a `#` comment is the spec; a
+  `#` comment after it on the same line and a leading UTF-8 BOM are ignored (2026-10-26).
 - **Refused specs:** `node`, `stable`, `latest`, `system`, `iojs`, any range (`>=18`, `^20`),
   and a major below 16. Each is an error that names the file and line, with the hint to write
   a version such as `22`. From a command it is `INVALID_ARGUMENT`; from a `.yard` it is
@@ -259,7 +260,8 @@ They go into one new protocol minor version **(builder's call: which number)**.
 - `SiteInfo` gains the site root's Node: the spec, where it came from (the `.yard`, the
   managed file, `sites.toml`, `.nvmrc`, `.node-version` or the default), the version it
   resolves to, and whether that is installed **(builder's call: the shape, following
-  `SettingSource` and its `Other` fallback)**.
+  `SettingSource` and its `Other` fallback)**. When the pin cannot be used, it carries the
+  error, and its source and file are the pin at fault (2026-10-26).
 
 ## 9. `yard info`, `yard doctor` and `install-shims`
 
@@ -312,6 +314,8 @@ sites.toml  [sites.<name>] node = "16"   # user-owned, set by `yard node use` fo
     `node -v` prints the same;
   - `npm install --build-from-source` of a small native module (such as `bufferutil`)
     succeeds under 16.14.0 (§3);
+  - `yard node install 22` leaves `jod = 22` in `lts.toml`, read from the real fnm's
+    release list (added 2026-10-26);
   - `yard node use 22` (managed `.yard`) wins over the `.nvmrc`;
   - a pin that is not installed gives the error and hint of §6;
   - `yard node uninstall` of a version in use is refused.

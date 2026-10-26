@@ -72,7 +72,8 @@ pub fn resolve_version(
     for (name, _, path) in innermost.iter().rev() {
         let file = paths.managed_project_file(name);
         if let Some(text) = read(&file) {
-            let (managed, project) = project::parse_managed(&text?, &file)?;
+            let (managed, project) =
+                text.and_then(|text| project::parse_managed(&text, &file)).map_err(naming(&file))?;
             if project.as_deref() == Some(*path) {
                 return Ok((managed.php.unwrap_or(yard.default_php), Source::Managed(file)));
             }
@@ -171,7 +172,8 @@ pub fn resolve_node(
     for dir in cwd.ancestors() {
         let file = dir.join(project::FILE);
         if let Some(text) = read(&file)
-            && let Some(spec) = project::parse(&text?, &file)?.node
+            && let Some(spec) =
+                project::parse(&text.map_err(naming(&file))?, &file).map_err(naming(&file))?.node
         {
             return Ok((spec, NodeSource::Project(file)));
         }
@@ -187,7 +189,8 @@ pub fn resolve_node(
         ] {
             let file = dir.join(name);
             if let Some(text) = read(&file) {
-                return Ok((pin_file_spec(&text?, &file)?, source(file)));
+                let spec = text.and_then(|text| pin_file_spec(&text, &file)).map_err(naming(&file))?;
+                return Ok((spec, source(file)));
             }
         }
     }
@@ -220,6 +223,27 @@ fn site_node(
         }
     }
     Ok(entry.node.clone().map(|spec| (spec, NodeSource::Site((*name).clone()))))
+}
+
+/// `e` with `file` in its data, unless it has data already, so [`failed_pin`] can say which
+/// pin [`resolve_node`] could not use.
+fn naming(file: &Path) -> impl FnOnce(YardError) -> YardError + '_ {
+    move |e| match e.data {
+        Some(_) => e,
+        None => e.with_data(serde_json::json!({ "file": file.display().to_string() })),
+    }
+}
+
+/// The pin a [`resolve_node`] error is about, as the source it would have been.
+pub fn failed_pin(e: &YardError, paths: &Paths) -> Option<NodeSource> {
+    let file = PathBuf::from(e.data.as_ref()?.get("file")?.as_str()?);
+    Some(match file.file_name()?.to_str()? {
+        ".nvmrc" => NodeSource::Nvmrc(file),
+        ".node-version" => NodeSource::NodeVersionFile(file),
+        project::FILE if file.starts_with(paths.managed_sites_dir()) => NodeSource::Managed(file),
+        project::FILE => NodeSource::Project(file),
+        _ => return None,
+    })
 }
 
 /// The spec in an `.nvmrc` or `.node-version`, `INVALID_ARGUMENT` naming the file when it
@@ -573,6 +597,7 @@ path = "/code/plain"
             assert_eq!(e.code, ErrorCode::InvalidArgument, "{bad}");
             assert!(e.message.contains("/code/.nvmrc"), "{}", e.message);
             assert_eq!(e.hint.as_deref(), Some("put a version such as 22 in /code/.nvmrc"));
+            assert_eq!(failed_pin(&e, &Paths::new("/r")), Some(NodeSource::Nvmrc("/code/.nvmrc".into())));
         }
         let files = with("20\n");
         let read = |p: &Path| {
@@ -585,6 +610,7 @@ path = "/code/plain"
         let e =
             resolve_node(Path::new("/code/x"), &yard, &sites, &Paths::new("/r"), &read, &same).unwrap_err();
         assert_eq!(e.message, "/code/.nvmrc is a FIFO");
+        assert_eq!(failed_pin(&e, &Paths::new("/r")), Some(NodeSource::Nvmrc("/code/.nvmrc".into())));
     }
 
     #[test]

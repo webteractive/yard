@@ -63,7 +63,7 @@ pub(super) fn source_label(source: Option<&SettingSource>) -> &'static str {
 }
 
 /// The `node` row: the version and where its spec comes from, or why there is none. An
-/// unusable pin has no source to name; `problems` shows its error.
+/// unusable pin names no source here; `problems` shows its error, which names the file.
 fn node_row(node: &SiteNode) -> (String, Option<&'static str>) {
     let source = Some(source_label(Some(&node.source)));
     match (&node.spec, &node.version, &node.error) {

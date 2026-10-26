@@ -274,7 +274,7 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
 const FAKE_REMOTE: &str = "v14.21.3 (Fermium)\nv16.14.0\nv16.20.2 (Gallium)\nv20.19.4 (Iron)\nv22.17.1\nv22.18.0 (Jod)\nv24.5.0 (Krypton)\nv25.1.0\n";
 
 /// brew's fnm, at `<prefix>/bin/fnm`. Each call is appended to `<prefix>/fake-fnm.log` with
-/// the `FNM_DIR` it saw. `ls-remote` fails while `fake-fnm-offline` exists, and prints
+/// the `FNM_DIR` and `CLICOLOR_FORCE` it saw. `ls-remote` fails while `fake-fnm-offline` exists, and prints
 /// `fake-fnm-remote` or `FAKE_REMOTE`. `install --progress never v<x>` leaves an empty
 /// version directory and fails when `fake-fnm-fail` holds `v<x>`, as a cancelled download
 /// does; else it installs empty `node`, `npm` and `npx`. `uninstall v<x>` removes it.
@@ -285,7 +285,11 @@ fn fnm(argv0: &Path, args: &[String]) -> ExitCode {
     let fnm_dir = std::env::var("FNM_DIR").unwrap_or_default();
     let log = prefix.join("fake-fnm.log");
     let logged = std::fs::read_to_string(&log).unwrap_or_default();
-    let _ = std::fs::write(&log, format!("{logged}{} FNM_DIR={fnm_dir}\n", args.join(" ")));
+    let colour = std::env::var("CLICOLOR_FORCE").unwrap_or_default();
+    let _ = std::fs::write(
+        &log,
+        format!("{logged}{} FNM_DIR={fnm_dir} CLICOLOR_FORCE={colour}\n", args.join(" ")),
+    );
     let version_dir = |v: &str| Path::new(&fnm_dir).join("node-versions").join(v);
     let arg = |i: usize| args.get(i).map(String::as_str).unwrap_or_default();
     match arg(0) {

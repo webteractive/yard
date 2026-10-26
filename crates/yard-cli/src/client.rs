@@ -94,7 +94,7 @@ impl Client {
             if response.id != id {
                 continue;
             }
-            let value = response.into_result()?;
+            let value = response.into_result().map_err(|e| self.stale(e, method))?;
             return serde_json::from_value(value).map_err(|e| {
                 YardError::new(
                     ErrorCode::ProtocolMismatch,
@@ -103,6 +103,22 @@ impl Client {
                 .with_hint("upgrade yard and yardd together")
             });
         }
+    }
+
+    /// A method an older yardd does not know yet means it was not restarted after an
+    /// upgrade, so `METHOD_NOT_FOUND` names the restart.
+    fn stale(&self, e: YardError, method: &str) -> YardError {
+        let protocol = &self.hello.protocol;
+        if e.code != ErrorCode::MethodNotFound
+            || protocol_version(protocol).is_none_or(|v| Some(v) >= protocol_version(PROTOCOL_VERSION))
+        {
+            return e;
+        }
+        YardError::new(
+            ErrorCode::MethodNotFound,
+            format!("yardd speaks protocol {protocol} and has no {method}"),
+        )
+        .with_hint("yard stop && yard start")
     }
 
     pub async fn subscribe(&mut self, topics: &[Topic]) -> Result<(), YardError> {
@@ -124,4 +140,10 @@ impl Client {
             }
         }
     }
+}
+
+/// A `major.minor` protocol version.
+pub fn protocol_version(protocol: &str) -> Option<(u32, u32)> {
+    let (major, minor) = protocol.split_once('.')?;
+    Some((major.parse().ok()?, minor.parse().ok()?))
 }

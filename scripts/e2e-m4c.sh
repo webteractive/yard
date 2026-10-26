@@ -7,7 +7,7 @@
 # under it, that `yard node use 22` in the managed .yard beats the .nvmrc, that a pin that
 # is not installed fails with the install hint, and that `yard node uninstall` refuses a
 # version a site still needs. It needs yardd running and brew's fnm, and downloads Node
-# 16.14.0, the newest 22 and bufferutil. yard.toml and sites.toml are backed up and put
+# 16.14.0, the newest 22 and bufferutil, and checks lts.toml has the LTS names fnm listed. yard.toml and sites.toml are backed up and put
 # back, only the Node versions this run installed are removed, and the run fails if nvm's
 # or Herd's Node versions, or Herd's resolver, changed.
 set -euo pipefail
@@ -104,6 +104,9 @@ pass "bufferutil built from source under Node 16.14.0"
 (cd "$project" && "$yard" init "$site" --yes >/dev/null)
 [[ -f $managed_dir/.yard ]] || fail "yard init wrote no $managed_dir/.yard"
 "$yard" node install 22 >/dev/null
+# The install read nodejs.org's release list from the real fnm and kept its LTS names.
+grep -q '^jod = 22$' "$data/node/lts.toml" || fail "lts.toml has no jod = 22: $(cat "$data/node/lts.toml")"
+pass "yard node install 22 wrote lts.toml from fnm ls-remote (jod = 22)"
 "$yard" node use 22 --site "$site" >/dev/null
 grep -q '^node = "22"$' "$managed_dir/.yard" || fail "yard node use 22 left: $(cat "$managed_dir/.yard")"
 v="$(shim node -v)"

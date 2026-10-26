@@ -1025,6 +1025,17 @@ fn init_refuses_a_yardd_that_would_write_into_the_project() {
 }
 
 #[test]
+fn a_method_an_older_yardd_lacks_names_the_restart() {
+    let old = json!({"protocol": "2.6", "daemon_version": "0.1.0", "commit": "old"});
+    let d = MockDaemon::start(&[("hello", Ok(old))]);
+    let out = d.yard().args(["node", "list"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("yardd speaks protocol 2.6 and has no node.list"), "{err}");
+    assert!(err.contains("hint: yard stop && yard start"), "{err}");
+}
+
+#[test]
 fn init_without_terminal_or_yes_is_needs_install() {
     let mut result = init_result(project_site(json!([{"kind": "php", "php": "7.3"}])));
     result["written"] = json!(false);

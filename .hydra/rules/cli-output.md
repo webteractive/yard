@@ -46,6 +46,9 @@ triggers:
   goes through `node::install_hint`, which quotes `'lts/*'` so zsh does not glob it.
 - `yard init` without `--local` refuses a yardd older than protocol 2.6, which would write
   `.yard` into the project (`PROTOCOL_MISMATCH`, hint `yard stop && yard start`).
+- A `METHOD_NOT_FOUND` from a yardd whose protocol is older than the CLI's says
+  `yardd speaks protocol <p> and has no <method>`, hint `yard stop && yard start`: it was not
+  restarted after an upgrade (`Client::stale`).
 - `yard init` writes the managed `.yard` (Yard's data root) unless `--local`; it prints
   `Wrote <file>:`, `Moved <managed> to <project file>:` for a `--local` move, and
   `Kept the old file as <backup>.` after a `--replace` over another project's managed file.

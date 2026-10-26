@@ -136,12 +136,15 @@ pub fn parse_spec(s: &str) -> Result<NodeSpec, String> {
 }
 
 /// The 1-based line and trimmed text of the first line that is neither blank nor a `#`
-/// comment, as nvm reads `.nvmrc`. Handles CRLF.
+/// comment, as nvm reads `.nvmrc`. A comment after the version is dropped, as is a UTF-8
+/// BOM an editor on Windows may leave. Handles CRLF.
 pub fn spec_line(text: &str) -> Option<(usize, &str)> {
-    text.lines()
-        .map(str::trim)
+    text.strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .lines()
+        .map(|line| line.split_once('#').map_or(line, |(before, _)| before).trim())
         .enumerate()
-        .find(|(_, line)| !line.is_empty() && !line.starts_with('#'))
+        .find(|(_, line)| !line.is_empty())
         .map(|(i, line)| (i + 1, line))
 }
 
@@ -217,10 +220,13 @@ pub struct Release {
     pub lts: Option<String>,
 }
 
-/// `fnm ls-remote`'s lines, `v22.18.0 (Jod)` or `v25.1.0`; anything else is skipped.
+/// `fnm ls-remote`'s lines, `v22.18.0 (Jod)` or `v25.1.0`; anything else is skipped. fnm
+/// colours the codename when `CLICOLOR_FORCE` is set, whatever `NO_COLOR` says, so colour
+/// codes are dropped first.
 pub fn parse_ls_remote(text: &str) -> Vec<Release> {
     text.lines()
         .filter_map(|line| {
+            let line = without_colour(line);
             let line = line.trim();
             let (version, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
             let version = version.parse().ok()?;
@@ -233,6 +239,19 @@ pub fn parse_ls_remote(text: &str) -> Vec<Release> {
             Some(Release { version, lts })
         })
         .collect()
+}
+
+/// `line` without its ANSI colour codes (`ESC [ ... m`).
+fn without_colour(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find("\u{1b}[") {
+        out.push_str(&rest[..at]);
+        let code = &rest[at + 2..];
+        rest = code.find('m').map_or("", |end| &code[end + 1..]);
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The built-in map with every codename in `releases` laid over it.
@@ -356,6 +375,13 @@ mod tests {
     }
 
     #[test]
+    fn spec_line_drops_a_trailing_comment_and_a_bom() {
+        assert_eq!(spec_line("20 # pinned for node-sass\n"), Some((1, "20")));
+        assert_eq!(spec_line("\u{feff}22\n"), Some((1, "22")));
+        assert_eq!(spec_line("\u{feff}# only a comment\n18\n"), Some((2, "18")));
+    }
+
+    #[test]
     fn pick_takes_the_newest_match() {
         let installed: Vec<NodeVersion> = ["16.14.0", "20.19.4", "22.17.1", "22.18.0", "24.5.0"]
             .iter()
@@ -382,6 +408,15 @@ mod tests {
         assert_eq!(map.major(&NodeSpec::LtsLatest), Some(26));
         assert_eq!(map.major(&NodeSpec::Lts("iron".into())), Some(20));
         assert_eq!(LtsMap::parse("iron = "), None);
+    }
+
+    #[test]
+    fn ls_remote_lines_fnm_coloured_still_parse() {
+        // What fnm 1.39.0 prints for an LTS line when CLICOLOR_FORCE=1 is inherited.
+        let releases = parse_ls_remote("v22.11.0\u{1b}[36m (Jod)\u{1b}[0m\nv26.12.0\n");
+        let got: Vec<(String, Option<String>)> =
+            releases.iter().map(|r| (r.version.to_string(), r.lts.clone())).collect();
+        assert_eq!(got, [("22.11.0".to_string(), Some("jod".to_string())), ("26.12.0".to_string(), None)]);
     }
 
     #[test]

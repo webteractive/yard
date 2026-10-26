@@ -1,6 +1,6 @@
 //! `node.*`: installed Node versions, the default, and a site's own spec (M4c spec §7).
 
-use super::handlers::{Target, directory, not_found, project_file_target, site, snapshot};
+use super::handlers::{Target, directory, not_found, project_file_target, site, snapshot, snapshot_of};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::managed::edit_managed;
@@ -139,8 +139,7 @@ pub(super) async fn uninstall(ctx: &Context, p: NodeVersionParams) -> Result<Job
     in_use(v, snapshot(ctx).await?.resolution.sites, &ctx.paths)?;
     let (paths, brew, reconciler) = (ctx.paths.clone(), ctx.brew.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("node-uninstall", move |job: JobCtx| async move {
-        let sites = reconciler.snapshot().await.map(|s| s.resolution.sites).unwrap_or_default();
-        in_use(v, sites, &paths)?;
+        in_use(v, snapshot_of(&reconciler).await?.resolution.sites, &paths)?;
         let fnm = brew.fnm_bin();
         if !fnm.exists() {
             return Err(YardError::new(ErrorCode::FormulaMissing, "fnm is not installed")

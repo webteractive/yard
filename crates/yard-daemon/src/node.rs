@@ -13,7 +13,7 @@ use yard_core::node::{
     DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, lts_from, matches, newest_per_line, parse_ls_remote,
     parse_spec, pick,
 };
-use yard_core::shim::{NodeSource, child_path, resolve_node, uses_node};
+use yard_core::shim::{NodeSource, child_path, failed_pin, resolve_node, uses_node};
 use yard_proto::{ErrorCode, NodeRelease, SettingSource, SiteInfo, SiteKind, SiteNode, YardError};
 
 /// The versions fnm has fully installed under `node/`, oldest first.
@@ -95,14 +95,17 @@ pub fn fill_node(sites: &mut [SiteInfo], paths: &Paths) {
             {
                 None
             }
-            // The error names the file at fault; `source` has nothing better to say.
-            Err(e) => Some(SiteNode {
-                spec: None,
-                source: SettingSource::Default,
-                file: None,
-                version: None,
-                error: Some(e),
-            }),
+            // `source` and `file` are the pin at fault, as for one that resolves.
+            Err(e) => {
+                let (source, file) = failed_pin(&e, paths).map_or((SettingSource::Default, None), setting);
+                Some(SiteNode {
+                    spec: None,
+                    source,
+                    file: file.map(|f| f.display().to_string()),
+                    version: None,
+                    error: Some(e),
+                })
+            }
         };
     }
 }
@@ -124,10 +127,13 @@ pub fn uses(site: &SiteInfo) -> Option<NodeSpec> {
 }
 
 /// What fnm runs with: Yard's `node/` as its directory, and no colour or progress noise.
+/// fnm colours its output under an inherited `CLICOLOR_FORCE=1`, which `NO_COLOR` does not
+/// override, so that is set to 0.
 pub fn fnm_env(paths: &Paths) -> Vec<(String, String)> {
     vec![
         ("FNM_DIR".to_string(), paths.node_dir().display().to_string()),
         ("FNM_LOGLEVEL".to_string(), "info".to_string()),
+        ("CLICOLOR_FORCE".to_string(), "0".to_string()),
     ]
 }
 
@@ -145,8 +151,9 @@ pub async fn available(
 ) -> Result<Vec<NodeRelease>, YardError> {
     let fnm = brew.fnm_bin();
     if !fnm.exists() {
-        return Err(YardError::new(ErrorCode::FormulaMissing, "fnm is not installed")
-            .with_hint("brew install fnm, or yard node install 22, which installs it"));
+        return Err(
+            YardError::new(ErrorCode::FormulaMissing, "fnm is not installed").with_hint("brew install fnm")
+        );
     }
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let mut cmd = tokio::process::Command::new(&fnm);
