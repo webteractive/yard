@@ -114,6 +114,7 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SERVICES_RESTART => json(services::restart(ctx, parse(params)?).await),
         methods::SERVICES_LOGS => json(services::logs(ctx, parse(params)?).await),
         methods::SERVICES_PORT => json(services::port(ctx, parse(params)?).await),
+        methods::SERVICES_SLEEP_SET => json(services::set_sleep(ctx, parse(params)?).await),
         methods::JOBS_CANCEL => {
             let p: JobParams = parse(params)?;
             json(ctx.jobs.cancel(&p.job_id))

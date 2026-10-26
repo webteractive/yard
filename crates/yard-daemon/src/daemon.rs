@@ -9,7 +9,7 @@ use crate::privileged::PrivilegedSockets;
 use crate::reconcile::Reconciler;
 use crate::sleep::{SleepConfig, Sleeper};
 use crate::supervisor::{Supervisor, SupervisorConfig};
-use crate::{portscan, rpc, services, sleep, watch};
+use crate::{portscan, rpc, services, sleep, wake, watch};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
@@ -106,15 +106,19 @@ impl Context {
 
 pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Result<(), YardError> {
     let socket = opts.paths.daemon_socket();
-    if socket.as_os_str().len() > MAX_SOCKET_PATH {
-        return Err(YardError::new(
-            ErrorCode::InvalidArgument,
-            format!("the socket path {} is longer than {MAX_SOCKET_PATH} bytes", socket.display()),
-        )
-        .with_hint("use a shorter --root or YARD_ROOT"));
+    let wake_socket = opts.paths.wake_socket();
+    for socket in [&socket, &wake_socket] {
+        if socket.as_os_str().len() > MAX_SOCKET_PATH {
+            return Err(YardError::new(
+                ErrorCode::InvalidArgument,
+                format!("the socket path {} is longer than {MAX_SOCKET_PATH} bytes", socket.display()),
+            )
+            .with_hint("use a shorter --root or YARD_ROOT"));
+        }
     }
-    // `sites/` too, so the watcher sees the first managed `.yard` written into it.
-    for dir in [opts.paths.root().to_path_buf(), opts.paths.managed_sites_dir()] {
+    // `sites/` too, so the watcher sees the first managed `.yard` written into it, and `run/`
+    // for the wake socket.
+    for dir in [opts.paths.root().to_path_buf(), opts.paths.managed_sites_dir(), opts.paths.run_dir()] {
         std::fs::create_dir_all(&dir)
             .map_err(|e| YardError::internal(format!("cannot create {}: {e}", dir.display())))?;
     }
@@ -158,6 +162,12 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         .map_err(|e| YardError::internal(format!("cannot listen on {}: {e}", socket.display())))?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| YardError::internal(format!("cannot set the mode of {}: {e}", socket.display())))?;
+    // yardd.sock is ours now, so a wake.sock left behind is a killed yardd's.
+    let _ = std::fs::remove_file(&wake_socket);
+    let wake_listener = UnixListener::bind(&wake_socket)
+        .map_err(|e| YardError::internal(format!("cannot listen on {}: {e}", wake_socket.display())))?;
+    std::fs::set_permissions(&wake_socket, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| YardError::internal(format!("cannot set the mode of {}: {e}", wake_socket.display())))?;
 
     // A service a killed yardd left running holds its port and data directory. This runs one
     // instance after another, up to the stop timeout (30 s) for each orphan that ignores its
@@ -178,12 +188,15 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let watcher = watch::spawn(ctx.clone(), opts.debounce, opts.port_scan_interval).await;
     let scan = portscan::spawn(ctx.clone(), opts.port_scan_interval);
     let idle = sleep::spawn(ctx.clone(), opts.sleep);
+    let wakes = tokio::spawn(wake::serve(wake_listener, ctx.clone()));
 
     rpc::server::serve(listener, ctx.clone(), shutdown).await;
 
     watcher.abort();
     scan.abort();
     idle.abort();
+    wakes.abort();
+    let _ = std::fs::remove_file(&wake_socket);
     ctx.supervisor().shutdown().await;
     // The port goes back to the system: the next yardd asks the helper again.
     ctx.supervisor().sockets().release_except(&[]);

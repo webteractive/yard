@@ -6,15 +6,18 @@
 use super::handlers::{reconcile, snapshot};
 use crate::daemon::Context;
 use crate::services::{self, Add, Resolved};
-use crate::sleep::Sleeper;
+use crate::sleep::{self, Sleeper};
 use crate::sources::require_trusted;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
+use std::time::Duration;
 use yard_core::config::load_services;
+use yard_core::services::sleep::SleepAfter;
 use yard_core::services::{Engine, instance_name};
 use yard_core::sources::tap_of;
 use yard_proto::methods::{
     ServiceAddParams, ServiceLogsParams, ServiceParams, ServicePortParams, ServiceRemoveParams,
+    ServiceSleepParams,
 };
 use yard_proto::{ErrorCode, JobStarted, ServiceInfo, ServiceState, YardError};
 
@@ -107,7 +110,18 @@ pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), 
         }
         return Err(refused);
     }
-    services::remove(&ctx.paths, &ctx.reconciler, entry.engine, &p.name, p.keep_data).await
+    services::remove(&ctx.paths, &ctx.reconciler, entry.engine, &p.name, p.keep_data).await?;
+    forget_sleep(ctx, &p.name).await;
+    Ok(())
+}
+
+/// A stopped or removed instance does not sleep: it wakes with its next start, and
+/// `run/sleeping` stops naming the sites that need it.
+async fn forget_sleep(ctx: &Context, name: &str) {
+    ctx.sleeper.forget(name);
+    if let Some(snap) = ctx.reconciler.snapshot().await {
+        sleep::write_sleeping(&ctx.paths, &snap, &ctx.sleeper);
+    }
 }
 
 /// The lines `services.logs` returns when the caller names no count.
@@ -156,8 +170,16 @@ pub(super) async fn set_stopped(
 ) -> Result<ServiceInfo, YardError> {
     engine_of(ctx, &p.name)?;
     services::set_stopped(&ctx.paths, &p.name, stopped)?;
+    if stopped {
+        ctx.sleeper.forget(&p.name);
+    } else if ctx.sleeper.is_asleep(&p.name) {
+        // A start of an asleep instance wakes it; the CLI waits for it as for any start.
+        sleep::wake(ctx, std::slice::from_ref(&p.name), Duration::ZERO).await;
+    }
     reconcile(ctx).await?;
-    if !stopped {
+    if stopped {
+        forget_sleep(ctx, &p.name).await;
+    } else {
         refuse_left_out(ctx, &p.name).await?;
     }
     info(ctx, &p.name).await
@@ -187,7 +209,30 @@ pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceIn
         .with_hint(format!("yard service start {}", p.name)));
     }
     refuse_left_out(ctx, &p.name).await?;
+    // An asleep instance has no unit to restart: waking it starts it afresh (spec §5.3).
+    if ctx.sleeper.is_asleep(&p.name) {
+        sleep::wake(ctx, std::slice::from_ref(&p.name), Duration::ZERO).await;
+        refuse_left_out(ctx, &p.name).await?;
+        return info(ctx, &p.name).await;
+    }
     ctx.supervisor().restart_and_wait(&p.name).await?;
+    info(ctx, &p.name).await
+}
+
+/// `services.sleep.set`: `after` is a duration of at least 60s, `off`, or `default`, which
+/// removes the instance's key so `yard.toml` decides. A new setting restarts the idle clock.
+pub(super) async fn set_sleep(ctx: &Context, p: ServiceSleepParams) -> Result<ServiceInfo, YardError> {
+    engine_of(ctx, &p.name)?;
+    let after = match p.after.as_str() {
+        "default" => None,
+        text => Some(text.parse::<SleepAfter>().map_err(|why| {
+            bad(format!("{why}; or write default to follow yard.toml"))
+                .with_hint(format!("yard service sleep-after {} 15m", p.name))
+        })?),
+    };
+    services::set_sleep_after(&ctx.paths, &p.name, after)?;
+    ctx.sleeper.touch(&p.name);
+    reconcile(ctx).await?;
     info(ctx, &p.name).await
 }
 

@@ -3,9 +3,11 @@
 
 mod support;
 
-use serde_json::Value;
-use std::path::Path;
-use std::time::Duration;
+use serde_json::{Value, json};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use support::daemon::{Client, Daemon, prepared};
 use support::{free_port, wait_until};
 
@@ -180,5 +182,246 @@ async fn instances_start_awake_after_a_restart() {
     let mut c = d.client().await;
     let info = redis_until(&mut c, Duration::from_secs(10), running).await;
     assert!(info.get("sleeping_since").is_none(), "{info}");
+    d.shutdown().await.unwrap();
+}
+
+// ---- Waking (Task 6) ----
+
+/// Sends `request` over `wake.sock` and returns the answer's status line and how long it took.
+async fn raw(socket: PathBuf, request: &'static [u8]) -> (String, Duration) {
+    tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(40))).unwrap();
+        stream.write_all(request).unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        (answer.lines().next().unwrap_or_default().to_string(), started.elapsed())
+    })
+    .await
+    .unwrap()
+}
+
+/// `GET /wake/<site>?wait=<wait>` as nginx and the shims send it.
+async fn ask(d: &Daemon, site: &str, wait: u64) -> (String, Duration) {
+    let request = format!("GET /wake/{site}?wait={wait} HTTP/1.1\r\nHost: yard\r\nConnection: close\r\n\r\n");
+    raw(d.fx.paths.wake_socket(), Box::leak(request.into_bytes().into_boxed_slice())).await
+}
+
+const NO_CONTENT: &str = "HTTP/1.1 204 No Content";
+
+/// A daemon whose `redis`, which `blog` needs, is asleep.
+async fn asleep_for_blog(port: u16) -> (Daemon, Client) {
+    let d = with_redis(port, "service_sleep_after = \"60s\"\n", "").await;
+    write_yard(&d.project("blog"), "[services]\nredis = true\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), asleep).await;
+    (d, c)
+}
+
+/// Makes `sleep_after` a day (86 s on the test clock), so a woken instance stays awake while
+/// the test looks; an asleep one stays asleep.
+async fn sleep_long(d: &Daemon, c: &mut Client) {
+    std::fs::write(d.fx.paths.yard_toml(), "service_sleep_after = \"24h\"\n").unwrap();
+    redis_until(c, Duration::from_secs(5), |i| i["sleep_after_secs"] == 86400).await;
+}
+
+fn sleeping_file(d: &Daemon) -> String {
+    std::fs::read_to_string(d.fx.paths.sleeping_file()).unwrap_or_default()
+}
+
+fn alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+async fn redis_unit(c: &mut Client) -> Option<Value> {
+    let status = c.call("status", Value::Null).await.unwrap();
+    status["units"].as_array().unwrap().iter().find(|u| u["name"] == "redis").cloned()
+}
+
+#[tokio::test]
+async fn an_ask_wakes_the_sites_instance() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    assert_eq!(sleeping_file(&d), "blog\n");
+    let (status, _) = ask(&d, "blog", 5).await;
+    assert_eq!(status, NO_CONTENT);
+    let info = redis(&mut c).await;
+    assert!(running(&info), "the answer waits until it runs: {info}");
+    assert!(info.get("sleeping_since").is_none(), "{info}");
+    assert_eq!(sleeping_file(&d), "");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_asks_share_one_start() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    let (a, b) = tokio::join!(ask(&d, "blog", 5), ask(&d, "blog", 5));
+    assert_eq!((a.0.as_str(), b.0.as_str()), (NO_CONTENT, NO_CONTENT));
+    let unit = redis_unit(&mut c).await.expect("a redis unit");
+    assert_eq!(unit["state"], "running", "both answers wait for it: {unit}");
+    assert_eq!(unit["restarts"], 0, "one start: {unit}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_ask_counts_as_use() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    ask(&d, "blog", 5).await;
+    let until = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < until {
+        ask(&d, "blog", 5).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let info = redis(&mut c).await;
+    assert!(running(&info), "asks keep it awake: {info}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unknown_site_and_garbage_get_204() {
+    let (d, _c) = asleep_for_blog(free_port()).await;
+    let socket = d.fx.paths.wake_socket();
+    assert_eq!(ask(&d, "nope", 1).await.0, NO_CONTENT);
+    assert_eq!(raw(socket.clone(), b"GET / HTTP/1.1\r\n\r\n").await.0, NO_CONTENT);
+    assert_eq!(raw(socket.clone(), b"hello\r\n\r\n").await.0, NO_CONTENT);
+    assert_eq!(raw(socket, b"GET /wake/../x?wait=1 HTTP/1.1\r\n\r\n").await.0, NO_CONTENT);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_silent_client_is_answered_and_closed() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    let silent = raw(d.fx.paths.wake_socket(), b"");
+    let other = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        ask(&d, "nope", 1).await
+    };
+    let ((silent, waited), (other, other_took)) = tokio::join!(silent, other);
+    assert_eq!(silent, NO_CONTENT);
+    assert!(waited < Duration::from_secs(3), "answered after {waited:?}");
+    assert_eq!(other, NO_CONTENT);
+    assert!(other_took < Duration::from_secs(1), "another ask is not held up: {other_took:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_stopped_instance_is_never_woken() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    c.call("services.stop", json!({"name": "redis"})).await.unwrap();
+    assert_eq!(ask(&d, "blog", 2).await.0, NO_CONTENT);
+    let info = redis(&mut c).await;
+    assert_eq!(info["stopped_by_user"], true, "{info}");
+    assert!(redis_unit(&mut c).await.is_none(), "nothing started it");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_held_port_answers_at_once_and_fails() {
+    let port = free_port();
+    let (d, mut c) = asleep_for_blog(port).await;
+    sleep_long(&d, &mut c).await;
+    let _holder = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let (status, took) = ask(&d, "blog", 10).await;
+    assert_eq!(status, NO_CONTENT);
+    assert!(took < Duration::from_secs(2), "a held port ends the wait: {took:?}");
+    let info = redis_until(&mut c, Duration::from_secs(2), |i| i["state"].get("failed").is_some()).await;
+    assert_eq!(info["state"]["failed"]["reason"]["code"], "PORT_IN_USE", "{info}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_wake_during_the_stop_waits_for_it() {
+    let d = with_redis(free_port(), "service_sleep_after = \"60s\"\n", "").await;
+    write_yard(&d.project("blog"), "[services]\nredis = true\n");
+    std::fs::write(d.fx.brew.path().join("fake-stop-delay"), "500").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let old_pid: i32 =
+        std::fs::read_to_string(d.fx.paths.service_pid("redis")).unwrap().trim().parse().unwrap();
+    // The fake logs this when its stop signal arrives, then takes 500 ms to exit.
+    let log = d.fx.paths.log("redis");
+    let stopping = || std::fs::read_to_string(&log).is_ok_and(|t| t.contains("fake stopping"));
+    assert!(wait_until(stopping, Duration::from_secs(5)).await, "redis began to stop");
+    std::fs::write(d.fx.paths.yard_toml(), "service_sleep_after = \"24h\"\n").unwrap();
+    let (status, _) = ask(&d, "blog", 5).await;
+    assert_eq!(status, NO_CONTENT);
+    assert!(!alive(old_pid), "the old process was gone before the new one started");
+    let unit = redis_unit(&mut c).await.expect("a redis unit");
+    assert_eq!(unit["state"], "running", "{unit}");
+    assert_ne!(unit["pid"], old_pid, "{unit}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn service_start_and_restart_wake() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    c.call("services.start", json!({"name": "redis"})).await.unwrap();
+    redis_until(&mut c, Duration::from_secs(2), running).await;
+    std::fs::write(d.fx.paths.yard_toml(), "service_sleep_after = \"60s\"\n").unwrap();
+    redis_until(&mut c, Duration::from_secs(5), asleep).await;
+    sleep_long(&d, &mut c).await;
+    c.call("services.restart", json!({"name": "redis"})).await.unwrap();
+    let info = redis_until(&mut c, Duration::from_secs(2), running).await;
+    assert_eq!(info["stopped_by_user"], false, "{info}");
+    let services = std::fs::read_to_string(d.fx.paths.services_toml()).unwrap();
+    assert!(!services.contains("stopped"), "{services}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_and_remove_clear_sleep() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    c.call("services.stop", json!({"name": "redis"})).await.unwrap();
+    let info = redis(&mut c).await;
+    assert!(info.get("sleeping_since").is_none(), "{info}");
+    assert_eq!(sleeping_file(&d), "");
+    let status = c.call("status", Value::Null).await.unwrap();
+    assert!(status.get("sleeping").is_none(), "{status}");
+
+    c.call("services.start", json!({"name": "redis"})).await.unwrap();
+    redis_until(&mut c, Duration::from_secs(5), asleep).await;
+    std::fs::remove_file(d.projects.path().join("blog").join(".yard")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match c.call("services.remove", json!({"name": "redis", "keep_data": false})).await {
+            Ok(_) => break,
+            Err(e) if e.code == yard_proto::ErrorCode::ServiceInUse && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    let status = c.call("status", Value::Null).await.unwrap();
+    assert!(status.get("sleeping").is_none(), "a removed instance does not sleep: {status}");
+    assert_eq!(sleeping_file(&d), "");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sleep_set_writes_and_clears_the_key() {
+    let d = with_redis(free_port(), "", "").await.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let info = c.call("services.sleep.set", json!({"name": "redis", "after": "1h"})).await.unwrap();
+    assert_eq!(info["sleep_after_secs"], 3600, "{info}");
+    assert_eq!(info["sleep_after_source"], "services_toml", "{info}");
+    let services = std::fs::read_to_string(d.fx.paths.services_toml()).unwrap();
+    assert!(services.contains("sleep_after = \"1h\""), "{services}");
+    let info = c.call("services.sleep.set", json!({"name": "redis", "after": "default"})).await.unwrap();
+    assert!(info.get("sleep_after_secs").is_none(), "{info}");
+    let services = std::fs::read_to_string(d.fx.paths.services_toml()).unwrap();
+    assert!(!services.contains("sleep_after"), "{services}");
+    let e = c.call("services.sleep.set", json!({"name": "redis", "after": "5s"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument);
+    assert_eq!(e.hint.as_deref(), Some("yard service sleep-after redis 15m"));
+    let e = c.call("services.sleep.set", json!({"name": "nope", "after": "1h"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::ServiceNotFound);
     d.shutdown().await.unwrap();
 }

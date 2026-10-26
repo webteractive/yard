@@ -24,7 +24,7 @@ use yard_core::project::ServiceWant;
 use yard_core::services::brew_info::{self, Formula};
 use yard_core::services::render::{UnitCommand, command, init_command};
 use yard_core::services::reserved::reserved_ports;
-use yard_core::services::sleep::effective_sleep;
+use yard_core::services::sleep::{SleepAfter, effective_sleep};
 use yard_core::services::{
     DATABASE_START_TIMEOUT, Engine, READY_WAIT, candidate_names, instance_name, line_formula, resolve_line,
 };
@@ -763,6 +763,24 @@ pub fn set_stopped(paths: &Paths, instance: &str, stopped: bool) -> Result<(), Y
             file.set(&["services", instance, "stopped"], value(true));
         } else {
             file.remove(&["services", instance, "stopped"]);
+        }
+        Ok(())
+    })
+}
+
+/// `services.sleep.set`: writes the instance's `sleep_after` (as `Display` spells it), or
+/// removes the key for `None`, so it follows `yard.toml` again. As `set_stopped`, the entry is
+/// checked inside the edit. The caller reconciles afterwards.
+pub fn set_sleep_after(paths: &Paths, instance: &str, after: Option<SleepAfter>) -> Result<(), YardError> {
+    TomlFile::edit(&paths.services_toml(), |file| {
+        if file.doc().get("services").and_then(|s| s.get(instance)).is_none() {
+            return Err(not_found(instance));
+        }
+        match after {
+            Some(after) => file.set(&["services", instance, "sleep_after"], value(after.to_string())),
+            None => {
+                file.remove(&["services", instance, "sleep_after"]);
+            }
         }
         Ok(())
     })

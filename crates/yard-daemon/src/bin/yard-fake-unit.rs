@@ -14,7 +14,11 @@ fn main() -> ExitCode {
     let mut argv = std::env::args();
     let argv0 = argv.next().unwrap_or_default();
     let args: Vec<String> = argv.collect();
-    match Path::new(&argv0).file_name().and_then(|n| n.to_str()) {
+    let name = Path::new(&argv0).file_name().and_then(|n| n.to_str());
+    if matches!(name, Some("mysqld" | "postgres" | "redis-server" | "minio")) {
+        stop_slowly(Path::new(&argv0));
+    }
+    match name {
         Some("nginx") => nginx(&args),
         Some("dnsmasq") => dnsmasq(&args),
         Some("php-fpm") => php_fpm(&args),
@@ -572,6 +576,37 @@ fn delay_from(argv0: &Path, file: &str) {
     if let Some(ms) = std::fs::read_to_string(prefix.join(file)).ok().and_then(|t| t.trim().parse().ok()) {
         std::thread::sleep(Duration::from_millis(ms));
     }
+}
+
+/// With `<prefix>/fake-stop-delay` (ms), an engine takes that long to exit after SIGTERM or
+/// SIGINT, as a database finishing its checkpoint does, and logs `fake stopping` when the
+/// signal arrives. Without the file the signals stop it at once, as before.
+fn stop_slowly(argv0: &Path) {
+    static STOPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    extern "C" fn stopping(_: libc::c_int) {
+        let line = b"fake stopping\n";
+        // SAFETY: write(2) is async-signal-safe and the buffer is static; so is an atomic store.
+        unsafe { libc::write(2, line.as_ptr().cast(), line.len()) };
+        STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    let prefix = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
+    let Some(ms) =
+        std::fs::read_to_string(prefix.join("fake-stop-delay")).ok().and_then(|t| t.trim().parse().ok())
+    else {
+        return;
+    };
+    // SAFETY: the handler only calls write(2) and stores an atomic.
+    unsafe {
+        libc::signal(libc::SIGTERM, stopping as libc::sighandler_t);
+        libc::signal(libc::SIGINT, stopping as libc::sighandler_t);
+    }
+    std::thread::spawn(move || {
+        while !STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(ms));
+        std::process::exit(0);
+    });
 }
 
 /// `initdb -D D` creates `D/PG_VERSION`.

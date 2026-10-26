@@ -218,3 +218,53 @@ async fn sample(ctx: &Context, cfg: &SleepConfig) {
     let snapshot = ctx.reconciler.snapshot().await.unwrap_or(snapshot);
     write_sleeping(&ctx.paths, &snapshot, sleeper);
 }
+
+/// How often a wake checks whether the instances it woke run yet.
+const WAKE_POLL: Duration = Duration::from_millis(20);
+
+/// Counts as use of each of `instances` and wakes the asleep ones, then waits up to `wait`
+/// until each one woken or still waking runs, has failed, or has no unit coming. An instance
+/// the user stopped is never woken. It returns either way: a wake that fails is the unit's own
+/// `failed` state (spec §6.1).
+pub async fn wake(ctx: &Context, instances: &[String], wait: Duration) {
+    let Some(snapshot) = ctx.reconciler.snapshot().await else { return };
+    let sleeper = &ctx.sleeper;
+    let instances: Vec<&String> =
+        instances.iter().filter(|i| snapshot.services.services.get(*i).is_some_and(|e| !e.stopped)).collect();
+    let mut woke = false;
+    for instance in &instances {
+        sleeper.touch(instance);
+        woke |= sleeper.wake(instance);
+    }
+    if woke {
+        tracing::info!("waking {}", instances.iter().map(|i| i.as_str()).collect::<Vec<_>>().join(", "));
+        if let Err(e) = ctx.reconciler.reconcile().await {
+            tracing::warn!("waking: {}", crate::describe(&e));
+        }
+        let snapshot = ctx.reconciler.snapshot().await.unwrap_or(snapshot);
+        write_sleeping(&ctx.paths, &snapshot, sleeper);
+    }
+    let waiting: Vec<&String> = instances.into_iter().filter(|i| sleeper.waking_since(i).is_some()).collect();
+    let deadline = Instant::now() + wait;
+    loop {
+        let snapshot = ctx.reconciler.snapshot().await;
+        let units = ctx.supervisor().list();
+        let pending = waiting.iter().filter(|i| {
+            let left_out = snapshot.as_ref().is_some_and(|s| s.left_out.contains_key(i.as_str()));
+            match units.iter().find(|u| u.name == ***i).map(|u| &u.state) {
+                Some(UnitState::Running) => {
+                    sleeper.clear_waking(i);
+                    false
+                }
+                Some(UnitState::Failed { .. }) => false,
+                Some(_) => true,
+                // Another wake's reconcile may not have spawned it yet.
+                None => !left_out && sleeper.waking_since(i).is_some(),
+            }
+        });
+        if pending.count() == 0 || Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(WAKE_POLL).await;
+    }
+}
