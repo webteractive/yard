@@ -3,6 +3,7 @@
 mod ext;
 mod handlers;
 mod info;
+mod node;
 mod php;
 mod project;
 pub mod server;

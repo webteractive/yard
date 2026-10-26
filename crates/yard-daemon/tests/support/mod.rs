@@ -81,6 +81,19 @@ impl Fixture {
 }
 
 impl Fixture {
+    /// Node `v` as fnm installs it under the data root: empty `node`, `npm` and `npx`.
+    pub fn add_node(&self, v: &str) {
+        let bin = self.paths.node_versions_dir().join(format!("v{v}/installation/bin"));
+        for name in ["node", "npm", "npx"] {
+            place(&bin.join(name), |dst| {
+                std::fs::write(dst, "")?;
+                std::fs::set_permissions(dst, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            });
+        }
+    }
+}
+
+impl Fixture {
     /// A brew keg `opt/<name>` for a service formula (`mysql@8.4`, `postgresql@17`, `redis`,
     /// `minio`) whose binaries are the fake, as the fake brew's `install` leaves it.
     pub fn add_formula(&self, name: &str) {

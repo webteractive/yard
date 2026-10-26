@@ -214,12 +214,10 @@ pub(super) async fn site_detail(ctx: &Context, p: SiteDetailParams) -> Result<Si
             .collect(),
         _ => vec![],
     };
-    Ok(SiteDetail {
-        php_full: php_full(ctx, site),
-        sources: sources(&snap, site),
-        services,
-        site: site.clone(),
-    })
+    let mut site = [site.clone()];
+    crate::node::fill_node(&mut site, &ctx.paths);
+    let [site] = site;
+    Ok(SiteDetail { php_full: php_full(ctx, &site), sources: sources(&snap, &site), services, site })
 }
 
 /// The full version of the PHP keg the site runs: the Cellar directory `opt/php@<v>` links

@@ -13,6 +13,7 @@ pub mod logsink;
 pub mod managed;
 pub mod modules;
 pub mod nginx;
+pub mod node;
 pub mod orphans;
 pub mod portscan;
 pub mod privileged;

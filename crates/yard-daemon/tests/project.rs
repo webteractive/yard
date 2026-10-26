@@ -548,6 +548,24 @@ async fn init_writes_the_managed_file_by_default() {
 }
 
 #[tokio::test]
+async fn init_moves_node_into_the_managed_file() {
+    let d = prepared("").await;
+    let dir = d.project("maker");
+    let mut toml = yard_core::config::TomlFile::load(&d.fx.paths.sites_toml()).unwrap();
+    toml.set(&["sites", "maker", "node"], toml_edit::value("18"));
+    toml.save().unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    init_managed(&mut c, &dir, json!({})).await.unwrap();
+    let file = std::fs::read_to_string(d.fx.paths.managed_project_file("maker")).unwrap();
+    assert!(file.contains("node = \"18\""), "{file}");
+    let sites: toml_edit::DocumentMut =
+        std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap().parse().unwrap();
+    assert!(sites["sites"]["maker"].get("node").is_none(), "{sites}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn init_applies_an_existing_managed_file() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;

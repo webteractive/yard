@@ -1,7 +1,7 @@
 //! One function per method. Mutations edit a TOML through `TomlFile`, then reconcile;
 //! they never write generated files themselves.
 
-use super::{ext, info, php, project, services, sources};
+use super::{ext, info, node, php, project, services, sources};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::managed::edit_managed;
@@ -33,7 +33,11 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
     match method {
         methods::STATUS => json(status(ctx).await),
         methods::DOCTOR => json(Ok(doctor(ctx, doctor_params(params)?).await)),
-        methods::SITES_LIST => json(Ok(snapshot(ctx).await?.resolution.sites)),
+        methods::SITES_LIST => {
+            let mut sites = snapshot(ctx).await?.resolution.sites;
+            crate::node::fill_node(&mut sites, &ctx.paths);
+            json(Ok(sites))
+        }
         methods::SITES_LINK => json(link(ctx, parse(params)?).await),
         methods::SITES_INFO => json(info::site_detail(ctx, parse(params)?).await),
         methods::ENV_PRINT => json(info::env_print(ctx, parse(params)?).await),
@@ -89,6 +93,10 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::PHP_INSTALL => json(php::install(ctx, parse(params)?).await),
         methods::PHP_UNINSTALL => json(php::uninstall(ctx, parse(params)?).await),
         methods::PHP_DEFAULT => json(php::set_default(ctx, parse(params)?).await),
+        methods::NODE_LIST => json(node::list(ctx, parse_or_default(params)?).await),
+        methods::NODE_DEFAULT => json(node::set_default(ctx, parse(params)?).await),
+        methods::NODE_USE => json(node::use_spec(ctx, parse(params)?).await),
+        methods::NODE_UNUSE => json(node::unuse(ctx, parse(params)?).await),
         methods::PHP_CONFIG_GET => json(php::config_get(ctx, parse(params)?)),
         methods::PHP_CONFIG_SET => json(php::config_edit(ctx, parse(params)?, true).await.map(|_| ())),
         methods::PHP_CONFIG_UNSET => json(php::config_edit(ctx, parse(params)?, false).await),
@@ -120,6 +128,11 @@ pub(super) fn parse<T: DeserializeOwned>(params: Value) -> Result<T, YardError> 
         .map_err(|e| YardError::new(ErrorCode::InvalidArgument, format!("bad parameters: {e}")))
 }
 
+/// `parse`, with `null` params as the type's defaults.
+fn parse_or_default<T: DeserializeOwned + Default>(params: Value) -> Result<T, YardError> {
+    if params.is_null() { Ok(T::default()) } else { parse(params) }
+}
+
 pub(super) fn json<T: Serialize>(result: Result<T, YardError>) -> Result<Value, YardError> {
     serde_json::to_value(result?).map_err(YardError::internal)
 }
@@ -142,8 +155,19 @@ pub(super) async fn reconcile(ctx: &Context) -> Result<(), YardError> {
     Ok(())
 }
 
+/// The site as `sites.list` shows it, its Node part filled.
 pub(super) async fn site(ctx: &Context, name: &str) -> Result<SiteInfo, YardError> {
-    snapshot(ctx).await?.resolution.sites.into_iter().find(|s| s.name == name).ok_or_else(|| not_found(name))
+    let site = snapshot(ctx)
+        .await?
+        .resolution
+        .sites
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| not_found(name))?;
+    let mut one = [site];
+    crate::node::fill_node(&mut one, &ctx.paths);
+    let [site] = one;
+    Ok(site)
 }
 
 pub(super) fn not_found(name: &str) -> YardError {
