@@ -507,7 +507,7 @@ Each was the yard session's recommendation, and the maintainer took them all ("P
 
 Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`, and
 verified on the maintainer's machine the same day with `scripts/e2e-m1.sh` and `scripts/e2e-m4e.sh`
-passing.
+passing, at `a1083ed` and again at `12babe5` after the final review's fixes.
 
 The same change updates the main spec (§3.1 for `wake.sock`, §4.2 note, §4.5 for shims that ask
 the daemon, §6.1 supervisor states and the faster first health check, §6.2 methods, §12
