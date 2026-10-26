@@ -830,7 +830,7 @@ Each milestone is usable on its own and gets its own implementation plan.
 3. **M3 HTTPS:** CA, secure/unsecure, secure_by_default, renewal (and re-issue on a
    TLD change). No `takeover` (dropped 2026-10-20, §5.5). Done 2026-10-21, verified by
    `scripts/e2e-m3.sh` on the maintainer's machine, where the maintainer ran `yard trust`.
-4. **M4 Node and services**, in four plans (split 2026-10-22; M4d split off 2026-10-23):
+4. **M4 Node and services**, in five plans (split 2026-10-22; M4d split off 2026-10-23, M4e added 2026-10-26):
    - **M4a the `.yard` project file and `yard init`**, designed in
      `docs/superpowers/specs/2026-10-22-yard-project-file-design.md`: `php`, `docroot`,
      `secure` and `extensions`, the setup page, and the shims following the file.
@@ -854,11 +854,11 @@ Each milestone is usable on its own and gets its own implementation plan.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in
      `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; whether Yard or
      emailulator's own LaunchAgent runs it is open for the maintainer.
-   - **M4e on-demand services** (drafted 2026-10-26, not approved, so not yet one of the
-     four plans): service instances sleep when idle and wake on a PHP request, a shim or
-     `yard service start`. Drafted in
+   - **M4e on-demand services** (approved 2026-10-26, the fifth plan, after M4d): service
+     instances that opt in sleep when idle and wake on a PHP request, a shim or
+     `yard service start`. Designed in
      `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md`, whose §13
-     lists what is open for the maintainer.
+     records the maintainer's answers to its open questions.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.

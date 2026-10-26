@@ -1,17 +1,18 @@
 # Yard M4e: on-demand services (sleep when idle, wake on use) — design
 
-Status: **draft, not approved.** Written 2026-10-26 in a separate session (the maintainer's homedir
+Status: **approved by the maintainer on 2026-10-26.** Written 2026-10-26 in a separate session (the maintainer's homedir
 session), from the yard session's account of the code at main `2472f47` (M4c in progress),
 then checked against the code at `c4e6eef` (M4c built and verified) the same day and
-corrected where it disagreed; corrections the code forced are marked **(code check)**.
-Needs the maintainer's review before a plan is written; nothing here is built. Part of M4 (main spec
+corrected where it disagreed; corrections the code forced are marked **(code check)**. The maintainer
+answered §13's ten questions the same day, taking the yard session's recommendation on each
+(marked **(maintainer, §13)**), and approved the spec. Nothing here is built yet. Part of M4 (main spec
 §12). It builds on the M4b service model
 (`docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md`) and changes no M4b
 decision except where §10 says so.
 
 Decisions marked **(maintainer)** are the maintainer's, from the 2026-10-26 conversation. Decisions marked
 **(builder's call)** were made while writing this and can be reversed on their own. §13
-lists what is still open for the maintainer.
+records the maintainer's answers to the questions the draft left open.
 
 ## 1. Intent
 
@@ -34,8 +35,8 @@ M4e changes.
 
 Goals:
 
-1. A service instance that nothing has used for `sleep_after` (default 15 minutes, §4) is
-   stopped gracefully, the way `yard service stop` stops it, and shows as `sleeping`.
+1. With sleeping turned on (it is off by default, §4), a service instance that nothing has
+   used for `sleep_after` is stopped gracefully, the way `yard service stop` stops it, and shows as `sleeping`.
 2. A request to a linked site whose `.yard` lists a sleeping instance wakes it, holds the
    request until the instance passes its health check, and then serves it. MySQL wakes in
    about 1–3 s, PostgreSQL in under 1 s, and Redis and MinIO in well under 1 s. That needs a
@@ -53,7 +54,8 @@ Non-goals:
 - Sleeping PHP-FPM masters, nginx or dnsmasq (§3).
 - Waking on a raw TCP connection to the instance's port (that is §12's proxy design).
 - Stopping or touching Herd, DBngin or Postgres.app.
-- Predictive pre-warming (waking at login, at `cd` into a project, on a schedule).
+- Predictive pre-warming (waking at `cd` into a project, on a schedule). Instances start awake
+  at login as today (§6.4).
 
 Anti-goals (a failure even if it works):
 
@@ -106,7 +108,7 @@ edited through `TomlFile` (config-ownership rule) **(builder's call)**:
 
 ```toml
 # yard.toml
-service_sleep_after = "15m"     # "off" disables sleeping for every instance
+service_sleep_after = "15m"     # absent or "off": no instance sleeps unless its own key says so
 ```
 
 ```toml
@@ -124,12 +126,15 @@ sleep_after = "off"     # this instance never sleeps; or a duration, e.g. "1h"
   with `CONFIG_INVALID` once the key is set, as it would for `default_node`.
 - Durations take `s`, `m`, `h` (`"90s"`, `"15m"`, `"2h"`), minimum `60s`; `"off"` disables.
   Anything else is `CONFIG_INVALID` with file, line and column, like the other TOMLs.
-- **Default `15m`, on for every engine (builder's call; open for the maintainer, §13).** Fifteen minutes
-  outlasts a coffee break but frees memory within a meeting. Redis costs only a few MB, but it
-  is on too so the behaviour is the same for every engine; `sleep_after = "off"` per instance
-  covers a machine-wide Redis someone wants always up.
+- **Off by default; opt-in (maintainer, §13).** With no `service_sleep_after` in `yard.toml` and no
+  `sleep_after` on the instance, nothing sleeps, and Yard behaves as M4b. Turning it on is
+  `service_sleep_after = "15m"` for every instance, or `sleep_after` on one. Sleeping on for
+  everyone would break every GUI client after 15 idle minutes until its user learned why
+  (§5.3). When turned on, it applies to every engine alike, Redis included; `sleep_after =
+  "off"` on an instance keeps that one up.
 - `yard service sleep-after <instance> <duration|off|default>` edits the instance key
-  (`default` removes it) **(builder's call on the name)**.
+  (`default` removes it) **(builder's call on the name)**. The machine-wide key is edited by
+  hand, like `default_node`'s neighbours, or by a `yard config` command if one exists by then.
 
 ## 5. Waking
 
@@ -150,10 +155,10 @@ location ~ \.php$ {
 
 location = /__yard_wake {
     internal;
-    proxy_pass http://unix:"<root>/run/wake.sock":/wake/<site>;
+    proxy_pass http://unix:"<root>/run/wake.sock":/wake/<site>?wait=10;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
-    proxy_read_timeout 35s;
+    proxy_read_timeout 15s;
     error_page 500 502 503 504 = @yard_wake_skipped;
 }
 
@@ -178,9 +183,12 @@ location @yard_wake_skipped {
   (nginx-generated 502/504); if it does not, the plan picks another fail-open mechanism
   before writing code **(builder's call; verify)**.
 - **`wake.sock`** is a unix socket under `run/`, mode 0600, owned by the user, served by
-  yardd as minimal HTTP/1.1 (one route, `GET /wake/<site>`). It is a second way into yardd
-  beside the JSON-RPC `yardd.sock` that main spec §3.1 and the rpc-protocol rule describe as
-  the only one, so §3.1 changes with it (§15, and open for the maintainer, §13). It is not a TCP port, so it
+  yardd as minimal HTTP/1.1 (one route, `GET /wake/<site>?wait=<s>`). It is a second way into
+  yardd beside the JSON-RPC `yardd.sock` that main spec §3.1 and the rpc-protocol rule
+  describe as the only one, so §3.1 changes with it (§15). **Accepted (maintainer, §13):** nginx can
+  only call an HTTP upstream, not JSON-RPC, so waking from the web needs it. It stays that
+  narrow: one route, readable only by the user, and it can only start instances that already
+  exist and are not `stopped`; it never adds, changes or removes anything. It is not a TCP port, so it
   needs no registry entry (port-registry rule) **(builder's call)**. The site name in the
   path is matched against `sites.toml`; an unknown one is `204` and a log line, never an
   error page.
@@ -198,21 +206,24 @@ location @yard_wake_skipped {
 `sites.toml` and the `.yard` with no daemon. For `php` and `composer` inside a linked site
 whose `.yard` lists services, it wakes them before `exec` **(builder's call on which shims)**:
 
-- **Only inside a linked site (code check).** The shim follows the nearest committed `.yard`
-  even in a project that is not linked, where there is no site to name, and it never reads
-  `services.toml`, which turning `redis = true` into an instance name needs. So the shim
-  finds the innermost linked site containing the cwd, as it already does for PHP, and asks
-  for that site.
+- **Only inside a linked site (code check; confirmed, the maintainer, §13).** The shim follows the
+  nearest committed `.yard` even in a project that is not linked, where there is no site to
+  name, and it never reads `services.toml`, which turning `redis = true` into an instance
+  name needs. So the shim finds the innermost linked site containing the cwd, as it already
+  does for PHP, and asks for that site.
 - It reads `run/sleeping`, a small file yardd rewrites atomically whenever an instance falls
   asleep or wakes, listing **the linked sites that need a sleeping instance**, one per line
   (code check: yardd knows which instances each site needs; the shim does not). When the
   site is not listed, the shim does nothing more: an awake machine costs one small file
   read, and no socket connect **(builder's call)**.
-- Otherwise it sends `GET /wake/<site>` on `wake.sock` and waits up to 30 s, printing one line
+- Otherwise it sends `GET /wake/<site>?wait=30` on `wake.sock` and waits up to 30 s (a CLI
+  command such as `php artisan migrate` can wait longer than a page, §6.3), printing one line
   to stderr (`yard: waking mysql-8.4 …`) so a pause is not a mystery. Then it `exec`s as
   today.
 - **It never fails the command.** A missing socket, a dead daemon or a timeout prints one line
-  to stderr and runs the command anyway.
+  to stderr and runs the command anyway. The connect has a short timeout (builder's call, about
+  200 ms), so a hung yardd costs a CLI command no more than that before the wait itself
+  **(accepted, the maintainer, §13)**.
 - `node`, `npm`, `npx`, `pecl`, `phpize` and `php-config` never wake anything.
 - **The shims no longer work entirely without a daemon.** They still run with yardd down (one
   stderr line), but AGENTS.md's layout and main spec §4.5 say they need no daemon, and that
@@ -222,17 +233,23 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
 
 - `yard service start <i>` on a sleeping instance wakes it and waits for health, as it does
   for a stopped one (M4b §7.2). On a stopped instance it does what it does today.
+- `yard service restart <i>` on a sleeping instance wakes it, as `start` does, and waits for
+  health **(maintainer, §13)**: restart means "make it run fresh", and refusing would only make the
+  user type `start` instead.
 - **A direct client** (TablePlus, a `mysql` by keg path, a script outside a project) cannot be
   seen before it connects. Against a sleeping instance it gets "connection refused". The fix
   is `yard service start <i>`, or `sleep_after = "off"` for an instance used that way. This is
   the price of keeping yardd out of the data path (§2) and is documented in `--help` and
-  README.
+  README. **Accepted, since sleeping is opt-in (maintainer, §13).** `yard services` shows the
+  instance as `sleeping`, and the hint is `yard service start <i>`.
 
 ## 6. Instance lifecycle
 
 ### 6.1 States
 
-`ServiceState` gains `sleeping` and `waking`:
+An instance gains two states, `sleeping` and `waking`. On the wire they are carried without
+new `ServiceState` variants (§11): `sleeping` is `stopped` with `sleeping_since` set, and
+`waking` is `starting` with it set.
 
 ```
             idle for sleep_after,             wake (§5)
@@ -253,8 +270,8 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
     and the instance is `failed` only after 5 failures in 60 s (main spec §6.1);
   - a missing keg is left out of the desired set (M4b), and the ask is answered at once.
 
-  The waiting asks are answered `204` at the latest after 30 s (§6.3), whatever the unit is
-  still doing.
+  The waiting asks are answered `204` at the latest after their `wait` (10 s from nginx, 30 s
+  from a shim, §6.3), whatever the unit is still doing.
 
 ### 6.2 How it maps onto the supervisor
 
@@ -285,21 +302,23 @@ to a `YardError`, and `services.start` and `restart` refuse with whatever it hol
 
 ### 6.3 How long an ask waits
 
-nginx's ask and the shim wait at most **30 s** for a wake **(builder's call)**. A MySQL doing
-crash recovery may take longer than that; the ask then answers `204`, the request goes through
-and the app reports its own connection error, while the unit keeps starting under its 120 s
-start timeout. The next request finds it awake. 30 s sits under nginx's `proxy_read_timeout`
-of 35 s for the ask, so nginx never times out first.
+nginx's ask waits at most **10 s** for a wake **(maintainer, §13)**, and a shim's at most **30 s**
+**(builder's call)**; each passes its limit as `wait`, which yardd caps at 30. MySQL and
+PostgreSQL start in a few seconds here, and a page that hangs for 30 s is worse than the app's
+own connection error. A MySQL doing crash recovery may take longer than the limit; the ask
+then answers `204`, the request goes through and the app reports its own connection error,
+while the unit keeps starting under its 120 s start timeout. The next request finds it awake.
+nginx's `proxy_read_timeout` for the ask is 15 s, above its 10 s `wait`, so yardd answers
+before nginx gives up.
 
 ### 6.4 At yardd start (login)
 
-An instance with sleeping enabled **starts asleep** when yardd starts: at login, no database
-runs until a site, a shim or the user needs one **(builder's call; open for the maintainer, §13)**. This
-is where most of the saving comes from on a machine that is rebooted or logged into daily.
+Every instance that is not `stopped` **starts awake** when yardd starts, as today, and its
+idle clock starts then; one with sleeping on falls asleep after `sleep_after` if nothing uses
+it **(maintainer, §13)**. Starting asleep would save more memory, but every first request of the day
+would pay the cold start.
 
-- `orphans::stop` still runs first for every instance (M4b §15), so a process a killed yardd
-  left behind is stopped cleanly before the instance is considered asleep.
-- An instance with `sleep_after = "off"` starts at yardd start, as today.
+- `orphans::stop` still runs first for every instance (M4b §15), as today.
 - `yard service add` starts the new instance awake and waits for health (it prints `yard env`
   lines after a working connection, M4b §7.2). The idle clock starts then.
 
@@ -362,8 +381,8 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
 
 ## 10. Changes to M4b behaviour
 
-- **M4b §4: "Every other instance starts when yardd starts."** With sleeping on, an instance
-  starts asleep (§6.4); with `sleep_after = "off"` it starts as before.
+- **M4b §4: "Every other instance starts when yardd starts."** Unchanged (§6.4); with
+  sleeping on, it may fall asleep later.
 - **M4b §9: "A stopped or failed instance does not send the site to the setup page."** The same
   holds for a sleeping one: the site is served, and the wake hook wakes the instance first.
 - **M4b §10 doctor:** `service:<i>` is `ok` for a sleeping instance (`sleeping since 14:02`), and
@@ -372,23 +391,27 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
 
 ## 11. RPC, errors, protocol
 
-- `ServiceState` gains `sleeping { since }` and `waking`. `ServiceInfo` gains
+- `ServiceState` keeps its variants **(maintainer, §13)**. `ServiceInfo` gains
+  `sleeping_since: Option<String>` (RFC 3339): set with `stopped` for a sleeping instance and
+  with `starting` for a waking one, absent otherwise. A 2.7 CLI ignores the field and shows a
+  sleeping instance as `stopped` and a waking one as `starting`, which is true of the process.
+  The protocol becomes **2.8**, a minor bump. `ServiceInfo` also gains
   `sleep_after_secs: Option<u64>` (`None` = off; the protocol writes durations as integers, as
   `retry_in_ms` does, code check) and its source. `SettingSource` has no `yard.toml` or
   `services.toml` variant yet; M4e adds them.
-- `yard status`'s result gains the sleeping instances (§9).
+- `yard status`'s result gains the sleeping instances (§9), as an optional field older CLIs
+  ignore.
 - New method `services.sleep.set { instance, after }` for §4's command (code check: every
   multi-word method is dotted, as `php.config.set` is; none has an underscore).
   `services.start` accepts a sleeping instance and wakes it.
 - No new error codes; a failed wake reuses `PORT_IN_USE`, `FORMULA_MISSING` and `JOB_FAILED`
   as `services.start` does.
-- **Not a plain minor bump (code check).** The rpc-protocol rule gives an enum a newer daemon may
-  extend a `#[serde(other)]` variant, and `ServiceState` has none: it is externally tagged, so
-  a 2.7 CLI fails to decode `services.list` from a daemon that sends `sleeping`. Adding an
-  `Other` variant now does not help clients already built. The choices are a major bump, or
-  keeping `ServiceState`'s variants and adding an optional `sleeping_since` beside it, so an
-  older CLI shows a sleeping instance as `stopped` (open for the maintainer, §13). Either way M4e adds
-  the `Other` fallback for later states.
+- **Why not new variants (code check).** The rpc-protocol rule gives an enum a newer daemon
+  may extend a `#[serde(other)]` variant, and `ServiceState` has none: it is externally
+  tagged, so a 2.7 CLI would fail to decode `services.list` from a daemon that sent
+  `sleeping`. Adding an `Other` variant now does not help clients already built, so the new
+  states ride on `sleeping_since` instead of a major bump. M4e still adds the `Other`
+  fallback, so a later state can be a variant.
 - `wake.sock` is not JSON-RPC and not part of `yard-proto`: it is an nginx- and shim-facing
   side door with one route and one answer (`204`).
 
@@ -407,29 +430,26 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
 - **Sleeping PHP-FPM masters.** Saves a few MB per version against a 502 risk (§3). Later, if
   ever.
 
-## 13. Open for the maintainer
+## 13. the maintainer's answers (2026-10-26)
 
-1. **Default on or opt-in?** This draft turns sleeping on for every instance at 15 minutes.
-   The alternative is `off` by default, enabled per instance or machine-wide.
-2. **Start asleep at login (§6.4)?** It saves the most memory, and every first request of the
-   day pays the cold start.
-3. **Is the GUI gap acceptable (§5.3)?** TablePlus against a sleeping MySQL gets "connection
-   refused" until `yard service start`, or the instance is set to `sleep_after = "off"`.
-4. **Milestone placement.** M4e after M4c, before or after M4d emailulator. If M4d ships first
-   and Yard runs emailulator, it is one more engine that can sleep. Main spec §12 says M4 is
-   "in four plans"; M4e makes five.
-5. **A second socket into yardd (§5.1).** `wake.sock` is plain HTTP beside the JSON-RPC
-   `yardd.sock`, which main spec §3.1 calls the only way in. Is that acceptable under
-   architecture A?
-6. **Shims that ask the daemon (§5.2).** They fail open, but until now they needed no daemon at
-   all. Acceptable?
-7. **A project that is not linked** but has a committed `.yard` with services: should its shims
-   wake anything? This draft says no (§5.2).
-8. **`yard service restart` on a sleeping instance:** wake it, or refuse? Not decided here.
-9. **How long a web request may wait for a wake.** 30 s (§6.3) is long for a page; a shorter cap
-   means the app's own connection error sooner.
-10. **Protocol (§11):** a major bump, or `sleeping_since` beside the existing states so an older
-    CLI still decodes.
+Each was the yard session's recommendation, and the maintainer took them all ("Proceed").
+
+1. **Default on or opt-in?** Opt-in: `service_sleep_after` is off unless set, with a
+   per-instance override (§4).
+2. **Start asleep at login?** No. Instances start awake as today and sleep only after being
+   idle (§6.4).
+3. **The GUI gap?** Acceptable, since sleeping is opt-in; `yard services` shows `sleeping` and
+   the hint is `yard service start <i>` (§5.3).
+4. **Milestone placement.** After M4d, as a fifth M4 plan; main spec §12's "four plans"
+   becomes five when M4e is approved.
+5. **A second socket into yardd?** Accepted, kept to one route that only wakes existing
+   instances, readable only by the user (§5.1).
+6. **Shims that ask the daemon?** Accepted, with a short connect timeout; they run the command
+   whatever yardd does (§5.2).
+7. **A project that is not linked?** Wakes nothing (§5.2).
+8. **`yard service restart` on a sleeping instance?** Wakes it (§5.3).
+9. **How long a web request waits.** 10 s; a shim waits 30 s (§6.3).
+10. **Protocol.** `sleeping_since` beside the existing states, protocol 2.8 (§11).
 
 ## 14. Testing
 
@@ -441,11 +461,13 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
   shows a connection; an ask wakes it and answers only after health; concurrent asks share one
   start; a wake during a stop waits for the stop; a stopped instance is never woken; a failed
   wake answers `204` and leaves `failed`; yardd start leaves sleep-enabled instances asleep;
-  `wake.sock` answers `204` for an unknown site.
-- **yard-shim:** no socket connect when `run/sleeping` does not list the project's instances; a
-  wake when it does; a dead socket still runs the command.
+  `wake.sock` answers `204` for an unknown site and at its `wait`, capped at 30 s;
+  `services.restart` wakes a sleeping instance; with no sleep setting anywhere nothing ever
+  sleeps.
+- **yard-shim:** no socket connect when `run/sleeping` does not list the site; a wake when it
+  does; a dead or hung socket still runs the command after the connect timeout.
 - **yard-cli:** `services` and `info` render `sleeping`/`waking` and SLEEP, human and `--json`,
-  and `service sleep-after`.
+  and `service sleep-after`; a 2.7-shaped `ServiceInfo` without `sleeping_since` still decodes.
 - **nginx:** a rendered config passes `nginx -t`, and an integration test proves fail-open: with
   `wake.sock` absent, a PHP request is still served.
 - **`scripts/e2e-m4e.sh`** on the maintainer's machine, after `e2e-m1.sh` and with M4b's instances, asked
