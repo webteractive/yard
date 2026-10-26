@@ -1,5 +1,6 @@
 //! Yard's side effects: probing ports, spawning units, serving RPC.
 
+pub mod conns;
 pub mod daemon;
 pub mod doctor;
 pub mod events;

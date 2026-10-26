@@ -26,6 +26,7 @@ fn main() -> ExitCode {
         Some("mysqld") => mysqld(Path::new(&argv0), &args),
         Some("initdb") => initdb(Path::new(&argv0), &args),
         Some("postgres") => postgres(&args),
+        Some("postgres-backend") => backend(),
         Some("redis-server") => redis_server(&args),
         Some("minio") => minio(&args),
         _ => mode(&args),
@@ -595,10 +596,39 @@ fn init_data(argv0: &Path, data: &Path, marker: &str) -> ExitCode {
     }
 }
 
-/// `postgres -D D -c listen_addresses=… -c port=N …`; listens on `N`.
+/// `postgres -D D -c listen_addresses=… -c port=N …`; listens on `N` and, as PostgreSQL forks
+/// a backend per connection, hands each one to a `postgres-backend` child.
 fn postgres(args: &[String]) -> ExitCode {
-    let port = args.iter().find_map(|a| a.strip_prefix("port=")?.parse().ok());
-    listen_tcp(port)
+    let Some(port) = args.iter().find_map(|a| a.strip_prefix("port=")?.parse::<u16>().ok()) else {
+        return fail("postgres needs -c port=N".into());
+    };
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => listener,
+        Err(e) => return fail(format!("cannot listen on {port}: {e}")),
+    };
+    let me = std::env::current_exe().unwrap_or_default();
+    for stream in listener.incoming().flatten() {
+        let Ok(out) = stream.try_clone() else { continue };
+        let mut cmd = std::process::Command::new(&me);
+        std::os::unix::process::CommandExt::arg0(&mut cmd, "postgres-backend");
+        cmd.stdin(std::process::Stdio::from(std::os::fd::OwnedFd::from(stream)))
+            .stdout(std::process::Stdio::from(std::os::fd::OwnedFd::from(out)));
+        if let Ok(mut child) = cmd.spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// A PostgreSQL backend: its connection is stdin and stdout. Greets, as `hold` does, then holds
+/// it until the client closes it.
+fn backend() -> ExitCode {
+    let _ = std::io::stdout().write_all(b"fake\n");
+    let _ = std::io::stdout().flush();
+    let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+    ExitCode::SUCCESS
 }
 
 /// `redis-server <conf>`; listens on the `port` in the conf. Like real redis it exits 1 at
@@ -639,8 +669,9 @@ fn listen_tcp(port: Option<u16>) -> ExitCode {
     }
 }
 
-/// Accepts and closes connections until killed. As nginx (`http`), answers each with a
-/// status line first, which is what the supervisor's HTTP health check looks for.
+/// Accepts connections until killed, holding each until its client closes it. As nginx
+/// (`http`), answers each with a status line instead, which is what the supervisor's HTTP
+/// health check looks for.
 fn serve(listener: TcpListener, http: bool) -> ExitCode {
     // nginx reloads on SIGHUP; the fake survives one and, as nginx, logs
     // `fake nginx reloaded` to stderr.
@@ -655,9 +686,19 @@ fn serve(listener: TcpListener, http: bool) -> ExitCode {
     for stream in listener.incoming().flatten() {
         if http {
             std::thread::spawn(move || answer(stream));
+        } else {
+            // A server keeps a connection until its client closes it (M4e's idle count).
+            std::thread::spawn(move || hold(stream));
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Greets the client first, as MySQL's handshake does, so a test knows a server took the
+/// connection rather than a listener's backlog; then holds it until the client closes it.
+fn hold(mut stream: std::net::TcpStream) {
+    let _ = stream.write_all(b"fake\n");
+    let _ = std::io::copy(&mut stream, &mut std::io::sink());
 }
 
 /// Reads the request head before answering, as nginx does: closing with the request

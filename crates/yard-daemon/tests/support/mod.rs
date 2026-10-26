@@ -255,8 +255,8 @@ pub fn ppid(pid: u32) -> u32 {
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
 }
 
-/// Something accepted a connection on `127.0.0.1:port` and closed it, as the fake units
-/// do. A listener nobody accepts on still takes the connect into its backlog, so a bare
+/// Something accepted a connection on `127.0.0.1:port` and greeted or closed it, as the fake
+/// units do. A listener nobody accepts on still takes the connect into its backlog, so a bare
 /// connect cannot tell a served socket from one yardd merely holds.
 pub fn served(port: u16) -> bool {
     use std::io::Read;
@@ -265,7 +265,9 @@ pub fn served(port: u16) -> bool {
     if s.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
         return true;
     }
-    s.read_to_end(&mut Vec::new()).is_ok()
+    // A fake engine greets and then holds the connection; nginx answers and closes. Either
+    // is a server; a connection left in a listener's backlog reads nothing.
+    s.read(&mut [0; 1]).is_ok()
 }
 
 /// How many times nginx started on sockets it inherited, from the line real nginx logs
