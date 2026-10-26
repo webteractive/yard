@@ -118,6 +118,27 @@ fn listing(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[tokio::test]
+async fn only_sites_with_services_ask() {
+    let e = env().await;
+    let ports = std::fs::read_to_string(e.fx.paths.ports_toml()).unwrap();
+    let pin = format!("\"redis\" = {{ port = {}, mode = \"pinned\" }}\n", free_port());
+    std::fs::write(e.fx.paths.ports_toml(), ports + &pin).unwrap();
+    e.fx.add_formula("redis");
+    e.fx.add_service("redis", "redis", false);
+    std::fs::write(e.site("shop").join(".yard"), "[services]\nredis = true\n").unwrap();
+    e.site("blog");
+
+    e.rec.reconcile().await.unwrap();
+    let shop = std::fs::read_to_string(e.conf("shop")).unwrap();
+    assert!(shop.contains("auth_request /__yard_wake;"), "{shop}");
+    let wake = e.fx.paths.wake_socket();
+    assert!(shop.contains(&format!("\"http://unix:{}:/wake/shop?wait=10\"", wake.display())), "{shop}");
+    let blog = std::fs::read_to_string(e.conf("blog")).unwrap();
+    assert!(!blog.contains("__yard_wake"), "{blog}");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
 async fn first_reconcile_writes_configs_and_starts_units() {
     let e = env().await;
     e.site("blog");

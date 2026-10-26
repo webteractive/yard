@@ -88,3 +88,107 @@ async fn real_nginx_serves_on_an_inherited_socket() {
     let _ = nginx.wait();
     eprintln!("error.log:\n{}", std::fs::read_to_string(dir.path().join("error.log")).unwrap_or_default());
 }
+
+/// How the stand-in for `wake.sock` answers.
+const HANG: u8 = 0;
+const ERROR_500: u8 = 1;
+const NO_CONTENT_AFTER_300_MS: u8 = 2;
+
+/// A `wake.sock` that answers each request as `mode` says when it arrives.
+fn fake_wake(socket: &Path, mode: &'static std::sync::atomic::AtomicU8) {
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut head = [0u8; 4096];
+                let _ = stream.read(&mut head);
+                match mode.load(std::sync::atomic::Ordering::SeqCst) {
+                    HANG => std::thread::sleep(Duration::from_secs(30)),
+                    ERROR_500 => {
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
+                    }
+                    _ => {
+                        std::thread::sleep(Duration::from_millis(300));
+                        let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// The status line of `GET <path>`, and how long it took.
+fn status(port: u16, path: &str) -> (String, Duration) {
+    let started = std::time::Instant::now();
+    let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+        return (String::new(), started.elapsed());
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(20)));
+    let _ = write!(s, "GET {path} HTTP/1.0\r\nHost: blog.yard\r\n\r\n");
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    (out.lines().next().unwrap_or_default().to_string(), started.elapsed())
+}
+
+/// M4e spec §5.1: the wake hook Yard renders never stops a PHP request. With no socket, a
+/// socket that answers 500, or one that never answers, the request is served; a socket that
+/// answers 204 holds it until then.
+#[tokio::test]
+#[ignore = "needs brew nginx"]
+async fn the_wake_hook_fails_open() {
+    assert!(Path::new(NGINX).exists(), "brew install nginx");
+    let dir = tempfile::Builder::new().prefix("yard-test-").tempdir_in("/tmp").unwrap();
+    let www = dir.path().join("www");
+    std::fs::create_dir_all(&www).unwrap();
+    std::fs::write(www.join("index.php"), "static\n").unwrap();
+    let socket = dir.path().join("wake.sock");
+    let wake = yard_core::render::nginx::wake_location(&socket, "blog");
+    let port = support::free_port();
+    let conf = |wake: &str| {
+        format!(
+            "daemon off;\nmaster_process off;\npid {pid};\nerror_log {log};\nevents {{}}\nhttp {{\n    access_log off;\n    server {{\n        listen 127.0.0.1:{port};\n        root {www};\n\n    location ~ \\.php$ {{\n        auth_request /__yard_wake;\n        default_type text/plain;\n    }}\n\n{wake}    }}\n}}\n",
+            pid = dir.path().join("nginx.pid").display(),
+            log = dir.path().join("error.log").display(),
+            www = www.display(),
+        )
+    };
+    let args = nginx_args(dir.path());
+    std::fs::write(dir.path().join("nginx.conf"), conf(&wake)).unwrap();
+    let test = Command::new(NGINX).arg("-t").args(&args).output().unwrap();
+    assert!(
+        test.status.success(),
+        "nginx -t passes on the rendered block: {}",
+        String::from_utf8_lossy(&test.stderr)
+    );
+
+    // A socket that never answers is given up on after 1 s here, not 15.
+    let short = wake.replace("proxy_read_timeout 15s;", "proxy_read_timeout 1s;");
+    assert_ne!(short, wake, "the rendered block sets proxy_read_timeout 15s");
+    std::fs::write(dir.path().join("nginx.conf"), conf(&short)).unwrap();
+    let mut nginx = Command::new(NGINX).args(&args).stdin(Stdio::null()).spawn().unwrap();
+    let up = wait_until(|| std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(), Duration::from_secs(5))
+        .await;
+    assert!(up, "nginx listens");
+
+    let log = || std::fs::read_to_string(dir.path().join("error.log")).unwrap_or_default();
+    let (line, _) = status(port, "/index.php");
+    assert!(line.contains(" 200 "), "no socket: {line}\n{}", log());
+
+    static MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(ERROR_500);
+    fake_wake(&socket, &MODE);
+    let (line, _) = status(port, "/index.php");
+    assert!(line.contains(" 200 "), "a 500 from the socket: {line}\n{}", log());
+
+    MODE.store(HANG, std::sync::atomic::Ordering::SeqCst);
+    let (line, took) = status(port, "/index.php");
+    assert!(line.contains(" 200 "), "a socket that never answers: {line} after {took:?}\n{}", log());
+
+    MODE.store(NO_CONTENT_AFTER_300_MS, std::sync::atomic::Ordering::SeqCst);
+    let (line, took) = status(port, "/index.php");
+    assert!(line.contains(" 200 "), "a 204: {line}\n{}", log());
+    assert!(took >= Duration::from_millis(300), "the request waited for the wake: {took:?}");
+
+    let _ = nginx.kill();
+    let _ = nginx.wait();
+}

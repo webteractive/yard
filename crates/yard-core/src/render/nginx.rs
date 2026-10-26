@@ -85,7 +85,9 @@ http {{
     )
 }
 
-pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
+/// A site's server blocks. With `wake` (a PHP site whose `.yard` lists services), each PHP
+/// request first asks yardd to wake the site's sleeping services (M4e spec §5.1).
+pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
     let override_file = ctx.paths.nginx_override(&site.name);
     let host = &site.host;
     let body = match &site.kind {
@@ -110,6 +112,14 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
                 .parse::<PhpVersion>()
                 .map(|v| ctx.paths.fpm_socket(v))
                 .unwrap_or_else(|_| ctx.paths.fpm_socket(PhpVersion::DEFAULT));
+            let (ask, wake_block) = if wake {
+                (
+                    "        auth_request /__yard_wake;\n",
+                    format!("\n{}", wake_location(&ctx.paths.wake_socket(), &site.name)),
+                )
+            } else {
+                ("", String::new())
+            };
             format!(
                 "    root {root};
     index index.php index.html;
@@ -120,7 +130,7 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
     }}
 
     location ~ \\.php$ {{
-        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
+{ask}        fastcgi_split_path_info ^(.+\\.php)(/.+)$;
         fastcgi_pass {pass};
         fastcgi_index index.php;
         include {params};
@@ -132,7 +142,7 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
     location ~ /\\.(?!well-known).* {{
         deny all;
     }}
-",
+{wake_block}",
                 root = nginx_str(docroot),
                 pass = nginx_str(&format!("unix:{}", socket.display())),
                 params = q(&ctx.brew.nginx_fastcgi_params()),
@@ -142,6 +152,31 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo) -> String {
     };
     let tls = site.secure.then(|| (ctx.paths.cert(&site.name), ctx.paths.cert_key(&site.name)));
     server_blocks(ctx, &format!("{host} *.{host}"), &body, &override_file, tls)
+}
+
+/// The subrequest a PHP location makes with `auth_request /__yard_wake;`: yardd's wake socket
+/// answers once `site`'s services are up (at most 10 s, which `proxy_read_timeout` outlasts).
+/// Any error, a missing socket and a timeout included, falls through to an empty `204`, so a
+/// request never fails because yardd could not wake a service. The whole URL is one quoted
+/// argument: nginx rejects a quoted socket path inside `http://unix:…:`.
+pub fn wake_location(wake_socket: &Path, site: &str) -> String {
+    format!(
+        "    location = /__yard_wake {{
+        internal;
+        proxy_pass {url};
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length \"\";
+        proxy_read_timeout 15s;
+        proxy_intercept_errors on;
+        error_page 400 401 403 404 500 502 503 504 = @yard_wake_skipped;
+    }}
+
+    location @yard_wake_skipped {{
+        return 204;
+    }}
+",
+        url = nginx_str(&format!("http://unix:{}:/wake/{site}?wait=10", wake_socket.display())),
+    )
 }
 
 /// The `location /` of a reverse proxy to `target`, which sends `host` as `Host` and keeps the

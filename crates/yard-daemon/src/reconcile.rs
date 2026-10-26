@@ -329,7 +329,11 @@ impl Reconciler {
         rendered.insert(paths.nginx_default_index(), default_index(&ctx, &resolution.sites));
         rendered.insert(paths.dnsmasq_conf(), dnsmasq_conf(&ctx, dns));
         for site in &resolution.sites {
-            rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site));
+            // A PHP site whose `.yard` lists services asks yardd to wake them (M4e spec §5.1).
+            let wake = matches!(site.kind, SiteKind::Php { .. })
+                && !site.needs_setup()
+                && projects.get(&site.name).and_then(|l| l.ok()).is_some_and(|f| !f.services.is_empty());
+            rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site, wake));
             if site.needs_setup() {
                 rendered.insert(paths.nginx_setup_page(&site.name), setup_page(&ctx, site));
             }
