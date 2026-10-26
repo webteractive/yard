@@ -501,7 +501,7 @@ async fn doctor_reports_project_files() {
     .unwrap();
     e.yard_site("met", "php = \"8.4\"\n", &dir);
     let needy = e.yard_site("needy", "php = \"7.3\"\n", &dir);
-    let bad = e.yard_site("bad", "node = \"20\"\n", &dir);
+    let bad = e.yard_site("bad", "nodejs = \"20\"\n", &dir);
     let both = e.yard_site("both", "", &dir);
     std::fs::write(both.join(".yard-php"), "7.1\n").unwrap();
     e.yard_site("off", "extensions = [\"xdebug\"]\n", &dir);

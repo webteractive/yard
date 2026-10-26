@@ -5,6 +5,7 @@ use crate::config::located_error;
 use crate::config::yard::{ExtName, parse_ext_name};
 use crate::config::{ServicesConfig, SiteEntry, SitesConfig};
 use crate::constraint::best_version;
+use crate::node::{NodeSpec, parse_spec};
 use crate::services::{Engine, instance_name};
 use crate::sites::detect_docroot;
 use crate::{Paths, PhpVersion};
@@ -20,6 +21,8 @@ pub const FILE: &str = ".yard";
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProjectFile {
     pub php: Option<PhpVersion>,
+    /// The Node spec the project and every directory under it runs (M4c spec §5).
+    pub node: Option<NodeSpec>,
     /// Relative to the project, and inside it.
     pub docroot: Option<PathBuf>,
     pub secure: Option<bool>,
@@ -87,6 +90,7 @@ pub type IgnoredFiles = BTreeMap<String, Ignored>;
 #[serde(deny_unknown_fields)]
 struct Raw {
     php: Option<PhpVersion>,
+    node: Option<Spanned<String>>,
     docroot: Option<Spanned<PathBuf>>,
     secure: Option<bool>,
     #[serde(default)]
@@ -144,6 +148,10 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
                 .map_err(|e| invalid(Some(name.span()), &format!("extensions: {}", e.message)))
         })
         .collect::<Result<_, _>>()?;
+    let node = match raw.node {
+        Some(n) => Some(parse_spec(n.get_ref()).map_err(|e| invalid(Some(n.span()), &format!("node: {e}")))?),
+        None => None,
+    };
     let services = parse_services(raw.services, &invalid)?;
     let project = match (raw.project, kind) {
         (Some(p), FileKind::Committed) => {
@@ -155,7 +163,7 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
         }
         (p, _) => p.map(Spanned::into_inner),
     };
-    Ok((ProjectFile { php: raw.php, docroot, secure: raw.secure, extensions, services }, project))
+    Ok((ProjectFile { php: raw.php, node, docroot, secure: raw.secure, extensions, services }, project))
 }
 
 /// `[services]`: keys are engines, values a release line of that engine or `true`.
@@ -270,6 +278,8 @@ pub struct Detected {
     pub docroot: PathBuf,
     /// `None` leaves HTTPS to each teammate's `secure_by_default`.
     pub secure: Option<bool>,
+    /// The site's own `node`, never `.nvmrc`'s, which the project already carries.
+    pub node: Option<NodeSpec>,
 }
 
 /// `php`: the site's isolation, else the version that best meets `composer.json`'s
@@ -310,7 +320,8 @@ pub fn detect(
         }
     };
     let secure = entry.and_then(|e| e.secure).or(secure_by_default.then_some(true));
-    Ok(Detected { php, docroot, secure })
+    let node = entry.and_then(|e| e.node.clone());
+    Ok(Detected { php, docroot, secure, node })
 }
 
 /// What `yard init` writes for `[services]`: one commented line per engine, since Yard does
@@ -336,6 +347,9 @@ fn render_keys(d: &Detected) -> String {
     let mut out = String::new();
     if let Some(v) = d.php {
         out.push_str(&format!("php = \"{v}\"\n"));
+    }
+    if let Some(spec) = &d.node {
+        out.push_str(&format!("node = \"{spec}\"\n"));
     }
     out.push_str(&format!("docroot = {}\n", toml_edit::Value::from(d.docroot.display().to_string())));
     if let Some(on) = d.secure {
@@ -372,11 +386,14 @@ pub fn to_committed(text: &str) -> Result<String, YardError> {
 }
 
 /// `existing` with the keys detection produced written over, keeping every other key and
-/// comment: `php` and `secure` only when detected, `docroot` always.
+/// comment: `php`, `node` and `secure` only when detected, `docroot` always.
 pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
     let mut doc = edit_doc(existing)?;
     if let Some(v) = d.php {
         doc["php"] = toml_edit::value(v.to_string());
+    }
+    if let Some(spec) = &d.node {
+        doc["node"] = toml_edit::value(spec.to_string());
     }
     doc["docroot"] = toml_edit::value(d.docroot.display().to_string());
     if let Some(on) = d.secure {
@@ -438,6 +455,7 @@ mod tests {
     use crate::Paths;
     use crate::config::SiteEntry;
     use crate::config::sites::parse_sites;
+    use crate::node::NodeSpec;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use yard_proto::{ErrorCode, Need, YardError};
@@ -470,11 +488,21 @@ mod tests {
 
     #[test]
     fn unknown_key_names_file_and_line() {
-        let e = parse("php = \"7.3\"\nnode = \"20\"\n", Path::new(FILE)).unwrap_err();
+        let e = parse("php = \"7.3\"\nnodejs = \"20\"\n", Path::new(FILE)).unwrap_err();
         assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
         assert_eq!(e.data.as_ref().unwrap()["line"], 2);
-        assert!(e.message.contains("node") && e.message.contains(FILE), "{}", e.message);
+        assert!(e.message.contains("nodejs") && e.message.contains(FILE), "{}", e.message);
         assert_eq!(e.hint.as_deref(), Some(format!("edit {FILE}").as_str()));
+    }
+
+    #[test]
+    fn node_key_parses_and_a_bad_one_names_its_line() {
+        let f = parse_ok("php = \"7.3\"\nnode = \"16.14.0\"\n");
+        assert_eq!(f.node, Some(crate::node::parse_spec("16.14.0").unwrap()));
+        let e = parse("php = \"7.3\"\nnode = \"latest\"\n", Path::new(FILE)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert_eq!(e.data.as_ref().unwrap()["line"], 2);
+        assert!(e.message.contains("latest"), "{}", e.message);
     }
 
     #[test]
@@ -632,20 +660,20 @@ mod tests {
 
     #[test]
     fn render_for_eepower() {
-        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None };
+        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None, node: None };
         assert_eq!(
             render(&d),
             format!(
                 "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n{BLOCK}"
             )
         );
-        let off = Detected { php: None, docroot: ".".into(), secure: Some(false) };
+        let off = Detected { php: None, docroot: ".".into(), secure: Some(false), node: None };
         assert!(
             render(&off).ends_with(&format!("docroot = \".\"\nsecure = false\n{BLOCK}")),
             "{}",
             render(&off)
         );
-        let d = Detected { php: None, docroot: ".".into(), secure: Some(true) };
+        let d = Detected { php: None, docroot: ".".into(), secure: Some(true), node: None };
         assert_eq!(
             render(&d),
             format!(
@@ -673,7 +701,7 @@ mod tests {
         // Isolation wins over composer.json.
         let entry = SiteEntry { php: Some(v("7.1")), ..Default::default() };
         let d = detect(Some(&entry), project, composer, &[v("7.1")], false, &is_dir).unwrap();
-        assert_eq!(d, Detected { php: Some(v("7.1")), docroot: "public".into(), secure: None });
+        assert_eq!(d, Detected { php: Some(v("7.1")), docroot: "public".into(), secure: None, node: None });
         // composer.json: the lowest supported fit when none installed fits.
         let d = detect(None, project, composer, &[v("8.4")], false, &is_dir).unwrap();
         assert_eq!(d.php, Some(v("7.3")));
@@ -697,9 +725,34 @@ mod tests {
     }
 
     #[test]
+    fn render_and_rewrite_carry_node() {
+        let d = Detected {
+            php: Some(v("7.4")),
+            docroot: "public".into(),
+            secure: None,
+            node: Some(NodeSpec::Major(16)),
+        };
+        assert!(render(&d).contains("php = \"7.4\"\nnode = \"16\"\ndocroot"), "{}", render(&d));
+        let none = Detected { node: None, ..d.clone() };
+        let kept = parse(&rewrite("node = \"18\"\n", &none).unwrap(), Path::new(FILE)).unwrap();
+        assert_eq!(kept.node, Some(NodeSpec::Major(18)));
+        let set = parse(&rewrite("node = \"18\"\n", &d).unwrap(), Path::new(FILE)).unwrap();
+        assert_eq!(set.node, Some(NodeSpec::Major(16)));
+    }
+
+    #[test]
+    fn detect_takes_node_from_the_site_only() {
+        let is_dir = |_: &Path| false;
+        let entry = SiteEntry { node: Some(NodeSpec::Major(16)), ..Default::default() };
+        let d = detect(Some(&entry), Path::new("/p"), None, &[], false, &is_dir).unwrap();
+        assert_eq!(d.node, Some(NodeSpec::Major(16)));
+        assert_eq!(detect(None, Path::new("/p"), None, &[], false, &is_dir).unwrap().node, None);
+    }
+
+    #[test]
     fn rewrite_keeps_extensions_and_comments() {
         let existing = "# ours\nphp = \"7.1\" # legacy\nextensions = [\"redis\"]\ndocroot = \"web\"\n";
-        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None };
+        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None, node: None };
         let out = rewrite(existing, &d).unwrap();
         let f = parse(&out, Path::new(FILE)).unwrap();
         assert_eq!((f.php, f.docroot.as_deref()), (Some(v("7.3")), Some(Path::new("public"))));
@@ -708,12 +761,12 @@ mod tests {
         // A key detection does not produce is kept.
         let kept = rewrite(
             "php = \"7.1\"\nsecure = true\n",
-            &Detected { php: None, docroot: ".".into(), secure: None },
+            &Detected { php: None, docroot: ".".into(), secure: None, node: None },
         )
         .unwrap();
         let f = parse(&kept, Path::new(FILE)).unwrap();
         assert_eq!((f.php, f.secure), (Some(v("7.1")), Some(true)));
-        let off = Detected { php: None, docroot: ".".into(), secure: Some(false) };
+        let off = Detected { php: None, docroot: ".".into(), secure: Some(false), node: None };
         let f = parse(&rewrite("secure = true\n", &off).unwrap(), Path::new(FILE)).unwrap();
         assert_eq!(f.secure, Some(false));
         assert_eq!(rewrite("php = [", &d).unwrap_err().code, ErrorCode::ProjectFileInvalid);
@@ -839,7 +892,7 @@ mod tests {
     }
 
     fn eepower() -> Detected {
-        Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None }
+        Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None, node: None }
     }
 
     #[test]

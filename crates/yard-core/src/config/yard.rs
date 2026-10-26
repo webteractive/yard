@@ -1,6 +1,7 @@
 //! `yard.toml`: default PHP, an optional TLD override and each version's extensions.
 
 use super::{config_error, read_optional};
+use crate::node::NodeSpec;
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -15,6 +16,8 @@ pub struct YardConfig {
     pub secure_by_default: bool,
     /// `[php."<v>".extensions]`: the extensions Yard loads for each version (spec §4.3).
     pub extensions: BTreeMap<PhpVersion, BTreeMap<String, ExtEntry>>,
+    /// `yard node default`: what runs where nothing pins a Node version (M4c spec §5).
+    pub default_node: Option<NodeSpec>,
 }
 
 /// Where an extension comes from. `bundled` is one PHP ships with (opcache), listed only
@@ -114,6 +117,7 @@ struct Raw {
     /// say so, so an old `yard.toml` keeps serving.
     parked: Option<toml::Value>,
     default_php: Option<PhpVersion>,
+    default_node: Option<NodeSpec>,
     tld: Option<toml::Spanned<String>>,
     #[serde(default)]
     secure_by_default: bool,
@@ -137,9 +141,14 @@ pub fn load_yard(paths: &Paths) -> Result<(YardConfig, Vec<String>), YardError> 
 pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<String>), YardError> {
     let raw: Raw = match text {
         Some(text) => toml::from_str(text).map_err(|e| config_error(file, text, e.span(), e.message()))?,
-        None => {
-            Raw { parked: None, default_php: None, tld: None, secure_by_default: false, php: BTreeMap::new() }
-        }
+        None => Raw {
+            parked: None,
+            default_php: None,
+            default_node: None,
+            tld: None,
+            secure_by_default: false,
+            php: BTreeMap::new(),
+        },
     };
     let mut warnings = vec![];
     if raw.parked.is_some() {
@@ -201,6 +210,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             tld,
             secure_by_default: raw.secure_by_default,
             extensions,
+            default_node: raw.default_node,
         },
         warnings,
     ))
@@ -241,6 +251,25 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("parked is no longer used"), "{}", warnings[0]);
         assert!(warnings[0].contains(FILE), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn default_node_parses_and_a_bad_one_is_config_invalid() {
+        assert_eq!(
+            parse(Some("default_node = \"lts/iron\"\n"))
+                .unwrap()
+                .default_node
+                .map(|s| s.to_string())
+                .as_deref(),
+            Some("lts/iron")
+        );
+        assert_eq!(parse(Some("")).unwrap().default_node, None);
+        let e = parse(Some("default_node = \"14\"\n")).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        let data = e.data.unwrap();
+        assert_eq!(data["file"], FILE);
+        assert_eq!(data["line"], 1);
+        assert!(e.message.contains("older than 16"), "{}", e.message);
     }
 
     #[test]

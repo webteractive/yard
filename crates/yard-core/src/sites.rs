@@ -211,6 +211,7 @@ mod tests {
             tld: None,
             secure_by_default: false,
             extensions: Default::default(),
+            default_node: None,
         }
     }
 
@@ -318,7 +319,7 @@ mod tests {
     #[test]
     fn invalid_project_file_marks_the_site() {
         let fs = Fs::new(&["/code/ee"]);
-        let p = project("ee", "node = \"20\"\n");
+        let p = project("ee", "nodejs = \"20\"\n");
         let entry = SiteEntry { php: Some("7.1".parse().unwrap()), ..linked("/code/ee") };
         let r = resolve(&cfg(), &sites(&[("ee", entry)]), &p, "yard", 8080, 8443, &fs.is_dir());
         let site = &r.sites[0];

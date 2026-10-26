@@ -813,7 +813,7 @@ async fn init_refuses_an_invalid_file() {
     let mut c = d.client().await;
     let dir = d.projects.path().join("bad");
     std::fs::create_dir_all(&dir).unwrap();
-    write_yard(&dir, "node = \"20\"\n");
+    write_yard(&dir, "nodejs = \"20\"\n");
     let e = init(&mut c, &dir, json!({})).await.unwrap_err();
     assert_eq!(e.code, yard_proto::ErrorCode::ProjectFileInvalid);
     let sites = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap_or_default();

@@ -194,7 +194,7 @@ fn name_taken(name: &str, message: &str, serves: &str) -> YardError {
 }
 
 /// The settings of `name`, linked at another directory, as they apply once it serves
-/// `dir`: its own `php` and `secure` (from `sites.toml`, else its old `.yard`), and the
+/// `dir`: its own `php`, `node` and `secure` (from `sites.toml`, else its old `.yard`), and the
 /// directory it serves when that is inside `dir`, so serving does not change.
 async fn carry(ctx: &Context, name: &str, other: &SiteEntry, dir: &Path) -> SiteEntry {
     let snapshot = snapshot(ctx).await.ok();
@@ -209,6 +209,7 @@ async fn carry(ctx: &Context, name: &str, other: &SiteEntry, dir: &Path) -> Site
     SiteEntry {
         php: other.php.or(old_file.and_then(|f| f.php)),
         secure: other.secure.or(old_file.and_then(|f| f.secure)),
+        node: other.node.clone().or(old_file.and_then(|f| f.node.clone())),
         docroot: served.filter(|d| d.starts_with(dir)),
         ..Default::default()
     }

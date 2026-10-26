@@ -25,6 +25,8 @@ pub struct SiteEntry {
     pub php: Option<crate::PhpVersion>,
     /// `yard secure` / `unsecure`; absent follows `secure_by_default` in `yard.toml`.
     pub secure: Option<bool>,
+    /// `yard node use`: the Node spec this site runs, unless a `.yard` or `.nvmrc` says.
+    pub node: Option<crate::node::NodeSpec>,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +71,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!((c.sites["a"].secure, c.sites["b"].secure), (Some(true), None));
+    }
+
+    #[test]
+    fn site_node_is_parsed() {
+        let c = parse_sites(
+            Some("[sites.old]\npath = \"/o\"\nnode = \"lts/iron\"\n"),
+            Path::new("/r/sites.toml"),
+        )
+        .unwrap();
+        assert_eq!(c.sites["old"].node, Some(crate::node::NodeSpec::Lts("iron".into())));
+        let e = parse_sites(Some("[sites.old]\npath = \"/o\"\nnode = \"^20\"\n"), Path::new("/r/sites.toml"))
+            .unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::ConfigInvalid);
+        assert_eq!(e.data.unwrap()["line"], 3);
     }
 
     #[test]
