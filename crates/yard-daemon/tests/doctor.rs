@@ -1158,3 +1158,74 @@ async fn trust_is_read_once_per_doctor_run() {
     let count = |call: &str| log.lines().filter(|l| *l == call).count();
     assert_eq!((count("--version"), count("trust --json=v1")), (1, 1), "{log}");
 }
+
+impl Env {
+    /// A linked project holding `files` (name, text).
+    fn node_site(&self, name: &str, files: &[(&str, &str)], dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let project = dir.path().join(name);
+        std::fs::create_dir_all(&project).unwrap();
+        for (file, text) in files {
+            std::fs::write(project.join(file), text).unwrap();
+        }
+        let mut sites = std::fs::read_to_string(self.fx.paths.sites_toml()).unwrap_or_default();
+        sites.push_str(&format!("[sites.{name}]\npath = {:?}\n", project.display().to_string()));
+        std::fs::write(self.fx.paths.sites_toml(), sites).unwrap();
+        project
+    }
+}
+
+fn node_ids(report: &DoctorReport) -> Vec<&str> {
+    report.checks.iter().map(|c| c.id.as_str()).filter(|id| id.starts_with("node")).collect()
+}
+
+#[tokio::test]
+async fn a_node_site_missing_its_version_warns_with_the_install() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("maker", &[(".nvmrc", "16.14.0\n")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "node:maker");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(
+        c.message.starts_with("maker needs Node 16.14.0 (") && c.message.ends_with("which is not installed"),
+        "{c:?}"
+    );
+    assert_eq!(c.hint.as_deref(), Some("yard node install 16.14.0"));
+    e.fx.add_node("16.14.0");
+    assert!(node_ids(&e.offline(&e.helper).await).is_empty());
+}
+
+#[tokio::test]
+async fn a_php_only_site_gets_no_node_check() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("plain", &[], &dir);
+    assert!(node_ids(&e.offline(&e.helper).await).is_empty());
+}
+
+#[tokio::test]
+async fn an_unusable_nvmrc_is_node_spec() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("maker", &[(".nvmrc", "latest\n")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "node-spec:maker");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains(".nvmrc") && c.message.contains("latest"), "{c:?}");
+    assert!(c.hint.as_deref().unwrap_or_default().starts_with("put a version such as 22 in"), "{c:?}");
+}
+
+#[tokio::test]
+async fn a_missing_default_used_by_a_site_warns_once() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("one", &[("package.json", "{}")], &dir);
+    e.node_site("two", &[("package.json", "{}")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "node-default");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "the default Node (22) is not installed, and one, two use it");
+    assert_eq!(c.hint.as_deref(), Some("yard node install 22"));
+    assert_eq!(only(&report, "node:one").message, "one needs Node 22 (the default), which is not installed");
+    only(&report, "node:two");
+}

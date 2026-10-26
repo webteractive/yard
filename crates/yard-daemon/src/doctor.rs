@@ -14,6 +14,7 @@ use yard_core::brew::Brew;
 use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
 use yard_core::generated::{Hashes, sha256_hex};
+use yard_core::node::{DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, pick};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::project::{Loaded, Projects, ServiceWant};
@@ -25,7 +26,7 @@ use yard_core::sources::{tap_dir, tap_of};
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
     Check, CheckStatus, DoctorReport, Holder, HolderKind, IgnoredBecause, Need, PortInfo, PortMode,
-    PortStatus, SiteInfo, SiteKind, UnitInfo, UnitState, YardError,
+    PortStatus, SettingSource, SiteInfo, SiteKind, UnitInfo, UnitState, YardError,
 };
 
 /// How many of a failed unit's last log lines the `units` check quotes.
@@ -239,6 +240,15 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             checks.extend(project_checks(site, view.yard.as_ref(), &view.projects));
         }
         checks.extend(managed_checks(paths, sites));
+        let mut sites = sites.clone();
+        crate::node::fill_node(&mut sites, paths);
+        let default = view.yard.as_ref().and_then(|y| y.default_node.clone()).unwrap_or(DEFAULT_SPEC);
+        checks.extend(node_checks(
+            &sites,
+            &default,
+            &crate::node::installed(paths),
+            &crate::node::lts(paths),
+        ));
     }
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
     checks.extend(legacy_php_mysql(sites, &view.projects));
@@ -259,6 +269,52 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     );
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
+}
+
+/// A site's Node that cannot run: `node-spec:<site>` for a pin that cannot be read,
+/// `node:<site>` for a spec nothing installed meets, and `node-default` once when the
+/// default is not installed and a site runs it. Sites without Node get nothing, and
+/// nothing reports Ok, so a machine without Node sees the same report as before.
+fn node_checks(
+    sites: &[SiteInfo],
+    default: &NodeSpec,
+    installed: &[NodeVersion],
+    lts: &LtsMap,
+) -> Vec<Check> {
+    let mut checks = vec![];
+    let mut on_default = vec![];
+    for site in sites {
+        let Some(node) = &site.node else { continue };
+        if let Some(e) = &node.error {
+            let hint = e.hint.clone().unwrap_or_else(|| "yard info shows the site's Node".into());
+            checks.push(warn(&format!("node-spec:{}", site.name), e.message.clone(), hint));
+            continue;
+        }
+        if node.source == SettingSource::Default {
+            on_default.push(site.name.as_str());
+        }
+        let Some(spec) = &node.spec else { continue };
+        if node.version.is_none() {
+            let from = match (&node.file, node.source) {
+                (Some(file), _) => file.clone(),
+                (None, SettingSource::Default) => "the default".to_string(),
+                (None, _) => "yard node use".to_string(),
+            };
+            checks.push(warn(
+                &format!("node:{}", site.name),
+                format!("{} needs Node {spec} ({from}), which is not installed", site.name),
+                format!("yard node install {spec}"),
+            ));
+        }
+    }
+    if !on_default.is_empty() && pick(default, installed, lts).is_none() {
+        checks.push(warn(
+            "node-default",
+            format!("the default Node ({default}) is not installed, and {} use it", on_default.join(", ")),
+            format!("yard node install {default}"),
+        ));
+    }
+    checks
 }
 
 const FIREFOX: &str = "/Applications/Firefox.app";
