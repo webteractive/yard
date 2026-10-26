@@ -5,6 +5,7 @@ pub mod config;
 pub mod constraint;
 pub mod generated;
 pub mod ini;
+pub mod node;
 pub mod paths;
 pub mod php;
 pub mod ports;

@@ -1,6 +1,7 @@
 //! Every path under the data root (spec §3.3), plus the fixed system paths.
 
 use crate::PhpVersion;
+use crate::node::NodeVersion;
 use std::path::{Path, PathBuf};
 use yard_proto::{ErrorCode, YardError};
 
@@ -230,6 +231,25 @@ impl Paths {
     pub fn cert_key(&self, site: &str) -> PathBuf {
         self.certs_dir().join(format!("{site}.key"))
     }
+
+    /// fnm's `FNM_DIR`: Node versions Yard installs, and `lts.toml`.
+    pub fn node_dir(&self) -> PathBuf {
+        self.root.join("node")
+    }
+
+    pub fn node_versions_dir(&self) -> PathBuf {
+        self.node_dir().join("node-versions")
+    }
+
+    /// `node`, `npm` or `npx` of an installed version.
+    pub fn node_bin(&self, v: NodeVersion, name: &str) -> PathBuf {
+        self.node_versions_dir().join(format!("v{v}")).join("installation/bin").join(name)
+    }
+
+    /// LTS codenames seen in nodejs.org's release list (generated).
+    pub fn lts_toml(&self) -> PathBuf {
+        self.node_dir().join("lts.toml")
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +307,18 @@ mod tests {
         let p = Paths::new("/r");
         assert_eq!(p.managed_sites_dir(), Path::new("/r/sites"));
         assert_eq!(p.managed_project_file("control"), Path::new("/r/sites/control/.yard"));
+    }
+
+    #[test]
+    fn node_paths_are_fnm_s_layout_under_node() {
+        let p = Paths::new("/r");
+        assert_eq!(p.node_dir(), Path::new("/r/node"));
+        assert_eq!(p.node_versions_dir(), Path::new("/r/node/node-versions"));
+        assert_eq!(
+            p.node_bin("16.14.0".parse().unwrap(), "npm"),
+            Path::new("/r/node/node-versions/v16.14.0/installation/bin/npm")
+        );
+        assert_eq!(p.lts_toml(), Path::new("/r/node/lts.toml"));
     }
 
     #[test]
