@@ -86,6 +86,13 @@ triggers:
   `select!` loop: it registers nothing until polled, so a Ctrl-C between two turns kills the
   command or is lost. CLI tests that wait on a child carry a 60 s watchdog (`yard_at`'s timeout,
   `watchdog` in `tests/cli.rs`), so a hang fails the test instead of stalling the suite.
+- Sleeping services (M4e): `yard services` has a SLEEP column after STATE (the effective
+  `sleep_after`, `15m` or `off`), and STATE reads `sleeping <age>` (`45s`, `12m`, `2h`, `3d`, the
+  largest whole unit) for a sleeping instance and `waking` while it starts again (`state_text`,
+  shared with `yard info`, which adds `wakes on the next request, or: yard service start <i>`
+  under its table). `yard status` gives each sleeping instance a row (`sleeping`, PID and
+  RESTARTS `-`). `yard service sleep-after <i> <duration|off|default>` prints
+  `<i> now sleeps after <d> without use`, `<i> never sleeps` or `<i> now follows yard.toml (<d>)`.
 - Output meant to be pasted (`yard env`) has no header or footer lines (no `For agents and
   scripts` footer), only a blank line between blocks: notes are `# …` comments, and what to do about an empty result
   goes to stderr. A request the daemon resolves against a directory (`env`, `info`) sends

@@ -95,3 +95,6 @@ triggers:
   `/Applications` and `~/Applications` and reads none of their files). A probe only sees live
   listeners, so without the reservation a stopped DBngin's port would be pinned and DBngin
   could no longer start. `--port` overrides a reservation.
+- A sleeping service instance (M4e) keeps its `pinned` ports: nothing listens on them while it
+  sleeps, and no other unit may take them. The runtime scan still watches them, so a program
+  that binds one meanwhile is a `port_conflict`, and the next wake fails with `PORT_IN_USE`.

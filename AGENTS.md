@@ -55,12 +55,12 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, both
   approved 2026-10-26, not built yet; emailulator keeps its own LaunchAgent and Yard only points at it (option B,
   decided 2026-10-26: the maintainer asked Claude to decide).
-  M4e, on-demand services (instances sleep when idle and wake on use), is drafted in
+  M4e, on-demand services (instances sleep when idle and wake on use), is designed in
   `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
   written in another session and checked against the code; the maintainer answered its §13 questions
-  and approved it on 2026-10-26: sleeping is opt-in, and M4e follows M4d). Planned in
-  `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26; being
-  built on main).
+  and approved it on 2026-10-26: sleeping is opt-in) and planned in
+  `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26). It
+  is built on main (2026-10-26, before M4d), with `scripts/e2e-m4e.sh` written and not run yet.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
@@ -232,6 +232,15 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   and restores `yard.toml` and `sites.toml`, uninstalls only the versions it installed, and
   fails if a listing of `~/.nvm/versions/node` or Herd's `config/nvm` changed.
   `shellcheck scripts/e2e-m4c.sh` stays clean.
+- `scripts/e2e-m4e.sh` — real-machine M4e check after `e2e-m1.sh`: adds a scratch `redis` with
+  `sleep_after = "60s"`, links a scratch project under `$TMPDIR` whose `.yard` lists it, waits for
+  it to sleep (nothing listens on its port), then checks a page wakes it (a PHP `PING` gets
+  `PONG`), that `php` through the shim wakes it and says so, and that a held `redis-cli`
+  connection keeps it awake. It prints the p50 of a wake ask while awake. It needs yardd
+  running and brew's `redis` (from M4b) and installs nothing; ask the maintainer first. It stops before
+  changing anything if `redis` is already in `services.toml`, backs up and restores
+  `yard.toml`, `services.toml`, `ports.toml` and `sites.toml`, and fails if the listeners on
+  3306, 5432 and 6379 or Herd's resolver changed. `shellcheck scripts/e2e-m4e.sh` stays clean.
 
 ## Verifying a change on this machine
 
@@ -262,7 +271,9 @@ change to serving, the helper or reconcile is only observable there, through `ya
 - `crates/yard-helper` — the root helper.
 - `crates/yard-cli` — the `yard` binary.
 - `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` and `node`/`npm`/`npx` shims, one binary
-  dispatching on `argv[0]`; it reads the TOMLs itself and needs no daemon.
+  dispatching on `argv[0]`; it reads the TOMLs itself and runs without a daemon. `php` and
+  `composer` ask yardd's `run/wake.sock` to wake a site's sleeping services first, when
+  `run/sleeping` lists the site (M4e).
 - `app/` — Yard.app (M6).
 
 ## Conventions

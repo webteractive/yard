@@ -29,7 +29,8 @@ brew's kegs (`yard service add`), a `[services]` table in `.yard`, `yard env` fo
 `.env` lines, `yard info` for what one site runs on, and `yard source` for the brew
 taps you trust. M4c adds Node: `node`, `npm` and `npx` shims that run the version a
 project pins (`.yard`'s `node`, `yard node use`, `.nvmrc` or `.node-version`), installed with
-brew's fnm into Yard's own `~/.yard/node` and never nvm's or Herd's. Tunnels (M5) and
+brew's fnm into Yard's own `~/.yard/node` and never nvm's or Herd's. M4e lets service
+instances sleep when idle and wake on use, if you turn it on. Tunnels (M5) and
 Yard.app (M6) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
@@ -76,8 +77,10 @@ proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unc
 the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git status` stays clean),
 `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
 (installing what is missing with brew), asks each one a question, and removes what it added,
-and `scripts/e2e-m4c.sh` Node: it installs Node 16.14.0 and 22 with fnm, runs them through the
-shims (a native module build included), and removes only what it installed.
+`scripts/e2e-m4c.sh` Node: it installs Node 16.14.0 and 22 with fnm, runs them through the
+shims (a native module build included), and removes only what it installed, and
+`scripts/e2e-m4e.sh` sleeping services: it lets a scratch Redis fall asleep, wakes it from a
+page, from `php` and with a held connection, and removes it.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in
@@ -102,6 +105,20 @@ password. `yard untrust` removes it. Until then `yard doctor` warns. Yard's `nod
 `security.enterprise_roots.enabled` set in `about:config`; `yard doctor` prints the path
 and the Firefox note.
 
+## Sleeping services
+
+Service instances can sleep when nothing uses them, which frees their memory. It is off
+until you turn it on: `service_sleep_after = "15m"` in `yard.toml` for every instance, or
+`yard service sleep-after <instance> 15m` for one (`off` keeps it awake, `default` follows
+`yard.toml`; at least `60s`). An instance with no client connection and no wake for that
+long is stopped gracefully; its port stays its own. It wakes when a PHP request comes in for
+a site whose `.yard` lists it, when `php` or `composer` runs in that site (they print
+`yard: waking the services <site> uses …` and wait up to 30 s), or with
+`yard service start <instance>`. A GUI client or a `mysql` run outside a site cannot wake one
+and gets "connection refused": start it, or set `off` for an instance used that way.
+`yard services` shows `sleeping 2h` and the SLEEP setting, and every instance starts awake
+with yardd.
+
 ## Commands
 
 Every command has `--help`, accepts `--json` for scripts and the global `--root <path>`.
@@ -112,7 +129,7 @@ error, 3 `yardd` is not running.
 |---|---|---|
 | `yard start` | no | Installs yardd's LaunchAgent and starts it. |
 | `yard stop` | no | Stops yardd and unloads its LaunchAgent. |
-| `yard status` | yes | Profile, TLD, units and site count. |
+| `yard status` | yes | Profile, TLD, units and site count; a sleeping service instance is a row of its own (`sleeping`). |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. It tells yardd which `XDG_CONFIG_HOME` and `HOMEBREW_FORBIDDEN_*` your shell sets (and nothing else), so it can warn when brew would see something else under launchd. |
 | `yard sites` | yes | The sites Yard serves, with the directory each one serves and whether it is `serving` or `needs setup`. |
@@ -137,12 +154,13 @@ error, 3 `yardd` is not running.
 | `yard ext add <name\|name-version\|path.so> [--php <ver>]` | yes | Installs a PHP extension from brew's `shivammathur/extensions` (the same trust check as `php install`, unless the tap's files do not list the formula, renames and aliases included), else pecl (`xdebug-2.9.8` pins a pecl release for legacy PHP), or copies a built `.so`, then checks it loads with `php -m`. Ctrl-C cancels it and undoes what it recorded. |
 | `yard ext list` / `enable <name>` / `disable <name>` / `remove <name>` `[--php <ver>]` | yes | Lists extensions, turns one on or off without uninstalling it (PHP's bundled ones too), or uninstalls one. |
 | `yard xdebug on\|off [--php <ver>]` | yes | Turns an added Xdebug on or off. |
-| `yard services` | yes | One row per service instance: `INSTANCE ENGINE VERSION PORT STATE ACCOUNT USED BY`. ACCOUNT is the login Yard set up (`root (no password)`, `— (no auth)`, `minioadmin / minioadmin`). Yard stores no other password. |
+| `yard services` | yes | One row per service instance: `INSTANCE ENGINE VERSION PORT STATE SLEEP ACCOUNT USED BY`. STATE reads `sleeping 2h` or `waking` for a sleeping instance, and SLEEP is its `sleep_after` (`15m`, `off`). ACCOUNT is the login Yard set up (`root (no password)`, `— (no auth)`, `minioadmin / minioadmin`). Yard stores no other password. |
 | `yard service add <engine> [--version <v>] [--port <p>] [--yes]` | yes | Adds `mysql`, `postgres`, `redis` or `minio`: installs the formula with brew if its keg is missing (MinIO comes from the `minio/stable` tap, so the trust question applies), pins a port, initializes the data, starts it, waits for it to pass its health check and prints its `.env` lines. Shows brew's output; Ctrl-C cancels and undoes it. `--yes` never grants trust. |
 | `yard service remove <instance> [--keep-data] [--yes]` | yes | Checks the instance first: unknown is `SERVICE_NOT_FOUND`, and one a linked site's `.yard` lists is refused with `SERVICE_IN_USE` (naming the sites and the file to edit) before anything is asked. Then asks `Delete <instance> and its data? [y/N]` (`--keep-data` leaves `services/<instance>/data`) and removes it. Without a terminal and without `--yes` it deletes nothing and fails with `NEEDS_CONFIRMATION`. Never runs `brew uninstall`. |
-| `yard service start\|stop\|restart <instance>` | yes | `start` and `restart` wait until the instance is running; one that fails prints its last log lines and exits 1. `stop` keeps it stopped across yardd restarts until `start`. |
+| `yard service start\|stop\|restart <instance>` | yes | `start` and `restart` wait until the instance is running, and wake a sleeping one; one that fails prints its last log lines and exits 1. `stop` keeps it stopped across yardd restarts until `start`. |
 | `yard service logs <instance> [-f] [-n <lines>]` | yes | The last 100 lines (at most 10000) of the instance's log; `-f` keeps following until Ctrl-C. |
 | `yard service port <instance> <port>` | yes | Moves an instance to another port; a running one restarts on it. |
+| `yard service sleep-after <instance> <duration\|off\|default>` | yes | Sets how long the instance may go unused before it sleeps (`sleep_after` in `services.toml`; at least `60s`), `off` to keep it awake, or `default` to follow `service_sleep_after` in `yard.toml`. |
 | `yard env [--site <name>] [--service <instance>]` | yes | Prints `KEY=value` lines under a `# <instance>` comment per service, for you to paste into `.env`; it never writes a file. In a linked project (or with `--site`) it prints the services its `.yard` lists; outside one, every instance. Yard creates no database or bucket, so there is no `DB_DATABASE` or `AWS_BUCKET`. |
 | `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), Node (with the spec it pins), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, the managed `.yard` (`managed`), `sites.toml`, `.nvmrc`, `.node-version` or the default. |
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |

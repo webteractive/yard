@@ -59,6 +59,14 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     and then reconcile. The edit itself checks the entry is still there (`SERVICE_NOT_FOUND`
     otherwise): setting a key under a missing table would write a stub entry that `services.toml`
     cannot parse. Nothing else, `services.restart` included, ever clears `stopped`.
+  - Sleep (M4e) is opt-in user config: `service_sleep_after` in `yard.toml` and `sleep_after` per
+    instance in `services.toml` (`"15m"`, `"off"`, at least 60 s; the instance key wins).
+    `services.sleep.set` writes or removes the instance key through `TomlFile`
+    (`services::set_sleep_after`); nothing else writes either key. Whether an instance sleeps is
+    runtime state in yardd's `Sleeper`, never written to a TOML: sleeping is not `stopped`.
+  - `run/sleeping` is generated (M4e): the linked sites that need a sleeping instance, one per
+    line, written atomically (`sleep::write_sleeping`) after an instance falls asleep or wakes,
+    and emptied at yardd start before the first reconcile. The shims read it; nobody edits it.
   - User TOMLs (`yard.toml`, `sites.toml`, `ports.toml`, `services.toml`) are edited only through
     `config::edit::TomlFile` (`toml_edit`), so comments and key order survive. Every
     read-modify-write in the daemon is one `TomlFile::edit(path, |file| …)`, which holds

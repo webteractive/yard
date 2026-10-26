@@ -116,7 +116,8 @@ stopped = true          # the user stopped it; reconcile leaves it stopped
 - `formula` is resolved once, at `add` (§5), and recorded, so reconcile never asks brew.
 - `stopped = true` is written by `yard service stop` and removed by `start`. A stopped
   instance stays stopped across `yard restart`, yardd restarts and reboots. Every other
-  instance starts when yardd starts, which is at login.
+  instance starts when yardd starts, which is at login. With `sleep_after` on (M4e spec
+  §6.4) it may fall asleep later, and it still starts awake.
 - `yard stop` stops yardd and with it every instance (main spec §6.1).
 - Unknown keys are `CONFIG_INVALID` with file, line and column, like the other TOMLs; a
   parse error keeps the last good snapshot serving.
@@ -599,7 +600,8 @@ minio = true
 - **A stopped or failed instance does not send the site to the setup page.** The site is
   served; `yard sites` shows the status and `yard doctor` warns `eepower's .yard asks for
   mysql-8.4, which is stopped`. Yard never starts an instance the user stopped
-  **(builder's call)**.
+  **(builder's call)**. A sleeping instance (M4e) does not either: the site is served, and
+  the wake hook wakes the instance before PHP runs.
 - Instances are shared: two projects asking for `mysql = "8.4"` use one instance. Yard
   never removes or stops an instance because a `.yard` stopped listing it.
 - `yard init` writes, commented out, one line per engine (`# mysql = "8.4"`,
@@ -614,7 +616,8 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
 - `service:<i>`, one per instance. `fail` for a failed instance: its last lines, hint `yard
   service restart <i>`. `warn` for one whose keg or binary is missing (`<i> cannot run: <keg> is
   missing`, hint `brew install <formula>` or `brew reinstall <formula>`, known without the daemon
-  too), one yardd has no unit for, one that is not running, or one in backoff. `ok` when running, starting, or stopped by the user. With no daemon (the offline
+  too), one yardd has no unit for, one that is not running, or one in backoff. `ok` when running, starting, or stopped by the user, and
+  (M4e) when sleeping: `<i> is sleeping since 14:02; it wakes on use`. With no daemon (the offline
   doctor) only "stopped by the user" is known, so the rest are skipped, as unit state is today.
 - An instance's port held by something else: the existing `ports` check (`portscan::infos`),
   which names the instance's pinned entry and the holder (`mysqld (pid 77034, DBngin)`).
@@ -628,7 +631,8 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
   (hint `yard service start <i>`), failed (hint `yard service restart <i>`; the daemon must be
   running to know) or not added (hint `yard service add <engine> [--version <line>]`; the site's
   `project-file:<site>` check fails for the same thing, with `yard init`). The message names the
-  site and the instance: `eepower's .yard asks for mysql-8.4, which is stopped`.
+  site and the instance: `eepower's .yard asks for mysql-8.4, which is stopped`. A sleeping
+  instance (M4e) is not stopped, and draws no warning.
 - `service-line:<i>`: `warn` for an instance on the plain `mysql` formula whose keg
   (`opt/<formula>`'s Cellar version, `9.7.1_1` being line `9.7`) is on a different line than the
   instance's name (§5), hint `yard service add mysql --version 8.4`, a line that does not move.

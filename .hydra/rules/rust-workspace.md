@@ -63,6 +63,14 @@ triggers:
 - A test that reconciles, probes or runs doctor writes a `ports.toml` first
   (`support::ports_toml(free_port(), …)`): with no file the registry seeds 8080, 8443
   and 53535, which tests never bind.
+- The fake engines hold each client connection open, greet it with `fake\n` and read it to
+  EOF (`support::served` reads one byte), so a test can hold a connection the way a client
+  does. The fake `postgres` hands each connection to a `postgres-backend` child (the socket as
+  its stdin and stdout), as the real postmaster forks a backend. `listen-tcp-after <port> <ms>`
+  listens only after a delay, and with `<prefix>/fake-stop-delay` (ms) an engine logs
+  `fake stopping` on SIGTERM or SIGINT and exits after the delay, so a test can act during a stop.
+- Sleep tests (M4e) run on `SleepConfig { sample_interval: 50 ms, second: 1 ms }`, so a
+  `sleep_after` of `"60s"` lasts 60 ms; a test that must not fall asleep uses a long one.
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
   never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not
   to retry. Run timing suites several times before calling them done.

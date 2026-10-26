@@ -92,6 +92,12 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   root opens two sockets and does nothing else. macOS lets any user bind a low
   port on the wildcard address but not on loopback, and listening on the wildcard
   would put every site on the network, so this is the one job root does for nginx.
+- **`wake.sock`** (M4e) is yardd's second socket, `run/wake.sock` (mode 0600, the user's),
+  beside the JSON-RPC `yardd.sock`. It answers minimal HTTP/1.1 on one route,
+  `GET /wake/<site>?wait=<s>`, always with `204`: nginx's `auth_request` before a PHP request
+  and the `php`/`composer` shims ask it to wake the sleeping service instances a site's
+  `.yard` lists. It can only start instances that exist and the user has not stopped; it
+  adds, changes and removes nothing (M4e spec §5.1).
 - No verb reads from the data root. The install checks that the data root is
   absolute and that every directory and symlink on its path, as written, is owned by
   the user or root, with no directory writable by group or others (sticky parents
@@ -163,6 +169,8 @@ sites/<name>/.yard-backup     # the managed file `yard init --replace` replaced
 services/<instance>/overrides.conf  # USER-OWNED, created once, included by my.cnf (seeded with [mysqld]) / redis.conf / nginx's minio block; PostgreSQL has none (its data/postgresql.conf is the user's)
 logs/                         # rotated logs per unit
 run/                          # sockets, pid files (run/<instance>.pid for a service)
+run/wake.sock                 # M4e: nginx and the shims ask yardd to wake a site's services
+run/sleeping                  # generated (M4e): the linked sites that need a sleeping instance, emptied at yardd start
 bin/                          # shims: php, composer, pecl, phpize, php-config, node, npm, npx
 node/                         # FNM_DIR (M4c): written only by fnm, which Yard runs to install and uninstall
 node/lts.toml                 # generated: LTS codename → major, refreshed on each install
@@ -340,6 +348,10 @@ resolved PHP. `node`, `npm` and `npx` are the same binary and run the Node a dir
 pins (§8.1). `yard install-shims` prints the PATH line for the user's shell
 profile; Yard does not edit dotfiles.
 
+- Before it execs, `php` or `composer` in a linked site reads `run/sleeping`, and when it
+  lists the site asks yardd's `wake.sock` to wake the site's services, waiting up to 30 s
+  (M4e spec §5.2). With yardd down it prints one line and runs anyway, so the shims still
+  run without a daemon; they just cannot wake anything.
 - The shim reads `yard.toml` and `sites.toml` itself, with no daemon. The containing
   site is the linked site whose `path` is the longest ancestor of the cwd; one that is
   not isolated falls through to `.yard-php`. A bad `.yard-php` is `INVALID_ARGUMENT`
@@ -485,7 +497,8 @@ profile; Yard does not edit dotfiles.
 - Every managed process is a `Unit` with `start`, `stop`, `reload` (optional),
   `health`, and a log sink.
 - Health: socket connect (FPM, mysql socket) or TCP connect (registered port),
-  every 5 s. Known gap: in the privileged profile yardd holds nginx's listeners, so a
+  every 5 s, and every 200 ms (`start_poll`) while a starting unit has not passed yet, so a
+  woken service is up as soon as it listens (M4e). Known gap: in the privileged profile yardd holds nginx's listeners, so a
   connect succeeds into their backlog even with no nginx serving. An HTTP check closed
   it but flaked the suite (unexplained resets on the inherited sockets), so it waits
   for a check that does not depend on them.
@@ -506,6 +519,10 @@ profile; Yard does not edit dotfiles.
   shown by `status` (`config_error`) and `doctor` until a reconcile succeeds.
   A linked project whose docroot (e.g. `public/`) appears later is picked up by
   the periodic scan.
+- A service instance with `sleep_after` set (M4e) falls asleep after that long without a
+  client: the reconcile leaves it out of the desired units, so `apply` stops it with its own
+  signal, and a wake puts it back. Sleep is runtime state in yardd, never written to a TOML,
+  and every instance starts awake with yardd.
 - On `yardd` shutdown, all child units are stopped, nginx included.
 
 ### 6.2 API
@@ -516,7 +533,7 @@ profile; Yard does not edit dotfiles.
   `php.list|install|uninstall|default|config.get|config.set|config.unset`,
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
-  `services.list|add|remove|start|stop|restart|logs|port`, `sites.info`,
+  `services.list|add|remove|start|stop|restart|logs|port|sleep.set`, `sites.info`,
   `sources.list|trust|untrust`,
   `ca.info`, `node.list|install|uninstall|default|use|unuse`, `units.restart`, `jobs.cancel`, `env.print`.
 - Long operations (brew installs) return `{ job_id }` immediately;
@@ -541,6 +558,8 @@ profile; Yard does not edit dotfiles.
   CI for drift.
 - Protocol version is exchanged on connect; mismatched major versions are
   refused with a clear upgrade message.
+- `wake.sock` (§3.1) is not part of this API: it is not JSON-RPC and has no types in
+  `yard-proto`.
 
 ### 6.3 Errors
 
@@ -858,12 +877,14 @@ Each milestone is usable on its own and gets its own implementation plan.
      `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; emailulator keeps its own
      LaunchAgent and Yard only points at it (option B, decided 2026-10-26). Spec and plan
      approved 2026-10-26.
-   - **M4e on-demand services** (approved 2026-10-26, the fifth plan, after M4d): service
+   - **M4e on-demand services** (approved 2026-10-26, the fifth plan): service
      instances that opt in sleep when idle and wake on a PHP request, a shim or
      `yard service start`. Designed in
      `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md`, whose §13
      records the maintainer's answers to its open questions, and planned in
-     `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26).
+     `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26);
+     built on main on 2026-10-26, before M4d. Its real-machine check is
+     `scripts/e2e-m4e.sh`.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.

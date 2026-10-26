@@ -5,7 +5,8 @@ session), from the yard session's account of the code at main `2472f47` (M4c in 
 then checked against the code at `c4e6eef` (M4c built and verified) the same day and
 corrected where it disagreed; corrections the code forced are marked **(code check)**. The maintainer
 answered §13's ten questions the same day, taking the yard session's recommendation on each
-(marked **(maintainer, §13)**), and approved the spec. Nothing here is built yet. Part of M4 (main spec
+(marked **(maintainer, §13)**), and approved the spec. Built on main on 2026-10-26 (§15); what the
+build settled is marked **(built)**. Part of M4 (main spec
 §12). It builds on the M4b service model
 (`docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md`) and changes no M4b
 decision except where §10 says so.
@@ -159,7 +160,8 @@ location = /__yard_wake {
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_read_timeout 15s;
-    error_page 500 502 503 504 = @yard_wake_skipped;
+    proxy_intercept_errors on;
+    error_page 400 401 403 404 500 502 503 504 = @yard_wake_skipped;
 }
 
 location @yard_wake_skipped {
@@ -168,7 +170,8 @@ location @yard_wake_skipped {
 ```
 
 - **`<root>` is quoted with `nginx_str`, as `fastcgi_pass` is (code check;** config-ownership
-  rule). The plan checks that nginx accepts a quoted `unix:` upstream path.
+  rule). nginx accepts the quoted `unix:` upstream path (checked 2026-10-26 with brew's nginx,
+  `nginx -t` in `tests/real_nginx.rs`) **(built)**.
 - **Only PHP requests ask.** Static files and the setup page never need a database, so they
   never wake one, and an asset-heavy page costs one ask, not fifty **(builder's call)**.
 - **Sites without services never ask.** The block is rendered only for a site whose `.yard`
@@ -179,9 +182,11 @@ location @yard_wake_skipped {
   shows its own connection error rather than nginx showing a 500.
 - **Fails open.** If `wake.sock` is missing, yardd is down, or yardd answers anything but 2xx,
   `error_page` turns the subrequest into `204` and the request goes through as it does today.
-  The plan must verify that nginx applies `error_page` to a subrequest's own upstream errors
-  (nginx-generated 502/504); if it does not, the plan picks another fail-open mechanism
-  before writing code **(builder's call; verify)**.
+  nginx applies `error_page` to the subrequest's own upstream errors, and with
+  `proxy_intercept_errors on` to an error status yardd might answer, so the 4xx codes
+  `auth_request` would turn into a refusal are caught too (checked 2026-10-26 with brew's
+  nginx: no socket, a `500`, a hang past the timeout and a late `204` all serve the page,
+  `the_wake_hook_fails_open`) **(built)**.
 - **`wake.sock`** is a unix socket under `run/`, mode 0600, owned by the user, served by
   yardd as minimal HTTP/1.1 (one route, `GET /wake/<site>?wait=<s>`). It is a second way into
   yardd beside the JSON-RPC `yardd.sock` that main spec §3.1 and the rpc-protocol rule
@@ -196,8 +201,8 @@ location @yard_wake_skipped {
   (§7), so a site under steady traffic keeps its instances awake without any connection
   counting.
 - **Cost.** One local unix-socket round trip per PHP request when everything is awake. The
-  plan measures it against a plain request (the target is under 1 ms at p50) and reports the
-  number **(builder's call)**.
+  target is under 1 ms at p50 **(builder's call)**; `scripts/e2e-m4e.sh` measures the ask
+  round trip on the real machine and prints its p50 **(built)**.
 
 ### 5.2 From the CLI: the shims ask before running
 
@@ -218,12 +223,14 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
   read, and no socket connect **(builder's call)**.
 - Otherwise it sends `GET /wake/<site>?wait=30` on `wake.sock` and waits up to 30 s (a CLI
   command such as `php artisan migrate` can wait longer than a page, §6.3), printing one line
-  to stderr (`yard: waking mysql-8.4 …`) so a pause is not a mystery. Then it `exec`s as
-  today.
-- **It never fails the command.** A missing socket, a dead daemon or a timeout prints one line
-  to stderr and runs the command anyway. The connect has a short timeout (builder's call, about
-  200 ms), so a hung yardd costs a CLI command no more than that before the wait itself
-  **(accepted, the maintainer, §13)**.
+  to stderr so a pause is not a mystery. Then it `exec`s as today. The line names the site,
+  `yard: waking the services <site> uses …`, since `run/sleeping` lists sites, not instances
+  **(built)**.
+- **It never fails the command.** A missing socket, a dead daemon or a timeout prints
+  `yard: could not wake <site>'s services (<error>); running anyway` and runs the command
+  **(accepted, the maintainer, §13)**. A unix-socket connect does not block (a missing or dead socket
+  fails at once, and a hung yardd's backlog takes the connect), so there is no separate
+  connect timeout: the read and write timeouts are 31 s, one more than the `wait` **(built)**.
 - `node`, `npm`, `npx`, `pecl`, `phpize` and `php-config` never wake anything.
 - **The shims no longer work entirely without a daemon.** They still run with yardd down (one
   stderr line), but AGENTS.md's layout and main spec §4.5 say they need no daemon, and that
@@ -281,9 +288,10 @@ call)**, but in its own set, not `Snapshot.left_out` **(code check)**: `left_out
 to a `YardError`, and `services.start` and `restart` refuse with whatever it holds
 (`refuse_left_out`), which would refuse §5.3's start.
 
-- The reconcile's service section skips an instance that is asleep and records it in the
-  snapshot's sleeping set (name → since); `services.list` and `yard info` report `sleeping`
-  from it rather than `failed`.
+- The reconcile's service section skips an instance that is asleep. Sleep lives in yardd's
+  `Sleeper` (`sleep.rs`: per instance, the last use, since when it sleeps, and whether it is
+  waking), runtime state beside the snapshot rather than in it **(built)**; `services.list`
+  and `yard info` report `sleeping` from it rather than `failed`.
 - `apply` deletes a unit that is no longer wanted from the supervisor's table, so `yard status`
   (which lists that table) would lose a sleeping instance; status reads the sleeping set too
   (§9, §11).
@@ -295,8 +303,8 @@ to a `YardError`, and `services.start` and `restart` refuse with whatever it hol
   and MinIO, M4b §15).
 - **A faster first health check (code check).** The supervisor checks health once at spawn and
   then every `health_interval` (5 s) until the first pass (`supervisor/unit.rs`). For §1.1's
-  wake times, a starting unit polls much faster until its first pass (every 100–250 ms,
-  builder's call), then falls back to the 5 s interval.
+  wake times, a starting unit polls much faster until its first pass, every 200 ms
+  (`SupervisorConfig.start_poll`) **(built)**, then falls back to the 5 s interval.
 - **A wake that arrives while the instance is still stopping** waits for the stop to finish,
   then starts it. The state machine never runs two processes on one data directory.
 
@@ -337,15 +345,18 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
   each client connection to a forked backend and the postmaster closes its copy, so the
   postmaster's own fds show no clients while clients are connected. The sampler counts the
   unit's pid and its descendants.
-- **How to count (builder's call on the mechanism).** Prefer libproc
-  (`proc_pidinfo(PROC_PIDLISTFDS)` then `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)`), which costs
-  microseconds and needs no subprocess; `fds.rs` already lists yardd's own fds with
-  `PROC_PIDLISTFDS`. `holder.rs` asks `/usr/sbin/lsof`, which is the fallback if libproc
-  cannot see unix-domain peers. The plan confirms which works on this machine before choosing.
-- **Yard's own health checks do not count.** The supervisor's health check is a TCP connect
-  that closes at once (main spec §6.1). A 30 s sampler will rarely see one. Socket info gives
-  addresses, not the peer's pid, so the sampler skips a sample taken while that unit's health
-  check is in flight rather than matching peers to yardd **(code check; builder's call)**.
+- **How to count (built).** `conns.rs` walks the tree with libproc's `proc_listchildpids`
+  and asks `/usr/sbin/lsof -F dn` for the tree's established TCP and unix sockets, with a 5 s
+  timeout. libc has `proc_listchildpids` but no binding for `socket_fdinfo`, so the sockets
+  themselves cannot be read through libproc here. lsof's `d` field is the socket's kernel
+  address, and each socket counts once: a backend can hold its connection on two
+  descriptors, and a postmaster keeps a copy until it has handed it over. A count that fails
+  keeps the instance awake.
+- **Yard's own health checks.** The supervisor's health check is a TCP connect that closes at
+  once (main spec §6.1), and once a unit runs it is every 5 s, so a 30 s sample rarely sees
+  one. When it does, the instance stays awake one sample longer. That is accepted rather
+  than skipping samples while a check is in flight **(built; replaces the builder's call
+  here)**.
 - **Long transactions, `tinker`, queue workers, GUI clients** hold connections, so the
   instance stays awake for as long as they do. That is the intended behaviour: something is
   using it **(builder's call)**.
@@ -401,7 +412,7 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
   `services.toml` variant yet; M4e adds them.
 - `yard status`'s result gains the sleeping instances (§9), as an optional field older CLIs
   ignore.
-- New method `services.sleep.set { instance, after }` for §4's command (code check: every
+- New method `services.sleep.set { name, after }` for §4's command (code check: every
   multi-word method is dotted, as `php.config.set` is; none has an underscore).
   `services.start` accepts a sleeping instance and wakes it.
 - No new error codes; a failed wake reuses `PORT_IN_USE`, `FORMULA_MISSING` and `JOB_FAILED`
@@ -460,12 +471,13 @@ Each was the yard session's recommendation, and the maintainer took them all ("P
   falls asleep after `sleep_after` with no asks and no connections; stays awake while a sample
   shows a connection; an ask wakes it and answers only after health; concurrent asks share one
   start; a wake during a stop waits for the stop; a stopped instance is never woken; a failed
-  wake answers `204` and leaves `failed`; yardd start leaves sleep-enabled instances asleep;
+  wake answers `204` and leaves `failed`; yardd start starts sleep-enabled instances awake
+  (§6.4);
   `wake.sock` answers `204` for an unknown site and at its `wait`, capped at 30 s;
   `services.restart` wakes a sleeping instance; with no sleep setting anywhere nothing ever
   sleeps.
 - **yard-shim:** no socket connect when `run/sleeping` does not list the site; a wake when it
-  does; a dead or hung socket still runs the command after the connect timeout.
+  does; a dead socket still runs the command; the Node shims never wake.
 - **yard-cli:** `services` and `info` render `sleeping`/`waking` and SLEEP, human and `--json`,
   and `service sleep-after`; a 2.7-shaped `ServiceInfo` without `sleeping_since` still decodes.
 - **nginx:** a rendered config passes `nginx -t`, and an integration test proves fail-open: with
@@ -479,6 +491,8 @@ Each was the yard session's recommendation, and the maintainer took them all ("P
 
 ## 15. When built
 
+Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`.
+
 The same change updates the main spec (§3.1 for `wake.sock`, §4.2 note, §4.5 for shims that ask
 the daemon, §6.1 supervisor states and the faster first health check, §6.2 methods, §12
 milestones and its "four plans"), the M4b spec where §10 says, README, `--help`, AGENTS.md (status, the layout line saying the
@@ -491,5 +505,7 @@ says.
 
 The exact Rust shape of the idle tracker and of `ServiceState`'s new variants; the HTTP
 handling on `wake.sock` (hand-rolled or a small crate, within the rust-workspace rule's
-dependency policy and `cargo deny`); how the fake clock is wired into `DaemonOptions`; the
+dependency policy and `cargo deny`; built hand-rolled, `wake.rs`); how the fake clock is
+wired into `DaemonOptions` (built: `SleepConfig`, whose `second` is how long one second of a
+`sleep_after` lasts, 1 ms in tests, and whose `sample_interval` is 50 ms there); the
 wording of messages and hints within the cli-output rule.
