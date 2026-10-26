@@ -187,6 +187,8 @@ holder=$!
 sleep 100
 [[ $(state) == running && $(instance_field '.sleeping_since // ""') == "" ]] || fail "$instance fell asleep while a client held a connection"
 kill "$holder" 2>/dev/null || true
+# Reaped here, so bash prints no job notice for it.
+wait "$holder" 2>/dev/null || true
 holder=""
 pass "a held redis-cli connection kept $instance awake for 100 s"
 

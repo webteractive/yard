@@ -883,8 +883,8 @@ Each milestone is usable on its own and gets its own implementation plan.
      `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md`, whose §13
      records the maintainer's answers to its open questions, and planned in
      `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26);
-     built on main on 2026-10-26, before M4d. Its real-machine check is
-     `scripts/e2e-m4e.sh`.
+     built on main on 2026-10-26, before M4d, and verified with `scripts/e2e-m4e.sh` on
+     the maintainer's machine on 2026-10-26.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
    Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.

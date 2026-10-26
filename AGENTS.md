@@ -60,7 +60,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   written in another session and checked against the code; the maintainer answered its §13 questions
   and approved it on 2026-10-26: sleeping is opt-in) and planned in
   `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26). It
-  is built on main (2026-10-26, before M4d), with `scripts/e2e-m4e.sh` written and not run yet.
+  is built on main (2026-10-26, before M4d) and verified on this machine on 2026-10-26 with
+  `scripts/e2e-m1.sh` and `e2e-m4e.sh` passing on their first run (maintainer approved the run); a wake
+  ask while awake took 0.16 ms at p50.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels

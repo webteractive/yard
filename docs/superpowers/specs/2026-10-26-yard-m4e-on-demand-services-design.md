@@ -202,7 +202,8 @@ location @yard_wake_skipped {
   counting.
 - **Cost.** One local unix-socket round trip per PHP request when everything is awake. The
   target is under 1 ms at p50 **(builder's call)**; `scripts/e2e-m4e.sh` measures the ask
-  round trip on the real machine and prints its p50 **(built)**.
+  round trip on the real machine and prints its p50, which was 0.16 ms on the maintainer's machine on
+  2026-10-26 **(built)**.
 
 ### 5.2 From the CLI: the shims ask before running
 
@@ -491,7 +492,9 @@ Each was the yard session's recommendation, and the maintainer took them all ("P
 
 ## 15. When built
 
-Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`.
+Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`, and
+verified on the maintainer's machine the same day with `scripts/e2e-m1.sh` and `scripts/e2e-m4e.sh`
+passing.
 
 The same change updates the main spec (§3.1 for `wake.sock`, §4.2 note, §4.5 for shims that ask
 the daemon, §6.1 supervisor states and the faster first health check, §6.2 methods, §12
