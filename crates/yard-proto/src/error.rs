@@ -67,6 +67,11 @@ pub enum ErrorCode {
     FormulaUntrusted,
     /// The command removes data or trusts a source and needs a yes it did not get.
     NeedsConfirmation,
+    /// A Node version a project or command asks for is not installed.
+    NodeMissing,
+    /// A Node version is the only one the default or a linked site resolves to, so it
+    /// cannot be removed.
+    NodeInUse,
     Internal,
 }
 
@@ -148,6 +153,8 @@ mod tests {
             (ErrorCode::ServiceVersionUnsupported, "SERVICE_VERSION_UNSUPPORTED"),
             (ErrorCode::FormulaUntrusted, "FORMULA_UNTRUSTED"),
             (ErrorCode::NeedsConfirmation, "NEEDS_CONFIRMATION"),
+            (ErrorCode::NodeMissing, "NODE_MISSING"),
+            (ErrorCode::NodeInUse, "NODE_IN_USE"),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
         }

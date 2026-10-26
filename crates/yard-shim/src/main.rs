@@ -1,7 +1,9 @@
-//! `yard-shim`: `php`, `composer`, `pecl`, `phpize` and `php-config` in Yard's `bin/`,
-//! chosen by `argv[0]` (spec §4.5). It resolves the PHP version for the current
-//! directory from `yard.toml` and `sites.toml`, with no daemon, and `exec`s brew's binary
-//! with Yard's ini and a PATH that never reaches Herd's `php`.
+//! `yard-shim`: `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx`
+//! in Yard's `bin/`, chosen by `argv[0]` (spec §4.5, M4c spec §6). It resolves the version
+//! for the current directory from `yard.toml`, `sites.toml` and the project's files, with no
+//! daemon. A PHP shim `exec`s brew's binary with Yard's ini; a Node shim `exec`s the version
+//! fnm installed into Yard's `node/`, and never runs fnm or downloads anything. Neither
+//! PATH reaches Herd's `php` or `node`.
 
 use std::convert::Infallible;
 use std::ffi::OsString;
@@ -11,7 +13,8 @@ use std::process::{Command, ExitCode};
 use yard_core::brew::Brew;
 use yard_core::config::yard::parse_yard;
 use yard_core::config::{SitesConfig, load_sites, load_yard};
-use yard_core::shim::{Source, command, resolve_version};
+use yard_core::node::{LtsMap, installed, pick};
+use yard_core::shim::{NODE_SHIMS, Source, command, node_command, resolve_node, resolve_version};
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
 
@@ -27,7 +30,7 @@ fn main() -> ExitCode {
     ExitCode::from(1)
 }
 
-/// The largest `.yard` or `.yard-php` the shim reads.
+/// The largest `.yard`, `.yard-php`, `.nvmrc`, `.node-version` or `lts.toml` the shim reads.
 const FILE_MAX: u64 = 64 * 1024;
 
 /// `file`'s text: `None` when nothing is there, and an error when it is there but not a
@@ -36,10 +39,10 @@ const FILE_MAX: u64 = 64 * 1024;
 /// the shim looks in every parent, and another tool may keep a `~/.yard` directory.
 fn read_small(file: &Path) -> Option<Result<String, YardError>> {
     let unusable = |what: String| {
-        let code = if file.file_name().is_some_and(|n| n == ".yard-php") {
-            ErrorCode::InvalidArgument
-        } else {
+        let code = if file.file_name().is_some_and(|n| n == ".yard") {
             ErrorCode::ProjectFileInvalid
+        } else {
+            ErrorCode::InvalidArgument
         };
         Some(Err(YardError::new(code, format!("{} {what}", file.display()))
             .with_hint(format!("replace {} with a text file", file.display()))))
@@ -71,6 +74,9 @@ fn read_small(file: &Path) -> Option<Result<String, YardError>> {
 }
 
 fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
+    if NODE_SHIMS.contains(&name) {
+        return run_node(name, args);
+    }
     let paths = Paths::from_env()?;
     // A TOML being edited must not stop every php on the machine: warn and carry on.
     let yard = match load_yard(&paths) {
@@ -106,6 +112,47 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     })?;
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let (program, pre, env) = command(name, v, &opt, &brew, &paths, &inherited, &exists)?;
+    let e = Command::new(&program).args(pre).args(args).envs(env).exec();
+    Err(YardError::new(ErrorCode::Internal, format!("cannot run {}: {e}", program.display())))
+}
+
+fn run_node(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
+    let paths = Paths::from_env()?;
+    let yard = match load_yard(&paths) {
+        Ok((yard, _)) => yard,
+        Err(e) => {
+            eprintln!("yard: {}; using Node {}", e.message, yard_core::node::DEFAULT_SPEC);
+            parse_yard(None, &paths.yard_toml())?.0
+        }
+    };
+    let sites = load_sites(&paths).unwrap_or_else(|e| {
+        eprintln!("yard: {}; ignoring site settings", e.message);
+        SitesConfig::default()
+    });
+    let cwd = std::env::current_dir().map_err(|e| {
+        YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
+            .with_hint("cd into an existing directory")
+    })?;
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (spec, source) = resolve_node(&cwd, &yard, &sites, &paths, &read_small, &canonical)?;
+    let lts = read_small(&paths.lts_toml()).and_then(Result::ok).and_then(|t| LtsMap::parse(&t));
+    let lts = lts.unwrap_or_else(LtsMap::builtin);
+    let list = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default()
+    };
+    let exists = |p: &Path| p.exists();
+    let v = pick(&spec, &installed(&paths.node_versions_dir(), &list, &exists), &lts).ok_or_else(|| {
+        YardError::new(ErrorCode::NodeMissing, format!("Node {spec} is not installed ({source})"))
+            .with_hint(format!("yard node install {spec}"))
+    })?;
+    if std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1") {
+        eprintln!("yard-shim: {name} runs Node {v} ({spec} from {source})");
+    }
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let extra_ca = std::env::var_os("NODE_EXTRA_CA_CERTS");
+    let (program, pre, env) = node_command(name, v, &paths, &inherited, extra_ca.as_deref(), &exists);
     let e = Command::new(&program).args(pre).args(args).envs(env).exec();
     Err(YardError::new(ErrorCode::Internal, format!("cannot run {}: {e}", program.display())))
 }

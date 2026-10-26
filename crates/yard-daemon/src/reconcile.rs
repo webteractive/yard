@@ -772,7 +772,7 @@ fn files_in(dir: &Path) -> Vec<PathBuf> {
 fn link_shims(bin: &Path, shim: &Path) -> Vec<String> {
     if !shim.is_file() {
         return vec![format!(
-            "{} is missing, so the php shims in {} are not linked",
+            "{} is missing, so the shims in {} are not linked",
             shim.display(),
             bin.display()
         )];

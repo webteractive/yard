@@ -546,7 +546,7 @@ async fn reconcile_links_the_shims() {
     std::os::unix::fs::symlink("/old/build/yard-shim", bin.join("pecl")).unwrap();
 
     let report = e.rec.reconcile().await.unwrap();
-    for name in ["php", "pecl", "phpize", "php-config"] {
+    for name in ["php", "pecl", "phpize", "php-config", "node", "npm", "npx"] {
         assert_eq!(std::fs::read_link(bin.join(name)).unwrap(), shim, "{name}");
     }
     assert_eq!(

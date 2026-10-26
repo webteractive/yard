@@ -1,17 +1,20 @@
-//! What the `php`/`composer`/`pecl` shims and every PHP command Yard runs see (spec §4.5).
-//! Herd puts its own `php` and `composer` on PATH, so nothing Yard starts may find them.
+//! What the `php`/`composer`/`pecl` shims and every PHP command Yard runs see (spec §4.5),
+//! and which Node the `node`/`npm`/`npx` shims run (M4c spec §5–§6). Herd puts its own
+//! `php`, `composer` and `node` on PATH, so nothing Yard starts may find them.
 
 use crate::brew::Brew;
 use crate::config::{SiteEntry, SitesConfig, YardConfig};
-use crate::node::{DEFAULT_SPEC, NodeSpec, parse_spec, spec_line};
+use crate::node::{DEFAULT_SPEC, NodeSpec, NodeVersion, parse_spec, spec_line};
 use crate::{Paths, PhpVersion, project};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use yard_proto::{ErrorCode, YardError};
 
+pub const PHP_SHIMS: [&str; 5] = ["php", "composer", "pecl", "phpize", "php-config"];
+pub const NODE_SHIMS: [&str; 3] = ["node", "npm", "npx"];
 /// The commands `bin/` holds, each a link to the one `yard-shim` binary.
-pub const SHIMS: [&str; 5] = ["php", "composer", "pecl", "phpize", "php-config"];
+pub const SHIMS: [&str; 8] = ["php", "composer", "pecl", "phpize", "php-config", "node", "npm", "npx"];
 
 /// Why the shim chose a version.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +283,34 @@ pub fn command(
     Ok((program, pre, env))
 }
 
+/// The command for Node shim `name` running `v`: the version's own binary, with its `bin`
+/// first on PATH (npm scripts call `node` by name), then Yard's, then `inherited` without
+/// Herd. `NODE_EXTRA_CA_CERTS` points at Yard's CA so `https://*.yard` works from Node,
+/// unless the user set their own (`extra_ca`, the inherited value; empty counts as unset).
+pub fn node_command(
+    name: &str,
+    v: NodeVersion,
+    paths: &Paths,
+    inherited: &OsStr,
+    extra_ca: Option<&OsStr>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> ShimCommand {
+    let program = paths.node_bin(v, name);
+    let version_bin = program.parent().map(Path::to_path_buf).unwrap_or_default();
+    let bin = paths.bin_dir();
+    let without_herd = child_path(None, inherited);
+    let rest: Vec<PathBuf> =
+        std::env::split_paths(&without_herd).filter(|p| *p != version_bin && *p != bin).collect();
+    let entries: Vec<PathBuf> = [version_bin, bin].into_iter().chain(rest).collect();
+    let path = std::env::join_paths(entries).unwrap_or_default();
+    let mut env = vec![("PATH".to_string(), path.to_string_lossy().into_owned())];
+    let ca = paths.ca_cert();
+    if extra_ca.is_none_or(OsStr::is_empty) && exists(&ca) {
+        env.push(("NODE_EXTRA_CA_CERTS".to_string(), ca.display().to_string()));
+    }
+    (program, vec![], env)
+}
+
 /// The PATH for a child: `keg_bin` first, then `inherited` without Herd's directories
 /// (any entry with a `Herd` component), empty entries or a second `keg_bin`.
 pub fn child_path(keg_bin: Option<&Path>, inherited: &OsStr) -> OsString {
@@ -545,6 +576,32 @@ path = "/code/plain"
         assert!(!uses_node(&NodeSource::Default, false));
         assert!(uses_node(&NodeSource::Default, true));
         assert!(uses_node(&NodeSource::Nvmrc("/p/.nvmrc".into()), false));
+    }
+
+    #[test]
+    fn node_command_puts_the_version_then_yard_first_and_drops_herd() {
+        let paths = Paths::new("/r");
+        let v16: crate::node::NodeVersion = "16.14.0".parse().unwrap();
+        let inherited = OsStr::new("/Users/x/Library/Application Support/Herd/bin:/usr/bin");
+        let ca = |p: &Path| p == Path::new("/r/ca/yard-ca.pem");
+        let env_of = |extra: Option<&OsStr>, exists: &dyn Fn(&Path) -> bool| {
+            let (program, pre, env) = node_command("npm", v16, &paths, inherited, extra, exists);
+            assert_eq!(program, Path::new("/r/node/node-versions/v16.14.0/installation/bin/npm"));
+            assert!(pre.is_empty());
+            env.into_iter().collect::<BTreeMap<String, String>>()
+        };
+        let env = env_of(None, &ca);
+        assert_eq!(env["PATH"], "/r/node/node-versions/v16.14.0/installation/bin:/r/bin:/usr/bin");
+        assert_eq!(env["NODE_EXTRA_CA_CERTS"], "/r/ca/yard-ca.pem");
+        assert!(!env_of(Some(OsStr::new("/mine.pem")), &ca).contains_key("NODE_EXTRA_CA_CERTS"));
+        assert_eq!(env_of(Some(OsStr::new("")), &ca)["NODE_EXTRA_CA_CERTS"], "/r/ca/yard-ca.pem");
+        assert!(!env_of(None, &|_| false).contains_key("NODE_EXTRA_CA_CERTS"));
+    }
+
+    #[test]
+    fn shims_are_php_s_then_node_s() {
+        assert_eq!(SHIMS[..5], PHP_SHIMS);
+        assert_eq!(SHIMS[5..], NODE_SHIMS);
     }
 
     #[test]
