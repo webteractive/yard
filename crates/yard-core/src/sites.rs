@@ -146,6 +146,7 @@ pub fn resolve(
                     ignored_managed_file: None,
                     needs: vec![],
                     project_error,
+                    node: None,
                 });
             }
             (None, Some(target)) => match parse_proxy_target(target) {
@@ -161,6 +162,7 @@ pub fn resolve(
                     ignored_managed_file: None,
                     needs: vec![],
                     project_error: None,
+                    node: None,
                 }),
                 Err(e) => warnings.push(format!("sites.toml: {name}: {}", e.message)),
             },

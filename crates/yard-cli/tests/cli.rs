@@ -35,6 +35,7 @@ fn sites() -> Vec<SiteInfo> {
             ignored_managed_file: None,
             needs: vec![],
             project_error: None,
+            node: None,
         },
         SiteInfo {
             name: "api".into(),
@@ -48,6 +49,7 @@ fn sites() -> Vec<SiteInfo> {
             ignored_managed_file: None,
             needs: vec![],
             project_error: None,
+            node: None,
         },
     ]
 }
@@ -88,7 +90,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], "0.1.0");
-    assert_eq!(v["protocol"], "2.6");
+    assert_eq!(v["protocol"], "2.7");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());
@@ -395,6 +397,7 @@ fn php_site(name: &str, path: &str, php: &str) -> Value {
         ignored_managed_file: None,
         needs: vec![],
         project_error: None,
+        node: None,
     })
     .unwrap()
 }

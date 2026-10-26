@@ -86,6 +86,57 @@ pub struct SiteInfo {
     /// page until it is fixed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_error: Option<YardError>,
+    /// The Node the site root resolves to, for a site that uses Node; filled per request,
+    /// so a `site_changed` event does not carry it. A missing version never puts the site
+    /// on its setup page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<SiteNode>,
+}
+
+/// A site's Node: the spec its root resolves to and the installed version that meets it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteNode {
+    /// `None` only with `error`.
+    pub spec: Option<String>,
+    pub source: SettingSource,
+    /// The `.yard`, `.nvmrc` or `.node-version` the spec comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// `None` while nothing installed matches.
+    pub version: Option<String>,
+    /// Why the spec cannot be resolved (an unusable `.nvmrc`, a bad `.yard`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<YardError>,
+}
+
+/// One row of `node.list`: an installed version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeInfo {
+    pub version: String,
+    /// What the default spec runs.
+    pub default: bool,
+    /// Linked sites that run this version.
+    pub sites: Vec<String>,
+}
+
+/// The newest release of a Node line on nodejs.org.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRelease {
+    pub version: String,
+    /// The LTS codename, lowercased.
+    pub lts: Option<String>,
+}
+
+/// `node.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeList {
+    /// The default spec.
+    pub default: String,
+    /// Installed versions, newest first.
+    pub versions: Vec<NodeInfo>,
+    /// With `available`: the newest release of each line, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available: Vec<NodeRelease>,
 }
 
 impl SiteInfo {
@@ -496,6 +547,10 @@ pub enum SettingSource {
     ManagedFile,
     SitesToml,
     Default,
+    /// The nearest `.nvmrc` (a site's Node).
+    Nvmrc,
+    /// The nearest `.node-version` (a site's Node).
+    NodeVersionFile,
     /// A source a newer yardd reports that this client does not know; never sent.
     #[serde(other)]
     Other,
@@ -608,6 +663,39 @@ mod tests {
         let site = serde_json::from_value::<SiteInfo>(v.clone()).unwrap();
         assert!(!site.needs_setup());
         assert_eq!(serde_json::to_value(&site).unwrap(), v);
+    }
+
+    #[test]
+    fn site_node_round_trips_and_an_old_answer_has_none() {
+        // What a 2.6 daemon sent: no node.
+        let v = json!({"name":"blog","host":"blog.yard","url":"http://blog.yard:8080/","source":"linked",
+            "kind":"proxy","target":"http://127.0.0.1:3000","secure":false});
+        let mut site = serde_json::from_value::<SiteInfo>(v).unwrap();
+        assert_eq!(site.node, None);
+        site.node = Some(SiteNode {
+            spec: Some("16.14.0".into()),
+            source: SettingSource::Nvmrc,
+            file: Some("/code/maker/.nvmrc".into()),
+            version: None,
+            error: None,
+        });
+        let v = serde_json::to_value(&site).unwrap();
+        assert_eq!(
+            v["node"],
+            json!({"spec":"16.14.0","source":"nvmrc","file":"/code/maker/.nvmrc","version":null})
+        );
+        assert_eq!(serde_json::from_value::<SiteInfo>(v).unwrap(), site);
+        assert_eq!(serde_json::to_value(SettingSource::NodeVersionFile).unwrap(), json!("node_version_file"));
+        let list = NodeList {
+            default: "22".into(),
+            versions: vec![NodeInfo { version: "22.18.0".into(), default: true, sites: vec![] }],
+            available: vec![],
+        };
+        let v = serde_json::to_value(&list).unwrap();
+        assert!(v.get("available").is_none(), "{v}");
+        assert_eq!(serde_json::from_value::<NodeList>(v).unwrap(), list);
+        let r = NodeRelease { version: "24.5.0".into(), lts: Some("krypton".into()) };
+        assert_eq!(serde_json::to_value(&r).unwrap(), json!({"version":"24.5.0","lts":"krypton"}));
     }
 
     #[test]
@@ -776,10 +864,7 @@ mod tests {
         assert_eq!(serde_json::to_value(SettingSource::ManagedFile).unwrap(), json!("managed_file"));
         assert_eq!(serde_json::from_value::<SiteDetail>(v).unwrap(), detail);
         // A source a newer yardd adds is read, not refused.
-        assert_eq!(
-            serde_json::from_value::<SettingSource>(json!("node_version_file")).unwrap(),
-            SettingSource::Other
-        );
+        assert_eq!(serde_json::from_value::<SettingSource>(json!("volta")).unwrap(), SettingSource::Other);
 
         let src = SourceInfo {
             tap: "minio/stable".into(),

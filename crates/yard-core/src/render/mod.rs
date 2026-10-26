@@ -117,6 +117,7 @@ mod tests {
             ignored_managed_file: None,
             needs: vec![],
             project_error: None,
+            node: None,
         }
     }
 
@@ -133,6 +134,7 @@ mod tests {
             ignored_managed_file: None,
             needs: vec![],
             project_error: None,
+            node: None,
         }
     }
 

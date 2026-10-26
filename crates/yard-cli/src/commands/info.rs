@@ -50,6 +50,8 @@ fn source_name(detail: &SiteDetail, key: &str) -> &'static str {
         Some(SettingSource::ManagedFile) => "managed",
         Some(SettingSource::SitesToml) => "sites.toml",
         Some(SettingSource::Default) | None => "default",
+        Some(SettingSource::Nvmrc) => ".nvmrc",
+        Some(SettingSource::NodeVersionFile) => ".node-version",
         Some(SettingSource::Other) => "elsewhere",
     }
 }

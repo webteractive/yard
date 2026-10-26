@@ -52,6 +52,12 @@ pub const ENV_PRINT: &str = "env.print";
 pub const SOURCES_LIST: &str = "sources.list";
 pub const SOURCES_TRUST: &str = "sources.trust";
 pub const SOURCES_UNTRUST: &str = "sources.untrust";
+pub const NODE_LIST: &str = "node.list";
+pub const NODE_INSTALL: &str = "node.install";
+pub const NODE_UNINSTALL: &str = "node.uninstall";
+pub const NODE_DEFAULT: &str = "node.default";
+pub const NODE_USE: &str = "node.use";
+pub const NODE_UNUSE: &str = "node.unuse";
 pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
@@ -123,7 +129,7 @@ pub struct InitParams {
     pub local: bool,
 }
 
-/// `sites.secure` and `sites.unsecure`.
+/// `sites.secure`, `sites.unsecure` and `node.unuse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SiteParams {
     pub site: String,
@@ -175,6 +181,45 @@ pub struct PhpConfigParams {
     pub value: Option<String>,
 }
 
+/// `node.list`: `available` also asks nodejs.org (through fnm) for the newest release of
+/// each line, or of `major` only. `null` params are the defaults.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct NodeListParams {
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub major: Option<u32>,
+}
+
+/// `node.install`: a `spec` (`22`, `16.14.0`, `lts/iron`), or the absolute `path` of a
+/// directory whose pin is installed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeInstallParams {
+    #[serde(default)]
+    pub spec: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// `node.uninstall`: an installed version such as `"16.14.0"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeVersionParams {
+    pub version: String,
+}
+
+/// `node.default`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeSpecParams {
+    pub spec: String,
+}
+
+/// `node.use`; `node.unuse` takes [`SiteParams`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeUseParams {
+    pub site: String,
+    pub spec: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubscribeParams {
     pub topics: Vec<Topic>,
@@ -205,6 +250,25 @@ mod tests {
             [SOURCES_LIST, SOURCES_TRUST, SOURCES_UNTRUST],
             ["sources.list", "sources.trust", "sources.untrust"]
         );
+    }
+
+    #[test]
+    fn node_method_names() {
+        assert_eq!(
+            [NODE_LIST, NODE_INSTALL, NODE_UNINSTALL, NODE_DEFAULT, NODE_USE, NODE_UNUSE],
+            ["node.list", "node.install", "node.uninstall", "node.default", "node.use", "node.unuse"]
+        );
+    }
+
+    #[test]
+    fn node_list_params_accept_null() {
+        let p: NodeListParams = serde_json::from_value(json!({})).unwrap();
+        assert_eq!((p.available, p.major), (false, None));
+        let p: NodeListParams = serde_json::from_value(json!({"available":true,"major":16})).unwrap();
+        assert_eq!((p.available, p.major), (true, Some(16)));
+        assert_eq!(serde_json::from_value::<Option<NodeListParams>>(json!(null)).unwrap(), None);
+        let p: NodeInstallParams = serde_json::from_value(json!({"path":"/code/maker"})).unwrap();
+        assert_eq!((p.spec, p.path.as_deref()), (None, Some("/code/maker")));
     }
 
     #[test]
