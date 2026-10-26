@@ -152,6 +152,9 @@ pub async fn run(cli: Cli) -> i32 {
                 services::logs(&ctx, instance, follow, lines).await
             }
             ServiceAction::Port { instance, port } => services::port(&ctx, instance, port).await,
+            ServiceAction::SleepAfter { instance, after } => {
+                services::sleep_after(&ctx, instance, after).await
+            }
         },
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,

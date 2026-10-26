@@ -1,12 +1,13 @@
 //! `yard info`: what one site runs on (spec §7.4).
 
-use super::services::{account_parts, address, failure_line, state_name};
+use super::services::{account_parts, address, failure_line, state_text};
 use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
 use yard_core::node::install_hint;
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
 use yard_proto::{
-    ExtInfo, Need, ProjectFileKind, SettingSource, SiteDetail, SiteKind, SiteNode, SiteSource, YardError,
+    ExtInfo, Need, ProjectFileKind, ServiceState, SettingSource, SiteDetail, SiteKind, SiteNode, SiteSource,
+    YardError,
 };
 
 /// The label column: `extensions` is the longest.
@@ -167,11 +168,16 @@ fn services_block(detail: &SiteDetail) -> String {
     let mut rows: Vec<Vec<String>> = vec![];
     let mut consoles: Vec<String> = vec![];
     let mut failures: Vec<String> = vec![];
+    let mut sleeping: Option<&str> = None;
+    let now = time::OffsetDateTime::now_utc();
     for wanted in &detail.services {
         match &wanted.service {
             Some(s) => {
                 let (user, rest) = account_parts(&s.account);
-                rows.push(vec![s.name.clone(), state_name(&s.state).into(), address(s), user, rest]);
+                rows.push(vec![s.name.clone(), state_text(s, now), address(s), user, rest]);
+                if s.state == ServiceState::Stopped && s.sleeping_since.is_some() {
+                    sleeping.get_or_insert(&s.name);
+                }
                 if let Some(console) = &s.console {
                     consoles.push(format!("{} console  {console}", s.name));
                 }
@@ -189,6 +195,9 @@ fn services_block(detail: &SiteDetail) -> String {
     let mut out = String::new();
     for l in table(&["services", "", "", "account", ""], &rows).lines() {
         out.push_str(&format!("  {l}\n"));
+    }
+    if let Some(name) = sleeping {
+        out.push_str(&format!("  wakes on the next request, or: yard service start {name}\n"));
     }
     for line in consoles.into_iter().chain(failures) {
         out.push_str(&format!("  {line}\n"));

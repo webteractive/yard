@@ -14,6 +14,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+time = { version = "0.3.55", features = ["parsing", "formatting"] }
 tokio = { version = "1.53.2", features = ["rt", "macros", "net", "io-util", "time", "signal"] }
 yard-core.workspace = true
 yard-daemon.workspace = true

@@ -1,4 +1,4 @@
-//! `yard services` and `yard service add|remove|start|stop|restart|logs|port`.
+//! `yard services` and `yard service add|remove|start|stop|restart|logs|port|sleep-after`.
 
 use super::sources::with_trust;
 use super::{Ctx, Outcome, confirm, env, finished, interactive, run_job};
@@ -6,10 +6,13 @@ use crate::client::CliError;
 use crate::output::{for_agents, print_json_line, table};
 use serde_json::Value;
 use std::time::{Duration, Instant};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::signal::unix::{SignalKind, signal};
+use yard_core::services::sleep::SleepAfter;
 use yard_proto::methods::{
     self, EnvParams, ServiceAddParams, ServiceLogsParams, ServiceParams, ServicePortParams,
-    ServiceRemoveParams,
+    ServiceRemoveParams, ServiceSleepParams,
 };
 use yard_proto::{
     Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceState, SiteInfo, Topic, YardError,
@@ -49,6 +52,33 @@ pub fn state_name(state: &ServiceState) -> &'static str {
     }
 }
 
+/// The state as `yard services` and `yard info` show it: `sleeping 2h` for an instance that
+/// is asleep (M4e spec §9), `waking` while it starts again, else [`state_name`].
+pub fn state_text(info: &ServiceInfo, now: OffsetDateTime) -> String {
+    let since = info.sleeping_since.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+    match (&info.state, since) {
+        (ServiceState::Stopped, Some(since)) => format!("sleeping {}", age(now - since)),
+        (ServiceState::Starting, Some(_)) => "waking".into(),
+        _ => state_name(&info.state).into(),
+    }
+}
+
+/// `45s`, `12m`, `2h` or `3d`: the largest whole unit.
+fn age(d: time::Duration) -> String {
+    let secs = d.whole_seconds().max(0);
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+/// The effective `sleep_after`: `15m`, `1h`, or `off`.
+pub fn sleep_text(info: &ServiceInfo) -> String {
+    info.sleep_after_secs.map_or_else(|| "off".to_string(), |secs| SleepAfter::After(secs).to_string())
+}
+
 /// `mysql-8.4 failed: port 3307 is held by mysqld (pid 77034, DBngin)  (yard service port
 /// mysql-8.4 <port>)`: why a failed instance failed, when yardd says, with the command that
 /// fixes it. `None` for any other state.
@@ -78,6 +108,7 @@ pub async fn list(ctx: &Ctx) -> Outcome {
                 for_agents("yard services")
             );
         }
+        let now = OffsetDateTime::now_utc();
         let rows: Vec<Vec<String>> = services
             .iter()
             .map(|s| {
@@ -88,13 +119,15 @@ pub async fn list(ctx: &Ctx) -> Outcome {
                     s.engine.clone(),
                     s.version.clone().unwrap_or_else(|| "-".into()),
                     port,
-                    state_name(&s.state).into(),
+                    state_text(s, now),
+                    sleep_text(s),
                     account_text(&s.account),
                     used_by,
                 ]
             })
             .collect();
-        let mut out = table(&["INSTANCE", "ENGINE", "VERSION", "PORT", "STATE", "ACCOUNT", "USED BY"], &rows);
+        let mut out =
+            table(&["INSTANCE", "ENGINE", "VERSION", "PORT", "STATE", "SLEEP", "ACCOUNT", "USED BY"], &rows);
         out.push('\n');
         let failures: Vec<String> = services.iter().filter_map(failure_line).collect();
         if !failures.is_empty() {
@@ -240,6 +273,18 @@ pub async fn port(ctx: &Ctx, instance: String, port: u16) -> Outcome {
             address(&info)
         ),
         _ => format!("{} now listens on {}.\n", info.name, address(&info)),
+    });
+    Ok(0)
+}
+
+/// `yard service sleep-after`: sets or clears the instance's `sleep_after` in `services.toml`.
+pub async fn sleep_after(ctx: &Ctx, instance: String, after: String) -> Outcome {
+    let params = ServiceSleepParams { name: instance, after: after.clone() };
+    let info: ServiceInfo = ctx.client().await?.call(methods::SERVICES_SLEEP_SET, params).await?;
+    ctx.emit(&info, || match (after.as_str(), info.sleep_after_secs) {
+        ("default", _) => format!("{} now follows yard.toml ({})\n", info.name, sleep_text(&info)),
+        (_, None) => format!("{} never sleeps\n", info.name),
+        (_, Some(_)) => format!("{} now sleeps after {} without use\n", info.name, sleep_text(&info)),
     });
     Ok(0)
 }

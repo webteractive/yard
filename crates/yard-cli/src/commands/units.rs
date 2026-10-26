@@ -21,10 +21,13 @@ pub async fn status(ctx: &Ctx) -> Outcome {
             "Profile   {profile}\nTLD       .{}\nSites     {}\nConfig    {config}\n\n",
             info.tld, info.sites
         );
-        if info.units.is_empty() {
+        if info.units.is_empty() && info.sleeping.is_empty() {
             out.push_str("No units yet; yardd starts them after its first reconcile.\n");
         } else {
-            let rows: Vec<Vec<String>> = info.units.iter().map(unit_row).collect();
+            // A sleeping instance has no unit, so it gets a row of its own (M4e spec §9).
+            let asleep =
+                info.sleeping.iter().map(|s| vec![s.name.clone(), "sleeping".into(), "-".into(), "-".into()]);
+            let rows: Vec<Vec<String>> = info.units.iter().map(unit_row).chain(asleep).collect();
             out.push_str(&table(&["UNIT", "STATE", "PID", "RESTARTS"], &rows));
         }
         out.push('\n');

@@ -2089,6 +2089,7 @@ fn the_new_commands_have_help_and_json() {
         vec!["service", "restart"],
         vec!["service", "logs"],
         vec!["service", "port"],
+        vec!["service", "sleep-after"],
         vec!["env"],
         vec!["info"],
         vec!["sources"],
@@ -2175,4 +2176,119 @@ fn a_plain_logs_command_does_not_swallow_ctrl_c() {
     });
     let status = child.wait().unwrap();
     assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGINT), "{status:?}");
+}
+
+// ---- M4e: sleeping services ----
+
+/// RFC 3339 for `ago` before now, as yardd sends `sleeping_since`.
+fn since(ago: time::Duration) -> String {
+    (time::OffsetDateTime::now_utc() - ago).format(&time::format_description::well_known::Rfc3339).unwrap()
+}
+
+fn sleeping_mysql() -> Value {
+    let mut mine = mysql(json!("stopped"));
+    mine["stopped_by_user"] = json!(false);
+    mine["sleeping_since"] = json!(since(time::Duration::hours(2)));
+    mine["sleep_after_secs"] = json!(900);
+    mine
+}
+
+#[test]
+fn services_shows_sleeping_and_sleep_column() {
+    let redis = service("redis", "redis", None, 6380, json!("running"), account(None, None));
+    let d = MockDaemon::start(&[("services.list", Ok(json!([sleeping_mysql(), redis])))]);
+    let out = d.yard().arg("services").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    let header = so.lines().next().unwrap();
+    assert!(header.contains("STATE") && header.find("SLEEP") > header.find("STATE"), "{so}");
+    let mysql_row = so.lines().find(|l| l.starts_with("mysql-8.4")).unwrap();
+    assert!(mysql_row.contains("sleeping 2h") && mysql_row.contains("15m"), "{so}");
+    let redis_row = so.lines().find(|l| l.starts_with("redis")).unwrap();
+    assert!(redis_row.contains(" off "), "{so}");
+}
+
+#[test]
+fn a_waking_instance_says_so() {
+    let mut mine = sleeping_mysql();
+    mine["state"] = json!("starting");
+    let d = MockDaemon::start(&[("services.list", Ok(json!([mine])))]);
+    let so = stdout(&d.yard().arg("services").output().unwrap());
+    assert!(so.lines().any(|l| l.starts_with("mysql-8.4") && l.contains("waking")), "{so}");
+}
+
+#[test]
+fn status_lists_sleeping_instances() {
+    let status = json!({
+        "version": {"cli": null, "daemon": MOCK_VERSION, "helper": null, "protocol": "2.8", "commit": "mock", "build_date": "2026-10-26"},
+        "profile": "standard", "tld": "yard", "sites": 1, "config_error": null,
+        "units": [{"name": "nginx", "state": "running", "pid": 10, "restarts": 0}],
+        "sleeping": [{"name": "mysql-8.4", "since": since(time::Duration::minutes(5))}],
+    });
+    let d = MockDaemon::start(&[("status", Ok(status))]);
+    let out = d.yard().arg("status").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    let row = so.lines().find(|l| l.starts_with("mysql-8.4")).expect("a row for the sleeping instance");
+    assert_eq!(row.split_whitespace().collect::<Vec<_>>(), ["mysql-8.4", "sleeping", "-", "-"], "{so}");
+}
+
+#[test]
+fn info_says_how_a_sleeping_instance_wakes() {
+    let mut detail = site_detail();
+    let mut mine = sleeping_mysql();
+    mine["used_by"] = json!(["blog"]);
+    detail["services"][0]["service"] = mine;
+    let d = MockDaemon::start(&[("sites.info", Ok(detail)), ("ext.list", Ok(ext_rows()))]);
+    let out = d.yard().arg("info").env("HOME", "/Users/me").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    assert!(so.lines().any(|l| l.contains("mysql-8.4") && l.contains("sleeping 2h")), "{so}");
+    assert!(so.contains("  wakes on the next request, or: yard service start mysql-8.4\n"), "{so}");
+}
+
+#[test]
+fn sleep_after_sends_and_prints() {
+    let redis = |secs: Value, source: &str| {
+        let mut r = service("redis", "redis", None, 6380, json!("running"), account(None, None));
+        r["sleep_after_secs"] = secs;
+        r["sleep_after_source"] = json!(source);
+        r
+    };
+    let d = MockDaemon::start_sequenced(&[(
+        "services.sleep.set",
+        vec![
+            Ok(redis(json!(3600), "services_toml")),
+            Ok(redis(Value::Null, "services_toml")),
+            Ok(redis(json!(900), "yard_toml")),
+        ],
+    )]);
+    let run =
+        |after: &str| stdout(&d.yard().args(["service", "sleep-after", "redis", after]).output().unwrap());
+    assert_eq!(run("1h"), "redis now sleeps after 1h without use\n");
+    assert_eq!(run("off"), "redis never sleeps\n");
+    assert_eq!(run("default"), "redis now follows yard.toml (15m)\n");
+    assert_eq!(
+        d.params("services.sleep.set"),
+        [
+            json!({"name": "redis", "after": "1h"}),
+            json!({"name": "redis", "after": "off"}),
+            json!({"name": "redis", "after": "default"}),
+        ]
+    );
+}
+
+#[test]
+fn service_help_mentions_sleep() {
+    for args in [vec!["services"], vec!["service", "start"], vec!["service", "sleep-after"]] {
+        let mut full = args.clone();
+        full.push("--help");
+        let (_root, out) = offline(&full);
+        let text = stdout(&out);
+        assert!(
+            text.contains("service_sleep_after in yard.toml, or yard service sleep-after"),
+            "{args:?}: {text}"
+        );
+        assert!(text.contains("GUI clients cannot wake one."), "{args:?}: {text}");
+    }
 }

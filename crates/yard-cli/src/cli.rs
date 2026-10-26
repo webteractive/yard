@@ -153,6 +153,8 @@ pub enum Command {
     /// would still win. Edits nothing.
     InstallShims,
     /// List the service instances (MySQL, PostgreSQL, Redis, MinIO), their ports and logins.
+    ///
+    /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
     Services,
     /// Add, remove, start, stop or inspect one service instance.
     Service {
@@ -225,6 +227,8 @@ pub enum ServiceAction {
         yes: bool,
     },
     /// Start an instance (and keep it started across yardd restarts), then wait until it is up.
+    ///
+    /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
     Start { instance: String },
     /// Stop an instance; yardd leaves it stopped until yard service start.
     Stop { instance: String },
@@ -242,6 +246,15 @@ pub enum ServiceAction {
     },
     /// Move an instance to another port (a running instance restarts on it).
     Port { instance: String, port: u16 },
+    /// Set how long an instance may go unused before it sleeps, in services.toml.
+    ///
+    /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
+    SleepAfter {
+        instance: String,
+        /// A duration of at least 60s (90s, 15m, 1h), off to keep it awake, or default to
+        /// follow service_sleep_after in yard.toml.
+        after: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
