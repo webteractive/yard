@@ -35,6 +35,7 @@ server {
     location = /__yard_wake {
         internal;
         proxy_pass "http://unix:/Users/me/Library/Application Support/Yard/run/wake.sock:/wake/blog?wait=10";
+        proxy_pass_request_headers off;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_read_timeout 15s;

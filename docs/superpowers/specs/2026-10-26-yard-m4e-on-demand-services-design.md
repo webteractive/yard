@@ -160,6 +160,7 @@ location ~ \.php$ {
 location = /__yard_wake {
     internal;
     proxy_pass http://unix:"<root>/run/wake.sock":/wake/<site>?wait=10;
+    proxy_pass_request_headers off;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_read_timeout 15s;
@@ -175,6 +176,10 @@ location @yard_wake_skipped {
 - **`<root>` is quoted with `nginx_str`, as `fastcgi_pass` is (code check;** config-ownership
   rule). nginx accepts the quoted `unix:` upstream path (checked 2026-10-26 with brew's nginx,
   `nginx -t` in `tests/real_nginx.rs`) **(built)**.
+- **The ask carries only its path.** The client's headers, cookies included, and its body stay
+  out of the subrequest (`proxy_pass_request_headers off`, `proxy_pass_request_body off`):
+  yardd needs nothing else, and a session cookie has no business on `wake.sock`
+  (checked with brew's nginx in `the_wake_hook_fails_open`) **(built, after the final review)**.
 - **Only PHP requests ask.** Static files and the setup page never need a database, so they
   never wake one, and an asset-heavy page costs one ask, not fifty **(builder's call)**.
 - **Sites without services never ask.** The block is rendered only for a site whose `.yard`
@@ -223,9 +228,10 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
   name, and it never reads `services.toml`, which turning `redis = true` into an instance
   name needs. So the shim finds the innermost linked site containing the cwd, as it already
   does for PHP, and asks for that site.
-- It reads `run/sleeping`, a small file yardd rewrites atomically at the end of every
-  reconcile when it changed (so a site linked, or a `.yard` edited, while an instance sleeps
-  is listed too; built), listing **the linked sites that need a sleeping instance**, one per line
+- It reads `run/sleeping`, a small file yardd rewrites atomically in every reconcile when it
+  changed, before that reconcile stops or starts a unit (so a site linked, or a `.yard`
+  edited, while an instance sleeps is listed too, and a site is listed while its instance is
+  still stopping; built), listing **the linked sites that need a sleeping instance**, one per line
   (code check: yardd knows which instances each site needs; the shim does not). When the
   site is not listed, the shim does nothing more: an awake machine costs one small file
   read, and no socket connect **(builder's call)**.
@@ -311,7 +317,13 @@ to a `YardError`, and `services.start` and `restart` refuse with whatever it hol
   (§9, §11).
 - Falling asleep: the idle check (§7) marks the instance asleep and triggers a reconcile, which
   stops the unit through `apply` with the unit's own stop signal and 30 s timeout (M4b §15).
-  The instance is listed in `run/sleeping` only after the process is gone.
+  Its sites are listed in `run/sleeping` before the stop begins, so a shim run during the stop
+  asks for a wake, which waits for the stop and starts it again, rather than finding a
+  stopping engine **(built, after the final review; this spec first listed them only once the
+  process was gone)**. The idle check and the marking happen under one lock, so a use that
+  lands between them keeps the instance awake. A reconcile that fails before it stops the unit
+  (a TOML that no longer parses, an `nginx -t` failure) undoes the sleep: the instance runs
+  and is reported running, and its idle clock starts again **(built, after the final review)**.
 - Waking: mark awake, remove it from `run/sleeping`, reconcile, and wait for the first health
   check, bounded by the unit's `start_timeout` (120 s for MySQL and PostgreSQL, 10 s for Redis
   and MinIO, M4b §15).
@@ -364,8 +376,10 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
   timeout. libc has `proc_listchildpids` but no binding for `socket_fdinfo`, so the sockets
   themselves cannot be read through libproc here. lsof's `d` field is the socket's kernel
   address, and each socket counts once: a backend can hold its connection on two
-  descriptors, and a postmaster keeps a copy until it has handed it over. A count that fails
-  keeps the instance awake.
+  descriptors, and a postmaster keeps a copy until it has handed it over. A connection whose
+  two ends both belong to the tree (MinIO's console calling its own API) is the engine talking
+  to itself and does not count **(built, after the final review)**. A count that fails keeps
+  the instance awake.
 - **Yard's own health checks.** The supervisor's health check is a TCP connect that closes at
   once (main spec §6.1), and once a unit runs it is every 5 s, so a 30 s sample rarely sees
   one. When it does, the instance stays awake one sample longer. That is accepted rather
@@ -436,7 +450,10 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
   tagged, so a 2.7 CLI would fail to decode `services.list` from a daemon that sent
   `sleeping`. Adding an `Other` variant now does not help clients already built, so the new
   states ride on `sleeping_since` instead of a major bump. M4e still adds the `Other`
-  fallback, so a later state can be a variant.
+  fallback, so a later state can be a variant, with or without data: `#[serde(other)]` alone
+  catches only a unit variant, so `ServiceState`'s `Deserialize` is written by hand to read an
+  unknown `{"<state>": {…}}` as `Other` too, while a known state that does not parse is still
+  an error **(built, after the final review)**.
 - `wake.sock` is not JSON-RPC and not part of `yard-proto`: it is an nginx- and shim-facing
   side door with one route and one answer (`204`).
 
@@ -507,7 +524,10 @@ Each was the yard session's recommendation, and the maintainer took them all ("P
 
 Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`, and
 verified on the maintainer's machine the same day with `scripts/e2e-m1.sh` and `scripts/e2e-m4e.sh`
-passing, at `a1083ed` and again at `12babe5` after the final review's fixes.
+passing, at `a1083ed` and again at `12babe5` after the final review's fixes. The review's
+deferred minors were fixed on 2026-10-27: the ask's headers (§5.1), `run/sleeping` written
+before the stop, the idle check under one lock and a failed sleep undone (§6.2), an engine's
+connections to itself (§7) and `ServiceState`'s fallback for a state with data (§11).
 
 The same change updates the main spec (§3.1 for `wake.sock`, §4.2 note, §4.5 for shims that ask
 the daemon, §6.1 supervisor states and the faster first health check, §6.2 methods, §12

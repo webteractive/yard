@@ -23,7 +23,10 @@ triggers:
   rename is a breaking change for the app too.
 - An enum a newer daemon may extend in a minor version carries a `#[serde(other)]` variant
   the daemon never sends (`SettingSource::Other`, shown as `elsewhere`), so an older client
-  still reads the answer instead of failing on an unknown variant.
+  still reads the answer instead of failing on an unknown variant. `#[serde(other)]` only
+  catches a unit variant: an enum with data variants that may gain more with data
+  (`ServiceState`) uses `#[serde(remote = "Self")]` and a hand-written `Deserialize` that reads
+  an unknown `{"<variant>": …}` as `Other` too, and still fails a known variant that does not parse.
 - The `node.*` methods (protocol 2.7, M4c): `node.list` (`NodeListParams`, `null` is the
   defaults), `node.install` and `node.uninstall` (jobs), `node.default`, `node.use` and
   `node.unuse`; `SiteInfo.node` is filled per request, not in reconcile's snapshot.
@@ -31,7 +34,7 @@ triggers:
   (`stopped` with it) and a waking one (`starting` with it), so an older client still sees a true
   state; `sleep_after_secs` and `sleep_after_source` give the effective setting, and
   `StatusInfo.sleeping` lists the sleeping instances. `ServiceState` has an `Other` fallback
-  from 2.8, so a later state can be a variant. `services.sleep.set { name, after }` takes a
+  from 2.8, so a later state can be a variant, with or without data. `services.sleep.set { name, after }` takes a
   duration, `off` or `default`.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), always `204`, for nginx's `auth_request`

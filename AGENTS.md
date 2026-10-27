@@ -64,7 +64,11 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `scripts/e2e-m1.sh` and `e2e-m4e.sh` passing on their first run (maintainer approved the run); a wake
   ask while awake took 0.16 ms at p50. Both passed again on 12babe5, after the final review's
   fixes (the snapshot published outside the reconcile lock, sleep undone by the files, the hook
-  only where a service may sleep).
+  only where a service may sleep). The review's deferred minors were fixed on 2026-10-27: sites
+  are listed in `run/sleeping` before the stop begins, a failed sleep reconcile undoes the
+  sleep, the idle check and the marking share one lock, a connection between two of an
+  engine's own sockets is not a client, the wake ask forwards no client headers, and an
+  unknown `ServiceState` with data reads as `Other`.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels

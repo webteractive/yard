@@ -196,7 +196,7 @@ impl Paths {
     }
 
     /// yardd's wake socket, which nginx and the shims ask before a site's sleeping
-    /// services are needed (M4e spec §6.3).
+    /// services are needed (M4e spec §5.1, §5.2).
     pub fn wake_socket(&self) -> PathBuf {
         self.run_dir().join("wake.sock")
     }

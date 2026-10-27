@@ -17,7 +17,7 @@ use yard_core::config::ServicesConfig;
 use yard_core::project::{Projects, ServiceWant};
 use yard_core::services::instance_name;
 use yard_core::services::sleep::{effective_sleep, sleeping_text};
-use yard_proto::UnitState;
+use yard_proto::{SiteInfo, UnitState};
 
 /// How the idle loop keeps time.
 #[derive(Debug, Clone, Copy)]
@@ -72,15 +72,35 @@ impl Sleeper {
         self.lock().entry(instance.to_string()).or_default().used = Some(Instant::now());
     }
 
-    pub fn idle_for(&self, instance: &str, now: Instant) -> Duration {
-        self.lock().get(instance).and_then(|i| i.used).map_or(Duration::ZERO, |used| now.duration_since(used))
-    }
-
-    pub fn fall_asleep(&self, instance: &str, since: OffsetDateTime) {
+    /// Puts the instance to sleep if it has been unused for `after` at `now`; true when it fell
+    /// asleep. One lock covers the check and the change, so a use in between keeps it awake. A
+    /// use after `now` counts as no idle time at all.
+    pub fn fall_asleep_if_idle(
+        &self,
+        instance: &str,
+        now: Instant,
+        after: Duration,
+        since: OffsetDateTime,
+    ) -> bool {
         let mut instances = self.lock();
         let entry = instances.entry(instance.to_string()).or_default();
+        let idle = entry.used.map_or(Duration::ZERO, |used| now.saturating_duration_since(used));
+        if idle < after {
+            return false;
+        }
         entry.asleep = Some(since);
         entry.waking = None;
+        true
+    }
+
+    /// Undoes a sleep whose unit was never stopped: it is awake, not waking, and its idle
+    /// clock starts again.
+    pub fn stay_awake(&self, instance: &str) {
+        let mut instances = self.lock();
+        let entry = instances.entry(instance.to_string()).or_default();
+        entry.asleep = None;
+        entry.waking = None;
+        entry.used = Some(Instant::now());
     }
 
     /// Wakes the instance; true when it was asleep. It is then waking, with the same
@@ -140,14 +160,19 @@ pub fn instances_for(services: &ServicesConfig, projects: &Projects, site: &str)
 }
 
 /// `run/sleeping`: the linked sites that need an asleep instance, which the shims read. The
-/// reconcile writes it after each pass, under its lock, so it is the file's only writer once
-/// yardd runs; an unchanged list is not rewritten.
-pub fn write_sleeping(paths: &Paths, snapshot: &Snapshot, sleeper: &Sleeper) {
-    let sites: BTreeSet<String> = snapshot
-        .resolution
-        .sites
+/// reconcile writes it before it stops or starts any unit, under its lock, so it is the file's
+/// only writer once yardd runs, and a shim run while an instance stops asks for a wake, which
+/// waits for the stop. An unchanged list is not rewritten.
+pub fn write_sleeping(
+    paths: &Paths,
+    sites: &[SiteInfo],
+    services: &ServicesConfig,
+    projects: &Projects,
+    sleeper: &Sleeper,
+) {
+    let sites: BTreeSet<String> = sites
         .iter()
-        .filter(|site| needed_by(snapshot, &site.name).iter().any(|i| sleeper.is_asleep(i)))
+        .filter(|site| instances_for(services, projects, &site.name).iter().any(|i| sleeper.is_asleep(i)))
         .map(|site| site.name.clone())
         .collect();
     let file = paths.sleeping_file();
@@ -209,8 +234,7 @@ async fn sample(ctx: &Context, cfg: &SleepConfig) {
                 sleeper.touch(name);
             }
         }
-        if sleeper.idle_for(name, Instant::now()) >= cfg.lasts(secs) {
-            sleeper.fall_asleep(name, OffsetDateTime::now_utc());
+        if sleeper.fall_asleep_if_idle(name, Instant::now(), cfg.lasts(secs), OffsetDateTime::now_utc()) {
             fell.push(name.clone());
         }
     }
@@ -218,10 +242,16 @@ async fn sample(ctx: &Context, cfg: &SleepConfig) {
         return;
     }
     tracing::info!("{} unused for their sleep_after: putting them to sleep", fell.join(", "));
-    // The reconcile leaves them out, which stops their units gracefully, and then lists their
-    // sites in `run/sleeping`.
+    // The reconcile lists their sites in `run/sleeping`, then leaves them out, which stops
+    // their units gracefully.
     if let Err(e) = ctx.reconciler.reconcile().await {
         tracing::warn!("putting {} to sleep: {}", fell.join(", "), crate::describe(&e));
+        // A reconcile that failed before it stopped a unit leaves that instance running: it is
+        // awake, and says so, and its idle clock starts again.
+        let units = ctx.supervisor().list();
+        for name in fell.iter().filter(|name| units.iter().any(|u| u.name == **name)) {
+            sleeper.stay_awake(name);
+        }
     }
 }
 
@@ -279,5 +309,59 @@ pub async fn wake(ctx: &Context, instances: &[String], wait: Duration) {
             return;
         }
         tokio::time::sleep(WAKE_POLL).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_falls_asleep_only_after_the_whole_sleep_after() {
+        let sleeper = Sleeper::default();
+        let since = OffsetDateTime::UNIX_EPOCH;
+        sleeper.touch("redis");
+        let after = Duration::from_secs(60);
+        assert!(!sleeper.fall_asleep_if_idle(
+            "redis",
+            Instant::now() + Duration::from_secs(30),
+            after,
+            since
+        ));
+        assert!(!sleeper.is_asleep("redis"));
+        assert!(sleeper.fall_asleep_if_idle("redis", Instant::now() + Duration::from_secs(61), after, since));
+        assert_eq!(sleeper.asleep().get("redis"), Some(&since));
+    }
+
+    #[test]
+    fn a_touch_after_the_check_began_keeps_it_awake() {
+        let sleeper = Sleeper::default();
+        let since = OffsetDateTime::UNIX_EPOCH;
+        let now = Instant::now();
+        sleeper.touch("redis");
+        // The check began before the touch, so the instance was not idle at all.
+        assert!(!sleeper.fall_asleep_if_idle("redis", now, Duration::from_nanos(1), since));
+    }
+
+    #[test]
+    fn stay_awake_undoes_a_sleep() {
+        let sleeper = Sleeper::default();
+        let since = OffsetDateTime::UNIX_EPOCH;
+        sleeper.touch("redis");
+        assert!(sleeper.fall_asleep_if_idle(
+            "redis",
+            Instant::now() + Duration::from_secs(61),
+            Duration::from_secs(60),
+            since
+        ));
+        sleeper.stay_awake("redis");
+        assert!(!sleeper.is_asleep("redis"));
+        assert_eq!(sleeper.waking_since("redis"), None, "it never stopped, so it is not waking");
+        assert!(!sleeper.fall_asleep_if_idle(
+            "redis",
+            Instant::now() + Duration::from_secs(30),
+            Duration::from_secs(60),
+            since
+        ));
     }
 }

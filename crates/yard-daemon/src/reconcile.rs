@@ -557,6 +557,9 @@ impl Reconciler {
         {
             report.warnings.push(format!("stopped nginx (pid {pid}), which an earlier yardd left running"));
         }
+        // The shims read which sites need an asleep instance before any unit stops (M4e spec
+        // §6.2), so one run during a stop asks for a wake instead of finding a stopping engine.
+        write_sleeping(&paths, &resolution.sites, &services_cfg, &projects, &self.sleeper);
         // A unit apply started reads the new files itself; restarting or reloading it on
         // top would start it twice.
         let started = self.supervisor.apply(desired).await;
@@ -624,7 +627,6 @@ impl Reconciler {
             resolution,
             left_out,
         };
-        write_sleeping(&paths, &snapshot, &self.sleeper);
         *self.published.write().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         state.snapshot = Some(snapshot);
         Ok(report)

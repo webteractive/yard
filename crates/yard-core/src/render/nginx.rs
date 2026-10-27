@@ -157,13 +157,15 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
 /// The subrequest a PHP location makes with `auth_request /__yard_wake;`: yardd's wake socket
 /// answers once `site`'s services are up (at most 10 s, which `proxy_read_timeout` outlasts).
 /// Any error, a missing socket and a timeout included, falls through to an empty `204`, so a
-/// request never fails because yardd could not wake a service. The whole URL is one quoted
+/// request never fails because yardd could not wake a service. The client's headers, cookies
+/// included, and body stay out of the ask: yardd needs only the path. The whole URL is one quoted
 /// argument: nginx rejects a quoted socket path inside `http://unix:…:`.
 pub fn wake_location(wake_socket: &Path, site: &str) -> String {
     format!(
         "    location = /__yard_wake {{
         internal;
         proxy_pass {url};
+        proxy_pass_request_headers off;
         proxy_pass_request_body off;
         proxy_set_header Content-Length \"\";
         proxy_read_timeout 15s;

@@ -1,7 +1,8 @@
 //! `run/wake.sock`: nginx (through `auth_request`) and the shims ask here before a site's
-//! sleeping services are needed (M4e spec §6.3). One route, `GET /wake/<site>?wait=<s>`, and
-//! every connection is answered `204`, whatever it sent and whatever the wake did, so asking
-//! never stops a request: a wake that fails is the instance's own `failed` state.
+//! sleeping services are needed (M4e spec §5.1, §5.2). One route,
+//! `GET /wake/<site>?wait=<s>`, and every connection is answered `204`, whatever it sent and
+//! whatever the wake did, so asking never stops a request: a wake that fails is the
+//! instance's own `failed` state.
 
 use crate::daemon::Context;
 use crate::sleep::{needed_by, wake};

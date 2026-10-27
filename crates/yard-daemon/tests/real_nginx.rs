@@ -12,6 +12,30 @@ use support::{inheritable_listener, wait_until};
 
 const NGINX: &str = "/opt/homebrew/opt/nginx/bin/nginx";
 
+/// nginx, killed when the test ends, a failed assertion included: a master left running keeps
+/// the test's output pipe open, so `cargo test … | grep` would never finish.
+struct Running(std::process::Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl std::ops::Deref for Running {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Running {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// The body of `GET /`, or an empty string when nothing answers.
 fn get(port: u16) -> String {
     let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return String::new() };
@@ -60,13 +84,15 @@ async fn real_nginx_serves_on_an_inherited_socket() {
         String::from_utf8_lossy(&without.stderr).trim()
     );
 
-    let mut nginx = Command::new(NGINX)
-        .args(&args)
-        .env("NGINX", format!("{fd};"))
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut nginx = Running(
+        Command::new(NGINX)
+            .args(&args)
+            .env("NGINX", format!("{fd};"))
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
     let pid = nginx.id() as i32;
 
     let served = wait_until(|| get(port) == "inherited", Duration::from_secs(5)).await;
@@ -94,6 +120,9 @@ const HANG: u8 = 0;
 const ERROR_500: u8 = 1;
 const NO_CONTENT_AFTER_300_MS: u8 = 2;
 
+/// The head of the last request the stand-in for `wake.sock` read.
+static LAST_ASK: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
 /// A `wake.sock` that answers each request as `mode` says when it arrives.
 fn fake_wake(socket: &Path, mode: &'static std::sync::atomic::AtomicU8) {
     let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
@@ -101,7 +130,8 @@ fn fake_wake(socket: &Path, mode: &'static std::sync::atomic::AtomicU8) {
         for mut stream in listener.incoming().flatten() {
             std::thread::spawn(move || {
                 let mut head = [0u8; 4096];
-                let _ = stream.read(&mut head);
+                let n = stream.read(&mut head).unwrap_or(0);
+                *LAST_ASK.lock().unwrap() = String::from_utf8_lossy(&head[..n]).into_owned();
                 match mode.load(std::sync::atomic::Ordering::SeqCst) {
                     HANG => std::thread::sleep(Duration::from_secs(30)),
                     ERROR_500 => {
@@ -125,7 +155,7 @@ fn status(port: u16, path: &str) -> (String, Duration) {
         return (String::new(), started.elapsed());
     };
     let _ = s.set_read_timeout(Some(Duration::from_secs(20)));
-    let _ = write!(s, "GET {path} HTTP/1.0\r\nHost: blog.yard\r\n\r\n");
+    let _ = write!(s, "GET {path} HTTP/1.0\r\nHost: blog.yard\r\nCookie: session=secret\r\n\r\n");
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
     (out.lines().next().unwrap_or_default().to_string(), started.elapsed())
@@ -166,7 +196,7 @@ async fn the_wake_hook_fails_open() {
     let short = wake.replace("proxy_read_timeout 15s;", "proxy_read_timeout 1s;");
     assert_ne!(short, wake, "the rendered block sets proxy_read_timeout 15s");
     std::fs::write(dir.path().join("nginx.conf"), conf(&short)).unwrap();
-    let mut nginx = Command::new(NGINX).args(&args).stdin(Stdio::null()).spawn().unwrap();
+    let nginx = Running(Command::new(NGINX).args(&args).stdin(Stdio::null()).spawn().unwrap());
     let up = wait_until(|| std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(), Duration::from_secs(5))
         .await;
     assert!(up, "nginx listens");
@@ -188,7 +218,9 @@ async fn the_wake_hook_fails_open() {
     let (line, took) = status(port, "/index.php");
     assert!(line.contains(" 200 "), "a 204: {line}\n{}", log());
     assert!(took >= Duration::from_millis(300), "the request waited for the wake: {took:?}");
+    let ask = LAST_ASK.lock().unwrap().clone();
+    assert!(ask.starts_with("GET /wake/blog?wait=10 "), "{ask}");
+    assert!(!ask.contains("secret"), "the browser's cookie stays out of the ask: {ask}");
 
-    let _ = nginx.kill();
-    let _ = nginx.wait();
+    drop(nginx);
 }

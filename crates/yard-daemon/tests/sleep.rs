@@ -444,6 +444,45 @@ async fn stopping_slowly(delay_ms: u64) -> (Daemon, Client) {
 }
 
 #[tokio::test]
+async fn run_sleeping_lists_the_site_while_its_instance_stops() {
+    let (d, _c) = stopping_slowly(3000).await;
+    // A shim run now asks for a wake, which waits for the stop, instead of running against a
+    // stopping engine.
+    assert_eq!(sleeping_file(&d), "blog\n");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_sleep_keeps_it_awake() {
+    let port = free_port();
+    let d = with_redis(port, "service_sleep_after = \"60s\"\n", "").await.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let held = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    // A sites.toml that does not parse fails every reconcile, the sleep's included.
+    std::fs::write(d.fx.paths.sites_toml(), "[sites\n").unwrap();
+    let broken = async {
+        loop {
+            let status = c.call("status", Value::Null).await.unwrap();
+            if status["config_error"].is_object() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), broken).await.expect("the reconcile fails");
+    drop(held);
+    // Several samples try to put it to sleep and fail; it is reported awake, as it is.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let info =
+        redis_until(&mut c, Duration::from_secs(2), |i| running(i) && i.get("sleeping_since").is_none())
+            .await;
+    assert!(running(&info), "{info}");
+    assert_eq!(sleeping_file(&d), "");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn an_ask_does_not_wait_on_another_stop() {
     let (d, _c) = stopping_slowly(3000).await;
     // `shop` needs nothing asleep: its answer must not wait for redis's 3 s stop.

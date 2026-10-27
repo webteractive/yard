@@ -54,10 +54,11 @@ instance_field() {
 
 state() { instance_field '.state | if type == "object" then keys[0] else . end'; }
 
-# True once yardd reports the instance asleep and has listed the site in run/sleeping,
-# which it writes only after the process is gone.
+# True once yardd reports the instance asleep, has listed the site in run/sleeping (which it
+# writes before the stop begins) and the process is gone, so nothing listens on its port.
 asleep() {
-  [[ $(instance_field '.sleeping_since // ""') != "" ]] && grep -qx "$site" "$data/run/sleeping" 2>/dev/null
+  [[ $(instance_field '.sleeping_since // ""') != "" ]] && grep -qx "$site" "$data/run/sleeping" 2>/dev/null &&
+    [[ -z $(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true) ]]
 }
 
 wait_asleep() {

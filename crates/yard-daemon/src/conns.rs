@@ -1,6 +1,7 @@
 //! How many clients a service instance has (M4e spec §7): its established TCP connections
 //! and accepted unix-socket connections, across its whole process tree, since PostgreSQL
-//! hands each connection to a forked backend.
+//! hands each connection to a forked backend. A connection between two of the tree's own
+//! sockets is not a client.
 //!
 //! Asks `lsof`: libc has `proc_listchildpids` but not `socket_fdinfo`, so the sockets
 //! themselves cannot be read through libproc here.
@@ -80,11 +81,16 @@ fn lsof(args: &[&str]) -> Result<String, String> {
 
 /// Established TCP connections in `lsof -F dn` output (`n127.0.0.1:3307->127.0.0.1:50000`),
 /// each socket once: a backend may hold its connection on two descriptors, and a postmaster
-/// holds a copy until it has handed it over.
+/// holds a copy until it has handed it over. A connection whose other end the tree holds too
+/// (MinIO's console calling its own API) is the engine talking to itself, not a client.
 fn count_tcp(out: &str) -> usize {
-    sockets(out)
-        .filter(|(_, name)| name.contains("->"))
-        .map(|(socket, _)| socket)
+    let connections: Vec<(&str, (&str, &str))> =
+        sockets(out).filter_map(|(socket, name)| Some((socket, name.split_once("->")?))).collect();
+    let ends: BTreeSet<(&str, &str)> = connections.iter().map(|(_, ends)| *ends).collect();
+    connections
+        .iter()
+        .filter(|(_, (local, remote))| !ends.contains(&(*remote, *local)))
+        .map(|(socket, _)| *socket)
         .collect::<BTreeSet<_>>()
         .len()
 }
@@ -131,6 +137,13 @@ mod tests {
         // A backend holding its connection as stdin and stdout, and a postmaster that has not
         // closed its copy yet.
         let out = "p1\nf9\nd0xa\nn127.0.0.1:5433->127.0.0.1:50000\np2\nf0\nd0xa\nn127.0.0.1:5433->127.0.0.1:50000\nf1\nd0xa\nn127.0.0.1:5433->127.0.0.1:50000\n";
+        assert_eq!(count_tcp(out), 1);
+    }
+
+    #[test]
+    fn a_connection_inside_the_tree_is_not_a_client() {
+        // MinIO's console talking to its own API holds both ends; a real client holds one.
+        let out = "p1\nf7\nd0xa\nn127.0.0.1:9000->127.0.0.1:50000\nf8\nd0xb\nn127.0.0.1:50000->127.0.0.1:9000\nf9\nd0xc\nn127.0.0.1:9000->127.0.0.1:50001\nf10\nd0xd\nn[::1]:9001->[::1]:50002\np2\nf3\nd0xe\nn[::1]:50002->[::1]:9001\n";
         assert_eq!(count_tcp(out), 1);
     }
 

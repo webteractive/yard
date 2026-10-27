@@ -163,6 +163,13 @@ mod tests {
     }
 
     #[test]
+    fn the_wake_ask_forwards_no_client_headers() {
+        // yardd needs only the path; a browser's cookies have no business on wake.sock.
+        let wake = nginx::wake_location(Path::new("/r/run/wake.sock"), "blog");
+        assert!(wake.contains("        proxy_pass_request_headers off;\n"), "{wake}");
+    }
+
+    #[test]
     fn nginx_site_proxy() {
         let (p, b) = ctx_parts();
         assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &proxy_site(), false));

@@ -436,7 +436,7 @@ pub struct CaInfo {
 
 /// The state of a service instance (`services.list`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", remote = "Self")]
 pub enum ServiceState {
     Running,
     Starting,
@@ -451,9 +451,35 @@ pub enum ServiceState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<YardError>,
     },
-    /// A state a newer yardd reports that this client does not know; never sent.
+    /// A state a newer yardd reports that this client does not know, with or without data;
+    /// never sent.
     #[serde(other)]
     Other,
+}
+
+impl Serialize for ServiceState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        ServiceState::serialize(self, serializer)
+    }
+}
+
+/// `#[serde(other)]` alone catches only an unknown unit variant (`"hibernating"`); an unknown
+/// one with data (`{"hibernating": {…}}`) would fail the whole answer. A known state that does
+/// not parse is still an error.
+impl<'de> Deserialize<'de> for ServiceState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        ServiceState::deserialize(&value).or_else(|e| match &value {
+            serde_json::Value::Object(map) if map.len() == 1 => {
+                let tag = map.keys().next().cloned().unwrap_or_default();
+                match ServiceState::deserialize(serde_json::Value::String(tag)) {
+                    Ok(ServiceState::Other) => Ok(ServiceState::Other),
+                    _ => Err(serde::de::Error::custom(e)),
+                }
+            }
+            _ => Err(serde::de::Error::custom(e)),
+        })
+    }
 }
 
 impl ServiceState {
@@ -922,6 +948,17 @@ mod tests {
             serde_json::from_value::<ServiceState>(json!("hibernating")).unwrap(),
             ServiceState::Other
         );
+    }
+
+    #[test]
+    fn an_unknown_state_with_data_is_other() {
+        let later = json!({"hibernating": {"until": "2026-10-27T09:00:00Z"}});
+        assert_eq!(serde_json::from_value::<ServiceState>(later).unwrap(), ServiceState::Other);
+    }
+
+    #[test]
+    fn a_malformed_known_state_is_still_an_error() {
+        assert!(serde_json::from_value::<ServiceState>(json!({"failed": {"last_lines": 3}})).is_err());
     }
 
     #[test]
