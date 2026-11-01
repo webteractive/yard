@@ -44,8 +44,13 @@ pub fn overrides_for(paths: &Paths, file: &Path) -> Option<PathBuf> {
     }
     let dir = file.parent()?;
     if dir == paths.nginx_services_dir() {
+        let name = file.file_stem()?.to_str()?;
+        if name == crate::emailulator::NAME {
+            // mail.<tld> has no instance directory: it ends with the override a site named mail would have.
+            return Some(paths.nginx_override(crate::emailulator::MAIL_HOST_LABEL));
+        }
         // The block for a service's web console, named for the instance (`minio`).
-        return Some(paths.service_overrides(file.file_stem()?.to_str()?));
+        return Some(paths.service_overrides(name));
     }
     if dir.parent() == Some(paths.services_dir().as_path()) {
         // `services/<instance>/my.cnf`, `redis.conf`: the generated configs, not `overrides.conf`.
@@ -280,6 +285,59 @@ mod tests {
         assert_snapshot!(nginx::service_site(&ctx(&p, &b), "minio", 9001, true));
     }
 
+    fn mail(secure: bool, upstream_tls: bool) -> nginx::MailHost {
+        nginx::MailHost {
+            host: "mail.yard".into(),
+            upstream: "127.0.0.1:8025".parse().unwrap(),
+            upstream_tls,
+            secure,
+        }
+    }
+
+    #[test]
+    fn mail_host_http() {
+        let (p, b) = ctx_parts();
+        assert_snapshot!(nginx::mail_host(&ctx(&p, &b), &mail(false, false)));
+    }
+
+    #[test]
+    fn mail_host_secure() {
+        let (p, b) = ctx_parts();
+        assert_snapshot!(nginx::mail_host(&ctx(&p, &b), &mail(true, false)));
+    }
+
+    /// emailulator answers only a `Host` that means this machine, and compares a POST's
+    /// `Origin` with `X-Forwarded-Host`, so that carries the port (emailulator spec §10).
+    #[test]
+    fn mail_host_rewrites_host() {
+        let (p, b) = ctx_parts();
+        let conf = nginx::mail_host(&ctx(&p, &b), &mail(false, false));
+        for line in [
+            "server_name mail.yard *.mail.yard;",
+            "proxy_pass \"http://127.0.0.1:8025\";",
+            "proxy_set_header Host 127.0.0.1:8025;",
+            "proxy_set_header X-Forwarded-Host $http_host;",
+            "proxy_set_header X-Forwarded-Proto $scheme;",
+            "proxy_set_header Upgrade $http_upgrade;",
+            "proxy_buffering off;",
+            "proxy_read_timeout 3600;",
+            "client_max_body_size 25m;",
+        ] {
+            assert!(conf.lines().any(|l| l.trim() == line), "{line}\n{conf}");
+        }
+        assert!(!conf.contains("Host $host"), "{conf}");
+        assert!(!conf.contains("proxy_ssl_verify"), "{conf}");
+    }
+
+    #[test]
+    fn mail_host_tls_upstream() {
+        let (p, b) = ctx_parts();
+        let conf = nginx::mail_host(&ctx(&p, &b), &mail(false, true));
+        assert!(conf.lines().any(|l| l.trim() == "proxy_pass \"https://127.0.0.1:8025\";"), "{conf}");
+        assert!(conf.lines().any(|l| l.trim() == "proxy_ssl_verify off;"), "{conf}");
+        assert!(conf.lines().any(|l| l.trim() == "proxy_set_header Host 127.0.0.1:8025;"), "{conf}");
+    }
+
     #[test]
     fn a_service_block_sends_the_upstream_as_host_and_keeps_the_port_forwarded() {
         let (p, b) = ctx_parts();
@@ -449,6 +507,7 @@ mod tests {
             (p.nginx_site(&site.name), nginx::nginx_site(&c, &site, false)),
             (p.nginx_default_index(), nginx::default_index(&c, &[])),
             (p.nginx_service("minio"), nginx::service_site(&c, "minio", 9001, true)),
+            (p.nginx_service("emailulator"), nginx::mail_host(&c, &mail(true, false))),
             (p.dnsmasq_conf(), dnsmasq::dnsmasq_conf(&c, 53535)),
             (p.nginx_setup_page("ee"), nginx::setup_page(&c, &needs_php("ee", "/code/ee"))),
             (p.php_ini(v("8.4")), php::php_ini(&c, v("8.4"))),
@@ -484,6 +543,8 @@ mod tests {
             let first = text.lines().next().unwrap();
             assert!(first.contains(&format!("edit {} instead", named.display())), "{first}");
         }
+        // mail.<tld> is not an instance: its block ends with the override a site named mail would have.
+        assert_eq!(overrides_for(&p, &p.nginx_service("emailulator")), Some(p.nginx_override("mail")));
         assert_eq!(overrides_for(&p, &p.service_overrides("redis")), None);
         assert_eq!(overrides_for(&p, &p.service_conf("redis", "other.conf")), None);
         assert_eq!(overrides_for(&p, &p.yard_toml()), None);

@@ -3,7 +3,9 @@
 use super::quote::{html, nginx_str};
 use super::{RenderCtx, header};
 use crate::PhpVersion;
+use crate::emailulator::MAIL_HOST_LABEL;
 use std::fmt::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use yard_proto::{Need, SiteInfo, SiteKind};
 
@@ -148,7 +150,7 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
                 params = q(&ctx.brew.nginx_fastcgi_params()),
             )
         }
-        SiteKind::Proxy { target } => proxy_location(target, "$host"),
+        SiteKind::Proxy { target } => proxy_location(target, "$host", ""),
     };
     let tls = site.secure.then(|| (ctx.paths.cert(&site.name), ctx.paths.cert_key(&site.name)));
     server_blocks(ctx, &format!("{host} *.{host}"), &body, &override_file, tls)
@@ -183,7 +185,8 @@ pub fn wake_location(wake_socket: &Path, site: &str) -> String {
 
 /// The `location /` of a reverse proxy to `target`, which sends `host` as `Host` and keeps the
 /// port the browser used in `X-Forwarded-Host` (`$http_host`; `$host` would drop it).
-fn proxy_location(target: &str, host: &str) -> String {
+/// `extra` is more lines for the block, each ending in a newline.
+fn proxy_location(target: &str, host: &str, extra: &str) -> String {
     format!(
         "    location / {{
         proxy_pass {target};
@@ -195,7 +198,7 @@ fn proxy_location(target: &str, host: &str) -> String {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $http_host;
         proxy_read_timeout 3600;
-    }}
+{extra}    }}
 ",
         target = nginx_str(target),
     )
@@ -262,10 +265,40 @@ server {{
 /// instance's `overrides.conf`.
 pub fn service_site(ctx: &RenderCtx, name: &str, upstream_port: u16, secure: bool) -> String {
     let upstream = format!("127.0.0.1:{upstream_port}");
-    let body = proxy_location(&format!("http://{upstream}"), &upstream);
+    let body = proxy_location(&format!("http://{upstream}"), &upstream, "");
     let certs = ctx.paths.services_certs_dir();
     let tls = secure.then(|| (certs.join(format!("{name}.pem")), certs.join(format!("{name}.key"))));
     server_blocks(ctx, &format!("{name}.{}", ctx.tld), &body, &ctx.paths.service_overrides(name), tls)
+}
+
+/// `mail.<tld>`: emailulator's web UI, whoever serves it (emailulator spec §10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailHost {
+    /// `mail.<tld>`.
+    pub host: String,
+    /// emailulator's HTTP address, on loopback.
+    pub upstream: SocketAddr,
+    /// emailulator was started with `--tls-cert`.
+    pub upstream_tls: bool,
+    pub secure: bool,
+}
+
+/// `nginx/services/emailulator.conf`. Like a service's console it is not a site, and `Host`
+/// is emailulator's own address: with no auth token its DNS-rebinding guard refuses any other,
+/// and `server_name` does that guard's job here. Its event stream is not buffered, and the
+/// body limit is emailulator's largest message. A secured block's certificate is
+/// `certs/services/emailulator.pem`; the block ends with `nginx/overrides/mail.conf`.
+pub fn mail_host(ctx: &RenderCtx, m: &MailHost) -> String {
+    let scheme = if m.upstream_tls { "https" } else { "http" };
+    let upstream = m.upstream.to_string();
+    // The upstream is loopback and its certificate emailulator's own.
+    let verify = if m.upstream_tls { "        proxy_ssl_verify off;\n" } else { "" };
+    let extra = format!("        proxy_buffering off;\n        client_max_body_size 25m;\n{verify}");
+    let body = proxy_location(&format!("{scheme}://{upstream}"), &upstream, &extra);
+    let certs = ctx.paths.services_certs_dir();
+    let tls = m.secure.then(|| (certs.join("emailulator.pem"), certs.join("emailulator.key")));
+    let server_name = format!("{host} *.{host}", host = m.host);
+    server_blocks(ctx, &server_name, &body, &ctx.paths.nginx_override(MAIL_HOST_LABEL), tls)
 }
 
 /// What a site whose `.yard` is not met says instead of serving the project.
