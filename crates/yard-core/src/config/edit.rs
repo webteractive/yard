@@ -72,13 +72,42 @@ impl TomlFile {
 
     /// Removes the key, and any table above it that is left empty, so no bare header stays.
     pub fn remove(&mut self, keys: &[&str]) -> bool {
+        let Some((_, parents)) = keys.split_last() else {
+            return false;
+        };
+        // Where the file printed what goes, so its comments land above what printed next.
+        let order = print_order(self.doc.as_table());
+        let removes_table = table_at(self.doc.as_table(), keys).is_some();
         let (removed, comments) = remove_in(self.doc.as_table_mut(), keys);
-        // Nothing follows the key anywhere: the comments go first in what ends the file.
         if let Some(comments) = comments {
-            let trailing = self.doc.trailing().as_str().unwrap_or_default().to_string();
-            self.doc.set_trailing(format!("{comments}{trailing}"));
+            let anchor = if removes_table { keys } else { parents };
+            self.keep_after(&order, anchor, &comments);
         }
         removed
+    }
+
+    /// Puts `comments` above the first header printed after the table at `anchor` (or its
+    /// nearest printed parent), or first in what ends the file when none follows.
+    fn keep_after(&mut self, order: &[Vec<String>], anchor: &[&str], comments: &str) {
+        let start = (0..=anchor.len())
+            .rev()
+            .find_map(|n| {
+                order.iter().position(|p| p.iter().map(String::as_str).eq(anchor[..n].iter().copied()))
+            })
+            .unwrap_or_default();
+        for path in &order[start + 1..] {
+            let path: Vec<&str> = path.iter().map(String::as_str).collect();
+            let Some(table) = table_at_mut(self.doc.as_table_mut(), &path) else { continue };
+            if table.is_dotted() || (table.is_implicit() && table.get_values().is_empty()) {
+                continue;
+            }
+            let decor = table.decor_mut();
+            let own = decor.prefix().and_then(|p| p.as_str()).unwrap_or_default().to_string();
+            decor.set_prefix(format!("{comments}{own}"));
+            return;
+        }
+        let trailing = self.doc.trailing().as_str().unwrap_or_default().to_string();
+        self.doc.set_trailing(format!("{comments}{trailing}"));
     }
 
     /// Appends `value` to the string array at `keys` unless already present.
@@ -152,51 +181,104 @@ fn implicit_table() -> Item {
 }
 
 /// Removes the key at `keys`, and any table left empty above it. Returns whether it was
-/// there, and the comment lines above it when no item follows it in its table or any table
-/// above, for the caller to keep; otherwise they move above the item that follows.
+/// there, and the comment lines above it (and above each table it empties) when no value
+/// follows it in its own table, for the caller to keep; otherwise they move above that value.
 fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> (bool, Option<String>) {
     let Some((first, rest)) = keys.split_first() else {
         return (false, None);
     };
-    let next = table.iter().map(|(k, _)| k.to_string()).skip_while(|k| k != first).nth(1);
-    let (removed, comments) = if rest.is_empty() {
+    if rest.is_empty() {
         let comments = leading_comments(table, first);
-        (table.remove(first).is_some(), comments)
-    } else {
-        let Some(child) = table.get_mut(first).and_then(Item::as_table_like_mut) else {
-            return (false, None);
+        // Values print before tables, so only a value can be what prints next in this table.
+        let next = match table.get(first) {
+            Some(item) if item.is_value() => table
+                .iter()
+                .skip_while(|(k, _)| k != first)
+                .skip(1)
+                .find(|(_, i)| i.is_value())
+                .map(|(k, _)| k.to_string()),
+            _ => None,
         };
-        let (removed, comments) = remove_in(child, rest);
-        if removed && child.is_empty() {
-            table.remove(first);
-        }
-        (removed, comments)
-    };
-    match (comments, next) {
-        (Some(comments), Some(next)) => {
-            keep_comments(table, &next, &comments);
-            (removed, None)
-        }
-        (comments, _) => (removed, comments),
+        let removed = table.remove(first).is_some();
+        return match (comments, next) {
+            (Some(comments), Some(next)) => {
+                keep_above_key(table, &next, &comments);
+                (removed, None)
+            }
+            (comments, _) => (removed, comments),
+        };
     }
+    let own = leading_comments(table, first);
+    let Some(child) = table.get_mut(first).and_then(Item::as_table_like_mut) else {
+        return (false, None);
+    };
+    let (removed, comments) = remove_in(child, rest);
+    if removed && child.is_empty() {
+        table.remove(first);
+        // The header goes too, and the comments above it.
+        let comments = format!("{}{}", own.unwrap_or_default(), comments.unwrap_or_default());
+        return (removed, Some(comments).filter(|c| !c.is_empty()));
+    }
+    (removed, comments)
 }
 
-/// The comment lines toml_edit keeps above `key` in its decor, which go when it is removed.
+/// The comment lines toml_edit keeps above `key` in its decor (a table's, above its header),
+/// which go when it is removed.
 fn leading_comments(table: &dyn TableLike, key: &str) -> Option<String> {
-    let (key, _) = table.get_key_value(key)?;
-    let prefix = key.leaf_decor().prefix()?.as_str()?;
+    let (key, item) = table.get_key_value(key)?;
+    let decor = match item.as_table() {
+        Some(t) => t.decor(),
+        None => key.leaf_decor(),
+    };
+    let prefix = decor.prefix()?.as_str()?;
     prefix.contains('#').then(|| prefix.to_string())
 }
 
-/// Puts `comments` above `next`: its key, or its header when it is a table.
-fn keep_comments(table: &mut dyn TableLike, next: &str, comments: &str) {
-    let Some((mut key, item)) = table.get_key_value_mut(next) else { return };
-    let decor = match item.as_table_mut() {
-        Some(t) => t.decor_mut(),
-        None => key.leaf_decor_mut(),
-    };
+/// Puts `comments` above the value at `next`.
+fn keep_above_key(table: &mut dyn TableLike, next: &str, comments: &str) {
+    let Some((mut key, _)) = table.get_key_value_mut(next) else { return };
+    let decor = key.leaf_decor_mut();
     let own = decor.prefix().and_then(|p| p.as_str()).unwrap_or_default().to_string();
     decor.set_prefix(format!("{comments}{own}"));
+}
+
+/// The paths of the tables under `root` in the order toml_edit prints them: by the position
+/// each was parsed at, a table added since following the one before it.
+fn print_order(root: &Table) -> Vec<Vec<String>> {
+    fn visit(table: &Table, path: &mut Vec<String>, last: &mut isize, out: &mut Vec<(isize, Vec<String>)>) {
+        if !table.is_dotted() {
+            if let Some(position) = table.position() {
+                *last = position;
+            }
+            out.push((*last, path.clone()));
+        }
+        for (key, item) in table.iter() {
+            if let Some(child) = item.as_table() {
+                path.push(key.to_string());
+                visit(child, path, last, out);
+                path.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    visit(root, &mut Vec::new(), &mut 0, &mut out);
+    // Stable, as toml_edit's is: the root first, then by position.
+    out.sort_by_key(|(position, path)| (!path.is_empty(), *position));
+    out.into_iter().map(|(_, path)| path).collect()
+}
+
+fn table_at<'a>(mut table: &'a Table, keys: &[&str]) -> Option<&'a Table> {
+    for key in keys {
+        table = table.get(key)?.as_table()?;
+    }
+    Some(table)
+}
+
+fn table_at_mut<'a>(mut table: &'a mut Table, keys: &[&str]) -> Option<&'a mut Table> {
+    for key in keys {
+        table = table.get_mut(key)?.as_table_mut()?;
+    }
+    Some(table)
 }
 
 #[cfg(test)]
@@ -244,6 +326,49 @@ mod tests {
         let mut f = TomlFile::load(&path).unwrap();
         assert!(f.remove(&["sites", "a", "php"]));
         assert_eq!(f.doc().to_string(), "[sites.a]\npath = \"/a\"\n# a's php\n\n[sites.b]\npath = \"/b\"\n");
+    }
+
+    #[test]
+    fn remove_keeps_the_comments_above_the_table_printed_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("services.toml");
+        // Key order is services, emailulator; the file prints [services.b] after [emailulator].
+        let text = "[services.a]\nengine = \"redis\"\n\n# mine\n[emailulator]\npath = \"/e\"\n\n# b\n[services.b]\nengine = \"redis\"\n";
+        std::fs::write(&path, text).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["emailulator"]));
+        assert_eq!(
+            f.doc().to_string(),
+            "[services.a]\nengine = \"redis\"\n\n# mine\n\n# b\n[services.b]\nengine = \"redis\"\n"
+        );
+    }
+
+    #[test]
+    fn remove_keeps_the_comments_above_a_table_it_empties() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yard.toml");
+        let text = "# about x\n[x]\n# k\nk = 1\n\n[y]\nv = 2\n";
+        std::fs::write(&path, text).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["x", "k"]));
+        assert_eq!(f.doc().to_string(), "# about x\n# k\n\n[y]\nv = 2\n");
+    }
+
+    #[test]
+    fn remove_keeps_the_comments_above_a_table_it_removes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("services.toml");
+        let text = "# mine\n[emailulator]\npath = \"/e\"\n\n# redis\n[services.redis]\nengine = \"redis\"\n";
+        std::fs::write(&path, text).unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["emailulator"]));
+        assert_eq!(f.doc().to_string(), "# mine\n\n# redis\n[services.redis]\nengine = \"redis\"\n");
+
+        // The only table: its comments stay as the file's trailing comments.
+        std::fs::write(&path, "# mine\n[emailulator]\npath = \"/e\"\n").unwrap();
+        let mut f = TomlFile::load(&path).unwrap();
+        assert!(f.remove(&["emailulator"]));
+        assert_eq!(f.doc().to_string(), "# mine\n");
     }
 
     #[test]

@@ -92,16 +92,17 @@ triggers:
 - emailulator (M4d) is run by its own LaunchAgent: `yard services` has a MANAGED BY column
   (`yard` or `LaunchAgent <label>`) and lists `<instance> web UI: <url>` under the table for
   every row with one (MinIO's console too). `yard service start|stop|restart|port|sleep-after
-  emailulator` print yardd's `SERVICE_EXTERNAL` with its hint (`emailulator service status`);
-  `yard service remove emailulator` asks nothing and prints the same refusal, hint `emailulator
-  service uninstall`. `yard service add emailulator` sends the first executable `emailulator`
+  emailulator` print yardd's `SERVICE_EXTERNAL` with its hint (`emailulator service status`),
+  or `SERVICE_NOT_FOUND` with no agent installed; `yard service remove emailulator` asks
+  nothing and prints the same refusal, hint `emailulator service uninstall`, or with no agent
+  installed `Yard no longer records emailulator; it was not installed.` `yard service add emailulator` sends the first executable `emailulator`
   on the shell's PATH as `path` (none when there is none), then prints `emailulator catches
   mail; its web UI is <url>. For your .env:` and its block. `yard env` prints emailulator's
   note on a block that has lines (`emailulator is not answering; see yard doctor`) as
   `warning:` on stderr, not as a `# ` comment.
 - Sleeping services (M4e): `yard services` has a SLEEP column after STATE (the effective
-  `sleep_after`, `15m` or `off`), and STATE reads `sleeping <age>` (`45s`, `12m`, `2h`, `3d`, the
-  largest whole unit) for a sleeping instance and `waking` while it starts again (`state_text`,
+  `sleep_after`, `15m` or `off`; `-` for a LaunchAgent row such as emailulator), and STATE
+  reads `sleeping <age>` (`45s`, `12m`, `2h`, `3d`, the largest whole unit) for a sleeping instance and `waking` while it starts again (`state_text`,
   shared with `yard info`, which adds `wakes on the next request, or: yard service start <i>`
   under its table). `yard status` gives each sleeping instance a row (`sleeping`, PID and
   RESTARTS `-`). `yard service sleep-after <i> <duration|off|default>` prints

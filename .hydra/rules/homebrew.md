@@ -80,7 +80,9 @@ triggers:
 - **`services.add`** (`rpc/services.rs`, `services::resolve`) asks brew `search --formula
   "/^<base>(@|$)/"` and `info --json=v2 <name>` once per formula, never from inside a job's
   command loop. A formula whose `disabled` is true is not a line; a deprecated one is, and the job
-  prints a line naming its `disable_date`. The line's winning formula that brew lists but cannot
+  prints a line naming its `disable_date`, or, when brew leaves that null, `deprecation_date`
+  plus a year, as brew itself computes it (`DeprecateDisable::REMOVE_DISABLED_TIME_WINDOW`,
+  12 months: mysql@8.0's 2026-04-30 is disabled on 2027-04-30). The line's winning formula that brew lists but cannot
   describe is `FORMULA_MISSING`, not `SERVICE_VERSION_UNSUPPORTED`. The trust gate runs for a
   non-core formula whose keg is missing (MinIO's `minio/stable/minio`), in the handler and again in
   the job before `brew install`, since an install that waited behind another job must not meet a

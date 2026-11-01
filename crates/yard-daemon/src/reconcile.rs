@@ -224,7 +224,13 @@ impl Reconciler {
     async fn probe_emailulator(&self) -> Option<emailulator::Probe> {
         let recorded = load_services(&self.paths).ok().and_then(|s| s.emailulator).and_then(|e| e.path);
         let previous = self.mail_probe.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let now = emailulator::find_and_probe(recorded.as_deref(), &self.home, previous.as_ref()).await;
+        let now = emailulator::find_and_probe(
+            recorded.as_deref(),
+            &self.home,
+            previous.as_ref(),
+            emailulator::TIMEOUT,
+        )
+        .await;
         *self.mail_probe.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
         now
     }
@@ -339,10 +345,15 @@ impl Reconciler {
             }
         }
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
-        // The agent's ports are its own, recorded so nothing else takes them.
+        // The agent's ports are its own, recorded so nothing else takes them. An entry the user
+        // pinned by hand is dropped first: the agent decides its ports, and `ensure` would keep
+        // a pinned one where it is.
         match &mail_agent {
             Some(agent) => {
                 for (unit, port) in [(SMTP_UNIT, agent.smtp.port()), (HTTP_UNIT, agent.http.port())] {
+                    if registry.entries.get(unit).is_some_and(|e| e.mode != PortMode::External) {
+                        registry.entries.remove(unit);
+                    }
                     if let Err(e) = registry.ensure(unit, PortMode::External, Some(port), &is_free) {
                         report.warnings.push(format!("{unit}: {}", describe(&e)));
                     }

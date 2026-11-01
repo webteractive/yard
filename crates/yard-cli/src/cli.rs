@@ -205,7 +205,8 @@ pub enum ServiceAction {
     /// https://raw.githubusercontent.com/webteractive/emailulator/main/install.sh | sh). Then
     /// yard service add emailulator sets up its LaunchAgent (emailulator service install; --port
     /// is its SMTP port) unless one already catches mail, and points Yard at it. Its LaunchAgent
-    /// runs it, so yard service start, stop, restart, port and remove refuse it.
+    /// runs it, so yard service start, stop, restart, port and remove refuse it; with no agent
+    /// installed, remove forgets it.
     Add {
         /// mysql, postgres, redis, minio or emailulator.
         engine: String,

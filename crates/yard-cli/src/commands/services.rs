@@ -77,8 +77,12 @@ fn age(d: time::Duration) -> String {
     }
 }
 
-/// The effective `sleep_after`: `15m`, `1h`, or `off`.
+/// The effective `sleep_after`: `15m`, `1h`, or `off`; `-` for an instance Yard does not run.
 pub fn sleep_text(info: &ServiceInfo) -> String {
+    if info.managed_by != ServiceManager::Yard {
+        // Yard never puts something it does not run to sleep.
+        return "-".to_string();
+    }
     info.sleep_after_secs.map_or_else(|| "off".to_string(), |secs| SleepAfter::After(secs).to_string())
 }
 
@@ -155,6 +159,7 @@ pub fn managed_by(manager: &ServiceManager) -> String {
     match manager {
         ServiceManager::Yard => "yard".into(),
         ServiceManager::LaunchAgent { label, .. } => format!("LaunchAgent {label}"),
+        ServiceManager::Other => "-".into(),
     }
 }
 
@@ -262,10 +267,11 @@ async fn check_removable(ctx: &Ctx, instance: &str) -> Result<(), CliError> {
 /// without `--yes` it deletes nothing.
 pub async fn remove(ctx: &Ctx, instance: String, keep_data: bool, yes: bool) -> Outcome {
     if instance == EMAILULATOR {
-        // Its LaunchAgent runs it and yardd refuses, naming emailulator's own command: nothing
-        // here is Yard's to delete, so there is nothing to ask.
+        // While its LaunchAgent runs it yardd refuses, naming emailulator's own command; without
+        // one it only forgets the recorded path. Nothing is Yard's to delete, so nothing to ask.
         let params = ServiceRemoveParams { name: instance, keep_data };
         ctx.client().await?.call::<_, ()>(methods::SERVICES_REMOVE, params).await?;
+        ctx.emit(&(), || "Yard no longer records emailulator; it was not installed.\n".to_string());
         return Ok(0);
     }
     check_removable(ctx, &instance).await?;

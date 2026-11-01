@@ -4,7 +4,7 @@
 //! and then every check that needs config re-reads the TOML files itself.
 
 use crate::daemon::VERSION;
-use crate::emailulator::{Probe, find_and_probe, is_exec, serving_agent};
+use crate::emailulator::{OFFLINE_TIMEOUT, Probe, find_and_probe, is_exec, next_step, serving_agent};
 use crate::helper_client::HelperClient;
 use crate::reconcile::serves_mail;
 use crate::sources::{self, BREW_TIMEOUT, TrustRead};
@@ -96,7 +96,7 @@ impl View {
     /// Asks emailulator as reconcile does, so the offline doctor sees what yardd would.
     async fn from_files(paths: &Paths, brew: &Brew, home: &Path) -> View {
         let recorded = load_services(paths).ok().and_then(|s| s.emailulator).and_then(|e| e.path);
-        let emailulator = find_and_probe(recorded.as_deref(), home, None).await;
+        let emailulator = find_and_probe(recorded.as_deref(), home, None, OFFLINE_TIMEOUT).await;
         let (yard, yard_warnings) = match load_yard(paths) {
             Ok((y, w)) => (Ok(y), w),
             Err(e) => (Err(e), vec![]),
@@ -322,8 +322,19 @@ fn emailulator_checks(view: &View, home: &Path) -> Vec<Check> {
     if let Some(why) = &probe.status_error {
         let message = format!("could not ask emailulator: {why}");
         checks.push(warn("emailulator-status", message, "emailulator service status"));
+        if probe.agent.is_none() {
+            // Nothing known of its agent: that warning is all there is to say, not that the
+            // agent is missing.
+            return checks;
+        }
     }
     let mail_site = view.sites.as_ref().is_some_and(|(_, sites)| !serves_mail(sites));
+    // A site's .yard asking for it makes a broken emailulator Yard's failure; the agent alone,
+    // with nothing in Yard using it, is a warning.
+    let broken = |message: &str, hint: &str| match listed {
+        true => fail(EMAILULATOR, message, hint),
+        false => warn(EMAILULATOR, message, hint),
+    };
     checks.push(match serving_agent(Some(probe)) {
         Some(agent) if agent.answering => {
             let who = match agent.pid {
@@ -334,19 +345,11 @@ fn emailulator_checks(view: &View, home: &Path) -> Vec<Check> {
                 mail_url(view).filter(|_| !mail_site).unwrap_or_else(|| format!("http://{}", agent.http));
             ok(EMAILULATOR, format!("mail is caught by {who}: SMTP {}, web UI {ui}", agent.smtp))
         }
-        Some(_) => fail(EMAILULATOR, "emailulator is not answering", "emailulator service status"),
-        // Before 0.1.3 Yard cannot read the agent; installed but unloaded, it is launchd's to say why.
-        None => match (old, agent) {
-            (Some(_), _) => fail(EMAILULATOR, "emailulator is not answering", "emailulator self-update"),
-            (None, Some(_)) => {
-                fail(EMAILULATOR, "emailulator is not answering", "emailulator service status")
-            }
-            (None, None) => fail(
-                EMAILULATOR,
-                "emailulator's LaunchAgent is not installed",
-                "yard service add emailulator",
-            ),
-        },
+        Some(_) => broken("emailulator is not answering", "emailulator service status"),
+        None if old.is_none() && agent.is_none() => {
+            broken("emailulator's LaunchAgent is not installed", next_step(Some(probe)))
+        }
+        None => broken("emailulator is not answering", next_step(Some(probe))),
     });
     if mail_site && serving_agent(Some(probe)).is_some() {
         let tld = view.tld.as_deref().unwrap_or("yard");

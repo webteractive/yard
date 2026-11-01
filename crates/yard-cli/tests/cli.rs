@@ -2417,6 +2417,8 @@ fn services_shows_launch_agent() {
     assert!(so.contains("MANAGED BY"), "{so}");
     let row = so.lines().find(|l| l.starts_with("emailulator ")).unwrap_or_else(|| panic!("{so}"));
     assert!(row.contains("LaunchAgent com.webteractive.emailulator"), "{row}");
+    // Yard never puts a LaunchAgent to sleep, so it has no SLEEP setting to show.
+    assert_eq!(row.split_whitespace().nth(5), Some("-"), "{row}");
     let mysql = so.lines().find(|l| l.starts_with("mysql-8.4 ")).unwrap();
     assert!(mysql.contains(" yard"), "{mysql}");
     assert!(so.contains("emailulator web UI: http://mail.yard:8080\n"), "{so}");
@@ -2453,6 +2455,14 @@ fn service_remove_emailulator_asks_nothing() {
     let se = stderr(&out);
     assert!(se.contains("hint: emailulator service uninstall"), "{se}");
     assert!(!se.contains("NEEDS_CONFIRMATION") && !se.contains("needs a yes"), "{se}");
+}
+
+#[test]
+fn service_remove_emailulator_without_agent_forgets_it() {
+    let d = MockDaemon::start(&[("services.remove", Ok(json!(null)))]);
+    let out = d.yard().args(["service", "remove", "emailulator"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Yard no longer records emailulator; it was not installed.\n");
 }
 
 #[test]

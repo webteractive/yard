@@ -10,6 +10,10 @@ use yard_core::emailulator::{AgentStatus, MIN_VERSION, Owner, owner, parse_statu
 /// How long one call may take before Yard stops waiting and keeps what it knew.
 pub const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The same for `yard doctor` with yardd down: someone is waiting at a terminal, and with no
+/// last known state to keep, a slow answer only says that it could not be read.
+pub const OFFLINE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// What Yard knows about emailulator after asking it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
@@ -89,10 +93,15 @@ pub fn is_exec(path: &Path) -> bool {
     path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Finds emailulator, the recorded path first, and asks it.
-pub async fn find_and_probe(recorded: Option<&Path>, home: &Path, previous: Option<&Probe>) -> Option<Probe> {
+/// Finds emailulator, the recorded path first, and asks it, waiting `timeout` for each call.
+pub async fn find_and_probe(
+    recorded: Option<&Path>,
+    home: &Path,
+    previous: Option<&Probe>,
+    timeout: Duration,
+) -> Option<Probe> {
     let bin = yard_core::emailulator::locate(recorded, home, &is_exec).ok()?;
-    Some(probe(&bin, TIMEOUT, previous).await)
+    Some(probe(&bin, timeout, previous).await)
 }
 
 /// What `services.list`, `env.print` and doctor show of the probe: when it changes, the port
@@ -107,4 +116,18 @@ pub fn shown(p: Option<&Probe>) -> impl PartialEq + use<'_> {
 /// The agent that serves mail, when one is installed and loaded.
 pub fn serving_agent(p: Option<&Probe>) -> Option<&AgentStatus> {
     p.and_then(|p| p.agent.as_ref()).filter(|a| matches!(owner(Some(a), false), Owner::Agent(_)))
+}
+
+/// What to run while no agent serves mail, as doctor and `yard env` both say it: the installer
+/// with no binary, `self-update` before 0.1.3 (Yard cannot read its agent), `service status`
+/// for an agent installed but not loaded (launchd's to say why), else `yard service add`.
+pub fn next_step(p: Option<&Probe>) -> &'static str {
+    let Some(p) = p else { return yard_core::emailulator::INSTALLER };
+    if p.version.is_some_and(|v| v < MIN_VERSION) {
+        "emailulator self-update"
+    } else if p.agent.as_ref().is_some_and(|a| a.installed) {
+        "emailulator service status"
+    } else {
+        "yard service add emailulator"
+    }
 }

@@ -99,6 +99,19 @@ fn only<'a>(report: &'a DoctorReport, id: &str) -> &'a Check {
     found[0]
 }
 
+/// The one `ports` check about `unit`. A port picked with `free_port` can be taken by another
+/// process before doctor probes it (an outgoing connection's ephemeral port), which adds a
+/// `ports` check of its own; a test about one unit's port looks only at that unit's.
+fn ports_check<'a>(report: &'a DoctorReport, unit: &str) -> &'a Check {
+    let found: Vec<&Check> = report
+        .checks
+        .iter()
+        .filter(|c| c.id == "ports" && c.message.contains(&format!("({unit},")))
+        .collect();
+    assert_eq!(found.len(), 1, "one ports check for {unit} in {report:#?}");
+    found[0]
+}
+
 fn check(id: &str, status: CheckStatus) -> Check {
     Check { id: id.into(), status, message: String::new(), hint: None }
 }
@@ -202,7 +215,7 @@ async fn port_held_by_listener_fails_with_holder() {
 
     let report = e.offline(&e.helper).await;
 
-    let c = only(&report, "ports");
+    let c = ports_check(&report, "nginx-http");
     assert_eq!(c.status, CheckStatus::Fail);
     for part in ["nginx-http", &held.to_string(), &format!("pid {}", std::process::id())] {
         assert!(c.message.contains(part), "{part} in {c:?}");
@@ -751,7 +764,7 @@ async fn a_service_port_held_by_something_else_fails_the_port_check() {
 
     let report = e.with(vec![], &[]).await;
 
-    let c = only(&report, "ports");
+    let c = ports_check(&report, "mysql-8.4");
     assert_eq!(c.status, CheckStatus::Fail, "{c:?}");
     assert!(c.message.contains("mysql-8.4") && c.message.contains(&held.to_string()), "{c:?}");
     assert!(c.message.contains(&format!("pid {}", std::process::id())), "{c:?}");
@@ -1311,16 +1324,32 @@ async fn doctor_names_the_agent() {
     d.shutdown().await.unwrap();
 }
 
+fn not_answering(smtp: u16, http: u16) -> String {
+    agent_json(3, smtp, http).replace("\"answering\":true", "\"answering\":false")
+}
+
 #[tokio::test]
 async fn doctor_fails_unanswering_emailulator() {
-    let (d, _) = mail_daemon(Some(|smtp, http| {
-        agent_json(3, smtp, http).replace("\"answering\":true", "\"answering\":false")
-    }))
-    .await;
+    let (d, _) = mail_daemon(Some(not_answering)).await;
+    let shop = d.project("shop");
+    std::fs::write(shop.join(".yard"), "[services]\nemailulator = true\n").unwrap();
     let d = d.start().await;
     let report = doctor_of(&d).await;
     let check = only(&report, "emailulator");
     assert_eq!(check.status, CheckStatus::Fail, "{check:?}");
+    assert_eq!(check.message, "emailulator is not answering");
+    assert_eq!(check.hint.as_deref(), Some("emailulator service status"));
+    d.shutdown().await.unwrap();
+}
+
+/// Only the agent, with no .yard asking for it: nothing of Yard's is broken, so a warning.
+#[tokio::test]
+async fn doctor_warns_unanswering_agent_nothing_uses() {
+    let (d, _) = mail_daemon(Some(not_answering)).await;
+    let d = d.start().await;
+    let report = doctor_of(&d).await;
+    let check = only(&report, "emailulator");
+    assert_eq!(check.status, CheckStatus::Warn, "{check:?}");
     assert_eq!(check.message, "emailulator is not answering");
     assert_eq!(check.hint.as_deref(), Some("emailulator service status"));
     d.shutdown().await.unwrap();
@@ -1364,6 +1393,24 @@ async fn doctor_warns_old_version() {
     assert_eq!(check.message, "emailulator 0.1.2 is older than 0.1.3");
     assert_eq!(check.hint.as_deref(), Some("emailulator self-update"));
     assert_eq!(only(&report, "emailulator").hint.as_deref(), Some("emailulator self-update"));
+}
+
+/// Offline, a hung binary costs the doctor seconds, not ten: and what it cannot read is a
+/// warning, never an emailulator that is not installed.
+#[tokio::test]
+async fn offline_doctor_waits_briefly_on_a_hung_emailulator() {
+    let e = env().await;
+    let fake = e.fx.add_emailulator();
+    std::fs::write(fake.join("hang-version"), "").unwrap();
+    let dir = e.secured_site();
+    std::fs::write(dir.path().join(".yard"), "[services]\nemailulator = true\n").unwrap();
+    let started = std::time::Instant::now();
+    let report = e.offline(&e.helper).await;
+    assert!(started.elapsed() < Duration::from_secs(4), "doctor took {:?}", started.elapsed());
+    let check = only(&report, "emailulator-status");
+    assert_eq!(check.status, CheckStatus::Warn, "{check:?}");
+    assert!(check.message.contains("did not answer within 2 s"), "{check:?}");
+    assert_eq!(emailulator_ids(&report), ["emailulator-status"], "{report:#?}");
 }
 
 #[tokio::test]

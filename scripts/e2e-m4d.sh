@@ -4,13 +4,15 @@
 # Checks Yard against the emailulator LaunchAgent already on this machine: `yard doctor`
 # names the agent, `yard ports` has its SMTP port as an external entry, mail.yard:8080 serves
 # its web UI while the agent's own port refuses that Host (so the rewrite is what makes it
-# work), and a scratch project whose .yard says `emailulator = true` serves and prints the
+# work), a DELETE from the web UI's own origin passes emailulator's Origin check through Yard
+# but not sent directly, and a scratch project whose .yard says `emailulator = true` serves and prints the
 # agent's MAIL_PORT in `yard env`.
 #
 # Needs: yardd running, built from this tree (e2e-m1.sh), emailulator 0.1.3 or later with its
 # LaunchAgent answering, and jq. Installs nothing. Ask the maintainer first.
 #
-# Read-only towards emailulator: it only runs `emailulator service status --json`, and never
+# Read-only towards emailulator: it only runs `emailulator service status --json` and signs out
+# a session it never opened (DELETE /api/v1/session, which changes nothing), and never
 # installs, uninstalls, starts or stops the agent (option B: the agent runs itself). It stops
 # before changing anything when no agent answers. sites.toml is backed up and put back if it
 # differs, and the scratch override is removed. Herd's resolver must come out unchanged.
@@ -86,6 +88,16 @@ code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://mail.yard:80
 direct="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Host: mail.yard:8080' "http://$http/")"
 [[ $direct == 403 ]] || fail "$http answered $direct to Host mail.yard:8080, expected 403 (emailulator's host check)"
 pass "mail.yard:8080 answers 200, and $http answers 403 to that Host without Yard's rewrite"
+
+# 4b. A state-changing request from the web UI's own page gets through the proxy: emailulator
+# checks Origin against X-Forwarded-Host, which Yard sets. Signing out with no session changes
+# nothing, so it stands in for any POST or DELETE.
+origin='Origin: http://mail.yard:8080'
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X DELETE -H "$origin" http://mail.yard:8080/api/v1/session)"
+[[ $code == 204 ]] || fail "DELETE /api/v1/session through mail.yard:8080 answered $code, expected 204"
+direct="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X DELETE -H "$origin" "http://$http/api/v1/session")"
+[[ $direct == 403 ]] || fail "$http answered $direct to a DELETE from Origin mail.yard:8080, expected 403 (emailulator's Origin check)"
+pass "a DELETE from mail.yard:8080's own page answers 204 through Yard, and 403 sent to $http directly"
 
 # 5. A scratch project, outside ~/Herd, whose .yard asks for emailulator.
 cp -R "$fixtures/hello-php" "$work/$site"

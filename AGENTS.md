@@ -269,7 +269,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   uninstalls, starts or stops it, and stops before changing anything when no agent answers.
   `yard doctor --json` names the agent, `yard ports --json` has `emailulator-smtp` `external`
   on its SMTP port, `mail.yard:8080` answers 200 while the agent's own port answers 403 to
-  `Host: mail.yard:8080`, and a scratch project under `$TMPDIR` whose `.yard` says
+  `Host: mail.yard:8080`, a `DELETE /api/v1/session` (a sign-out that changes nothing) with
+  `Origin: http://mail.yard:8080` answers 204 through `mail.yard` and 403 sent to the agent
+  directly, and a scratch project under `$TMPDIR` whose `.yard` says
   `emailulator = true` serves (no setup page) and prints the agent's `MAIL_PORT` in `yard env`.
   It needs yardd running and jq; it backs up and restores `sites.toml` and removes its
   scratch override, and fails if Herd's resolver changed; ask the maintainer first.

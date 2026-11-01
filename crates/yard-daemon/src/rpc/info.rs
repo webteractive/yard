@@ -5,7 +5,7 @@ use super::emailulator::is_emailulator;
 use super::handlers::{not_found, snapshot};
 use super::services::instance_info;
 use crate::daemon::Context;
-use crate::emailulator::serving_agent;
+use crate::emailulator::{next_step, serving_agent};
 use crate::services::{default_instance, not_found as service_not_found, service_info};
 use crate::sleep::Sleeper;
 use crate::state::Snapshot;
@@ -13,7 +13,7 @@ use crate::supervisor::Supervisor;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use yard_core::PhpVersion;
-use yard_core::emailulator::{INSTALLER, NAME as EMAILULATOR, env_lines as mail_env};
+use yard_core::emailulator::{NAME as EMAILULATOR, env_lines as mail_env};
 use yard_core::php::full_version;
 use yard_core::project::{FileKind, ServiceWant};
 use yard_core::services::{Engine, env_lines, instance_name};
@@ -81,7 +81,7 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
 fn mail_block(snap: &Snapshot, wanted: bool) -> Option<EnvBlock> {
     let instance = EMAILULATOR.to_string();
     let Some(agent) = serving_agent(snap.emailulator.as_ref()) else {
-        let command = if snap.emailulator.is_some() { "yard service add emailulator" } else { INSTALLER };
+        let command = next_step(snap.emailulator.as_ref());
         return wanted.then(|| EnvBlock {
             instance,
             lines: vec![],

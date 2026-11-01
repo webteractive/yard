@@ -43,7 +43,8 @@ fn main() -> ExitCode {
 /// is there; `service status --json` prints
 /// `agent.json` after its first line, which is the exit code, or exits 4 without it, and
 /// sleeps a minute first while `hang` is there. `service install` writes an answering
-/// `agent.json` on 127.0.0.1:1025 and 8025, or the SMTP address after `-- --smtp-addr`.
+/// `agent.json` on 127.0.0.1:1025 and 8025, or the SMTP address after `-- --smtp-addr`, and
+/// fails while `install-fails` is there.
 fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
     let dir = argv0.parent().unwrap_or(Path::new("."));
     // One append per call: reconcile, the port scan and a job may ask at the same time.
@@ -71,6 +72,9 @@ fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
             let (code, json) = text.split_once('\n').unwrap_or((&text, ""));
             print!("{json}");
             ExitCode::from(code.trim().parse::<u8>().unwrap_or(1))
+        }
+        ["service", "install", ..] if dir.join("install-fails").exists() => {
+            fail("fake emailulator: launchctl bootstrap failed".to_string())
         }
         ["service", "install", rest @ ..] => {
             let smtp = match rest {
@@ -734,6 +738,16 @@ fn redis_server(args: &[String]) -> ExitCode {
     {
         eprintln!("Can't chdir to '{dir}': No such file or directory");
         return ExitCode::from(1);
+    }
+    // `slow-stop` in the data dir: SIGTERM only starts a 2 s alarm, so the unit is seen
+    // stopping for that long.
+    if dir.is_some_and(|dir| Path::new(dir).join("slow-stop").exists()) {
+        extern "C" fn slow(_: libc::c_int) {
+            // SAFETY: alarm(3) is async-signal-safe; SIGALRM's default action ends the process.
+            unsafe { libc::alarm(2) };
+        }
+        // SAFETY: installing a handler that makes only an async-signal-safe call.
+        unsafe { libc::signal(libc::SIGTERM, slow as libc::sighandler_t) };
     }
     listen_tcp(text.lines().find_map(|l| l.trim().strip_prefix("port ")?.trim().parse().ok()))
 }

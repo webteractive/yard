@@ -127,9 +127,12 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   file it hides.
 - toml_edit keeps the comment lines above a key in that key's decor. `TomlFile::set`
   replaces an existing key's value in place, so they survive (`insert` would drop them),
-  and `TomlFile::remove` moves them onto the item that follows in the same table, else
-  onto what follows that table, else to the start of the file's trailing comments (where a
-  managed `.yard`'s commented `[services]` block is). Removing never deletes a comment.
+  and `TomlFile::remove` moves them onto the value that follows in the same table, else
+  above the next table header the file prints (toml_edit prints tables by their parsed
+  position, not key order), else to the start of the file's trailing comments (where a
+  managed `.yard`'s commented `[services]` block is). A table the removal empties goes with
+  its header, and the comments above that header move the same way. Removing never deletes
+  a comment.
 - **Node (M4c spec §10).** `<root>/node/` is fnm's (`FNM_DIR`): Yard writes nothing inside it
   except through `fnm install`/`uninstall`, never deletes the directory, and removes only a
   `node-versions/v<x>` with no `bin/node` (a failed download) before retrying. `node/lts.toml`

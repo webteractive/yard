@@ -365,6 +365,98 @@ async fn add_with_agent_runs_nothing() {
 }
 
 #[tokio::test]
+async fn add_with_port_is_refused_when_the_agent_listens_elsewhere() {
+    let (d, dir, smtp, _) = with_emailulator(true).await;
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let other = if smtp == 2525 { 2526 } else { 2525 };
+    let e = c.call("services.add", json!({"engine": "emailulator", "port": other})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument);
+    assert_eq!(
+        e.message,
+        format!(
+            "emailulator's LaunchAgent com.webteractive.emailulator already catches mail on \
+             127.0.0.1:{smtp}; Yard does not move it"
+        )
+    );
+    assert_eq!(e.hint.as_deref(), Some("emailulator service status"));
+    // Its own port is no change: the add goes ahead and installs nothing.
+    let (lines, error) =
+        run_job(&mut c, "services.add", json!({"engine": "emailulator", "port": smtp})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(!calls(&dir).contains("install"), "{}", calls(&dir));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_install_records_nothing() {
+    let (d, dir, _, _) = with_emailulator(false).await;
+    std::fs::write(dir.join("install-fails"), "").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "services.add", json!({"engine": "emailulator"})).await;
+    assert!(error.is_some(), "{lines:?}");
+    assert!(calls(&dir).lines().any(|l| l == "service install"), "{}", calls(&dir));
+    let services = std::fs::read_to_string(d.fx.paths.services_toml()).unwrap_or_default();
+    assert!(!services.contains("[emailulator]"), "{services}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn lifecycle_without_an_agent_is_not_found() {
+    let (d, _dir, _, _) = with_emailulator(false).await;
+    let d = d.start().await;
+    let mut c = d.client().await;
+    for (method, params) in [
+        ("services.stop", json!({"name": "emailulator"})),
+        ("services.port", json!({"name": "emailulator", "port": 2525})),
+        ("services.remove", json!({"name": "emailulator"})),
+    ] {
+        let e = c.call(method, params).await.unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::ServiceNotFound, "{method}: {e:?}");
+        assert_eq!(e.message, "emailulator's LaunchAgent is not installed", "{method}");
+        assert_eq!(e.hint.as_deref(), Some("yard service add emailulator"), "{method}");
+    }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_without_an_agent_drops_the_record() {
+    let (d, dir, _, _) = with_emailulator(false).await;
+    let bin = dir.join("emailulator");
+    std::fs::write(
+        d.fx.paths.services_toml(),
+        format!("# mine\n[emailulator]\npath = {:?}\n", bin.display().to_string()),
+    )
+    .unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("services.remove", json!({"name": "emailulator"})).await.unwrap();
+    let services = std::fs::read_to_string(d.fx.paths.services_toml()).unwrap();
+    assert!(!services.contains("emailulator"), "{services}");
+    assert!(services.contains("# mine"), "{services}");
+    assert!(!calls(&dir).contains("uninstall"), "{}", calls(&dir));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_pinned_entry_follows_the_agent() {
+    let (smtp, http) = (free_port(), free_port());
+    let pinned = format!(
+        "emailulator-smtp = {{ port = {}, mode = \"pinned\" }}\nemailulator-http = {{ port = {}, mode = \"preferred\" }}\n",
+        free_port(),
+        free_port()
+    );
+    let d = prepared(&pinned).await;
+    let dir = d.fx.add_emailulator();
+    std::fs::write(dir.join("agent.json"), agent_json(0, smtp, http)).unwrap();
+    let d = d.start().await;
+    assert_eq!(entry(&d, "emailulator-smtp"), Some((smtp, PortMode::External)));
+    assert_eq!(entry(&d, "emailulator-http"), Some((http, PortMode::External)));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn add_without_binary_is_not_found() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;
@@ -495,6 +587,21 @@ async fn env_names_what_a_site_still_needs_for_mail() {
     let block = mail_block(&env_blocks(&d, json!({"site": "shop"})).await).expect("an emailulator block");
     assert_eq!(block["lines"], json!([]));
     assert_eq!(block["note"], "emailulator is not catching mail: yard service add emailulator");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_hints_as_doctor_does_for_an_unloaded_agent() {
+    let (d, dir, smtp, http) = with_emailulator(false).await;
+    let json = agent_json(3, smtp, http)
+        .replace("\"answering\":true", "\"answering\":false")
+        .replace("\"loaded\":true", "\"loaded\":false")
+        .replace("\"running\":true", "\"running\":false");
+    std::fs::write(dir.join("agent.json"), json).unwrap();
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    let block = mail_block(&env_blocks(&d, json!({"site": "shop"})).await).expect("an emailulator block");
+    assert_eq!(block["note"], "emailulator is not catching mail: emailulator service status");
     d.shutdown().await.unwrap();
 }
 

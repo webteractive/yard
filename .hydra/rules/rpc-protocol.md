@@ -41,8 +41,12 @@ triggers:
   `console`. `Need::Manual { what, command }` is a need Yard cannot install (`installable()` is
   false): the confirm flow lists it and leaves it to the user. `ServiceAddParams.path` is the
   emailulator binary the CLI found on its PATH; `services.*` for the name `emailulator` are
-  handled in `rpc/emailulator.rs` (add a job, the rest `SERVICE_EXTERNAL`, logs from the agent's
-  log), and `env.print` adds an `emailulator` block.
+  handled in `rpc/emailulator.rs` (add a job, the rest `SERVICE_EXTERNAL` while its agent is
+  installed and `SERVICE_NOT_FOUND` without one, `remove` then forgetting `[emailulator]`, logs
+  from the agent's log), and `env.print` adds an `emailulator` block. `Need` and `ServiceManager` are tagged by
+  `kind`, and each has an `Other` fallback the daemon never sends: `#[serde(other)]` on an
+  internally tagged enum reads an unknown kind with fields too. An `Other` need is not
+  installable, and `ServiceManager::Other` shows as `-`.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), always `204`, for nginx's `auth_request`
   and the shims. It never adds, changes or removes anything; keep it that narrow.

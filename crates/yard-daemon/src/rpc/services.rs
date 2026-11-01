@@ -96,7 +96,7 @@ pub(super) async fn list(ctx: &Context) -> Result<Vec<ServiceInfo>, YardError> {
 /// hint is the edit that frees it. Confirming the delete is the CLI's.
 pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), YardError> {
     if emailulator::is_emailulator(&p.name) {
-        return Err(emailulator::refuse(ctx, true).await);
+        return emailulator::remove(ctx).await;
     }
     let services = load_services(&ctx.paths)?;
     let Some(entry) = services.services.get(&p.name) else {

@@ -202,6 +202,10 @@ pub enum Need {
         what: String,
         command: String,
     },
+    /// A need a newer yardd reports that this client does not know, with or without data;
+    /// never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// How a service engine is named to people: `mysql` is `MySQL`. An engine Yard does not
@@ -225,6 +229,7 @@ impl Need {
             Need::Service { engine, version: Some(v) } => format!("{} {v}", engine_display(engine)),
             Need::Service { engine, version: None } => engine_display(engine).to_string(),
             Need::Manual { what, .. } => what.clone(),
+            Need::Other => "something a newer yardd asks for".to_string(),
         }
     }
 
@@ -246,12 +251,14 @@ impl Need {
             Need::Service { engine, version: Some(v) } => format!("yard service add {engine} --version {v}"),
             Need::Service { engine, version: None } => format!("yard service add {engine}"),
             Need::Manual { command, .. } => command.clone(),
+            Need::Other => "yard doctor".to_string(),
         }
     }
 
-    /// Whether Yard can install it after a yes; a `Manual` need is the user's to run.
+    /// Whether Yard can install it after a yes; a `Manual` need is the user's to run, and an
+    /// `Other` one this client cannot name.
     pub fn installable(&self) -> bool {
-        !matches!(self, Need::Manual { .. })
+        !matches!(self, Need::Manual { .. } | Need::Other)
     }
 }
 
@@ -589,6 +596,9 @@ pub enum ServiceManager {
     Yard,
     /// A launchd agent Yard does not start or stop, such as emailulator's.
     LaunchAgent { label: String, pid: Option<u32> },
+    /// A manager a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// One block of `env.print`: the `.env` lines for an instance.
@@ -682,6 +692,26 @@ mod tests {
         );
         assert_eq!(need.describe(), "emailulator");
         assert_eq!(need.command(), "curl … | sh");
+    }
+
+    #[test]
+    fn an_unknown_need_is_other_and_not_installable() {
+        let later = json!({"kind":"keychain","item":"login"});
+        let need = serde_json::from_value::<Need>(later).unwrap();
+        assert_eq!(need, Need::Other);
+        assert!(!need.installable());
+        assert_eq!(need.describe(), "something a newer yardd asks for");
+        assert_eq!(need.command(), "yard doctor");
+    }
+
+    #[test]
+    fn an_unknown_service_manager_is_other() {
+        let later = json!({"kind":"system_daemon","label":"com.example","pid":9});
+        assert_eq!(serde_json::from_value::<ServiceManager>(later).unwrap(), ServiceManager::Other);
+        assert_eq!(
+            serde_json::from_value::<ServiceManager>(json!({"kind":"yard"})).unwrap(),
+            ServiceManager::Yard
+        );
     }
 
     #[test]

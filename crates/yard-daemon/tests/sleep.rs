@@ -545,3 +545,21 @@ async fn run_sleeping_follows_links_and_hand_edits() {
     assert!(info.get("sleeping_since").is_none(), "{info}");
     d.shutdown().await.unwrap();
 }
+
+/// A unit that takes its time to stop: `status` reports the instance once, as sleeping, while
+/// its unit is still on its way down.
+#[tokio::test]
+async fn status_lists_a_stopping_sleeper_once() {
+    let d = with_redis(free_port(), "service_sleep_after = \"60s\"\n", "").await;
+    let data = d.fx.paths.service_data("redis");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("slow-stop"), "").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), asleep).await;
+    let status = c.call("status", Value::Null).await.unwrap();
+    let units = status["units"].as_array().unwrap();
+    assert!(units.iter().all(|u| u["name"] != "redis"), "listed as a unit too: {status}");
+    assert_eq!(status["sleeping"][0]["name"], "redis", "{status}");
+    d.shutdown().await.unwrap();
+}

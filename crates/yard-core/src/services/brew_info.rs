@@ -15,6 +15,8 @@ pub struct Formula {
     pub deprecation_date: Option<String>,
     /// brew already refuses to install it (`disabled`): it is not offered as a line.
     pub disabled: bool,
+    /// When brew disables it: its own `disable_date`, else a year after `deprecation_date`, as
+    /// brew works it out for `brew info` ("It will be disabled on …").
     pub disable_date: Option<String>,
     pub aliases: Vec<String>,
 }
@@ -64,12 +66,25 @@ pub fn parse(json: &str) -> Result<Vec<Formula>, String> {
             tap: raw.tap,
             version: raw.versions.stable.unwrap_or_default(),
             deprecated: raw.deprecated,
+            disable_date: raw.disable_date.or_else(|| raw.deprecation_date.as_deref().and_then(a_year_after)),
             deprecation_date: raw.deprecation_date,
             disabled: raw.disabled,
-            disable_date: raw.disable_date,
             aliases: raw.aliases,
         })
         .collect())
+}
+
+/// `YYYY-MM-DD` twelve months on, as Ruby's `Date >> 12` (brew's
+/// `DeprecateDisable::REMOVE_DISABLED_TIME_WINDOW`): 29 February becomes 28 February.
+fn a_year_after(date: &str) -> Option<String> {
+    let mut parts = date.split('-').map(|p| p.parse::<u32>().ok());
+    let (year, month, day) = match (parts.next()??, parts.next()??, parts.next()??, parts.next()) {
+        (y, m @ 1..=12, d @ 1..=31, None) => (y, m, d),
+        _ => return None,
+    };
+    let leap = |y: u32| (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+    let day = if month == 2 && day == 29 && !leap(year + 1) { 28 } else { day };
+    Some(format!("{:04}-{month:02}-{day:02}", year + 1))
 }
 
 #[cfg(test)]
@@ -112,8 +127,26 @@ mod tests {
         assert!(f.deprecated);
         assert_eq!(f.deprecation_date.as_deref(), Some("2026-04-30"));
         assert!(!f.disabled);
-        assert_eq!(f.disable_date, None);
+        // brew prints "It will be disabled on 2027-04-30.": a year after the deprecation.
+        assert_eq!(f.disable_date.as_deref(), Some("2027-04-30"));
         assert!(f.aliases.is_empty());
+    }
+
+    #[test]
+    fn disable_date_is_a_year_after_deprecation_when_brew_sets_none() {
+        let one = |deprecated: &str, disable: &str| {
+            let json = format!(
+                r#"{{"formulae":[{{"name":"x","deprecated":true,"deprecation_date":{deprecated},"disable_date":{disable}}}]}}"#
+            );
+            parse(&json).unwrap()[0].disable_date.clone()
+        };
+        assert_eq!(one(r#""2026-04-30""#, "null").as_deref(), Some("2027-04-30"));
+        // Ruby's `Date >> 12` keeps the last day of February.
+        assert_eq!(one(r#""2028-02-29""#, "null").as_deref(), Some("2029-02-28"));
+        // brew's own date wins, and no deprecation date means none.
+        assert_eq!(one(r#""2026-04-30""#, r#""2026-12-01""#).as_deref(), Some("2026-12-01"));
+        assert_eq!(one("null", "null"), None);
+        assert_eq!(one(r#""soon""#, "null"), None);
     }
 
     #[test]

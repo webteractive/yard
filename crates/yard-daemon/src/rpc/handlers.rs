@@ -236,6 +236,7 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
     let snapshot = ctx.reconciler.snapshot().await;
     let helper = ctx.helper.status().await.ok().map(|s| s.version);
     let profile = snapshot.as_ref().map(|s| s.registry.profile).unwrap_or_default();
+    let asleep = ctx.sleeper.asleep();
     Ok(StatusInfo {
         version: VersionInfo {
             cli: None,
@@ -253,12 +254,12 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
             },
             |s| s.tld.clone(),
         ),
-        units: ctx.supervisor().list(),
+        // An instance is marked asleep before its unit has finished stopping: it is reported
+        // once, as sleeping, never also as a unit on its way down.
+        units: ctx.supervisor().list().into_iter().filter(|u| !asleep.contains_key(&u.name)).collect(),
         sites: snapshot.as_ref().map_or(0, |s| s.resolution.sites.len()),
         config_error: ctx.reconciler.last_error().await,
-        sleeping: ctx
-            .sleeper
-            .asleep()
+        sleeping: asleep
             .into_iter()
             .filter_map(|(name, since)| {
                 Some(SleepingInstance { name, since: crate::services::rfc3339(since)? })
