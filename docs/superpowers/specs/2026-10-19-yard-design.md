@@ -149,7 +149,7 @@ local users and the old location inherited `~/Library`'s `0700`.
 yard.toml                     # global: default php, default_node, tld override, secure_by_default, [php."<ver>".extensions]
 sites.toml                    # links, per-site php and node, secure flag, docroot overrides, proxies
 ports.toml                    # port registry and active profile (§7)
-services.toml                 # the service instances (§8.2), one [services."<instance>"] table each
+services.toml                 # the service instances (§8.2), one [services."<instance>"] table each, and [emailulator] path (M4d)
 state/hashes.json             # hash of every generated file as Yard last wrote it
 state/php-modules.json        # each PHP keg's compiled-in modules (`php -n -m`), keyed by its canonical path
 dnsmasq/dnsmasq.conf          # generated
@@ -161,12 +161,13 @@ php/<ver>/pecl.conf           # generated before each pecl run: a PEAR user conf
 nginx/nginx.conf              # generated
 nginx/sites/<site>.conf       # generated
 nginx/overrides/<site>.conf   # USER-OWNED, included inside the site's server block
-nginx/services/<name>.conf    # generated: minio.<tld>, the console proxied (a managed directory)
+nginx/services/<name>.conf    # generated: minio.<tld>, the console proxied, and emailulator.conf for mail.<tld> (a managed directory)
+nginx/overrides/mail.conf     # USER-OWNED, included in mail.<tld>'s server block (M4d)
 nginx/default/index.html      # generated site list served for unknown hosts
 nginx/setup/<site>.html       # generated setup page for a site whose .yard is not met (503)
 ca/yard-ca.pem, ca/yard-ca.key
 certs/<site>.pem, certs/<site>.key
-certs/services/<name>.pem, .key    # certificates for service hostnames (minio.<tld> once secured)
+certs/services/<name>.pem, .key    # certificates for service hostnames (minio.<tld>, and mail.<tld> as emailulator.pem, once secured)
 services/<instance>/data/     # the engine's data dir; never re-initialized or deleted by Yard except `service remove`
 services/<instance>/my.cnf    # generated (MySQL), or redis.conf (Redis); PostgreSQL and MinIO have none
 sites/<name>/.yard            # USER-OWNED managed .yard (M4a.1): written by `yard init`, edited by isolate/secure/docroot, never deleted by `unlink`
@@ -575,7 +576,8 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`,
 `PROJECT_FILE_EXISTS`, `SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
 `FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`, `NODE_MISSING`, `NODE_IN_USE` (M4c), `EMAILULATOR_NOT_FOUND`
-(`data.searched`) and `SERVICE_EXTERNAL` (`data { label, pid }`, M4d). The CLI prints message and hint;
+(`data.searched`, hint emailulator's installer) and `SERVICE_EXTERNAL` (`data { label, pid }`, hint
+`emailulator service status`, or `emailulator service uninstall` for a remove; M4d). The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI
@@ -609,8 +611,8 @@ nginx-https  = { port = 8443,  mode = "pinned" }
 dnsmasq      = { port = 53535, mode = "pinned" }
 "mysql-8.4"  = { port = 3307,  mode = "pinned" }   # a service: allocated once, at `yard service add`
 redis        = { port = 6380,  mode = "pinned" }
-emailulator-smtp = { port = 1025,  mode = "external" }   # emailulator's own LaunchAgent (M4d)
-emailulator-http = { port = 8025,  mode = "external" }
+emailulator-smtp = { port = 1025,  mode = "external" }   # emailulator's own LaunchAgent (M4d): written and
+emailulator-http = { port = 8025,  mode = "external" }   # moved by reconcile to follow the agent, removed when none serves
 "proxy:api"  = { port = 3000,  mode = "external" }
 ```
 
@@ -625,8 +627,11 @@ emailulator-http = { port = 8025,  mode = "external" }
   allocate the lowest free port in `range` and record it; otherwise fail with
   `PORT_IN_USE` and the hint to set a port or enable fallback.
 - `auto`: allocated from `range`.
-- `external`: not bound by Yard (proxy targets). Tracked so Yard never allocates
-  it and can warn when the target is not listening.
+- `external`: not bound by Yard (proxy targets, and emailulator's agent). Tracked so Yard
+  never allocates it and can warn when the target is not listening. emailulator's two entries
+  follow its LaunchAgent: reconcile writes them on the ports `emailulator service status --json`
+  reports while the agent is installed and loaded, moves them when it moves, and removes them
+  when it goes (M4d).
 
 **Profiles:** `standard` (nginx on 8080/8443, the default) and `privileged`
 (nginx on 80/443, opt-in) are named sets of pinned values; `yard ports profile
@@ -701,7 +706,7 @@ port(s) in the registry, listed in `services.toml` (M4b design:
 | `postgres-<line>` (`15`–`18`) | `postgresql@<line>` | the macOS user, no password |
 | `redis` | `redis` | no auth |
 | `minio` | `minio/stable/minio` (a homebrew/core `minio` already installed is used as it is) | `minioadmin`; console proxied at `minio.<tld>` |
-| emailulator | not brew; runs as its own LaunchAgent (see below) | SMTP and HTTP on the agent's ports, recorded `external`; web UI proxied at `mail.<tld>` (M4d, not built) |
+| emailulator | not brew; runs as its own LaunchAgent (see below) | SMTP and HTTP on the agent's ports, recorded `external`; web UI proxied at `mail.<tld>` (M4d) |
 
 The lines are brew's: `add` runs `brew search --formula "/^<base>(@|$)/"` and `brew info
 --json=v2` for each name found, once per add. A formula brew reports as disabled is not a
@@ -710,7 +715,7 @@ line; a deprecated one is, with a job line naming brew's disable date.
 As built (daemon methods, and the CLI commands that call them):
 
 - `services.list` answers a `ServiceInfo` per instance in `services.toml`.
-- `services.add { engine, version?, port? }` is a job. Before it starts: an unknown engine,
+- `services.add { engine, version?, port?, path? }` is a job (`path` is for emailulator, below). Before it starts: an unknown engine,
   a `version` for Redis or MinIO or one that is not a line, and `port` 0 are
   `INVALID_ARGUMENT`; an instance that exists is `SERVICE_EXISTS`; a line brew does not have
   is `SERVICE_VERSION_UNSUPPORTED` naming the lines it has; a formula brew lists but cannot
@@ -749,20 +754,36 @@ As built (daemon methods, and the CLI commands that call them):
 **emailulator** replaced Mailpit on 2026-10-21 (maintainer): it is our own mail catcher, with a
 web UI, a REST API and an MCP server, so agents can read the mail a site sent.
 
-- `yard service add emailulator` needs `emailulator` on the user's PATH; without it, it fails
-  with a hint naming emailulator's installer. Yard never downloads it (§2).
+- `yard service add emailulator` needs emailulator installed: the CLI sends the one on the
+  user's PATH as `services.add { path }`, and yardd falls back to the recorded
+  `[emailulator] path` in `services.toml`, then the installer's `~/.local/bin/emailulator`.
+  Without one it fails with `EMAILULATOR_NOT_FOUND`, hint emailulator's installer. Yard never
+  downloads it (§2). A `version` is `INVALID_ARGUMENT`, hint `emailulator self-update`.
 - **emailulator runs itself; Yard never runs it (M4d spec §4, option B, decided
   2026-10-26).** It runs as its own LaunchAgent (`emailulator service install`, label
   `com.webteractive.emailulator`), built around being the one server on the Mac, and keeps
   catching mail while yardd is stopped, for Herd's sites too. Yard records the agent's two
   ports as `external` entries and points `mail.<tld>` and `yard env` at them, and
-  `yard doctor` says whether it is serving mail. When no agent is installed,
-  `yard service add emailulator` runs `emailulator service install` after a yes.
-  `yard service start|stop|restart|remove|port emailulator` are refused with
-  `SERVICE_EXTERNAL`, hinting emailulator's own command.
+  `yard doctor` says whether it is serving mail. `services.add` for emailulator is a job: it
+  records `[emailulator] path`, then, unless an agent already catches mail, runs
+  `emailulator service install` (`-- --smtp-addr 127.0.0.1:<port>` with `--port`), probes and
+  reconciles. `yard service start|stop|restart|remove|port|sleep-after emailulator` are refused
+  with `SERVICE_EXTERNAL`, hinting emailulator's own command; `yard service logs emailulator`
+  reads the log the agent names. `yard services` lists it, while its agent is installed, with
+  MANAGED BY `LaunchAgent <label>` and its web UI. yardd asks the binary (`--version` and
+  `service status --json`, 5 s each) at every reconcile and every 30 s port scan, and keeps
+  the last answer when one cannot be read.
+- A `.yard` may say `emailulator = true` in `[services]` (no version: it updates itself). Any
+  agent Yard can reach meets it; without one it is a need, `yard service add emailulator`
+  when the binary is there and a manual one naming the installer when it is not.
 - emailulator keeps its own message store, so `emailulator app`, `emailulator mcp` and
   `emailulator inbox|key` see the same mail.
-- `yard env` prints `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1` and `MAIL_PORT=<smtp>`.
+- `yard env` prints `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1`, `MAIL_PORT=<smtp>` and
+  `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_ENCRYPTION` and `MAIL_SCHEME` as `null`, as an
+  `emailulator` block, with a warning on stderr while the agent is loaded but not answering.
+- `mail.<tld>` proxies the agent's web UI with its `Host` rewritten to the agent's address
+  (emailulator answers 403 to any other host), unless a linked site is named `mail`; then
+  `yard doctor` warns `mail-host`, hint `yard unlink mail`.
 
 Commands: `yard services` (list), `yard service add <engine> [--version] [--port] [--yes]`,
 `yard service remove <instance> [--keep-data] [--yes]`,
@@ -830,6 +851,11 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   added is removed. It stops before changing anything if one of those instances already
   exists, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails if
   the listeners on 3306, 5432 and 6379 (DBngin, Postgres.app) or Herd's resolver changed.
+  `scripts/e2e-m4d.sh` checks emailulator against the agent already on the machine and never
+  installs, starts or stops it: `yard doctor` names the agent, `yard ports` has
+  `emailulator-smtp` `external` on its SMTP port, `mail.<tld>` answers 200 while the agent's
+  own port answers 403 to that `Host` (the rewrite is what makes it work), and a scratch
+  project whose `.yard` says `emailulator = true` serves and prints the agent's `MAIL_PORT`.
 - **Swift:** `YardClient` against a mock socket server; store tests driven by
   event streams; schema drift check in CI.
 
@@ -883,7 +909,7 @@ Each milestone is usable on its own and gets its own implementation plan.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in
      `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; emailulator keeps its own
      LaunchAgent and Yard only points at it (option B, decided 2026-10-26). Spec and plan
-     approved 2026-10-26.
+     approved 2026-10-26; built on main on 2026-11-01.
    - **M4e on-demand services** (approved 2026-10-26, the fifth plan): service
      instances that opt in sleep when idle and wake on a PHP request, a shim or
      `yard service start`. Designed in

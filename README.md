@@ -30,7 +30,10 @@ brew's kegs (`yard service add`), a `[services]` table in `.yard`, `yard env` fo
 taps you trust. M4c adds Node: `node`, `npm` and `npx` shims that run the version a
 project pins (`.yard`'s `node`, `yard node use`, `.nvmrc` or `.node-version`), installed with
 brew's fnm into Yard's own `~/.yard/node` and never nvm's or Herd's. M4e lets service
-instances sleep when idle and wake on use, if you turn it on. Tunnels (M5) and
+instances sleep when idle and wake on use, if you turn it on. M4d points Yard at
+[emailulator](https://github.com/webteractive/emailulator), the mail catcher, which keeps
+running as its own LaunchAgent: `mail.<tld>` shows its web UI, `yard env` prints its `MAIL_*`
+lines, and a `.yard` can say `emailulator = true`. Tunnels (M5) and
 Yard.app (M6) come later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
@@ -80,7 +83,9 @@ the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git statu
 `scripts/e2e-m4c.sh` Node: it installs Node 16.14.0 and 22 with fnm, runs them through the
 shims (a native module build included), and removes only what it installed, and
 `scripts/e2e-m4e.sh` sleeping services: it lets a scratch Redis fall asleep, wakes it from a
-page, from `php` and with a held connection, and removes it.
+page, from `php` and with a held connection, and removes it, and `scripts/e2e-m4d.sh`
+emailulator: against the agent already installed (it never installs, starts or stops it), it
+checks `yard doctor`, the external port entries, `mail.yard:8080` and a project's `MAIL_PORT`.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in
@@ -164,14 +169,14 @@ error, 3 `yardd` is not running.
 | `yard ext add <name\|name-version\|path.so> [--php <ver>]` | yes | Installs a PHP extension from brew's `shivammathur/extensions` (the same trust check as `php install`, unless the tap's files do not list the formula, renames and aliases included), else pecl (`xdebug-2.9.8` pins a pecl release for legacy PHP), or copies a built `.so`, then checks it loads with `php -m`. Ctrl-C cancels it and undoes what it recorded. |
 | `yard ext list` / `enable <name>` / `disable <name>` / `remove <name>` `[--php <ver>]` | yes | Lists extensions, turns one on or off without uninstalling it (PHP's bundled ones too), or uninstalls one. |
 | `yard xdebug on\|off [--php <ver>]` | yes | Turns an added Xdebug on or off. |
-| `yard services` | yes | One row per service instance: `INSTANCE ENGINE VERSION PORT STATE SLEEP ACCOUNT USED BY`. STATE reads `sleeping 2h` or `waking` for a sleeping instance, and SLEEP is its `sleep_after` (`15m`, `off`). ACCOUNT is the login Yard set up (`root (no password)`, `— (no auth)`, `minioadmin / minioadmin`). Yard stores no other password. |
-| `yard service add <engine> [--version <v>] [--port <p>] [--yes]` | yes | Adds `mysql`, `postgres`, `redis` or `minio`: installs the formula with brew if its keg is missing (MinIO comes from the `minio/stable` tap, so the trust question applies), pins a port, initializes the data, starts it, waits for it to pass its health check and prints its `.env` lines. Shows brew's output; Ctrl-C cancels and undoes it. `--yes` never grants trust. |
+| `yard services` | yes | One row per service instance: `INSTANCE ENGINE VERSION PORT STATE SLEEP ACCOUNT USED BY MANAGED BY`. STATE reads `sleeping 2h` or `waking` for a sleeping instance, and SLEEP is its `sleep_after` (`15m`, `off`). ACCOUNT is the login Yard set up (`root (no password)`, `— (no auth)`, `minioadmin / minioadmin`). Yard stores no other password. MANAGED BY is `yard`, or `LaunchAgent <label>` for emailulator, whose row shows while its agent is installed. Each web UI (MinIO's console, emailulator's `mail.<tld>`) is listed under the table. |
+| `yard service add <engine> [--version <v>] [--port <p>] [--yes]` | yes | Adds `mysql`, `postgres`, `redis` or `minio`: installs the formula with brew if its keg is missing (MinIO comes from the `minio/stable` tap, so the trust question applies), pins a port, initializes the data, starts it, waits for it to pass its health check and prints its `.env` lines. Shows brew's output; Ctrl-C cancels and undoes it. `--yes` never grants trust. `emailulator` is different: Yard never installs it (use its installer); `add` records which one to use (the first on your PATH) and runs `emailulator service install` (`--port` is its SMTP port) unless its LaunchAgent already catches mail. `start`, `stop`, `restart`, `port`, `sleep-after` and `remove` refuse emailulator with `SERVICE_EXTERNAL`, naming emailulator's own command; `logs` reads its agent's log. |
 | `yard service remove <instance> [--keep-data] [--yes]` | yes | Checks the instance first: unknown is `SERVICE_NOT_FOUND`, and one a linked site's `.yard` lists is refused with `SERVICE_IN_USE` (naming the sites and the file to edit) before anything is asked. Then asks `Delete <instance> and its data? [y/N]` (`--keep-data` leaves `services/<instance>/data`) and removes it. Without a terminal and without `--yes` it deletes nothing and fails with `NEEDS_CONFIRMATION`. Never runs `brew uninstall`. |
 | `yard service start\|stop\|restart <instance>` | yes | `start` and `restart` wait until the instance is running, and wake a sleeping one; one that fails prints its last log lines and exits 1. `stop` keeps it stopped across yardd restarts until `start`. |
 | `yard service logs <instance> [-f] [-n <lines>]` | yes | The last 100 lines (at most 10000) of the instance's log; `-f` keeps following until Ctrl-C. |
 | `yard service port <instance> <port>` | yes | Moves an instance to another port; a running one restarts on it. |
 | `yard service sleep-after <instance> <duration\|off\|default>` | yes | Sets how long the instance may go unused before it sleeps (`sleep_after` in `services.toml`; at least `60s`), `off` to keep it awake, or `default` to follow `service_sleep_after` in `yard.toml`. |
-| `yard env [--site <name>] [--service <instance>]` | yes | Prints `KEY=value` lines under a `# <instance>` comment per service, for you to paste into `.env`; it never writes a file. In a linked project (or with `--site`) it prints the services its `.yard` lists; outside one, every instance. Yard creates no database or bucket, so there is no `DB_DATABASE` or `AWS_BUCKET`. |
+| `yard env [--site <name>] [--service <instance>]` | yes | Prints `KEY=value` lines under a `# <instance>` comment per service, for you to paste into `.env`; it never writes a file. In a linked project (or with `--site`) it prints the services its `.yard` lists; outside one, every instance. emailulator's block is the seven `MAIL_*` lines, with a `warning:` on stderr while its agent does not answer. Yard creates no database or bucket, so there is no `DB_DATABASE` or `AWS_BUCKET`. |
 | `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), Node (with the spec it pins), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, the managed `.yard` (`managed`), `sites.toml`, `.nvmrc`, `.node-version` or the default. |
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |
 | `yard source trust\|untrust <formula> [--tap]` | yes | Runs `brew trust` / `brew untrust` for one formula, or with `--tap` a whole tap. Needs no terminal. Untrusting something installed does not stop it serving, but brew will no longer load it. |

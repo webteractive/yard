@@ -90,6 +90,7 @@ mysql = "8.4"
 postgres = "17"
 redis = true
 minio = true
+emailulator = true   # M4d
 ```
 
 | Key | Type | Meaning | Today's equivalent |
@@ -122,8 +123,8 @@ minio = true
   instance when a `.yard` stops asking for it. Services are added and started when `init`
   or `link` is confirmed; reconcile never restarts one the user stopped with
   `yard service stop`. The rules (M4b spec §9):
-  - Keys are `mysql`, `postgres`, `redis` and `minio`. Any other key is
-    `PROJECT_FILE_INVALID`, naming the file, the line and the key.
+  - Keys are `mysql`, `postgres`, `redis`, `minio` and, from M4d, `emailulator`. Any other
+    key is `PROJECT_FILE_INVALID`, naming the file, the line and the key.
   - A value is a release line of that engine (MySQL `major.minor`, such as `"8.4"`;
     PostgreSQL a major, such as `"17"`) or `true`. Redis and MinIO take only `true`.
     `"latest"`, a patch release (`"8.4.13"`), `false`, a number and a table are
@@ -134,6 +135,12 @@ minio = true
     (MySQL 8.4, PostgreSQL 17). A missing instance is `Need::Service { engine, version }`
     and puts the site on the setup page; a stopped or failed instance is not a need, the
     site is served and `yard doctor` warns.
+  - `emailulator` takes only `true` (a string is `PROJECT_FILE_INVALID`: "Yard does not
+    choose its version"). It is met by any emailulator LaunchAgent Yard can reach, which
+    runs itself (emailulator spec §4, option B). Without one it is `Need::Service { engine:
+    "emailulator" }` when the binary is installed (`yard init` runs `yard service add
+    emailulator`), else `Need::Manual { what, command }` naming emailulator's installer,
+    which `yard init` lists as `Still needed:` and never runs.
 
 ## 5. How it changes serving
 

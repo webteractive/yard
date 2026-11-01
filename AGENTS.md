@@ -53,8 +53,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   passing on its first run (maintainer approved the run and `brew install fnm`). The maintainer moved emailulator out of M4b into
   M4d on 2026-10-23: designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, both
-  approved 2026-10-26, not built yet; emailulator keeps its own LaunchAgent and Yard only points at it (option B,
-  decided 2026-10-26: the maintainer asked Claude to decide).
+  approved 2026-10-26; emailulator keeps its own LaunchAgent and Yard only points at it (option B,
+  decided 2026-10-26: the maintainer asked Claude to decide). M4d is built on main (2026-11-01, Tasks 1–11
+  committed one per task with the maintainer's approval); `scripts/e2e-m4d.sh` is written and not run yet.
   M4e, on-demand services (instances sleep when idle and wake on use), is designed in
   `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
   written in another session and checked against the code; the maintainer answered its §13 questions
@@ -257,6 +258,16 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   and restores `yard.toml` and `sites.toml`, uninstalls only the versions it installed, and
   fails if a listing of `~/.nvm/versions/node` or Herd's `config/nvm` changed.
   `shellcheck scripts/e2e-m4c.sh` stays clean.
+- `scripts/e2e-m4d.sh` — real-machine M4d check after `e2e-m1.sh`, against the emailulator
+  LaunchAgent already on this machine (`com.webteractive.emailulator`); it never installs,
+  uninstalls, starts or stops it, and stops before changing anything when no agent answers.
+  `yard doctor --json` names the agent, `yard ports --json` has `emailulator-smtp` `external`
+  on its SMTP port, `mail.yard:8080` answers 200 while the agent's own port answers 403 to
+  `Host: mail.yard:8080`, and a scratch project under `$TMPDIR` whose `.yard` says
+  `emailulator = true` serves (no setup page) and prints the agent's `MAIL_PORT` in `yard env`.
+  It needs yardd running and jq; it backs up and restores `sites.toml` and removes its
+  scratch override, and fails if Herd's resolver changed; ask the maintainer first.
+  `shellcheck scripts/e2e-m4d.sh` stays clean.
 - `scripts/e2e-m4e.sh` — real-machine M4e check after `e2e-m1.sh`: adds a scratch `redis` with
   `sleep_after = "60s"`, links a scratch project under `$TMPDIR` whose `.yard` lists it, waits for
   it to sleep (nothing listens on its port), then checks a page wakes it (a PHP `PING` gets

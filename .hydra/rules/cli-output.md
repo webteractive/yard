@@ -38,6 +38,9 @@ triggers:
   before moving a site onto a directory with its own `.yard` (`Replace it with this
   directory? [y/N] `, `--replace`, else `SITE_NAME_TAKEN`); it never asks when there
   is no `.yard` yet, since codifying the running site is what init is for.
+- A `Need::Manual { what, command }` (emailulator not installed, M4d) is listed with the others
+  as `  <what>  (<command>)` but never run: after installing the rest, `settle` prints
+  `Still needed: <what>  (<command>)` and fails with `NEEDS_INSTALL`, hint that command.
 - A missing Node is offered by `settle` as `  Node <spec>  (yard node install <spec>)` and
   installed last, but it is never a `Need`: when it is the only thing missing and nobody
   agrees, `settle` prints `<site> runs Node <spec>, which is not installed: yard node install
@@ -86,6 +89,16 @@ triggers:
   `select!` loop: it registers nothing until polled, so a Ctrl-C between two turns kills the
   command or is lost. CLI tests that wait on a child carry a 60 s watchdog (`yard_at`'s timeout,
   `watchdog` in `tests/cli.rs`), so a hang fails the test instead of stalling the suite.
+- emailulator (M4d) is run by its own LaunchAgent: `yard services` has a MANAGED BY column
+  (`yard` or `LaunchAgent <label>`) and lists `<instance> web UI: <url>` under the table for
+  every row with one (MinIO's console too). `yard service start|stop|restart|port|sleep-after
+  emailulator` print yardd's `SERVICE_EXTERNAL` with its hint (`emailulator service status`);
+  `yard service remove emailulator` asks nothing and prints the same refusal, hint `emailulator
+  service uninstall`. `yard service add emailulator` sends the first executable `emailulator`
+  on the shell's PATH as `path` (none when there is none), then prints `emailulator catches
+  mail; its web UI is <url>. For your .env:` and its block. `yard env` prints emailulator's
+  note on a block that has lines (`emailulator is not answering; see yard doctor`) as
+  `warning:` on stderr, not as a `# ` comment.
 - Sleeping services (M4e): `yard services` has a SLEEP column after STATE (the effective
   `sleep_after`, `15m` or `off`), and STATE reads `sleeping <age>` (`45s`, `12m`, `2h`, `3d`, the
   largest whole unit) for a sleeping instance and `waking` while it starts again (`state_text`,

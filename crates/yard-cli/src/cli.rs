@@ -210,7 +210,7 @@ pub enum ServiceAction {
         /// mysql, postgres, redis, minio or emailulator.
         engine: String,
         /// The release line, e.g. 8.4 for MySQL or 17 for PostgreSQL; the engine's default
-        /// when omitted. Redis and MinIO have none.
+        /// when omitted. Redis, MinIO and emailulator have none.
         #[arg(long)]
         version: Option<String>,
         /// The port to pin; defaults to the engine's usual port, else the next free one.

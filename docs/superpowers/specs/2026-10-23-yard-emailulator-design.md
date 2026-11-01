@@ -3,6 +3,8 @@
 Date: 2026-10-23
 Status: approved by the maintainer on 2026-10-26. §4's question, who runs emailulator, is decided: **option B**,
 emailulator keeps its own LaunchAgent (2026-10-26, Claude's call; the maintainer asked Claude to decide).
+Built on main on 2026-11-01 (M4d, plan `2026-10-23-yard-m4d-emailulator.md`, option B only:
+Yard never runs a unit of its own for emailulator).
 It extends
 `2026-10-19-yard-design.md` (the main spec, §2, §7 and §8.2) and
 `2026-10-22-yard-project-file-design.md` (the `.yard` spec, §4), and builds on M4b

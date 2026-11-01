@@ -62,6 +62,11 @@ triggers:
   visible to this user)", never guess.
 - `set_profile` checks every port of the new profile before changing anything, and
   reports all conflicts at once.
+- emailulator's ports are `external` entries that follow its LaunchAgent (M4d): reconcile
+  `ensure`s `emailulator-smtp` and `emailulator-http` on the ports `service status --json`
+  reports while the agent is installed and loaded, moves them when it moves (the 30 s scan asks
+  `Reconciler::emailulator_moved` and reconciles), and removes them when no agent serves. Yard
+  never binds or allocates them, and never starts what listens on them.
 - A service port is allocated once, at `services.add`, and recorded `pinned`:
   `Registry::allocate_from(unit, usual, reserved, is_free)` takes the first port at or above
   the engine's usual one that no other entry holds, that is not reserved and that `is_free`;
