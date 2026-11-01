@@ -29,6 +29,8 @@ pub struct ProjectFile {
     pub extensions: Vec<ExtName>,
     /// `[services]`: the engines the project needs, shared with every other project.
     pub services: BTreeMap<Engine, ServiceWant>,
+    /// `[services] emailulator = true`: met by any emailulator Yard can reach (M4d).
+    pub emailulator: bool,
 }
 
 /// What a `[services]` value asks for.
@@ -152,7 +154,7 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
         Some(n) => Some(parse_spec(n.get_ref()).map_err(|e| invalid(Some(n.span()), &format!("node: {e}")))?),
         None => None,
     };
-    let services = parse_services(raw.services, &invalid)?;
+    let (services, emailulator) = parse_services(raw.services, &invalid)?;
     let project = match (raw.project, kind) {
         (Some(p), FileKind::Committed) => {
             return Err(invalid(Some(p.span()), "project is only for a managed .yard"));
@@ -163,19 +165,36 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
         }
         (p, _) => p.map(Spanned::into_inner),
     };
-    Ok((ProjectFile { php: raw.php, node, docroot, secure: raw.secure, extensions, services }, project))
+    Ok((
+        ProjectFile { php: raw.php, node, docroot, secure: raw.secure, extensions, services, emailulator },
+        project,
+    ))
 }
 
-/// `[services]`: keys are engines, values a release line of that engine or `true`.
+/// `[services]`: keys are engines, values a release line of that engine or `true`; and
+/// `emailulator`, which takes only `true` or `false`, since it has one version that updates
+/// itself.
 fn parse_services(
     raw: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
     invalid: &dyn Fn(Option<std::ops::Range<usize>>, &str) -> YardError,
-) -> Result<BTreeMap<Engine, ServiceWant>, YardError> {
+) -> Result<(BTreeMap<Engine, ServiceWant>, bool), YardError> {
     let mut services = BTreeMap::new();
+    let mut emailulator = false;
     for (key, value) in raw {
         let name = key.get_ref();
+        if name == crate::emailulator::NAME {
+            emailulator = match value.get_ref() {
+                toml::Value::Boolean(b) => *b,
+                _ => {
+                    let message = "[services]: emailulator takes true: Yard does not choose its version";
+                    return Err(invalid(Some(value.span()), message));
+                }
+            };
+            continue;
+        }
         let Some(engine) = Engine::from_key(name) else {
-            let known: Vec<&str> = Engine::ALL.iter().map(|e| e.key()).collect();
+            let known: Vec<&str> =
+                Engine::ALL.iter().map(|e| e.key()).chain([crate::emailulator::NAME]).collect();
             return Err(invalid(
                 Some(key.span()),
                 &format!("[services]: unknown service {name:?}; the services are {}", known.join(", ")),
@@ -204,7 +223,7 @@ fn parse_services(
         };
         services.insert(engine, want);
     }
-    Ok(services)
+    Ok((services, emailulator))
 }
 
 /// `docroot` as a `.yard` holds it: relative to `project`, with an absolute path under
@@ -616,6 +635,27 @@ mod tests {
         assert_eq!(e.data.as_ref().unwrap()["line"], 3);
         // A scalar where the table goes.
         assert_eq!(service_err("services = \"mysql\"\n").code, ErrorCode::ProjectFileInvalid);
+    }
+
+    #[test]
+    fn emailulator_takes_only_true() {
+        assert!(parse_ok("[services]\nemailulator = true\n").emailulator);
+        assert!(!parse_ok("[services]\nemailulator = false\n").emailulator);
+        assert!(!parse_ok("[services]\nredis = true\n").emailulator);
+        // It is not an engine: no instance of it is a service need.
+        assert!(parse_ok("[services]\nemailulator = true\n").services.is_empty());
+        for value in ["\"0.1\"", "\"0.1.3\"", "1"] {
+            let e = service_err(&format!("php = \"8.4\"\n\n[services]\nemailulator = {value}\n"));
+            assert_eq!(e.code, ErrorCode::ProjectFileInvalid, "{value}");
+            assert_eq!(e.data.as_ref().unwrap()["line"], 4, "{value}");
+            assert!(
+                e.message.contains("emailulator takes true: Yard does not choose its version"),
+                "{value}: {}",
+                e.message
+            );
+        }
+        // The unknown-service message names it among the services.
+        assert!(service_err("[services]\nmongo = true\n").message.contains("emailulator"));
     }
 
     #[test]
