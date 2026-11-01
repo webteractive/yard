@@ -171,6 +171,10 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   (7.0–8.5) is installed here. A scratch site per version, each asking for `mysql-8.4`, served
   its page and logged in through PDO and mysqli. `scripts/e2e-m4a.sh` needs one supported PHP
   left uninstalled for its setup-page step, so it stops at its precheck here until one is removed.
+- Also on 2026-11-01 the maintainer approved checking MySQL 8.0: `yard service add mysql --version 8.0`
+  installed brew's `mysql@8.0` (8.0.46, deprecated; the keg stays, unlinked beside `mysql@8.4`).
+  A scratch `mysql-8.0` let PHP 7.0 log in only once `default_authentication_plugin` was set
+  (M4b spec §16); then every PHP from 7.0 to 8.5 did, and the instance was removed.
 - Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
 - For M4b (checked 2026-10-23 and 2026-10-24): Homebrew is 7.0.10. Since 6.0 it loads a
   formula from a non-official tap only when the formula or its tap is trusted; brew's own

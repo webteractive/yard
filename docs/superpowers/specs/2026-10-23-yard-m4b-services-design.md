@@ -762,7 +762,10 @@ MySQL up for them:**
 - A MySQL 8 line makes `mysql_native_password` the default, so `root` and every user created
   without `IDENTIFIED WITH` log in the old way: `authentication_policy =
   mysql_native_password,,` in `my.cnf` and at init, and on 8.4, which leaves the plugin off,
-  `mysql_native_password = ON` as well. PHP 7.4 and newer log in either way. MySQL 9 removed the
+  `mysql_native_password = ON` as well. 8.0 to 8.3 offer a client `default_authentication_plugin`
+  first, not the policy's, and PHP 7.0 cannot switch away from `caching_sha2_password`, so those
+  lines also set `default_authentication_plugin = mysql_native_password` (8.4 removed the
+  variable, and mysqld refuses one it does not know). PHP 7.4 and newer log in either way. MySQL 9 removed the
   plugin, so a 9 line gets neither, and `yard doctor` warns `php-mysql-login:<site>` for a PHP
   7.0 to 7.3 site whose `.yard` asks for one.
 - Every MySQL instance sets `character-set-server = utf8mb4`, `collation-server =
@@ -776,7 +779,8 @@ MySQL up for them:**
 - On 2026-11-01 a scratch site on brew's PHP 7.0.33 logged in to this machine's `mysql-8.4`
   through both PDO and mysqli, so the `php7.0-mysql` doctor warning, which said PHP 7.0 could
   not log in to any MySQL, was removed. A PHP 7.0 site asking for MySQL 9 still gets
-  `php-mysql-login`.
+  `php-mysql-login`. The same day a scratch `mysql-8.0` (8.0.46) let PHP 7.1 to 8.5 log in but
+  not 7.0, until `default_authentication_plugin` was set as above.
 
 ## 17. Left to the builder
 

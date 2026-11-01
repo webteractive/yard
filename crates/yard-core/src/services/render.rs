@@ -253,7 +253,9 @@ sql_mode = NO_ENGINE_SUBSTITUTION
                 header = header(&overrides),
                 native = match native_password(instance) {
                     NativePassword::Loaded => {
-                        "# PHP 7.0 to 7.3 log in only with mysql_native_password.\n\
+                        "# PHP 7.0 to 7.3 log in only with mysql_native_password, and 7.0 only when\n\
+                         # the server offers it first.\n\
+                         default_authentication_plugin = mysql_native_password\n\
                          authentication_policy = mysql_native_password,,\n"
                     }
                     NativePassword::Off => {
@@ -333,6 +335,23 @@ mod tests {
             settings.iter().any(|l| l == "authentication_policy = mysql_native_password,,"),
             "{settings:?}"
         );
+    }
+
+    /// 8.0 to 8.3 offer `default_authentication_plugin` first, and PHP 7.0 cannot switch away
+    /// from caching_sha2 (seen 2026-11-01). 8.4 removed the variable, and mysqld refuses one it
+    /// does not know.
+    #[test]
+    fn only_mysql_80_to_83_offer_native_password_first() {
+        let line = "default_authentication_plugin = mysql_native_password";
+        for instance in ["mysql-8.0", "mysql-8.3"] {
+            assert!(mysqld_settings(instance).iter().any(|l| l == line), "{instance} lacks {line}");
+        }
+        for instance in ["mysql-8.4", "mysql-9.7"] {
+            assert!(
+                !mysqld_settings(instance).iter().any(|l| l.starts_with("default_authentication")),
+                "{instance}"
+            );
+        }
     }
 
     #[test]
