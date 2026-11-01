@@ -437,3 +437,73 @@ async fn logs_read_the_agent_log() {
     assert_eq!(lines, json!(["two", "three"]));
     d.shutdown().await.unwrap();
 }
+
+// yard env prints emailulator's MAIL_* lines.
+
+async fn env_blocks(d: &Daemon, params: Value) -> Vec<Value> {
+    let mut c = d.client().await;
+    c.call("env.print", params).await.unwrap().as_array().unwrap().clone()
+}
+
+fn mail_block(blocks: &[Value]) -> Option<Value> {
+    blocks.iter().find(|b| b["instance"] == "emailulator").cloned()
+}
+
+fn mail_lines(port: u16) -> Value {
+    json!([
+        "MAIL_MAILER=smtp",
+        "MAIL_HOST=127.0.0.1",
+        format!("MAIL_PORT={port}"),
+        "MAIL_USERNAME=null",
+        "MAIL_PASSWORD=null",
+        "MAIL_ENCRYPTION=null",
+        "MAIL_SCHEME=null",
+    ])
+}
+
+#[tokio::test]
+async fn env_prints_mail_lines_for_the_agent() {
+    let (d, _dir, smtp, _) = with_emailulator(true).await;
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    for params in [json!({}), json!({"site": "shop"}), json!({"service": "emailulator"})] {
+        let block = mail_block(&env_blocks(&d, params.clone()).await).unwrap_or_else(|| panic!("{params}"));
+        assert_eq!(block["lines"], mail_lines(smtp), "{params}");
+        assert_eq!(block["note"], Value::Null, "{params}");
+    }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_warns_when_not_answering() {
+    let (d, dir, smtp, http) = with_emailulator(false).await;
+    let json = agent_json(3, smtp, http).replace("\"answering\":true", "\"answering\":false");
+    std::fs::write(dir.join("agent.json"), json).unwrap();
+    let d = d.start().await;
+    let block = mail_block(&env_blocks(&d, json!({})).await).expect("an emailulator block");
+    assert_eq!(block["lines"], mail_lines(smtp));
+    assert_eq!(block["note"], "emailulator is not answering; see yard doctor");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_has_no_mail_lines_without_emailulator() {
+    let d = prepared("").await.start().await;
+    let blocks = env_blocks(&d, json!({})).await;
+    assert_eq!(mail_block(&blocks), None, "{blocks:?}");
+    let mut c = d.client().await;
+    let e = c.call("env.print", json!({"service": "emailulator"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::ServiceNotFound);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn env_names_what_a_site_still_needs_for_mail() {
+    let (d, _dir, _, _) = with_emailulator(false).await;
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    let block = mail_block(&env_blocks(&d, json!({"site": "shop"})).await).expect("an emailulator block");
+    assert_eq!(block["lines"], json!([]));
+    assert_eq!(block["note"], "emailulator is not catching mail: yard service add emailulator");
+    d.shutdown().await.unwrap();
+}

@@ -1,9 +1,11 @@
 //! `env.print` and `sites.info`: what a project runs on (M4b spec §7.3, §7.4). Both only
 //! read the last good snapshot and the brew keg; neither writes anything.
 
+use super::emailulator::is_emailulator;
 use super::handlers::{not_found, snapshot};
 use super::services::instance_info;
 use crate::daemon::Context;
+use crate::emailulator::serving_agent;
 use crate::services::{default_instance, not_found as service_not_found, service_info};
 use crate::sleep::Sleeper;
 use crate::state::Snapshot;
@@ -11,6 +13,7 @@ use crate::supervisor::Supervisor;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use yard_core::PhpVersion;
+use yard_core::emailulator::{INSTALLER, NAME as EMAILULATOR, env_lines as mail_env};
 use yard_core::php::full_version;
 use yard_core::project::{FileKind, ServiceWant};
 use yard_core::services::{Engine, env_lines, instance_name};
@@ -29,6 +32,9 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
     let snap = snapshot(ctx).await?;
     let supervisor = ctx.supervisor();
     if let Some(name) = &p.service {
+        if is_emailulator(name) {
+            return mail_block(&snap, false).map(|b| vec![b]).ok_or_else(|| service_not_found(name));
+        }
         let engine = snap.services.services.get(name).map(|e| e.engine);
         let info = service_info(&snap, supervisor, &ctx.sleeper, name);
         return match (engine, info) {
@@ -43,6 +49,15 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
         (None, Some(path)) => site_containing(&snap, Path::new(path)),
         (None, None) => None,
     };
+    // A project prints emailulator's lines when its `.yard` asks for them; the whole list does
+    // while an agent is installed.
+    let mail = match site {
+        Some(site) => match snap.projects.get(&site.name).map(|l| &l.parsed) {
+            Some(Ok(file)) if file.emailulator => mail_block(&snap, true),
+            _ => None,
+        },
+        None => mail_block(&snap, false),
+    };
     let blocks = match site {
         Some(site) => project_blocks(&snap, supervisor, &ctx.sleeper, site)?,
         None => snap
@@ -55,7 +70,30 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
             .map(|(engine, info)| (engine, instance_block(engine, &info)))
             .collect(),
     };
-    Ok(note_clashes(blocks))
+    let mut blocks = note_clashes(blocks);
+    blocks.extend(mail);
+    Ok(blocks)
+}
+
+/// emailulator's `MAIL_*` lines while its LaunchAgent owns mail, with a note when it does not
+/// answer. With no agent, `wanted` (a `.yard` asks for it) gives a block naming the command
+/// that installs one; otherwise there is none.
+fn mail_block(snap: &Snapshot, wanted: bool) -> Option<EnvBlock> {
+    let instance = EMAILULATOR.to_string();
+    let Some(agent) = serving_agent(snap.emailulator.as_ref()) else {
+        let command = if snap.emailulator.is_some() { "yard service add emailulator" } else { INSTALLER };
+        return wanted.then(|| EnvBlock {
+            instance,
+            lines: vec![],
+            note: Some(format!("emailulator is not catching mail: {command}")),
+        });
+    };
+    let lines = mail_env(&agent.smtp.ip().to_string(), agent.smtp.port())
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    let note = (!agent.answering).then(|| "emailulator is not answering; see yard doctor".to_string());
+    Some(EnvBlock { instance, lines, note })
 }
 
 /// One block per `[services]` entry of the site's `.yard`, in engine order. A site with no
