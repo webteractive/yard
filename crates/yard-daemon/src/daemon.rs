@@ -51,6 +51,8 @@ pub struct DaemonOptions {
     pub app_dirs: Vec<PathBuf>,
     /// How the idle loop samples service instances and keeps time (M4e).
     pub sleep: SleepConfig,
+    /// The user's home, where emailulator's installer puts its binary (`.local/bin`).
+    pub home: PathBuf,
 }
 
 impl DaemonOptions {
@@ -70,6 +72,7 @@ impl DaemonOptions {
             usual_ports: None,
             app_dirs: app_dirs(),
             sleep: SleepConfig::production(),
+            home: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
         }
     }
 }

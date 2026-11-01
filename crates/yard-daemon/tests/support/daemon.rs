@@ -31,6 +31,7 @@ const STARTUP: Duration = Duration::from_secs(60);
 
 pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Path) -> DaemonOptions {
     let no_apps = paths.root().join("no-applications");
+    let home = paths.root().join("home");
     DaemonOptions {
         paths,
         brew_prefix: brew.to_path_buf(),
@@ -54,6 +55,8 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         // A sample every 50 ms and a millisecond for each second of a `sleep_after`, so
         // `"60s"` lasts 60 ms.
         sleep: SleepConfig { sample_interval: Duration::from_millis(50), second: Duration::from_millis(1) },
+        // Never this machine's home: its emailulator and LaunchAgent are not a test's.
+        home,
     }
 }
 

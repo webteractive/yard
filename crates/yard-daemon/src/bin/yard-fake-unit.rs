@@ -1,4 +1,4 @@
-//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, fnm, security and the
+//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, fnm, security, emailulator and the
 //! service engines (mysqld, postgres, initdb, redis-server, minio), chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
@@ -33,7 +33,39 @@ fn main() -> ExitCode {
         Some("postgres-backend") => backend(),
         Some("redis-server") => redis_server(&args),
         Some("minio") => minio(&args),
+        Some("emailulator") => emailulator(Path::new(&argv0), &args),
         _ => mode(&args),
+    }
+}
+
+/// emailulator, linked into a directory of its own. Each call's arguments are appended to
+/// `calls` there. `--version` prints `version` (else 0.1.3); `service status --json` prints
+/// `agent.json` after its first line, which is the exit code, or exits 4 without it, and
+/// sleeps a minute first while `hang` is there.
+fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
+    let dir = argv0.parent().unwrap_or(Path::new("."));
+    let calls = std::fs::read_to_string(dir.join("calls")).unwrap_or_default();
+    let _ = std::fs::write(dir.join("calls"), format!("{calls}{}\n", args.join(" ")));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        ["--version"] => {
+            let version = std::fs::read_to_string(dir.join("version"));
+            print!("{}", version.unwrap_or_else(|_| "emailulator 0.1.3 (fake, 2026-10-20)\n".into()));
+            ExitCode::SUCCESS
+        }
+        ["service", "status", "--json"] => {
+            if dir.join("hang").exists() {
+                std::thread::sleep(Duration::from_secs(60));
+            }
+            let Ok(text) = std::fs::read_to_string(dir.join("agent.json")) else {
+                println!("{{\"installed\": false}}");
+                return ExitCode::from(4);
+            };
+            let (code, json) = text.split_once('\n').unwrap_or((&text, ""));
+            print!("{json}");
+            ExitCode::from(code.trim().parse::<u8>().unwrap_or(1))
+        }
+        _ => fail(format!("fake emailulator: unexpected {args:?}")),
     }
 }
 

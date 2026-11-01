@@ -95,6 +95,14 @@ impl Fixture {
 
 impl Fixture {
     /// brew's `fnm`, as the fake brew's `install fnm` leaves it: the fake, at `bin/fnm`.
+    /// The fake emailulator where its installer puts it in the test daemon's home
+    /// (`<root>/home/.local/bin`); returns its directory, which holds `agent.json`.
+    pub fn add_emailulator(&self) -> PathBuf {
+        let bin = self.paths.root().join("home/.local/bin/emailulator");
+        place(&bin, |dst| symlink(&self.fake, dst));
+        bin.parent().unwrap().to_path_buf()
+    }
+
     pub fn add_fnm(&self) {
         place(&self.brew.path().join("bin/fnm"), |dst| symlink(&self.fake, dst));
     }
