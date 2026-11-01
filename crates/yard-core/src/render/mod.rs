@@ -243,6 +243,28 @@ mod tests {
         );
     }
 
+    /// Yard never installs emailulator, so the page names its installer, not `yard init`.
+    #[test]
+    fn setup_page_names_a_manual_command() {
+        let (p, b) = ctx_parts();
+        let c = ctx(&p, &b);
+        let manual = yard_proto::Need::Manual {
+            what: "emailulator".into(),
+            command: "curl -fsSL x/install.sh | sh".into(),
+        };
+        let mut site = needs_php("shop", "/code/shop");
+        site.needs = vec![manual.clone()];
+        assert_eq!(
+            page_text(&nginx::setup_page(&c, &site)),
+            "shop needs emailulator.\nInstall emailulator with: curl -fsSL x/install.sh | sh\n"
+        );
+        site.needs = vec![yard_proto::Need::Php { php: "7.3".into() }, manual];
+        assert_eq!(
+            page_text(&nginx::setup_page(&c, &site)),
+            "shop needs PHP 7.3 and emailulator.\nRun yard init in /code/shop to install PHP 7.3.\nInstall emailulator with: curl -fsSL x/install.sh | sh\n"
+        );
+    }
+
     #[test]
     fn setup_page_for_parse_error() {
         let (p, b) = ctx_parts();

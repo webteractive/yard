@@ -344,6 +344,7 @@ impl Reconciler {
             &projects,
             &yard,
             Some(&services_cfg),
+            state.emailulator.as_ref(),
             &state.brew,
             &state.paths,
         );

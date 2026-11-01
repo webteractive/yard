@@ -510,8 +510,7 @@ async fn a_newly_linked_project_is_watched() {
 }
 
 /// What `yard init` appends: one commented line per service engine (M4b spec §9).
-const SERVICES_BLOCK: &str =
-    "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
+const SERVICES_BLOCK: &str = "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n# emailulator = true\n";
 
 /// `sites.init` writing into the project, as every test written before managed files did.
 async fn init(c: &mut Client, dir: &Path, extra: Value) -> Result<Value, yard_proto::YardError> {

@@ -234,3 +234,69 @@ async fn recorded_path_is_used_first() {
     assert_eq!(entry(&d, "emailulator-smtp"), Some((smtp, PortMode::External)));
     d.shutdown().await.unwrap();
 }
+
+// A .yard that asks for emailulator.
+
+use serde_json::{Value, json};
+
+async fn needs_of(d: &Daemon, name: &str) -> Value {
+    let mut c = d.client().await;
+    let list = c.call("sites.list", Value::Null).await.unwrap();
+    let site = list.as_array().unwrap().iter().find(|s| s["name"] == name).cloned();
+    site.unwrap_or_else(|| panic!("{list}"))["needs"].clone()
+}
+
+fn asks_for_emailulator(d: &Daemon) {
+    let dir = d.project("shop");
+    std::fs::write(dir.join(".yard"), "php = \"8.4\"\n\n[services]\nemailulator = true\n").unwrap();
+}
+
+#[tokio::test]
+async fn emailulator_need_when_missing() {
+    let d = prepared("").await;
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    let installer = yard_core::emailulator::INSTALLER;
+    assert_eq!(
+        needs_of(&d, "shop").await,
+        json!([{"kind": "manual", "what": "emailulator", "command": installer}])
+    );
+    let page = std::fs::read_to_string(d.fx.paths.nginx_setup_page("shop")).unwrap();
+    assert!(page.contains("install.sh"), "{page}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn found_without_agent_needs_the_service() {
+    let (d, _dir, _, _) = with_emailulator(false).await;
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    assert_eq!(needs_of(&d, "shop").await, json!([{"kind": "service", "engine": "emailulator"}]));
+    let page = std::fs::read_to_string(d.fx.paths.nginx_setup_page("shop")).unwrap();
+    assert!(page.contains("yard init"), "{page}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_meets_emailulator() {
+    let (d, _dir, _, _) = with_emailulator(true).await;
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    assert_eq!(needs_of(&d, "shop").await, Value::Null);
+    assert!(!d.fx.paths.nginx_setup_page("shop").exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stopped_owner_still_meets() {
+    let (d, dir, smtp, http) = with_emailulator(false).await;
+    // Loaded, so launchd restarts it, but neither running nor answering: exit 3.
+    let quiet = agent_json(3, smtp, http)
+        .replace("\"answering\":true", "\"answering\":false")
+        .replace("\"running\":true", "\"running\":false");
+    std::fs::write(dir.join("agent.json"), quiet).unwrap();
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    assert_eq!(needs_of(&d, "shop").await, Value::Null);
+    d.shutdown().await.unwrap();
+}

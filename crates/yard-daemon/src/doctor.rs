@@ -117,7 +117,7 @@ impl View {
                 // A services.toml that does not parse is `config_error`'s to report: reading it as
                 // empty would call every `[services]` entry a missing instance.
                 let services = services.as_ref().ok();
-                crate::project::fill_needs(&mut resolution.sites, &projects, y, services, brew, paths);
+                crate::project::fill_needs(&mut resolution.sites, &projects, y, services, None, brew, paths);
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }

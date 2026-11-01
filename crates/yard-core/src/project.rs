@@ -278,6 +278,21 @@ pub fn service_needs(file: &ProjectFile, services: &ServicesConfig) -> Vec<Need>
         .collect()
 }
 
+/// What `[services] emailulator = true` still needs: nothing while an emailulator is
+/// reachable (its agent loaded, answering or not: a crashed mail catcher must not take the
+/// site down); its installer, which Yard never runs, when the binary is not `found`; else
+/// the service, whose add installs the agent (emailulator spec §8).
+pub fn emailulator_need(file: &ProjectFile, reachable: bool, found: bool) -> Option<Need> {
+    if !file.emailulator || reachable {
+        return None;
+    }
+    Some(if found {
+        Need::Service { engine: crate::emailulator::NAME.into(), version: None }
+    } else {
+        Need::Manual { what: crate::emailulator::NAME.into(), command: crate::emailulator::INSTALLER.into() }
+    })
+}
+
 /// The first line `yard init --local` writes into the project.
 pub const HEADER: &str = "# .yard: how Yard serves this project. Commit it.\n";
 
@@ -345,8 +360,7 @@ pub fn detect(
 
 /// What `yard init` writes for `[services]`: one commented line per engine, since Yard does
 /// not read `.env` to guess them (M4b spec §9). The user uncomments what the project needs.
-const SERVICES_BLOCK: &str =
-    "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
+const SERVICES_BLOCK: &str = "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n# emailulator = true\n";
 
 /// A new `.yard`. `secure` is written only when detected: absent, HTTPS follows each
 /// teammate's `secure_by_default`.
@@ -659,6 +673,30 @@ mod tests {
     }
 
     #[test]
+    fn emailulator_need_table() {
+        let wants = parse_ok("[services]\nemailulator = true\n");
+        let manual =
+            Need::Manual { what: "emailulator".into(), command: crate::emailulator::INSTALLER.into() };
+        let service = Need::Service { engine: "emailulator".into(), version: None };
+        // (reachable, found) → need
+        assert_eq!(emailulator_need(&wants, true, true), None);
+        assert_eq!(emailulator_need(&wants, false, false), Some(manual));
+        assert_eq!(emailulator_need(&wants, false, true), Some(service));
+        assert_eq!(emailulator_need(&ProjectFile::default(), false, false), None);
+    }
+
+    #[test]
+    fn init_comments_emailulator() {
+        let detected = Detected { php: None, docroot: ".".into(), secure: None, node: None };
+        let text = render(&detected);
+        assert!(text.lines().any(|l| l == "# emailulator = true"), "{text}");
+        // Uncommenting the table and that line parses.
+        let uncommented =
+            text.replace("# [services]", "[services]").replace("# emailulator = true", "emailulator = true");
+        assert!(parse_ok(&uncommented).emailulator, "{uncommented}");
+    }
+
+    #[test]
     fn service_needs_table() {
         let services = |text: &str| {
             crate::config::services::parse_services(Some(text), Path::new("/r/services.toml")).unwrap()
@@ -695,8 +733,7 @@ mod tests {
     }
 
     /// Spec §9's last bullet: one commented line per engine, since Yard does not read `.env`.
-    const BLOCK: &str =
-        "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n";
+    const BLOCK: &str = "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"17\"\n# redis = true\n# minio = true\n# emailulator = true\n";
 
     #[test]
     fn render_for_eepower() {

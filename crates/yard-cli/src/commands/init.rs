@@ -186,13 +186,21 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
     if let Some(e) = &site.project_error {
         return Err(e.clone().into());
     }
-    // Installed, yet still missing: a module PHP lists under another name, say.
+    // Installed, yet still missing: what Yard does not install (emailulator), or a module PHP
+    // lists under another name, say.
     if !site.needs.is_empty() {
+        let manual: Vec<&Need> = site.needs.iter().filter(|n| !n.installable()).collect();
+        if !ctx.json {
+            for need in &manual {
+                println!("Still needed: {}  ({})", need.describe(), need.command());
+            }
+        }
+        let hint = manual.first().map_or_else(|| "yard doctor".to_string(), |n| n.command());
         return Err(YardError::new(
             ErrorCode::NeedsInstall,
             format!("{} still needs {}", site.name, Need::describe_all(&site.needs)),
         )
-        .with_hint("yard doctor")
+        .with_hint(hint)
         .with_data(json!({ "needs": site.needs }))
         .into());
     }

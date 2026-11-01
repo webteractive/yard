@@ -1,6 +1,7 @@
 //! Each linked project's `.yard`, read for reconcile and doctor, and what it needs that
 //! this machine lacks (project-file spec §5).
 
+use crate::emailulator::Probe;
 use crate::modules;
 use crate::reconcile::brew_conf_d;
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,9 +67,12 @@ pub fn fill_needs(
     projects: &Projects,
     yard: &YardConfig,
     services: Option<&ServicesConfig>,
+    emailulator: Option<&Probe>,
     brew: &Brew,
     paths: &Paths,
 ) {
+    // `None` from the probe: no binary where Yard looks.
+    let mail_reachable = crate::emailulator::serving_agent(emailulator).is_some();
     let exists = |p: &Path| p.exists();
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let installed = brew.installed_php(&exists, &read_link);
@@ -94,5 +98,6 @@ pub fn fill_needs(
         };
         site.needs = project::needs(file, v, &installed, &has);
         site.needs.extend(services.into_iter().flat_map(|s| project::service_needs(file, s)));
+        site.needs.extend(project::emailulator_need(file, mail_reachable, emailulator.is_some()));
     }
 }

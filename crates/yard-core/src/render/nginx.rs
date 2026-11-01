@@ -312,8 +312,21 @@ fn setup_text(site: &SiteInfo) -> String {
         SiteKind::Proxy { .. } => "",
     };
     let list = Need::describe_all(&site.needs);
-    let them = if site.needs.len() > 1 { "them" } else { "it" };
-    format!("{} needs {list}.\nRun yard init in {path} to install {them}.\n", site.name)
+    let mut text = format!("{} needs {list}.\n", site.name);
+    // What Yard installs goes through yard init; the rest (emailulator) is the user's to run.
+    let (installs, manual): (Vec<Need>, Vec<Need>) = site.needs.iter().cloned().partition(Need::installable);
+    if !installs.is_empty() {
+        let what = match (installs.len(), manual.is_empty()) {
+            (_, false) => Need::describe_all(&installs),
+            (1, true) => "it".to_string(),
+            (_, true) => "them".to_string(),
+        };
+        let _ = writeln!(text, "Run yard init in {path} to install {what}.");
+    }
+    for need in &manual {
+        let _ = writeln!(text, "Install {} with: {}", need.describe(), need.command());
+    }
+    text
 }
 
 /// `nginx/setup/<site>.html`, served with a 503 while the site's `.yard` is not met.

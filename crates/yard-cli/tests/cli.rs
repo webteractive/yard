@@ -1163,6 +1163,35 @@ fn init_yes_reports_what_is_still_missing() {
     assert!(err.contains("  hint: yard doctor"), "{err}");
 }
 
+/// Yard installs what it can after the yes and leaves emailulator's installer to the user.
+#[test]
+fn settle_yes_leaves_manual_need() {
+    let installer =
+        "curl -fsSL https://raw.githubusercontent.com/webteractive/emailulator/main/install.sh | sh";
+    let manual = json!({"kind": "manual", "what": "emailulator", "command": installer});
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            (
+                "sites.init",
+                vec![Ok(init_result(project_site(json!([{"kind": "php", "php": "7.3"}, manual]))))],
+            ),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("php.install", vec![Ok(json!({"job_id": "php-install-1"}))]),
+            ("sites.list", vec![Ok(json!([project_site(json!([manual]))]))]),
+        ],
+        &[("php.install", job_events("php-install-1", json!(null)))],
+    );
+    let out = d.yard().args(["init", "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(d.params("php.install"), [json!({"php": "7.3"})]);
+    let (so, err) = (stdout(&out), stderr(&out));
+    assert!(so.contains(&format!("  emailulator  ({installer})\n")), "the list names it: {so}");
+    assert!(so.contains(&format!("Still needed: emailulator  ({installer})\n")), "{so}");
+    assert!(!so.contains("Serving"), "{so}");
+    assert!(err.contains("error: blog still needs emailulator"), "{err}");
+    assert!(err.contains(&format!("  hint: {installer}")), "{err}");
+}
+
 #[test]
 fn init_says_where_it_moved_the_site_from() {
     let mut result = init_result(project_site(json!([])));
