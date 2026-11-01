@@ -68,7 +68,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   are listed in `run/sleeping` before the stop begins, a failed sleep reconcile undoes the
   sleep, the idle check and the marking share one lock, a connection between two of an
   engine's own sockets is not a client, the wake ask forwards no client headers, and an
-  unknown `ServiceState` with data reads as `Other`.
+  unknown `ServiceState` with data reads as `Other` (2fb79d6). `scripts/e2e-m1.sh` and `e2e-m4e.sh`
+  passed again against yardd built from 2fb79d6 on 2026-10-27 (a wake ask took 0.18 ms at p50),
+  so M4e is done.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
@@ -120,7 +122,10 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   allocated once at `yard service add`, recorded `pinned` and never moved by Yard, and skip
   the ports DBngin and Postgres.app reserve while installed. Yard never runs `brew services`
   or `brew uninstall` for one, never re-initializes or deletes data except `service remove`,
-  and creates no databases, roles or buckets. A formula from a third-party tap installs only
+  and creates no databases, roles or buckets. A MySQL 8 instance makes `mysql_native_password`
+  the default (root included) and every MySQL instance uses `utf8mb4_unicode_ci` and
+  `sql_mode = NO_ENGINE_SUBSTITUTION`, so PHP 7.0–7.3 projects work (M4b spec §16, the maintainer
+  2026-10-28: old projects must install and work). A formula from a third-party tap installs only
   once brew itself trusts it (`brew trust`, read with `brew trust --json=v1`); `--yes`, `init`
   and `link` never grant trust, and Yard sets no `HOMEBREW_NO_*` variable.
 - **Never Herd's PHP** (maintainer, 2026-10-20): every PHP command Yard runs or a shim

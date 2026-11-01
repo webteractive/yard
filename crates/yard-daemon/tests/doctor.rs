@@ -1028,6 +1028,33 @@ async fn a_php_70_site_asking_for_mysql_warns_about_authentication() {
 }
 
 #[tokio::test]
+async fn old_php_asking_for_mysql_9_warns_it_cannot_log_in() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.fx.add_php("7.3");
+    e.instance("mysql-9.7", "mysql@9.7", false);
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.data("mysql-9.7");
+    e.data("mysql-8.4");
+    e.formulae(json!([formula("mysql@9.7", "9.7.0"), formula("mysql@8.4", "8.4.13")]));
+    e.yard_site("legacy", "php = \"7.3\"\n[services]\nmysql = \"9.7\"\n", &dir);
+    e.yard_site("fine", "php = \"7.3\"\n[services]\nmysql = \"8.4\"\n", &dir);
+    e.yard_site("modern", "php = \"8.4\"\n[services]\nmysql = \"9.7\"\n", &dir);
+
+    let report = e.offline(&e.helper).await;
+
+    let c = only(&report, "php-mysql-login:legacy");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("PHP 7.3") && c.message.contains("mysql-9.7"), "{c:?}");
+    assert!(c.message.contains("mysql_native_password"), "{c:?}");
+    assert!(c.hint.as_deref().unwrap().contains("mysql = \"8.4\""), "{c:?}");
+    for site in ["fine", "modern"] {
+        let id = format!("php-mysql-login:{site}");
+        assert!(!report.checks.iter().any(|c| c.id == id), "{id}");
+    }
+}
+
+#[tokio::test]
 async fn an_unreadable_services_toml_adds_no_service_checks() {
     let e = env().await;
     e.instance("redis", "redis", false);

@@ -47,6 +47,47 @@ fn arg(text: impl Into<OsString>) -> OsString {
     text.into()
 }
 
+/// What a MySQL line does with `mysql_native_password`, the only login PHP 7.0 to 7.3's mysqlnd
+/// knows (`caching_sha2_password` arrived in 7.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativePassword {
+    /// 8.0 to 8.3 load it, and only need it made the default.
+    Loaded,
+    /// 8.4 has it but leaves it off.
+    Off,
+    /// 9.0 removed it: old PHP cannot log in at all.
+    Gone,
+}
+
+/// The line comes from the instance name (`mysql-8.4`), which is always made from it.
+fn native_password(instance: &str) -> NativePassword {
+    let line = super::parse_instance(instance).and_then(|(_, line)| line).unwrap_or_default();
+    let number = |s: Option<&str>| s.and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let mut parts = line.split('.');
+    match (number(parts.next()), number(parts.next())) {
+        (8, minor) if minor < 4 => NativePassword::Loaded,
+        (8, _) => NativePassword::Off,
+        _ => NativePassword::Gone,
+    }
+}
+
+/// Whether PHP 7.0 to 7.3 can log in to the MySQL `instance` at all: MySQL 9 removed the
+/// only login their mysqlnd knows.
+pub fn old_php_can_log_in(instance: &str) -> bool {
+    native_password(instance) != NativePassword::Gone
+}
+
+/// The flags that turn `mysql_native_password` on where the line has it and make it the
+/// default, so the root `--initialize-insecure` creates and every new user log in the old way.
+fn native_password_flags(instance: &str) -> Vec<OsString> {
+    let policy = arg("--authentication-policy=mysql_native_password,,");
+    match native_password(instance) {
+        NativePassword::Loaded => vec![policy],
+        NativePassword::Off => vec![arg("--mysql-native-password=ON"), policy],
+        NativePassword::Gone => vec![],
+    }
+}
+
 /// The locale `postgres` and `initdb` run with. yardd runs from launchd with none, and
 /// postgres on macOS then exits at startup ("postmaster became multithreaded during startup",
 /// hint: set LC_ALL), as Postgres.app knows. Every macOS install has this one.
@@ -125,12 +166,16 @@ pub fn init_command(
             program: bin("mysqld"),
             // `--no-defaults` first: mysqld reads `/etc/my.cnf` and `~/.my.cnf` unless told
             // not to, and a user's `datadir` or `port` there would shape what Yard creates.
-            args: vec![
-                arg("--no-defaults"),
-                arg("--initialize-insecure"),
-                arg(format!("--datadir={}", data.display())),
-                arg(format!("--basedir={}", keg.display())),
-            ],
+            args: [
+                vec![
+                    arg("--no-defaults"),
+                    arg("--initialize-insecure"),
+                    arg(format!("--datadir={}", data.display())),
+                    arg(format!("--basedir={}", keg.display())),
+                ],
+                native_password_flags(instance),
+            ]
+            .concat(),
             env: Vec::new(),
             stop_signal: SIGTERM,
         }),
@@ -197,10 +242,27 @@ bind-address = 127.0.0.1
 socket = {socket}
 datadir = {data}
 mysqlx = OFF
+{native}# PHP 7.0 knows no utf8mb4_0900 collation. Old apps' loose GROUP BY and zero dates work;
+# Laravel sets its own sql_mode on each connection.
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+sql_mode = NO_ENGINE_SUBSTITUTION
 
 !include {overrides}
 ",
                 header = header(&overrides),
+                native = match native_password(instance) {
+                    NativePassword::Loaded => {
+                        "# PHP 7.0 to 7.3 log in only with mysql_native_password.\n\
+                         authentication_policy = mysql_native_password,,\n"
+                    }
+                    NativePassword::Off => {
+                        "# PHP 7.0 to 7.3 log in only with mysql_native_password.\n\
+                         mysql_native_password = ON\n\
+                         authentication_policy = mysql_native_password,,\n"
+                    }
+                    NativePassword::Gone => "",
+                },
                 overrides = overrides.display(),
             );
             Some((paths.service_conf(instance, "my.cnf"), text))
@@ -245,6 +307,69 @@ mod tests {
             config_file(Engine::Mysql, "mysql-8.4", &paths, &[port("mysql-8.4", 3306)]).unwrap();
         assert_eq!(file, paths.service_conf("mysql-8.4", "my.cnf"));
         assert_snapshot!(text);
+    }
+
+    /// The `[mysqld]` settings of `instance`'s `my.cnf`, before the user's `!include`.
+    fn mysqld_settings(instance: &str) -> Vec<String> {
+        let (_, text) = config_file(Engine::Mysql, instance, &Paths::new(ROOT), &[]).unwrap();
+        text.lines().take_while(|l| !l.starts_with("!include")).map(str::to_string).collect()
+    }
+
+    #[test]
+    fn mysql_84_lets_old_php_log_in() {
+        let settings = mysqld_settings("mysql-8.4");
+        assert!(settings.iter().any(|l| l == "mysql_native_password = ON"), "{settings:?}");
+        assert!(
+            settings.iter().any(|l| l == "authentication_policy = mysql_native_password,,"),
+            "{settings:?}"
+        );
+    }
+
+    #[test]
+    fn mysql_80_has_native_password_without_turning_it_on() {
+        let settings = mysqld_settings("mysql-8.0");
+        assert!(!settings.iter().any(|l| l.starts_with("mysql_native_password")), "{settings:?}");
+        assert!(
+            settings.iter().any(|l| l == "authentication_policy = mysql_native_password,,"),
+            "{settings:?}"
+        );
+    }
+
+    #[test]
+    fn mysql_9_has_no_native_password_to_turn_on() {
+        let settings = mysqld_settings("mysql-9.7");
+        assert!(!settings.iter().any(|l| l.contains("native_password")), "{settings:?}");
+    }
+
+    #[test]
+    fn every_mysql_line_uses_a_charset_old_php_knows_and_a_lenient_sql_mode() {
+        for instance in ["mysql-8.0", "mysql-8.4", "mysql-9.7"] {
+            let settings = mysqld_settings(instance);
+            for line in [
+                "character-set-server = utf8mb4",
+                "collation-server = utf8mb4_unicode_ci",
+                "sql_mode = NO_ENGINE_SUBSTITUTION",
+            ] {
+                assert!(settings.iter().any(|l| l == line), "{instance} lacks {line}: {settings:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn mysql_init_creates_root_with_native_password_where_the_line_has_it() {
+        let paths = Paths::new(ROOT);
+        let keg = Path::new(KEG);
+        let args = |instance: &str| init_command(Engine::Mysql, instance, keg, &paths, "me").unwrap().args;
+        let policy = OsString::from("--authentication-policy=mysql_native_password,,");
+        let on = OsString::from("--mysql-native-password=ON");
+        let a84 = args("mysql-8.4");
+        assert!(a84.contains(&policy) && a84.contains(&on), "{a84:?}");
+        let a80 = args("mysql-8.0");
+        assert!(a80.contains(&policy) && !a80.contains(&on), "{a80:?}");
+        let a97 = args("mysql-9.7");
+        assert!(!a97.iter().any(|a| a.to_string_lossy().contains("native")), "{a97:?}");
+        // `--no-defaults` must stay first, or mysqld reads the user's own my.cnf.
+        assert_eq!(a84[0], "--no-defaults");
     }
 
     #[test]
@@ -342,6 +467,8 @@ mod tests {
                 "--initialize-insecure",
                 &format!("--datadir={}", data.display()),
                 &format!("--basedir={}", keg.display()),
+                "--mysql-native-password=ON",
+                "--authentication-policy=mysql_native_password,,",
             ])
         );
 

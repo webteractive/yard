@@ -9,5 +9,13 @@ bind-address = 127.0.0.1
 socket = "/Users/me/Library/Application Support/Yard/run/mysql-8.4.sock"
 datadir = "/Users/me/Library/Application Support/Yard/services/mysql-8.4/data"
 mysqlx = OFF
+# PHP 7.0 to 7.3 log in only with mysql_native_password.
+mysql_native_password = ON
+authentication_policy = mysql_native_password,,
+# PHP 7.0 knows no utf8mb4_0900 collation. Old apps' loose GROUP BY and zero dates work;
+# Laravel sets its own sql_mode on each connection.
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+sql_mode = NO_ENGINE_SUBSTITUTION
 
 !include /Users/me/Library/Application Support/Yard/services/mysql-8.4/overrides.conf

@@ -105,6 +105,15 @@ password. `yard untrust` removes it. Until then `yard doctor` warns. Yard's `nod
 `security.enterprise_roots.enabled` set in `about:config`; `yard doctor` prints the path
 and the Firefox note.
 
+## Old PHP and MySQL
+
+PHP 7.0 to 7.3 can log in to MySQL only with `mysql_native_password`, so a MySQL 8 instance
+Yard adds makes it the default, for `root` too. Every MySQL instance also defaults to
+`utf8mb4_unicode_ci` and the lenient `sql_mode = NO_ENGINE_SUBSTITUTION`, so old apps' loose
+`GROUP BY` and zero dates work (Laravel sets its own `sql_mode`). Put a different setting under
+`[mysqld]` in the instance's `overrides.conf`. MySQL 9 has no `mysql_native_password`: use
+`mysql = "8.4"` for an old project, and `yard doctor` warns when one asks for 9.
+
 ## Sleeping services
 
 Service instances can sleep when nothing uses them, which frees their memory. It is off

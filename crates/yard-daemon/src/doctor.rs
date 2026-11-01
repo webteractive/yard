@@ -21,7 +21,7 @@ use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry}
 use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
 use yard_core::services::brew_info;
-use yard_core::services::render::init_command;
+use yard_core::services::render::{init_command, old_php_can_log_in};
 use yard_core::services::{Engine, instance_name, plain_line};
 use yard_core::sources::{tap_dir, tap_of};
 use yard_core::{Paths, PhpVersion, sites};
@@ -255,6 +255,9 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     }
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
     checks.extend(legacy_php_mysql(sites, &view.projects));
+    if let Some(services) = &view.services {
+        checks.extend(old_php_mysql_login(sites, &view.projects, services));
+    }
     let trust = ask_trust(brew).await;
     if let Some(services) = &view.services {
         let ask = ServiceView {
@@ -693,6 +696,40 @@ fn legacy_php_mysql(sites: &[SiteInfo], projects: &Projects) -> Vec<Check> {
                     site.name
                 ),
                 format!("use PHP 7.1.16 or newer: edit {file}"),
+            ))
+        })
+        .collect()
+}
+
+/// `php-mysql-login:<site>`: PHP 7.0 to 7.3's mysqlnd logs in only with
+/// `mysql_native_password`, which Yard turns on for MySQL 8 and MySQL 9 no longer has, so such
+/// a site whose `.yard` asks for a MySQL 9 instance cannot connect (M4b spec §16).
+fn old_php_mysql_login(sites: &[SiteInfo], projects: &Projects, services: &ServicesConfig) -> Vec<Check> {
+    sites
+        .iter()
+        .filter_map(|site| {
+            let SiteKind::Php { php, .. } = &site.kind else { return None };
+            let version = php.parse::<PhpVersion>().ok()?;
+            if version >= (PhpVersion { major: 7, minor: 4 }) {
+                return None;
+            }
+            let project = projects.get(&site.name).and_then(Loaded::ok)?;
+            let instance = match project.services.get(&Engine::Mysql)? {
+                ServiceWant::Line(line) => instance_name(Engine::Mysql, Some(line)),
+                ServiceWant::Default => services::default_instance(services, Engine::Mysql)?.to_string(),
+            };
+            if old_php_can_log_in(&instance) {
+                return None;
+            }
+            let file = site.project_file.as_deref().unwrap_or(".yard");
+            Some(warn(
+                &format!("php-mysql-login:{}", site.name),
+                format!(
+                    "{} runs PHP {php}, which logs in to MySQL only with mysql_native_password, \
+                     and {instance} has none (MySQL 9 removed it)",
+                    site.name
+                ),
+                format!("use mysql = \"8.4\" in {file}"),
             ))
         })
         .collect()

@@ -177,21 +177,24 @@ Projects that need a stable MySQL use a versioned line.
 ### 5.1 MySQL
 
 - Initialize: `mysqld --no-defaults --initialize-insecure --datadir=<data> --basedir=<keg>`, so
-  `root` has an empty password (main spec §8.2). `--no-defaults` comes first: mysqld reads
+  `root` has an empty password (main spec §8.2). On a MySQL 8 line it adds
+  `--authentication-policy=mysql_native_password,,` (and on 8.4, which leaves the plugin off,
+  `--mysql-native-password=ON` before it), so `root` logs in the way PHP 7.0 to 7.3 can (§16). `--no-defaults` comes first: mysqld reads
   `/etc/my.cnf` and `~/.my.cnf` otherwise, and a `datadir`, `port` or `basedir` in a user's
   file would shape what Yard creates. The instance's own run reads only its `my.cnf`
   (`--defaults-file`).
 - Run: `mysqld --defaults-file=<root>/services/<i>/my.cnf`. The generated `my.cnf` sets
   `port`, `bind-address = 127.0.0.1`, `socket = <root>/run/<i>.sock`, `datadir`,
-  `mysqlx = OFF` (the X Protocol would otherwise take 33060 for every instance), and
-  ends with `!include <root>/services/<i>/overrides.conf`, created once and never written
+  `mysqlx = OFF` (the X Protocol would otherwise take 33060 for every instance), the legacy
+  PHP settings of §16, and ends with `!include <root>/services/<i>/overrides.conf`, created once and never written
   again. It starts as a comment saying it is the user's file and included last, then
   `[mysqld]`: a file `!include` pulls in needs its own group header, and a setting before one
   makes mysqld exit ("Found option without preceding group").
   The include path is the one unquoted path in Yard's output: mysqld takes the rest of the
   line and keeps a quote as part of the path (checked against mysqld 8.0.33, 2026-10-24).
 - Health: TCP connect. Stop: SIGTERM (mysqld shuts down cleanly).
-- Legacy PHP: MySQL keeps its defaults; PHP 7.1.16+ connects to it (§16).
+- Legacy PHP: MySQL 8 instances log in with `mysql_native_password`, and every instance
+  uses `utf8mb4_unicode_ci` and a lenient `sql_mode` (§16).
 
 ### 5.2 PostgreSQL
 
@@ -658,6 +661,8 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
   a value. The in-process doctor (no daemon) has the CLI's own environment and skips it.
 - `php7.0-mysql:<site>`: `warn` for a PHP 7.0 site whose `.yard` asks for MySQL, naming
   "authentication method unknown" (§16).
+- `php-mysql-login:<site>`: `warn` for a PHP 7.0 to 7.3 site whose `.yard` asks for a MySQL 9
+  instance, which has no `mysql_native_password`, hint `use mysql = "8.4" in <file>` (§16).
 
 Doctor never runs `brew install`, `brew trust` or `brew services`: it only asks. Trust is read once per run
 (`brew --version`, `brew trust --json=v1`, under one 30 s bound) and shared by the checks; each `brew info`
@@ -745,12 +750,31 @@ checklists say. The M4d plan is re-checked against the M4b plan before M4d is bu
 ## 16. MySQL and legacy PHP
 
 MySQL 8 logs in with `caching_sha2_password` and defaults to the `utf8mb4_0900_ai_ci`
-collation (charset id 255). PHP's mysqlnd understands both from 7.1.16 and 7.2.4; PHP 7.0
-does not, and fails with "authentication method unknown" or "charset (255) unknown".
+collation (charset id 255). PHP's mysqlnd reads that charset from 7.1.16 and 7.2.4, but brew's
+PHP gets `caching_sha2_password` only from 7.4: 7.1 and 7.3 list just `mysql_native_password`,
+`mysql_clear_password` and `sha256_password` (`php -i`, 2026-10-27), and fail with "The server
+requested authentication method unknown to the client". PHP 7.0 knows neither.
 
-**the maintainer's oldest project runs PHP 7.3 (maintainer, 2026-10-23), so MySQL keeps its defaults.**
-Yard sets no `mysql_native_password` and no charset override. `yard doctor` warns when a
-PHP 7.0 site's `.yard` asks for MySQL, naming the error it will hit **(builder's call)**.
+The first version of this section (2026-10-23) kept MySQL's defaults, on the belief that PHP
+7.1.16 and newer could log in. Linking all-about-circuits (PHP 7.3, MySQL 8.4) on 2026-10-27
+showed it cannot. **The maintainer wants old projects to install and work (2026-10-28), so Yard sets
+MySQL up for them:**
+
+- A MySQL 8 line makes `mysql_native_password` the default, so `root` and every user created
+  without `IDENTIFIED WITH` log in the old way: `authentication_policy =
+  mysql_native_password,,` in `my.cnf` and at init, and on 8.4, which leaves the plugin off,
+  `mysql_native_password = ON` as well. PHP 7.4 and newer log in either way. MySQL 9 removed the
+  plugin, so a 9 line gets neither, and `yard doctor` warns `php-mysql-login:<site>` for a PHP
+  7.0 to 7.3 site whose `.yard` asks for one.
+- Every MySQL instance sets `character-set-server = utf8mb4`, `collation-server =
+  utf8mb4_unicode_ci` (a charset PHP 7.0 knows, and Laravel's default) and `sql_mode =
+  NO_ENGINE_SUBSTITUTION`, so an old app's loose `GROUP BY` and zero dates work. Laravel sets
+  its own `sql_mode` on each connection, so a Laravel app sees no change **(builder's call)**.
+- All of it is in the generated `my.cnf`, so a line in `overrides.conf` wins. An instance
+  created before this keeps the `root` its init made: `ALTER USER root@localhost IDENTIFIED WITH
+  mysql_native_password BY ''` switches it, which Yard never runs itself (it changes no users).
+- mysqld logs a deprecation warning each time a user logs in with `mysql_native_password`.
+- The PHP 7.0 doctor warning stays until a PHP 7.0 site is seen to connect.
 
 ## 17. Left to the builder
 
