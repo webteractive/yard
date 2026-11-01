@@ -164,9 +164,13 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   extension formulas keep the `.so` in their own keg (`redis@7.1` installs keg
   `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`.
 - On 2026-10-22 brew also had `php@7.3` and `php@7.4` installed (and the plain `php`
-  formula), so `scripts/e2e-m4a.sh` uses 7.2 as the version that is not installed.
+  formula).
 - On 2026-11-01 the maintainer approved installing PHP 7.0 (`yard php install 7.0`, brew's 7.0.33), which
   stays installed. A scratch site on it logged in to `mysql-8.4` through PDO and mysqli.
+- The same day the maintainer approved installing 7.2, 8.0, 8.1, 8.2 and 8.3, so every supported PHP
+  (7.0–8.5) is installed here. A scratch site per version, each asking for `mysql-8.4`, served
+  its page and logged in through PDO and mysqli. `scripts/e2e-m4a.sh` needs one supported PHP
+  left uninstalled for its setup-page step, so it stops at its precheck here until one is removed.
 - Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
 - For M4b (checked 2026-10-23 and 2026-10-24): Homebrew is 7.0.10. Since 6.0 it loads a
   formula from a non-official tap only when the formula or its tap is trusted; brew's own
@@ -219,9 +223,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   never run the real `security` or touch a keychain: `DaemonOptions.security`, the
   fixture's fake `security` and the CLI's `YARD_SECURITY` stand in for it.
 - `scripts/e2e-m4a.sh` — real-machine M4a check after `e2e-m1.sh`: a scratch project's
-  `.yard` picks PHP 7.1, then 8.4 after an edit, then a missing 7.2 serves the setup
-  page, and `yard isolate` is refused. It needs php@7.1 (from `e2e-m2.sh`) and installs
-  nothing; ask the maintainer first.
+  `.yard` picks PHP 7.1, then 8.4 after an edit, then the first supported PHP that is not
+  installed serves the setup page, and `yard isolate` is refused. It needs php@7.1 (from
+  `e2e-m2.sh`) and one supported PHP left uninstalled, and installs nothing; ask the maintainer first.
 - `scripts/e2e-m4a1.sh` — real-machine M4a.1 check after `e2e-m1.sh`: `yard init` in a
   scratch git repo leaves `git status` clean and serves from the managed `.yard`,
   `yard isolate 7.1` edits that file and keeps its comment, `yard unisolate` keeps the

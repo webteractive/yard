@@ -2,10 +2,10 @@
 # M4a end-to-end check on a real Mac, in the standard profile, after e2e-m1.sh passes.
 #
 # Links a temp PHP app as hello-yard whose .yard asks for PHP 7.1, checks that an edit to
-# the file is served within seconds, that a PHP which is not installed (7.2) serves the
+# the file is served within seconds, that a supported PHP which is not installed serves the
 # setup page, and that `yard isolate` is refused for it. It installs nothing: it needs
-# php@7.1 (left by e2e-m2.sh) and 8.4, and no php@7.2. sites.toml is backed up and put
-# back. Herd's resolver must come out unchanged.
+# php@7.1 (left by e2e-m2.sh) and 8.4, and one supported PHP (7.0–8.5) left uninstalled.
+# sites.toml is backed up and put back. Herd's resolver must come out unchanged.
 set -euo pipefail
 unset YARD_ROOT
 
@@ -36,7 +36,15 @@ answer() {
 
 # 1. What this needs, and Herd's resolver, before.
 [[ -d $brew_prefix/opt/php@7.1 ]] || fail "php@7.1 is not installed; run scripts/e2e-m2.sh first"
-[[ ! -d $brew_prefix/opt/php@7.2 ]] || fail "php@7.2 is installed, so the setup page cannot be checked"
+# The first supported PHP that is not installed, for the setup page. 8.5 is brew's plain `php`.
+missing=""
+for v in 7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5; do
+  [[ -d $brew_prefix/opt/php@$v ]] && continue
+  [[ $v == 8.5 && -d $brew_prefix/opt/php ]] && continue
+  missing=$v
+  break
+done
+[[ -n $missing ]] || fail "every supported PHP (7.0–8.5) is installed, so the setup page cannot be checked"
 before="$(sum "$herd_resolver")"
 
 # 2. The fixture in a temp dir, and sites.toml backed up.
@@ -73,16 +81,16 @@ version="$(tries=15 answer "http://$site.yard:8080/")"
 pass "editing it to 8.4 serves PHP $version within 3 s"
 
 # 5. A PHP that is not installed serves the setup page, naming the fix.
-printf 'php = "7.2"\n' >"$work/$site/.yard"
+printf 'php = "%s"\n' "$missing" >"$work/$site/.yard"
 code=""
 for _ in $(seq 50); do
   code="$(curl -s -o "$work/body" -w '%{http_code}' "http://$site.yard:8080/" || true)"
   [[ $code == 503 ]] && break
   sleep 0.2
 done
-[[ $code == 503 ]] || fail "with php = \"7.2\", http://$site.yard:8080/ answered $code, expected 503"
+[[ $code == 503 ]] || fail "with php = \"$missing\", http://$site.yard:8080/ answered $code, expected 503"
 grep -q 'yard init' "$work/body" || fail "the setup page does not name yard init: $(head -c 400 "$work/body")"
-pass "php = \"7.2\" (not installed) serves the 503 setup page naming yard init"
+pass "php = \"$missing\" (not installed) serves the 503 setup page naming yard init"
 
 # 6. The file owns the site's php, so yard isolate is refused.
 if "$yard" isolate 8.4 --site "$site" --json >"$work/isolate.json" 2>&1; then
