@@ -1005,26 +1005,26 @@ async fn a_shell_setting_brew_reads_that_yardd_lacks_warns_with_key_names_only()
 }
 
 #[tokio::test]
-async fn a_php_70_site_asking_for_mysql_warns_about_authentication() {
+async fn a_php_70_site_on_mysql_8_has_nothing_to_warn_about() {
     let e = env().await;
     let dir = tempfile::tempdir().unwrap();
     e.fx.add_php("7.0");
-    e.fx.add_php("7.3");
     e.instance("mysql-8.4", "mysql@8.4", false);
+    e.instance("mysql-9.7", "mysql@9.7", false);
     e.data("mysql-8.4");
-    e.formulae(json!([formula("mysql@8.4", "8.4.13")]));
+    e.data("mysql-9.7");
+    e.formulae(json!([formula("mysql@8.4", "8.4.13"), formula("mysql@9.7", "9.7.0")]));
     e.yard_site("legacy", "php = \"7.0\"\n[services]\nmysql = \"8.4\"\n", &dir);
-    e.yard_site("newer", "php = \"7.3\"\n[services]\nmysql = \"8.4\"\n", &dir);
-    e.yard_site("cache", "php = \"7.0\"\n[services]\nredis = true\n", &dir);
+    e.yard_site("newest", "php = \"7.0\"\n[services]\nmysql = \"9.7\"\n", &dir);
 
     let report = e.offline(&e.helper).await;
 
-    let c = only(&report, "php7.0-mysql:legacy");
-    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
-    assert!(c.message.contains("authentication method unknown"), "{c:?}");
-    assert!(c.message.contains("legacy"), "{c:?}");
-    assert!(c.hint.is_some());
-    assert!(!report.checks.iter().any(|c| c.id == "php7.0-mysql:newer" || c.id == "php7.0-mysql:cache"));
+    // PHP 7.0 logs in to a MySQL 8 instance, which Yard sets up with mysql_native_password
+    // and a collation 7.0 knows (seen on this machine on 2026-11-01); MySQL 9 is the
+    // php-mysql-login check's, as for 7.1 to 7.3.
+    not_present(&report, "php7.0-mysql");
+    assert!(!report.checks.iter().any(|c| c.id == "php-mysql-login:legacy"));
+    assert_eq!(only(&report, "php-mysql-login:newest").status, CheckStatus::Warn);
 }
 
 #[tokio::test]

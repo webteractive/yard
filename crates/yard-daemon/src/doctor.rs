@@ -254,7 +254,6 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         ));
     }
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
-    checks.extend(legacy_php_mysql(sites, &view.projects));
     if let Some(services) = &view.services {
         checks.extend(old_php_mysql_login(sites, &view.projects, services));
     }
@@ -673,32 +672,6 @@ fn site_needs(view: &ServiceView<'_>, site: &SiteInfo, projects: &Projects) -> V
         }
     }
     checks
-}
-
-/// `php7.0-mysql:<site>`: PHP 7.0's mysqlnd knows neither MySQL 8's `caching_sha2_password`
-/// nor its default charset (spec §16), so a PHP 7.0 site whose `.yard` asks for MySQL will
-/// fail to connect.
-fn legacy_php_mysql(sites: &[SiteInfo], projects: &Projects) -> Vec<Check> {
-    sites
-        .iter()
-        .filter_map(|site| {
-            let SiteKind::Php { php, .. } = &site.kind else { return None };
-            let project = projects.get(&site.name).and_then(Loaded::ok)?;
-            if php != "7.0" || !project.services.contains_key(&Engine::Mysql) {
-                return None;
-            }
-            let file = site.project_file.as_deref().unwrap_or(".yard");
-            Some(warn(
-                &format!("php7.0-mysql:{}", site.name),
-                format!(
-                    "{} runs PHP 7.0 and its .yard asks for MySQL, which PHP 7.0 cannot log in to \
-                     (\"authentication method unknown\", or \"charset (255) unknown\")",
-                    site.name
-                ),
-                format!("use PHP 7.1.16 or newer: edit {file}"),
-            ))
-        })
-        .collect()
 }
 
 /// `php-mysql-login:<site>`: PHP 7.0 to 7.3's mysqlnd logs in only with

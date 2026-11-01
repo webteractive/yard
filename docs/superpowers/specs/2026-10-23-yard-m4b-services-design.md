@@ -660,8 +660,6 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
   sent as `DoctorParams`, which an older client leaves out) has a key that yardd's environment lacks
   or sets differently, hint `put it in ~/.homebrew/brew.env`. Only the key names are printed, never
   a value. The in-process doctor (no daemon) has the CLI's own environment and skips it.
-- `php7.0-mysql:<site>`: `warn` for a PHP 7.0 site whose `.yard` asks for MySQL, naming
-  "authentication method unknown" (§16).
 - `php-mysql-login:<site>`: `warn` for a PHP 7.0 to 7.3 site whose `.yard` asks for a MySQL 9
   instance, which has no `mysql_native_password`, hint `use mysql = "8.4" in <file>` (§16).
 
@@ -775,7 +773,10 @@ MySQL up for them:**
   created before this keeps the `root` its init made: `ALTER USER root@localhost IDENTIFIED WITH
   mysql_native_password BY ''` switches it, which Yard never runs itself (it changes no users).
 - mysqld logs a deprecation warning each time a user logs in with `mysql_native_password`.
-- The PHP 7.0 doctor warning stays until a PHP 7.0 site is seen to connect.
+- On 2026-11-01 a scratch site on brew's PHP 7.0.33 logged in to this machine's `mysql-8.4`
+  through both PDO and mysqli, so the `php7.0-mysql` doctor warning, which said PHP 7.0 could
+  not log in to any MySQL, was removed. A PHP 7.0 site asking for MySQL 9 still gets
+  `php-mysql-login`.
 
 ## 17. Left to the builder
 

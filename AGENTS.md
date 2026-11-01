@@ -165,6 +165,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`.
 - On 2026-10-22 brew also had `php@7.3` and `php@7.4` installed (and the plain `php`
   formula), so `scripts/e2e-m4a.sh` uses 7.2 as the version that is not installed.
+- On 2026-11-01 the maintainer approved installing PHP 7.0 (`yard php install 7.0`, brew's 7.0.33), which
+  stays installed. A scratch site on it logged in to `mysql-8.4` through PDO and mysqli.
 - Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
 - For M4b (checked 2026-10-23 and 2026-10-24): Homebrew is 7.0.10. Since 6.0 it loads a
   formula from a non-official tap only when the formula or its tap is trusted; brew's own

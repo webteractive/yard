@@ -64,7 +64,9 @@ fn human(report: &DoctorReport) -> String {
             CheckStatus::Fail => "FAIL",
         };
         let mut lines = c.message.lines();
-        out.push_str(&format!("{status:<6}{:<ID_WIDTH$}{}\n", c.id, lines.next().unwrap_or_default()));
+        // A space after the id always, so a long id (`project-file:<site>`) never runs into its message.
+        let id_width = ID_WIDTH - 1;
+        out.push_str(&format!("{status:<6}{:<id_width$} {}\n", c.id, lines.next().unwrap_or_default()));
         for line in lines {
             out.push_str(&format!("{indent}{line}\n"));
         }
@@ -81,4 +83,24 @@ fn human(report: &DoctorReport) -> String {
     });
     out.push_str(&for_agents("yard doctor"));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::human;
+    use yard_proto::{Check, CheckStatus, DoctorReport};
+
+    #[test]
+    fn an_id_wider_than_its_column_keeps_a_space_before_the_message() {
+        let check = |id: &str| Check {
+            id: id.into(),
+            status: CheckStatus::Ok,
+            message: "the message".into(),
+            hint: None,
+        };
+        let report = DoctorReport { checks: vec![check("brew"), check("project-file:all-about-circuits")] };
+        let out = human(&report);
+        assert!(out.contains("ok    brew            the message\n"), "{out}");
+        assert!(out.contains("ok    project-file:all-about-circuits the message\n"), "{out}");
+    }
 }
