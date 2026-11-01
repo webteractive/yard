@@ -121,7 +121,7 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         .iter()
         .filter_map(|n| match n {
             Need::Php { php } => Some(php.clone()),
-            Need::Extension { .. } | Need::Service { .. } => None,
+            Need::Extension { .. } | Need::Service { .. } | Need::Manual { .. } => None,
         })
         .collect();
     for v in &php {
@@ -139,7 +139,7 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         .iter()
         .filter_map(|n| match n {
             Need::Extension { name, php } => Some((name.clone(), php.clone())),
-            Need::Php { .. } | Need::Service { .. } => None,
+            Need::Php { .. } | Need::Service { .. } | Need::Manual { .. } => None,
         })
         .collect();
     for (name, php) in &exts {
@@ -156,7 +156,7 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         .iter()
         .filter_map(|n| match n {
             Need::Service { engine, version } => Some((engine.clone(), version.clone())),
-            Need::Php { .. } | Need::Extension { .. } => None,
+            Need::Php { .. } | Need::Extension { .. } | Need::Manual { .. } => None,
         })
         .collect();
     for (engine, version) in &wanted {

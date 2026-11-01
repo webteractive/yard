@@ -196,6 +196,12 @@ pub enum Need {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         version: Option<String>,
     },
+    /// Something Yard cannot install itself (emailulator's binary): `command` is what the
+    /// user runs (protocol 2.9).
+    Manual {
+        what: String,
+        command: String,
+    },
 }
 
 /// How a service engine is named to people: `mysql` is `MySQL`. An engine Yard does not
@@ -218,6 +224,7 @@ impl Need {
             Need::Extension { name, php } => format!("the {name} extension for PHP {php}"),
             Need::Service { engine, version: Some(v) } => format!("{} {v}", engine_display(engine)),
             Need::Service { engine, version: None } => engine_display(engine).to_string(),
+            Need::Manual { what, .. } => what.clone(),
         }
     }
 
@@ -238,7 +245,13 @@ impl Need {
             Need::Extension { name, php } => format!("yard ext add {name} --php {php}"),
             Need::Service { engine, version: Some(v) } => format!("yard service add {engine} --version {v}"),
             Need::Service { engine, version: None } => format!("yard service add {engine}"),
+            Need::Manual { command, .. } => command.clone(),
         }
+    }
+
+    /// Whether Yard can install it after a yes; a `Manual` need is the user's to run.
+    pub fn installable(&self) -> bool {
+        !matches!(self, Need::Manual { .. })
     }
 }
 
@@ -547,7 +560,8 @@ pub struct ServiceInfo {
     /// Stopped by `yard service stop`, so yardd leaves it stopped.
     pub stopped_by_user: bool,
     pub account: Account,
-    /// The web console's URL, when the engine has one (MinIO).
+    /// The web console's URL, when the engine has one (MinIO, and emailulator's
+    /// `mail.<tld>`).
     pub console: Option<String>,
     /// Sites whose `.yard` lists this instance.
     pub used_by: Vec<String>,
@@ -561,6 +575,20 @@ pub struct ServiceInfo {
     /// Where that setting comes from: `services_toml`, `yard_toml` or `default` (none).
     #[serde(default)]
     pub sleep_after_source: SettingSource,
+    /// Who runs it (protocol 2.9): Yard, or emailulator's own LaunchAgent.
+    #[serde(default)]
+    pub managed_by: ServiceManager,
+}
+
+/// Who runs a service instance.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServiceManager {
+    /// A yardd unit.
+    #[default]
+    Yard,
+    /// A launchd agent Yard does not start or stop, such as emailulator's.
+    LaunchAgent { label: String, pid: Option<u32> },
 }
 
 /// One block of `env.print`: the `.env` lines for an instance.
@@ -644,6 +672,52 @@ pub struct JobStarted {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn manual_need_is_tagged() {
+        let need = Need::Manual { what: "emailulator".into(), command: "curl … | sh".into() };
+        assert_eq!(
+            serde_json::to_value(&need).unwrap(),
+            json!({"kind":"manual","what":"emailulator","command":"curl … | sh"})
+        );
+        assert_eq!(need.describe(), "emailulator");
+        assert_eq!(need.command(), "curl … | sh");
+    }
+
+    #[test]
+    fn manual_need_is_not_installable() {
+        assert!(!Need::Manual { what: "emailulator".into(), command: "sh".into() }.installable());
+        assert!(Need::Php { php: "7.3".into() }.installable());
+        assert!(Need::Service { engine: "emailulator".into(), version: None }.installable());
+    }
+
+    fn mysql_info() -> serde_json::Value {
+        json!({"name":"mysql-8.4","engine":"mysql","version":"8.4","formula":"mysql@8.4",
+            "ports":[{"name":"mysql-8.4","port":3307}],"state":"running","stopped_by_user":false,
+            "account":{"user":"root","password":""},"console":null,"used_by":[]})
+    }
+
+    #[test]
+    fn service_info_without_manager_is_yard() {
+        // What a 2.8 daemon sent: no `managed_by`.
+        let info: ServiceInfo = serde_json::from_value(mysql_info()).unwrap();
+        assert_eq!(info.managed_by, ServiceManager::Yard);
+        assert_eq!(info.console, None);
+    }
+
+    #[test]
+    fn launch_agent_manager_round_trips() {
+        let manager =
+            ServiceManager::LaunchAgent { label: "com.webteractive.emailulator".into(), pid: Some(3261) };
+        let v = serde_json::to_value(&manager).unwrap();
+        assert_eq!(v, json!({"kind":"launch_agent","label":"com.webteractive.emailulator","pid":3261}));
+        assert_eq!(serde_json::from_value::<ServiceManager>(v).unwrap(), manager);
+        assert_eq!(serde_json::to_value(ServiceManager::Yard).unwrap(), json!({"kind":"yard"}));
+        let mut info = mysql_info();
+        info["managed_by"] = json!({"kind":"launch_agent","label":"l","pid":null});
+        let info: ServiceInfo = serde_json::from_value(info).unwrap();
+        assert_eq!(info.managed_by, ServiceManager::LaunchAgent { label: "l".into(), pid: None });
+    }
 
     #[test]
     fn profile_values() {
@@ -906,6 +980,7 @@ mod tests {
             sleeping_since: None,
             sleep_after_secs: None,
             sleep_after_source: SettingSource::Default,
+            managed_by: ServiceManager::Yard,
         };
         let v = serde_json::to_value(&info).unwrap();
         assert_eq!(v["state"], "running");

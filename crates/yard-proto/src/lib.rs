@@ -13,4 +13,4 @@ pub use types::*;
 
 /// Version of the JSON-RPC protocol spoken over `yardd.sock` and the helper socket.
 /// Bump the minor for additive changes and the major for breaking ones.
-pub const PROTOCOL_VERSION: &str = "2.8";
+pub const PROTOCOL_VERSION: &str = "2.9";

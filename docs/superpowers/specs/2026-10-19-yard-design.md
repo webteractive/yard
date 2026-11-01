@@ -574,7 +574,8 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `HELPER_NOT_INSTALLED`, `EXT_VERIFY_FAILED`, `EXT_NOT_FOUND`, `CA_NOT_TRUSTED`, `CA_STILL_TRUSTED`,
 `SITE_HAS_PROJECT_FILE`, `NEEDS_INSTALL`, `SITE_NAME_TAKEN`, `PROJECT_FILE_INVALID`,
 `PROJECT_FILE_EXISTS`, `SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
-`FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`, `NODE_MISSING`, `NODE_IN_USE` (M4c). The CLI prints message and hint;
+`FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`, `NODE_MISSING`, `NODE_IN_USE` (M4c), `EMAILULATOR_NOT_FOUND`
+(`data.searched`) and `SERVICE_EXTERNAL` (`data { label, pid }`, M4d). The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI

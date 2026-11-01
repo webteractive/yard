@@ -284,6 +284,7 @@ mod tests {
             sleeping_since: None,
             sleep_after_secs: None,
             sleep_after_source: yard_proto::SettingSource::Default,
+            managed_by: yard_proto::ServiceManager::Yard,
         }
     }
 

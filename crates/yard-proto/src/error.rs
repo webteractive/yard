@@ -72,6 +72,11 @@ pub enum ErrorCode {
     /// A Node version is the only one the default or a linked site resolves to, so it
     /// cannot be removed.
     NodeInUse,
+    /// No emailulator binary where Yard looks; `data.searched` lists the paths tried.
+    EmailulatorNotFound,
+    /// The service is run by something other than Yard (emailulator's LaunchAgent), so Yard
+    /// does not start, stop or remove it; `data` names the `label` and `pid`.
+    ServiceExternal,
     Internal,
 }
 
@@ -155,6 +160,8 @@ mod tests {
             (ErrorCode::NeedsConfirmation, "NEEDS_CONFIRMATION"),
             (ErrorCode::NodeMissing, "NODE_MISSING"),
             (ErrorCode::NodeInUse, "NODE_IN_USE"),
+            (ErrorCode::EmailulatorNotFound, "EMAILULATOR_NOT_FOUND"),
+            (ErrorCode::ServiceExternal, "SERVICE_EXTERNAL"),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
         }

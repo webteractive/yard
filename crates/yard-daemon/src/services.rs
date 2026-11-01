@@ -216,6 +216,7 @@ pub fn service_info(
         sleeping_since: sleeping_since.and_then(rfc3339),
         sleep_after_secs,
         sleep_after_source,
+        managed_by: yard_proto::ServiceManager::Yard,
     })
 }
 

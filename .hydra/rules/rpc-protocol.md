@@ -36,6 +36,10 @@ triggers:
   `StatusInfo.sleeping` lists the sleeping instances. `ServiceState` has an `Other` fallback
   from 2.8, so a later state can be a variant, with or without data. `services.sleep.set { name, after }` takes a
   duration, `off` or `default`.
+- Protocol 2.9 (M4d): `ServiceInfo.managed_by` (`{"kind":"yard"}` or `{"kind":"launch_agent",
+  "label", "pid"}`, `yard` when absent) says who runs an instance; emailulator's web UI URL rides
+  `console`. `Need::Manual { what, command }` is a need Yard cannot install (`installable()` is
+  false): the confirm flow lists it and leaves it to the user.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), always `204`, for nginx's `auth_request`
   and the shims. It never adds, changes or removes anything; keep it that narrow.
