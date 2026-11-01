@@ -45,8 +45,10 @@ fn main() -> ExitCode {
 /// `agent.json` on 127.0.0.1:1025 and 8025, or the SMTP address after `-- --smtp-addr`.
 fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
     let dir = argv0.parent().unwrap_or(Path::new("."));
-    let calls = std::fs::read_to_string(dir.join("calls")).unwrap_or_default();
-    let _ = std::fs::write(dir.join("calls"), format!("{calls}{}\n", args.join(" ")));
+    // One append per call: reconcile, the port scan and a job may ask at the same time.
+    let calls = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("calls"));
+    let _ =
+        calls.and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}\n", args.join(" ")).as_bytes()));
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["--version"] => {

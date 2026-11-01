@@ -284,3 +284,13 @@ pub fn inherited_starts(paths: &Paths) -> usize {
     let log = std::fs::read_to_string(paths.logs_dir().join("nginx.log")).unwrap_or_default();
     log.lines().filter(|l| l.contains("using inherited sockets from")).count()
 }
+
+/// `service status --json` as emailulator 0.1.3 prints it, on `smtp` and `http`.
+pub fn agent_json(exit: i32, smtp: u16, http: u16) -> String {
+    format!(
+        r#"{exit}
+{{"label":"com.webteractive.emailulator","installed":true,"answering":true,"loaded":true,"running":true,
+"pid":4242,"smtp_addr":"127.0.0.1:{smtp}","http_addr":"127.0.0.1:{http}","tls":false,
+"log":"/tmp/emailulator-server.log"}}"#
+    )
+}

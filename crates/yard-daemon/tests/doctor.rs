@@ -71,6 +71,7 @@ impl Env {
             security: &self.fx.security,
             client_env: Default::default(),
             sleeping: Default::default(),
+            home: &self.fx.paths.root().join("home"),
         })
         .await
     }
@@ -141,6 +142,7 @@ async fn all_ok_on_healthy_fixture() {
         security: &e.fx.security,
         client_env: Default::default(),
         sleeping: Default::default(),
+        home: &e.fx.paths.root().join("home"),
     })
     .await;
     sup.shutdown().await;
@@ -251,6 +253,7 @@ async fn failed_unit_reports_last_lines() {
         security: &e.fx.security,
         client_env: Default::default(),
         sleeping: Default::default(),
+        home: &e.fx.paths.root().join("home"),
     })
     .await;
 
@@ -321,6 +324,7 @@ async fn failed_reconcile_fails_config_and_units() {
         security: &e.fx.security,
         client_env: Default::default(),
         sleeping: Default::default(),
+        home: &e.fx.paths.root().join("home"),
     })
     .await;
 
@@ -659,6 +663,7 @@ impl Env {
             security: &self.fx.security,
             client_env: client_env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             sleeping: Default::default(),
+            home: &self.fx.paths.root().join("home"),
         })
         .await
     }
@@ -1260,4 +1265,130 @@ async fn a_missing_default_used_by_a_site_warns_once() {
     assert_eq!(c.hint.as_deref(), Some("yard node install 22"));
     assert_eq!(only(&report, "node:one").message, "one needs Node 22 (the default), which is not installed");
     only(&report, "node:two");
+}
+
+// ---- emailulator (M4d) ----
+
+use support::agent_json;
+
+fn emailulator_ids(report: &DoctorReport) -> Vec<&str> {
+    ids(report).into_iter().filter(|id| id.starts_with("emailulator") || *id == "mail-host").collect()
+}
+
+async fn doctor_of(d: &support::daemon::Daemon) -> DoctorReport {
+    let mut c = d.client().await;
+    serde_json::from_value(c.call("doctor", Value::Null).await.unwrap()).unwrap()
+}
+
+/// A daemon whose home has the fake emailulator, its agent described by `agent` (the
+/// `agent.json` text) when given. Returns the daemon and the agent's SMTP port.
+async fn mail_daemon(agent: Option<fn(u16, u16) -> String>) -> (support::daemon::Daemon, u16) {
+    let d = prepared("").await;
+    let dir = d.fx.add_emailulator();
+    let (smtp, http) = (free_port(), free_port());
+    if let Some(agent) = agent {
+        std::fs::write(dir.join("agent.json"), agent(smtp, http)).unwrap();
+    }
+    (d, smtp)
+}
+
+#[tokio::test]
+async fn doctor_names_the_agent() {
+    let (d, smtp) = mail_daemon(Some(|smtp, http| agent_json(0, smtp, http))).await;
+    let d = d.start().await;
+    let report = doctor_of(&d).await;
+    let nginx = yard_core::ports::Registry::load(&d.fx.paths).unwrap().entries["nginx-http"].port;
+    let check = only(&report, "emailulator");
+    assert_eq!(check.status, CheckStatus::Ok, "{check:?}");
+    assert_eq!(
+        check.message,
+        format!(
+            "mail is caught by LaunchAgent com.webteractive.emailulator (pid 4242): SMTP 127.0.0.1:{smtp}, \
+             web UI http://mail.yard:{nginx}"
+        )
+    );
+    assert_eq!(emailulator_ids(&report), ["emailulator"]);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn doctor_fails_unanswering_emailulator() {
+    let (d, _) = mail_daemon(Some(|smtp, http| {
+        agent_json(3, smtp, http).replace("\"answering\":true", "\"answering\":false")
+    }))
+    .await;
+    let d = d.start().await;
+    let report = doctor_of(&d).await;
+    let check = only(&report, "emailulator");
+    assert_eq!(check.status, CheckStatus::Fail, "{check:?}");
+    assert_eq!(check.message, "emailulator is not answering");
+    assert_eq!(check.hint.as_deref(), Some("emailulator service status"));
+    d.shutdown().await.unwrap();
+}
+
+/// Offline, as `yard doctor` runs with yardd down: the same probe, from the files.
+#[tokio::test]
+async fn doctor_fails_missing_binary_when_yard_lists_it() {
+    let e = env().await;
+    let dir = e.secured_site();
+    std::fs::write(dir.path().join(".yard"), "[services]\nemailulator = true\n").unwrap();
+    let report = e.offline(&e.helper).await;
+    let check = only(&report, "emailulator");
+    assert_eq!(check.status, CheckStatus::Fail, "{check:?}");
+    assert_eq!(check.message, "emailulator is not installed");
+    assert_eq!(check.hint.as_deref(), Some(yard_core::emailulator::INSTALLER));
+}
+
+#[tokio::test]
+async fn doctor_silent_without_emailulator() {
+    let d = prepared("").await.start().await;
+    assert_eq!(emailulator_ids(&doctor_of(&d).await), Vec::<&str>::new());
+    d.shutdown().await.unwrap();
+    // Installed but unused: nothing to say either.
+    let (d, _) = mail_daemon(None).await;
+    let d = d.start().await;
+    assert_eq!(emailulator_ids(&doctor_of(&d).await), Vec::<&str>::new());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn doctor_warns_old_version() {
+    let e = env().await;
+    let fake = e.fx.add_emailulator();
+    std::fs::write(fake.join("version"), "emailulator 0.1.2 (fake, 2026-10-01)\n").unwrap();
+    let dir = e.secured_site();
+    std::fs::write(dir.path().join(".yard"), "[services]\nemailulator = true\n").unwrap();
+    let report = e.offline(&e.helper).await;
+    let check = only(&report, "emailulator-version");
+    assert_eq!(check.status, CheckStatus::Warn, "{check:?}");
+    assert_eq!(check.message, "emailulator 0.1.2 is older than 0.1.3");
+    assert_eq!(check.hint.as_deref(), Some("emailulator self-update"));
+    assert_eq!(only(&report, "emailulator").hint.as_deref(), Some("emailulator self-update"));
+}
+
+#[tokio::test]
+async fn doctor_warns_unreadable_status() {
+    let (d, _) = mail_daemon(Some(|_, _| "0\nnot json".to_string())).await;
+    let shop = d.project("shop");
+    std::fs::write(shop.join(".yard"), "[services]\nemailulator = true\n").unwrap();
+    let d = d.start().await;
+    let report = doctor_of(&d).await;
+    let check = only(&report, "emailulator-status");
+    assert_eq!(check.status, CheckStatus::Warn, "{check:?}");
+    assert!(check.message.starts_with("emailulator service status failed: "), "{check:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn doctor_warns_site_named_mail() {
+    let (d, _) = mail_daemon(Some(|smtp, http| agent_json(0, smtp, http))).await;
+    d.project("mail");
+    let d = d.start().await;
+    let report = doctor_of(&d).await;
+    let check = only(&report, "mail-host");
+    assert_eq!(check.status, CheckStatus::Warn, "{check:?}");
+    assert_eq!(check.message, "the site mail is served at mail.yard, so emailulator's web UI is not");
+    assert_eq!(check.hint.as_deref(), Some("yard unlink mail"));
+    assert!(only(&report, "emailulator").message.contains("web UI http://127.0.0.1:"), "{report:#?}");
+    d.shutdown().await.unwrap();
 }

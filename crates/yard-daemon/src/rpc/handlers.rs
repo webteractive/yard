@@ -427,6 +427,7 @@ async fn doctor(ctx: &Context, params: DoctorParams) -> DoctorReport {
         security: &ctx.security,
         client_env: params.client_env,
         sleeping: ctx.sleeper.asleep(),
+        home: ctx.reconciler.home(),
     })
     .await
 }

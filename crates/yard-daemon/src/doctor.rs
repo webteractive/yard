@@ -4,7 +4,9 @@
 //! and then every check that needs config re-reads the TOML files itself.
 
 use crate::daemon::VERSION;
+use crate::emailulator::{Probe, find_and_probe, is_exec, serving_agent};
 use crate::helper_client::HelperClient;
+use crate::reconcile::serves_mail;
 use crate::sources::{self, BREW_TIMEOUT, TrustRead};
 use crate::state::State;
 use crate::{holder, portscan, services, tls};
@@ -14,6 +16,7 @@ use time::OffsetDateTime;
 use yard_core::brew::Brew;
 use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services, load_sites, load_yard};
 use yard_core::constraint::{best_version, satisfies};
+use yard_core::emailulator::{MAIL_HOST_LABEL, MIN_VERSION, NAME as EMAILULATOR, locate};
 use yard_core::generated::{Hashes, sha256_hex};
 use yard_core::node::{DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, install_hint, pick};
 use yard_core::paths::RESOLVER_MARKER;
@@ -50,6 +53,8 @@ pub struct DoctorInput<'a> {
     pub client_env: BTreeMap<String, String>,
     /// The service instances asleep and since when (M4e); empty without yardd.
     pub sleeping: BTreeMap<String, OffsetDateTime>,
+    /// The user's home, where emailulator's installer puts it (M4d).
+    pub home: &'a Path,
 }
 
 /// What the config-dependent checks read: yardd's last good snapshot, or the files.
@@ -67,6 +72,8 @@ struct View {
     /// The service instances; `None` when `services.toml` does not parse.
     services: Option<ServicesConfig>,
     hashes: Result<Hashes, YardError>,
+    /// What emailulator said about itself; `None` when it is not installed.
+    emailulator: Option<Probe>,
 }
 
 impl View {
@@ -82,10 +89,14 @@ impl View {
             projects: snap.projects.clone(),
             services: Some(snap.services.clone()),
             hashes: Ok(state.hashes.clone()),
+            emailulator: snap.emailulator.clone(),
         })
     }
 
-    fn from_files(paths: &Paths, brew: &Brew) -> View {
+    /// Asks emailulator as reconcile does, so the offline doctor sees what yardd would.
+    async fn from_files(paths: &Paths, brew: &Brew, home: &Path) -> View {
+        let recorded = load_services(paths).ok().and_then(|s| s.emailulator).and_then(|e| e.path);
+        let emailulator = find_and_probe(recorded.as_deref(), home, None).await;
         let (yard, yard_warnings) = match load_yard(paths) {
             Ok((y, w)) => (Ok(y), w),
             Err(e) => (Err(e), vec![]),
@@ -117,7 +128,8 @@ impl View {
                 // A services.toml that does not parse is `config_error`'s to report: reading it as
                 // empty would call every `[services]` entry a missing instance.
                 let services = services.as_ref().ok();
-                crate::project::fill_needs(&mut resolution.sites, &projects, y, services, None, brew, paths);
+                let mail = emailulator.as_ref();
+                crate::project::fill_needs(&mut resolution.sites, &projects, y, services, mail, brew, paths);
                 warnings.extend(resolution.warnings);
                 Some((warnings, resolution.sites))
             }
@@ -133,6 +145,7 @@ impl View {
             projects,
             services: services.ok(),
             hashes: Hashes::load(&paths.hashes()),
+            emailulator,
         }
     }
 
@@ -148,7 +161,10 @@ impl View {
 pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
     let paths = input.paths;
     let brew = input.brew;
-    let mut view = input.state.and_then(View::from_state).unwrap_or_else(|| View::from_files(paths, brew));
+    let mut view = match input.state.and_then(View::from_state) {
+        Some(view) => view,
+        None => View::from_files(paths, brew, input.home).await,
+    };
     // yardd's last failure covers more than a parse error: nginx rejecting the config, say.
     if let Some(e) = input.state.and_then(|s| s.last_error.clone()) {
         view.config_error = Some(e);
@@ -270,11 +286,83 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         };
         checks.extend(service_checks(&ask, sites, &view.projects).await);
     }
+    checks.extend(emailulator_checks(&view, input.home));
     checks.extend(
         sources_checks(brew, &trust, view.yard.as_ref(), view.services.as_ref(), &input.client_env).await,
     );
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
+}
+
+/// Who catches mail (M4d spec §11): `emailulator`, with `emailulator-version`,
+/// `emailulator-status` and `mail-host` warnings. Nothing is said unless `services.toml`
+/// records emailulator, a `.yard` asks for it, or its LaunchAgent is installed.
+fn emailulator_checks(view: &View, home: &Path) -> Vec<Check> {
+    let recorded = view.services.as_ref().and_then(|s| s.emailulator.as_ref());
+    let listed = view.projects.values().any(|loaded| loaded.ok().is_some_and(|file| file.emailulator));
+    let agent = view.emailulator.as_ref().and_then(|p| p.agent.as_ref()).filter(|a| a.installed);
+    if recorded.is_none() && !listed && agent.is_none() {
+        return vec![];
+    }
+    let Some(probe) = &view.emailulator else {
+        let path = recorded.and_then(|e| e.path.as_deref());
+        return locate(path, home, &is_exec).err().map(|e| from_error(EMAILULATOR, &e)).into_iter().collect();
+    };
+    let mut checks = vec![];
+    let old = probe.version.filter(|v| *v < MIN_VERSION);
+    if let Some((major, minor, patch)) = old {
+        let (a, b, c) = MIN_VERSION;
+        checks.push(warn(
+            "emailulator-version",
+            format!("emailulator {major}.{minor}.{patch} is older than {a}.{b}.{c}"),
+            "emailulator self-update",
+        ));
+    }
+    if let Some(why) = &probe.status_error {
+        let message = format!("emailulator service status failed: {why}");
+        checks.push(warn("emailulator-status", message, "emailulator service status"));
+    }
+    let mail_site = view.sites.as_ref().is_some_and(|(_, sites)| !serves_mail(sites));
+    checks.push(match serving_agent(Some(probe)) {
+        Some(agent) if agent.answering => {
+            let who = match agent.pid {
+                Some(pid) => format!("LaunchAgent {} (pid {pid})", agent.label),
+                None => format!("LaunchAgent {}", agent.label),
+            };
+            let ui =
+                mail_url(view).filter(|_| !mail_site).unwrap_or_else(|| format!("http://{}", agent.http));
+            ok(EMAILULATOR, format!("mail is caught by {who}: SMTP {}, web UI {ui}", agent.smtp))
+        }
+        Some(_) => fail(EMAILULATOR, "emailulator is not answering", "emailulator service status"),
+        // Before 0.1.3 Yard cannot read the agent; installed but unloaded, it is launchd's to say why.
+        None => {
+            let hint = match (old, agent) {
+                (Some(_), _) => "emailulator self-update",
+                (None, Some(_)) => "emailulator service status",
+                (None, None) => "yard service add emailulator",
+            };
+            fail(EMAILULATOR, "emailulator is not answering", hint)
+        }
+    });
+    if mail_site && serving_agent(Some(probe)).is_some() {
+        let tld = view.tld.as_deref().unwrap_or("yard");
+        checks.push(warn(
+            "mail-host",
+            format!("the site {MAIL_HOST_LABEL} is served at {MAIL_HOST_LABEL}.{tld}, so emailulator's web UI is not"),
+            format!("yard unlink {MAIL_HOST_LABEL}"),
+        ));
+    }
+    checks
+}
+
+/// `mail.<tld>` with nginx's port, as `services.list` gives it.
+fn mail_url(view: &View) -> Option<String> {
+    let (tld, registry) = (view.tld.as_deref()?, view.registry.as_ref()?);
+    let port_of = |unit: &str, usual: u16| registry.entries.get(unit).map_or(usual, |e| e.port);
+    let http = port_of(NGINX_HTTP, registry.profile.http_port());
+    let https = port_of(NGINX_HTTPS, registry.profile.https_port());
+    let secure = view.yard.as_ref().is_some_and(|y| y.secure_by_default);
+    Some(services::host_url(MAIL_HOST_LABEL, tld, secure, http, https))
 }
 
 /// A site's Node that cannot run: `node-spec:<site>` for a pin that cannot be read,

@@ -4,7 +4,7 @@ use super::{Ctx, Outcome};
 use crate::client::CliError;
 use crate::output::for_agents;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use yard_core::brew::{Brew, DEFAULT_PREFIX};
 use yard_core::paths::{HELPER_SOCKET, RESOLVER_DIR};
 use yard_daemon::doctor::{self, DoctorInput};
@@ -39,6 +39,7 @@ async fn offline(ctx: &Ctx) -> DoctorReport {
     // A missing Homebrew is the brew check's to report, so fall back to its usual prefix.
     let brew = Brew::from_env(&|p: &Path| p.exists()).unwrap_or_else(|_| Brew::new(DEFAULT_PREFIX));
     let helper = HelperClient::new(HELPER_SOCKET);
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     doctor::run(DoctorInput {
         paths: &ctx.paths,
         brew: &brew,
@@ -50,6 +51,7 @@ async fn offline(ctx: &Ctx) -> DoctorReport {
         security: &ctx.security,
         client_env: Default::default(),
         sleeping: Default::default(),
+        home: &home,
     })
     .await
 }

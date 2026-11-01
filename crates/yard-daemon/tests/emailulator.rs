@@ -7,7 +7,7 @@ mod support;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use support::FAKE;
+use support::{FAKE, agent_json};
 use tempfile::TempDir;
 use yard_daemon::emailulator::{Probe, probe};
 
@@ -15,16 +15,6 @@ fn fake_emailulator(dir: &Path) -> PathBuf {
     let bin = dir.join("emailulator");
     symlink(FAKE, &bin).unwrap();
     bin
-}
-
-/// `service status --json` as emailulator 0.1.3 prints it, on `smtp` and `http`.
-fn agent_json(exit: i32, smtp: u16, http: u16) -> String {
-    format!(
-        r#"{exit}
-{{"label":"com.webteractive.emailulator","installed":true,"answering":true,"loaded":true,"running":true,
-"pid":4242,"smtp_addr":"127.0.0.1:{smtp}","http_addr":"127.0.0.1:{http}","tls":false,
-"log":"/tmp/emailulator-server.log"}}"#
-    )
 }
 
 const TIMEOUT: Duration = Duration::from_secs(5);
