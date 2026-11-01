@@ -55,7 +55,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   and planned in `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`, both
   approved 2026-10-26; emailulator keeps its own LaunchAgent and Yard only points at it (option B,
   decided 2026-10-26: the maintainer asked Claude to decide). M4d is built on main (2026-11-01, Tasks 1–11
-  committed one per task with the maintainer's approval); `scripts/e2e-m4d.sh` is written and not run yet.
+  committed one per task with the maintainer's approval) and verified on this machine on 2026-11-01 with
+  `scripts/e2e-m1.sh` and `e2e-m4d.sh` passing on their first run against yardd built from 09c4b81
+  (maintainer approved the run); the agent kept its pid throughout.
   M4e, on-demand services (instances sleep when idle and wake on use), is designed in
   `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
   written in another session and checked against the code; the maintainer answered its §13 questions

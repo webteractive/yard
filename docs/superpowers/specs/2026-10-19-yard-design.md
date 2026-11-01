@@ -909,7 +909,8 @@ Each milestone is usable on its own and gets its own implementation plan.
      Designed in `docs/superpowers/specs/2026-10-23-yard-emailulator-design.md`, planned in
      `docs/superpowers/plans/2026-10-23-yard-m4d-emailulator.md`; emailulator keeps its own
      LaunchAgent and Yard only points at it (option B, decided 2026-10-26). Spec and plan
-     approved 2026-10-26; built on main on 2026-11-01.
+     approved 2026-10-26; built on main and verified with `scripts/e2e-m4d.sh` on
+     the maintainer's machine on 2026-11-01.
    - **M4e on-demand services** (approved 2026-10-26, the fifth plan): service
      instances that opt in sleep when idle and wake on a PHP request, a shim or
      `yard service start`. Designed in
