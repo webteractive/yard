@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use yard_core::emailulator::{AgentStatus, MIN_VERSION, parse_status, parse_version};
+use yard_core::emailulator::{AgentStatus, MIN_VERSION, Owner, owner, parse_status, parse_version};
 
 /// How long one call may take before Yard stops waiting and keeps what it knew.
 pub const TIMEOUT: Duration = Duration::from_secs(5);
@@ -68,4 +68,21 @@ async fn run(bin: &Path, args: &[&str], timeout: Duration) -> Result<(i32, Strin
         .map_err(|e| format!("cannot run {}: {e}", bin.display()))?;
     let code = out.status.code().ok_or_else(|| format!("{what} was killed by a signal"))?;
     Ok((code, String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// An executable regular file, as the installer leaves emailulator.
+pub fn is_exec(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// Finds emailulator, the recorded path first, and asks it.
+pub async fn find_and_probe(recorded: Option<&Path>, home: &Path, previous: Option<&Probe>) -> Option<Probe> {
+    let bin = yard_core::emailulator::locate(recorded, home, &is_exec).ok()?;
+    Some(probe(&bin, TIMEOUT, previous).await)
+}
+
+/// The agent that serves mail, when one is installed and loaded.
+pub fn serving_agent(p: Option<&Probe>) -> Option<&AgentStatus> {
+    p.and_then(|p| p.agent.as_ref()).filter(|a| matches!(owner(Some(a), false), Owner::Agent(_)))
 }

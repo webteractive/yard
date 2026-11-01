@@ -57,6 +57,12 @@ pub fn spawn(ctx: Arc<Context>, interval: Duration) -> JoinHandle<()> {
         let mut tick = tokio::time::interval(interval);
         loop {
             tick.tick().await;
+            // emailulator's agent runs outside Yard, so only asking it shows a change (M4d).
+            if ctx.reconciler.emailulator_moved().await
+                && let Err(e) = ctx.reconciler.reconcile().await
+            {
+                tracing::warn!("reconcile after emailulator changed: {}", crate::describe(&e));
+            }
             let Some(snapshot) = ctx.reconciler.snapshot().await else { continue };
             let busy_units = own_units(&ctx.supervisor().list());
             let idle: Vec<(String, u16)> = snapshot

@@ -143,7 +143,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         )?
         .with_shim(opts.shim.clone())
         .with_services(opts.usual_ports.clone(), opts.app_dirs.clone())
-        .with_sleeper(sleeper.clone()),
+        .with_sleeper(sleeper.clone())
+        .with_home(opts.home.clone()),
     );
     let jobs = Jobs::new(bus.clone());
     let ctx = Arc::new(Context {

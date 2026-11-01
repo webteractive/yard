@@ -8,13 +8,23 @@ use crate::services::{Engine, parse_instance};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml::Spanned;
 use yard_proto::YardError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ServicesConfig {
     pub services: BTreeMap<String, ServiceEntry>,
+    /// `[emailulator]`: written by `yard service add emailulator`, which Yard does not run
+    /// (M4d, option B).
+    pub emailulator: Option<EmailulatorEntry>,
+}
+
+/// `[emailulator]` in `services.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EmailulatorEntry {
+    /// The binary the CLI found on the user's PATH; yardd, started by launchd, has another.
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +59,13 @@ struct RawEntry {
 struct Raw {
     #[serde(default)]
     services: BTreeMap<Spanned<String>, RawEntry>,
+    emailulator: Option<RawEmailulator>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEmailulator {
+    path: Option<Spanned<PathBuf>>,
 }
 
 /// `CONFIG_INVALID` for an unknown key, a missing `engine` or `formula`, an instance name
@@ -104,7 +121,14 @@ pub fn parse_services(text: Option<&str>, file: &Path) -> Result<ServicesConfig,
             },
         );
     }
-    Ok(ServicesConfig { services })
+    let emailulator = match raw.emailulator {
+        Some(RawEmailulator { path: Some(p) }) if !p.get_ref().is_absolute() => {
+            return Err(invalid(p.span(), format!("emailulator's path {:?} must be absolute", p.get_ref())));
+        }
+        Some(e) => Some(EmailulatorEntry { path: e.path.map(Spanned::into_inner) }),
+        None => None,
+    };
+    Ok(ServicesConfig { services, emailulator })
 }
 
 #[cfg(test)]
@@ -117,6 +141,24 @@ mod tests {
 
     fn parse(text: &str) -> Result<ServicesConfig, YardError> {
         parse_services(Some(text), Path::new(FILE))
+    }
+
+    #[test]
+    fn emailulator_table_records_the_path() {
+        let file = Path::new("/r/services.toml");
+        let c = parse_services(Some("[emailulator]\npath = \"/opt/bin/emailulator\"\n"), file).unwrap();
+        assert_eq!(
+            c.emailulator,
+            Some(EmailulatorEntry { path: Some(PathBuf::from("/opt/bin/emailulator")) })
+        );
+        assert_eq!(
+            parse_services(Some("[emailulator]\n"), file).unwrap().emailulator,
+            Some(EmailulatorEntry::default())
+        );
+        assert_eq!(parse_services(Some(""), file).unwrap().emailulator, None);
+        let e = parse_services(Some("[emailulator]\npath = \"emailulator\"\n"), file).unwrap_err();
+        assert!(e.message.contains("must be absolute"), "{}", e.message);
+        assert!(parse_services(Some("[emailulator]\nversion = \"0.1\"\n"), file).is_err());
     }
 
     #[test]

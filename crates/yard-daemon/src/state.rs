@@ -1,5 +1,6 @@
 //! What the daemon last applied, and what went wrong since.
 
+use crate::emailulator::Probe;
 use std::collections::BTreeMap;
 use yard_core::Paths;
 use yard_core::brew::Brew;
@@ -29,6 +30,8 @@ pub struct Snapshot {
     /// their port could not be had. `services.list` shows them as failed with that reason, and
     /// `services.start` and `restart` refuse with it.
     pub left_out: BTreeMap<String, YardError>,
+    /// What emailulator said at this reconcile; `None` when Yard found no binary (M4d).
+    pub emailulator: Option<Probe>,
 }
 
 #[derive(Clone)]
@@ -45,6 +48,9 @@ pub struct State {
     /// A certificate was issued that the running nginx has not loaded yet, kept across
     /// a reconcile that failed before it could reload.
     pub nginx_reload_pending: bool,
+    /// The last time emailulator was asked, whether or not that reconcile succeeded: its
+    /// agent is kept when a later answer cannot be read.
+    pub emailulator: Option<Probe>,
 }
 
 impl State {
@@ -58,6 +64,7 @@ impl State {
             applied_resolver: None,
             hashes,
             nginx_reload_pending: false,
+            emailulator: None,
         })
     }
 }

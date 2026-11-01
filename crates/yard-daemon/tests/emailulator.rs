@@ -102,3 +102,135 @@ async fn status_timeout_keeps_last_state() {
     assert_eq!(p.agent, earlier.agent);
     assert!(p.status_error.as_deref().is_some_and(|e| e.contains("did not answer")), "{:?}", p.status_error);
 }
+
+// Reconcile points the registry and mail.<tld> at the agent.
+
+use support::daemon::{Daemon, prepared};
+use support::{free_port, wait_until};
+use yard_core::ports::Registry;
+use yard_proto::PortMode;
+
+/// A daemon whose home has the fake emailulator, with an agent on two free ports when
+/// `agent` is set. Returns the daemon, the fake's directory and the agent's ports.
+async fn with_emailulator(agent: bool) -> (Daemon, PathBuf, u16, u16) {
+    let d = prepared("").await;
+    let dir = d.fx.add_emailulator();
+    let (smtp, http) = (free_port(), free_port());
+    if agent {
+        std::fs::write(dir.join("agent.json"), agent_json(0, smtp, http)).unwrap();
+    }
+    (d, dir, smtp, http)
+}
+
+fn entry(d: &Daemon, unit: &str) -> Option<(u16, PortMode)> {
+    let registry = Registry::load(&d.fx.paths).unwrap();
+    registry.entries.get(unit).map(|e| (e.port, e.mode))
+}
+
+fn mail_conf(d: &Daemon) -> Option<String> {
+    std::fs::read_to_string(d.fx.paths.nginx_service("emailulator")).ok()
+}
+
+#[tokio::test]
+async fn agent_ports_become_external_entries() {
+    let (d, _dir, smtp, http) = with_emailulator(true).await;
+    let d = d.start().await;
+    assert_eq!(entry(&d, "emailulator-smtp"), Some((smtp, PortMode::External)));
+    assert_eq!(entry(&d, "emailulator-http"), Some((http, PortMode::External)));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn mail_host_follows_the_agent() {
+    let (d, _dir, _smtp, http) = with_emailulator(true).await;
+    let d = d.start().await;
+    let conf = mail_conf(&d).expect("nginx/services/emailulator.conf");
+    assert!(conf.contains(&format!("proxy_set_header Host 127.0.0.1:{http};")), "{conf}");
+    assert!(conf.contains("server_name mail.yard *.mail.yard;"), "{conf}");
+    // The file its block includes exists, or nginx would refuse the config.
+    assert!(d.fx.paths.nginx_override("mail").exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_emailulator_no_mail_host() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    assert_eq!(mail_conf(&d), None);
+    assert_eq!(entry(&d, "emailulator-smtp"), None);
+    assert_eq!(entry(&d, "emailulator-http"), None);
+    assert!(d.fx.paths.nginx_site("blog").exists(), "other sites are served");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_agent_no_mail_host() {
+    let (d, _dir, _, _) = with_emailulator(false).await;
+    let d = d.start().await;
+    assert_eq!(mail_conf(&d), None);
+    assert_eq!(entry(&d, "emailulator-smtp"), None);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn site_named_mail_wins() {
+    let (d, _dir, _, _) = with_emailulator(true).await;
+    d.project("mail");
+    let d = d.start().await;
+    assert!(d.fx.paths.nginx_site("mail").exists());
+    assert_eq!(mail_conf(&d), None);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_port_change_is_followed() {
+    let (d, dir, _, _) = with_emailulator(true).await;
+    let d = d.start().await;
+    let (smtp, http) = (free_port(), free_port());
+    std::fs::write(dir.join("agent.json"), agent_json(0, smtp, http)).unwrap();
+    let moved = || {
+        entry(&d, "emailulator-smtp") == Some((smtp, PortMode::External))
+            && mail_conf(&d).is_some_and(|c| c.contains(&format!("Host 127.0.0.1:{http};")))
+    };
+    assert!(
+        wait_until(moved, Duration::from_secs(10)).await,
+        "{:?}\n{:?}",
+        entry(&d, "emailulator-smtp"),
+        mail_conf(&d)
+    );
+    // And an agent that goes away takes the entries and the host with it.
+    std::fs::remove_file(dir.join("agent.json")).unwrap();
+    let gone = || entry(&d, "emailulator-smtp").is_none() && mail_conf(&d).is_none();
+    assert!(wait_until(gone, Duration::from_secs(10)).await);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn secure_by_default_issues_mail_cert() {
+    let (d, _dir, _, _) = with_emailulator(true).await;
+    std::fs::write(d.fx.paths.yard_toml(), "secure_by_default = true\n").unwrap();
+    let d = d.start().await;
+    let cert = d.fx.paths.services_certs_dir().join("emailulator.pem");
+    assert!(cert.exists(), "{}", cert.display());
+    let conf = mail_conf(&d).unwrap();
+    assert!(conf.contains("services/emailulator.pem"), "{conf}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn recorded_path_is_used_first() {
+    let d = prepared("").await;
+    let tools = TempDir::new().unwrap();
+    let bin = fake_emailulator(tools.path());
+    let (smtp, http) = (free_port(), free_port());
+    std::fs::write(tools.path().join("agent.json"), agent_json(0, smtp, http)).unwrap();
+    std::fs::write(
+        d.fx.paths.services_toml(),
+        format!("[emailulator]\npath = {:?}\n", bin.display().to_string()),
+    )
+    .unwrap();
+    let d = d.start().await;
+    assert_eq!(entry(&d, "emailulator-smtp"), Some((smtp, PortMode::External)));
+    d.shutdown().await.unwrap();
+}

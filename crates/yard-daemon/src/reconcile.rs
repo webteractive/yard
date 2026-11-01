@@ -3,6 +3,7 @@
 //! step either completes or leaves the previous state in place.
 
 use crate::describe;
+use crate::emailulator;
 use crate::events::EventBus;
 use crate::helper_client::HelperClient;
 use crate::nginx::NginxCommand;
@@ -22,13 +23,16 @@ use yard_core::brew::Brew;
 use yard_core::config::edit::TomlFile;
 use yard_core::config::yard::DEFAULT_TLD;
 use yard_core::config::{ServicesConfig, load_services, load_sites, load_yard};
+use yard_core::emailulator::{HTTP_UNIT, MAIL_HOST_LABEL, NAME as EMAILULATOR, SMTP_UNIT};
 use yard_core::generated::{self, Action};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::php::system_timezone;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
-use yard_core::render::nginx::{default_index, nginx_main, nginx_site, service_site, setup_page};
+use yard_core::render::nginx::{
+    MailHost, default_index, mail_host, nginx_main, nginx_site, service_site, setup_page,
+};
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::services::Engine;
 use yard_core::services::render::{config_file, user_overrides};
@@ -76,6 +80,8 @@ pub struct Reconciler {
     app_dirs: Vec<PathBuf>,
     /// The instances asleep, which get no unit (M4e).
     sleeper: Arc<Sleeper>,
+    /// The user's home, where emailulator's installer puts it.
+    home: PathBuf,
 }
 
 const HERD_APP: &str = "/Applications/Herd.app";
@@ -109,6 +115,7 @@ impl Reconciler {
             usual_ports: None,
             app_dirs: Vec::new(),
             sleeper: Arc::new(Sleeper::default()),
+            home: PathBuf::new(),
         })
     }
 
@@ -132,6 +139,11 @@ impl Reconciler {
 
     pub fn sleeper(&self) -> &Arc<Sleeper> {
         &self.sleeper
+    }
+
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.home = home;
+        self
     }
 
     pub fn with_shim(mut self, shim: Option<PathBuf>) -> Self {
@@ -185,14 +197,26 @@ impl Reconciler {
         })
     }
 
+    /// Whether emailulator's agent appeared, went away, or moved its ports or TLS since the
+    /// last good reconcile. Asks it without the state lock, from the published snapshot.
+    pub async fn emailulator_moved(&self) -> bool {
+        let Some(snap) = self.snapshot().await else { return false };
+        let recorded = snap.services.emailulator.as_ref().and_then(|e| e.path.as_deref());
+        let now = emailulator::find_and_probe(recorded, &self.home, snap.emailulator.as_ref()).await;
+        let key =
+            |p: Option<&emailulator::Probe>| emailulator::serving_agent(p).map(|a| (a.smtp, a.http, a.tls));
+        key(now.as_ref()) != key(snap.emailulator.as_ref())
+    }
+
     /// A secured site whose certificate is missing, from another CA, for other names or
     /// close to expiry. Nothing watches `certs/` or the clock, so the periodic scan finds it.
     pub async fn certs_due(&self) -> bool {
         let state = self.state.lock().await;
         let Some(snap) = &state.snapshot else { return false };
         let mut secure = snap.resolution.sites.iter().filter(|s| s.secure).peekable();
-        let console = secure_console(&snap.services, &snap.resolution.sites, &snap.yard, &snap.tld);
-        if secure.peek().is_none() && console.is_none() {
+        let mail = emailulator::serving_agent(snap.emailulator.as_ref()).is_some();
+        let hosts = secure_service_hosts(&snap.services, &snap.resolution.sites, &snap.yard, &snap.tld, mail);
+        if secure.peek().is_none() && hosts.is_empty() {
             return false;
         }
         let now = OffsetDateTime::now_utc();
@@ -203,8 +227,8 @@ impl Reconciler {
         let now = now.unix_timestamp();
         secure.any(|s| {
             needs_issue(tls::facts_against(&state.paths, &s.name, ca.as_deref()).as_ref(), &s.host, now)
-        }) || console.is_some_and(|(name, host)| {
-            needs_issue(tls::service_facts_against(&state.paths, name, ca.as_deref()).as_ref(), &host, now)
+        }) || hosts.iter().any(|(name, host)| {
+            needs_issue(tls::service_facts_against(&state.paths, name, ca.as_deref()).as_ref(), host, now)
         })
     }
 
@@ -249,6 +273,11 @@ impl Reconciler {
         });
         let ((yard, yard_warnings), sites_cfg, services_cfg, mut registry) = loaded?;
         report.warnings.extend(yard_warnings);
+        // emailulator's agent decides its ports and whether mail.<tld> is served (M4d).
+        let recorded = services_cfg.emailulator.as_ref().and_then(|e| e.path.as_deref());
+        state.emailulator =
+            emailulator::find_and_probe(recorded, &self.home, state.emailulator.as_ref()).await;
+        let mail_agent = emailulator::serving_agent(state.emailulator.as_ref()).cloned();
         let tld = yard.effective_tld().to_string();
         // Moving to a TLD another tool's resolver claims would serve nothing (Herd's `.test`).
         let old_tld = state.snapshot.as_ref().map(|s| s.tld.as_str());
@@ -285,6 +314,20 @@ impl Reconciler {
             }
         }
         registry.entries.retain(|unit, _| !unit.starts_with("proxy:") || proxies.contains(unit));
+        // The agent's ports are its own, recorded so nothing else takes them.
+        match &mail_agent {
+            Some(agent) => {
+                for (unit, port) in [(SMTP_UNIT, agent.smtp.port()), (HTTP_UNIT, agent.http.port())] {
+                    if let Err(e) = registry.ensure(unit, PortMode::External, Some(port), &is_free) {
+                        report.warnings.push(format!("{unit}: {}", describe(&e)));
+                    }
+                }
+            }
+            None => {
+                registry.entries.remove(SMTP_UNIT);
+                registry.entries.remove(HTTP_UNIT);
+            }
+        }
         // A service's ports were pinned when it was added. Reconcile only reads them, and
         // pins a new one the same way when `ports.toml` lost its entry.
         let mut left_out = BTreeMap::new();
@@ -308,8 +351,9 @@ impl Reconciler {
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.
         let paths = state.paths.clone();
-        let console = secure_console(&services_cfg, &resolution.sites, &yard, &tld);
-        if issue_certs(&paths, &resolution.sites, console.as_ref(), &mut report)? {
+        let service_hosts =
+            secure_service_hosts(&services_cfg, &resolution.sites, &yard, &tld, mail_agent.is_some());
+        if issue_certs(&paths, &resolution.sites, &service_hosts, &mut report)? {
             state.nginx_reload_pending = true;
         }
 
@@ -387,7 +431,17 @@ impl Reconciler {
             let secure = yard.secure_by_default;
             rendered.insert(paths.nginx_service("minio"), service_site(&ctx, "minio", console.port, secure));
         }
-        prepare_dirs(&paths, &resolution.sites, &inis, &services_cfg).map_err(io_error)?;
+        let serve_mail = mail_agent.is_some() && serves_mail(&resolution.sites);
+        if let Some(agent) = mail_agent.as_ref().filter(|_| serve_mail) {
+            let host = MailHost {
+                host: format!("{MAIL_HOST_LABEL}.{tld}"),
+                upstream: agent.http,
+                upstream_tls: agent.tls,
+                secure: yard.secure_by_default,
+            };
+            rendered.insert(paths.nginx_service(EMAILULATOR), mail_host(&ctx, &host));
+        }
+        prepare_dirs(&paths, &resolution.sites, &inis, &services_cfg, serve_mail).map_err(io_error)?;
 
         // 6. Write.
         let mut hashes = state.hashes.clone();
@@ -442,7 +496,8 @@ impl Reconciler {
         }
         state.hashes = hashes;
         // Only now: until the new confs passed, the old ones still named these files.
-        report.removed.extend(prune_certs(&paths, &resolution.sites, console.is_some()));
+        let keep: BTreeSet<&str> = service_hosts.iter().map(|(name, _)| *name).collect();
+        report.removed.extend(prune_certs(&paths, &resolution.sites, &keep));
 
         // 8. Apply units; restart the ones whose files changed and reload nginx. In the
         // privileged profile nginx inherits the helper's sockets, whose bind is the probe.
@@ -626,6 +681,7 @@ impl Reconciler {
             tld,
             resolution,
             left_out,
+            emailulator: state.emailulator.clone(),
         };
         *self.published.write().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         state.snapshot = Some(snapshot);
@@ -726,16 +782,16 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
 }
 
 /// Makes the CA when a site is secure and issues each secure site whose certificate
-/// `needs_issue`, and likewise `console`, the `(name, host)` of a secured service host
-/// (`minio.<tld>`). `Ok(true)` when it issued one.
+/// `needs_issue`, and likewise each of `hosts`, the `(name, host)` of a secured service host
+/// (`minio.<tld>`, `mail.<tld>`). `Ok(true)` when it issued one.
 fn issue_certs(
     paths: &Paths,
     sites: &[SiteInfo],
-    console: Option<&(&str, String)>,
+    hosts: &[(&str, String)],
     report: &mut ReconcileReport,
 ) -> Result<bool, YardError> {
     let secure: Vec<&SiteInfo> = sites.iter().filter(|s| s.secure).collect();
-    if secure.is_empty() && console.is_none() {
+    if secure.is_empty() && hosts.is_empty() {
         return Ok(false);
     }
     let now = OffsetDateTime::now_utc();
@@ -750,7 +806,7 @@ fn issue_certs(
             issued = true;
         }
     }
-    if let Some((name, host)) = console {
+    for (name, host) in hosts {
         let facts = tls::service_facts_against(paths, name, ca.as_deref());
         if needs_issue(facts.as_ref(), host, now.unix_timestamp()) {
             tls::issue_service(paths, name, host, now, LEAF_DAYS)?;
@@ -766,15 +822,27 @@ pub(crate) fn serves_console(services: &ServicesConfig, sites: &[SiteInfo]) -> b
     services.services.contains_key("minio") && !sites.iter().any(|s| s.name == "minio")
 }
 
-/// `("minio", "minio.<tld>")` when that host is served over HTTPS, which `secure_by_default`
-/// decides: a service has no `secure` setting of its own.
-fn secure_console(
+/// Whether `mail.<tld>` may be served: no site took the name `mail`.
+pub(crate) fn serves_mail(sites: &[SiteInfo]) -> bool {
+    !sites.iter().any(|s| s.name == MAIL_HOST_LABEL)
+}
+
+/// The service hosts served over HTTPS, as `(certificate name, host)`: `minio.<tld>`, and
+/// `mail.<tld>` while emailulator's agent serves mail (`mail`). `secure_by_default` decides:
+/// a service has no `secure` setting of its own.
+fn secure_service_hosts(
     services: &ServicesConfig,
     sites: &[SiteInfo],
     yard: &yard_core::config::YardConfig,
     tld: &str,
-) -> Option<(&'static str, String)> {
-    (yard.secure_by_default && serves_console(services, sites)).then(|| ("minio", format!("minio.{tld}")))
+    mail: bool,
+) -> Vec<(&'static str, String)> {
+    if !yard.secure_by_default {
+        return vec![];
+    }
+    let console = serves_console(services, sites).then(|| ("minio", format!("minio.{tld}")));
+    let mail = (mail && serves_mail(sites)).then(|| (EMAILULATOR, format!("{MAIL_HOST_LABEL}.{tld}")));
+    console.into_iter().chain(mail).collect()
 }
 
 /// The reconcile warning for an instance left out for `why` (`services::missing_program`):
@@ -787,9 +855,9 @@ fn left_out_warning(instance: &str, why: &YardError) -> String {
 }
 
 /// Removes every `certs/<name>.{pem,key}` whose site is not secure, and any `.yard-tmp`
-/// file an interrupted write left there; the same under `certs/services/` unless
-/// `console` (a secured `minio.<tld>`) keeps its certificate.
-fn prune_certs(paths: &Paths, sites: &[SiteInfo], console: bool) -> Vec<PathBuf> {
+/// file an interrupted write left there; the same under `certs/services/` for every name
+/// not in `keep` (the secured service hosts).
+fn prune_certs(paths: &Paths, sites: &[SiteInfo], keep: &BTreeSet<&str>) -> Vec<PathBuf> {
     let secure: BTreeSet<&str> = sites.iter().filter(|s| s.secure).map(|s| s.name.as_str()).collect();
     let stale = |f: &Path, keep: &dyn Fn(&str) -> bool| match f.extension().and_then(|e| e.to_str()) {
         Some("yard-tmp") => true,
@@ -798,7 +866,7 @@ fn prune_certs(paths: &Paths, sites: &[SiteInfo], console: bool) -> Vec<PathBuf>
     };
     let sites_certs = files_in(&paths.certs_dir()).into_iter().filter(|f| stale(f, &|s| secure.contains(s)));
     let service_certs =
-        files_in(&paths.services_certs_dir()).into_iter().filter(|f| stale(f, &|s| console && s == "minio"));
+        files_in(&paths.services_certs_dir()).into_iter().filter(|f| stale(f, &|s| keep.contains(s)));
     sites_certs.chain(service_certs).filter(|f| std::fs::remove_file(f).is_ok()).collect()
 }
 
@@ -875,6 +943,7 @@ fn prepare_dirs(
     sites: &[SiteInfo],
     versions: &BTreeSet<PhpVersion>,
     services: &ServicesConfig,
+    mail: bool,
 ) -> std::io::Result<()> {
     for dir in [
         paths.logs_dir(),
@@ -888,6 +957,10 @@ fn prepare_dirs(
     }
     for site in sites {
         generated::ensure_user_file(&paths.nginx_override(&site.name), USER_OWNED_NGINX)?;
+    }
+    if mail {
+        // mail.<tld>'s block includes the override a site named mail would have.
+        generated::ensure_user_file(&paths.nginx_override(MAIL_HOST_LABEL), USER_OWNED_NGINX)?;
     }
     for v in versions {
         generated::ensure_user_file(&paths.php_overrides(*v), USER_OWNED_INI)?;
