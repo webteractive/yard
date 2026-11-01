@@ -39,7 +39,8 @@ fn main() -> ExitCode {
 }
 
 /// emailulator, linked into a directory of its own. Each call's arguments are appended to
-/// `calls` there. `--version` prints `version` (else 0.1.3); `service status --json` prints
+/// `calls` there. `--version` prints `version` (else 0.1.3), after a minute while `hang-version`
+/// is there; `service status --json` prints
 /// `agent.json` after its first line, which is the exit code, or exits 4 without it, and
 /// sleeps a minute first while `hang` is there. `service install` writes an answering
 /// `agent.json` on 127.0.0.1:1025 and 8025, or the SMTP address after `-- --smtp-addr`.
@@ -52,6 +53,9 @@ fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["--version"] => {
+            if dir.join("hang-version").exists() {
+                std::thread::sleep(Duration::from_secs(60));
+            }
             let version = std::fs::read_to_string(dir.join("version"));
             print!("{}", version.unwrap_or_else(|_| "emailulator 0.1.3 (fake, 2026-10-20)\n".into()));
             ExitCode::SUCCESS

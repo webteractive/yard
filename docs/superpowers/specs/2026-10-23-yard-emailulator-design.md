@@ -129,8 +129,9 @@ agent, and `emailulator run` refuses to start beside it, so A has to defer anywa
 
 Yard never runs an emailulator unit. It reads the agent's state and ports, records them
 as `external`, proxies `mail.<tld>` to them, prints `yard env`, and checks them in
-`doctor`. When no agent is installed, `yard service add emailulator` (and the `.yard`
-confirm flow) runs `emailulator service install` after a yes.
+`doctor`. When no agent is installed, `yard service add emailulator` runs `emailulator
+service install` (as built: the command is the request, as `yard service add mysql` installs
+its formula without a question; the `.yard` confirm flow asks before it).
 
 - For: emailulator already has a supervisor built for it, with the one-server rule,
   `emailulator app` opening the agent's UI, and `self-update --restart`; Yard does not fight
@@ -173,7 +174,8 @@ be resolved by the CLI **(builder's call)**:
 
 - `yard service add emailulator` (and `yard init`/`yard link` when a `.yard` needs it)
   resolve `emailulator` on the CLI's own PATH and send the absolute path. yardd records it
-  as `path` on the instance entry (§14, M4b's services config).
+  in a top-level `[emailulator] path = "<abs>"` table of `services.toml` (as built: there is no
+  instance entry under option B).
 - yardd looks, in order: the recorded `path`; `~/.local/bin/emailulator` (where the
   installer puts it). The first one that is an executable regular file wins.
 - `self-update` replaces the binary in place, so a recorded path stays valid.
@@ -198,8 +200,12 @@ be resolved by the CLI **(builder's call)**:
   only when it is `running`: launchd restarts a loaded KeepAlive agent, and a Yard unit
   started in that gap would hold its ports and leave the agent crash-looping.
 - The command runs with the `cloexec_inherited` hook and a 5 s timeout, on every reconcile
-  and in the 30 s port scan. A timeout, a non-JSON answer or an unknown exit code keeps
-  the last known state and is a doctor `warn` **(builder's call)**.
+  and in the 30 s port scan, never under the reconcile lock. A timeout, a non-JSON answer or
+  an unknown exit code, of `service status` or of `--version`, keeps the last known version
+  and agent and is a doctor `warn`; an emailulator Yard could not read is never a `.yard`
+  need **(builder's call)**. The scan reconciles when what Yard shows changes (the agent
+  appeared, went, crashed, came back or moved), so doctor, `yard services` and `yard env`
+  follow it within one scan.
 - `0.0.0.0` in `smtp_addr`/`http_addr` means 127.0.0.1 for connecting, as emailulator
   itself treats it.
 
@@ -328,9 +334,9 @@ MAIL_SCHEME=null
 
 | Check | Status |
 |---|---|
-| `emailulator` | `ok`: who serves mail (`Yard's unit` or `LaunchAgent <label> (pid N)`), the SMTP address and the web UI URL. `fail` when a `.yard` or an instance needs it and it is unreachable or not answering, hint `yard service start emailulator` (Yard's, stopped), `emailulator service status` (the agent). `fail` when the binary is gone, with `EMAILULATOR_NOT_FOUND`'s hint. Absent when nothing uses emailulator. |
+| `emailulator` | `ok`: who serves mail (`Yard's unit` or `LaunchAgent <label> (pid N)`), the SMTP address and the web UI URL. `fail` when a `.yard` needs it or its agent is installed and it is not answering, hint `emailulator service status` (`emailulator self-update` below 0.1.3); with no agent installed, `emailulator's LaunchAgent is not installed`, hint `yard service add emailulator`. `fail` when the binary is gone, with `EMAILULATOR_NOT_FOUND`'s hint. Absent when no `.yard` asks for it and no agent is installed, even with `[emailulator]` recorded (as built, so `emailulator service uninstall` leaves doctor clean). |
 | `emailulator-version` | `warn` below 0.1.3, hint `emailulator self-update`. |
-| `emailulator-status` | `warn` when `service status --json` timed out or did not parse. |
+| `emailulator-status` | `warn` `could not ask emailulator: <reason>` when `--version` or `service status --json` timed out, did not parse or exited oddly. |
 | `mail-host` | `warn` when a site named `mail` shadows `mail.<tld>`, hint `yard unlink mail` or rename it. |
 
 Ports go through `portscan::infos` like every registered port, so `yard ports` and doctor's
@@ -354,7 +360,7 @@ port checks show `emailulator-smtp`/`-http` with their holder (`emailulator (pid
 
 - No new methods: emailulator rides M4b's `services.*` and `env.print` **(builder's call)**.
 - `ServiceInfo` (M4b) gains `managed_by: ServiceManager` (`yard` | `launch_agent { label,
-  pid }`) and `web_url: Option<String>`. `Need` gains `Manual { what, command }`. Both
+  pid }`); the web UI URL rides the existing `console` (as built, no `web_url`). `Need` gains `Manual { what, command }`. Both
   additive: protocol minor bump over M4b's.
 - New codes: `EMAILULATOR_NOT_FOUND` (`data.searched`) and `SERVICE_EXTERNAL`
   (`data { label, pid }`).

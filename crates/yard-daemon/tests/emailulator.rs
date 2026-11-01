@@ -497,3 +497,71 @@ async fn env_names_what_a_site_still_needs_for_mail() {
     assert_eq!(block["note"], "emailulator is not catching mail: yard service add emailulator");
     d.shutdown().await.unwrap();
 }
+
+// Final review fixes: an emailulator Yard cannot read is not one that went away, and asking
+// it never holds the reconcile lock.
+
+#[tokio::test]
+async fn unreadable_version_keeps_last_state() {
+    let dir = TempDir::new().unwrap();
+    let bin = fake_emailulator(dir.path());
+    std::fs::write(dir.path().join("agent.json"), agent_json(0, 41025, 48025)).unwrap();
+    let earlier = probe(&bin, TIMEOUT, None).await;
+    std::fs::write(dir.path().join("hang-version"), "").unwrap();
+    let p = probe(&bin, Duration::from_secs(1), Some(&earlier)).await;
+    assert_eq!(p.agent, earlier.agent);
+    assert_eq!(p.version, earlier.version);
+    assert!(p.status_error.as_deref().is_some_and(|e| e.contains("did not answer")), "{:?}", p.status_error);
+}
+
+#[tokio::test]
+async fn unreadable_emailulator_is_no_need() {
+    let (d, dir, _, _) = with_emailulator(false).await;
+    std::fs::write(dir.join("agent.json"), "0\nnot json").unwrap();
+    asks_for_emailulator(&d);
+    let d = d.start().await;
+    let needs = needs_of(&d, "shop").await;
+    assert!(needs.is_null() || needs == json!([]), "{needs}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_hung_emailulator_does_not_hold_the_lock() {
+    let (d, dir, _, _) = with_emailulator(true).await;
+    let d = d.start().await;
+    std::fs::write(dir.join("hang"), "").unwrap();
+    let site = d.projects.path().join("other");
+    std::fs::create_dir_all(&site).unwrap();
+    let mut linker = d.client().await;
+    let link = tokio::spawn(async move {
+        linker.call("sites.link", json!({"name": "other", "path": site.display().to_string()})).await
+    });
+    // The link's reconcile is now asking emailulator, which takes its 5 s timeout.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut c = d.client().await;
+    let started = Instant::now();
+    c.call("status", Value::Null).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "status waited {:?}", started.elapsed());
+    link.await.unwrap().unwrap();
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_crashed_agent_is_seen_within_a_scan() {
+    let (d, dir, smtp, http) = with_emailulator(true).await;
+    let d = d.start().await;
+    let json = agent_json(3, smtp, http).replace("\"answering\":true", "\"answering\":false");
+    std::fs::write(dir.join("agent.json"), json).unwrap();
+    let mut c = d.client().await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let list = c.call("services.list", Value::Null).await.unwrap();
+        let row = list.as_array().unwrap().iter().find(|s| s["name"] == "emailulator").cloned().unwrap();
+        if row["state"].get("failed").is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "still {row}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    d.shutdown().await.unwrap();
+}

@@ -82,6 +82,10 @@ pub struct Reconciler {
     sleeper: Arc<Sleeper>,
     /// The user's home, where emailulator's installer puts it.
     home: PathBuf,
+    /// The data root, read without the state lock to find the recorded emailulator.
+    paths: Paths,
+    /// The last thing emailulator said, from a reconcile or the port scan.
+    mail_probe: std::sync::Mutex<Option<emailulator::Probe>>,
 }
 
 const HERD_APP: &str = "/Applications/Herd.app";
@@ -104,6 +108,8 @@ impl Reconciler {
         let localtime = std::fs::read_link("/etc/localtime").ok();
         Ok(Self {
             nginx: NginxCommand::new(&paths, &brew),
+            paths: paths.clone(),
+            mail_probe: std::sync::Mutex::new(None),
             state: Mutex::new(State::new(paths, brew)?),
             published: std::sync::RwLock::new(None),
             supervisor,
@@ -202,15 +208,25 @@ impl Reconciler {
         })
     }
 
-    /// Whether emailulator's agent appeared, went away, or moved its ports or TLS since the
-    /// last good reconcile. Asks it without the state lock, from the published snapshot.
+    /// Whether what Yard shows of emailulator changed since the last good reconcile: its agent
+    /// appeared, went away, crashed, came back or moved its ports or TLS. Asked without the
+    /// state lock.
     pub async fn emailulator_moved(&self) -> bool {
         let Some(snap) = self.snapshot().await else { return false };
-        let recorded = snap.services.emailulator.as_ref().and_then(|e| e.path.as_deref());
-        let now = emailulator::find_and_probe(recorded, &self.home, snap.emailulator.as_ref()).await;
-        let key =
-            |p: Option<&emailulator::Probe>| emailulator::serving_agent(p).map(|a| (a.smtp, a.http, a.tls));
-        key(now.as_ref()) != key(snap.emailulator.as_ref())
+        let now = self.probe_emailulator().await;
+        emailulator::shown(now.as_ref()) != emailulator::shown(snap.emailulator.as_ref())
+    }
+
+    /// Finds and asks emailulator (two commands, up to 5 s each when it hangs), never under the
+    /// state lock: a wake ask or `yard status` must not wait on it. The recorded path is read
+    /// from `services.toml` as it is now, so the first reconcile after `[emailulator]` is written
+    /// already uses it.
+    async fn probe_emailulator(&self) -> Option<emailulator::Probe> {
+        let recorded = load_services(&self.paths).ok().and_then(|s| s.emailulator).and_then(|e| e.path);
+        let previous = self.mail_probe.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let now = emailulator::find_and_probe(recorded.as_deref(), &self.home, previous.as_ref()).await;
+        *self.mail_probe.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
+        now
     }
 
     /// A secured site whose certificate is missing, from another CA, for other names or
@@ -263,13 +279,18 @@ impl Reconciler {
 
     /// Serialized: a second call waits for the first to finish.
     pub async fn reconcile(&self) -> Result<ReconcileReport, YardError> {
+        let mail = self.probe_emailulator().await;
         let mut state = self.state.lock().await;
-        let result = self.run(&mut state).await;
+        let result = self.run(&mut state, mail).await;
         state.last_error = result.as_ref().err().cloned();
         result
     }
 
-    async fn run(&self, state: &mut State) -> Result<ReconcileReport, YardError> {
+    async fn run(
+        &self,
+        state: &mut State,
+        mail: Option<emailulator::Probe>,
+    ) -> Result<ReconcileReport, YardError> {
         let mut report = ReconcileReport::default();
 
         // 1. Load config. A parse error keeps the last good state serving.
@@ -278,10 +299,9 @@ impl Reconciler {
         });
         let ((yard, yard_warnings), sites_cfg, services_cfg, mut registry) = loaded?;
         report.warnings.extend(yard_warnings);
-        // emailulator's agent decides its ports and whether mail.<tld> is served (M4d).
-        let recorded = services_cfg.emailulator.as_ref().and_then(|e| e.path.as_deref());
-        state.emailulator =
-            emailulator::find_and_probe(recorded, &self.home, state.emailulator.as_ref()).await;
+        // emailulator's agent decides its ports and whether mail.<tld> is served (M4d); it was
+        // asked before the lock was taken.
+        state.emailulator = mail;
         let mail_agent = emailulator::serving_agent(state.emailulator.as_ref()).cloned();
         let tld = yard.effective_tld().to_string();
         // Moving to a TLD another tool's resolver claims would serve nothing (Herd's `.test`).

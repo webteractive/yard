@@ -71,8 +71,10 @@ pub fn fill_needs(
     brew: &Brew,
     paths: &Paths,
 ) {
-    // `None` from the probe: no binary where Yard looks.
-    let mail_reachable = crate::emailulator::serving_agent(emailulator).is_some();
+    // `None` from the probe: no binary where Yard looks. One Yard could not read is not missing:
+    // it may well be catching mail, and doctor says it could not be asked.
+    let mail_reachable = crate::emailulator::serving_agent(emailulator).is_some()
+        || emailulator.is_some_and(|p| p.status_error.is_some());
     let exists = |p: &Path| p.exists();
     let read_link = |p: &Path| std::fs::read_link(p).ok();
     let installed = brew.installed_php(&exists, &read_link);

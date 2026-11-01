@@ -771,8 +771,10 @@ web UI, a REST API and an MCP server, so agents can read the mail a site sent.
   with `SERVICE_EXTERNAL`, hinting emailulator's own command; `yard service logs emailulator`
   reads the log the agent names. `yard services` lists it, while its agent is installed, with
   MANAGED BY `LaunchAgent <label>` and its web UI. yardd asks the binary (`--version` and
-  `service status --json`, 5 s each) at every reconcile and every 30 s port scan, and keeps
-  the last answer when one cannot be read.
+  `service status --json`, 5 s each) at every reconcile and every 30 s port scan, never under
+  the reconcile lock, and keeps the last answer when one cannot be read (an emailulator it
+  could not read is never a `.yard` need). The scan reconciles when the agent appears, goes,
+  crashes, recovers or moves, so `yard doctor`, `yard services` and `yard env` follow it.
 - A `.yard` may say `emailulator = true` in `[services]` (no version: it updates itself). Any
   agent Yard can reach meets it; without one it is a need, `yard service add emailulator`
   when the binary is there and a manual one naming the installer when it is not.

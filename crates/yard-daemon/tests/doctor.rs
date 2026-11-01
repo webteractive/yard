@@ -1375,7 +1375,7 @@ async fn doctor_warns_unreadable_status() {
     let report = doctor_of(&d).await;
     let check = only(&report, "emailulator-status");
     assert_eq!(check.status, CheckStatus::Warn, "{check:?}");
-    assert!(check.message.starts_with("emailulator service status failed: "), "{check:?}");
+    assert!(check.message.starts_with("could not ask emailulator: "), "{check:?}");
     d.shutdown().await.unwrap();
 }
 
@@ -1390,5 +1390,35 @@ async fn doctor_warns_site_named_mail() {
     assert_eq!(check.message, "the site mail is served at mail.yard, so emailulator's web UI is not");
     assert_eq!(check.hint.as_deref(), Some("yard unlink mail"));
     assert!(only(&report, "emailulator").message.contains("web UI http://127.0.0.1:"), "{report:#?}");
+    d.shutdown().await.unwrap();
+}
+
+/// After `emailulator service uninstall`, the hint yard service remove gives, doctor has
+/// nothing to fail on while no .yard asks for emailulator, though services.toml records it.
+#[tokio::test]
+async fn doctor_silent_after_the_agent_is_uninstalled() {
+    let (d, _) = mail_daemon(None).await;
+    let bin = d.fx.paths.root().join("home/.local/bin/emailulator");
+    std::fs::write(
+        d.fx.paths.services_toml(),
+        format!("[emailulator]\npath = {:?}\n", bin.display().to_string()),
+    )
+    .unwrap();
+    let d = d.start().await;
+    assert_eq!(emailulator_ids(&doctor_of(&d).await), Vec::<&str>::new());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn doctor_says_not_installed_when_a_yard_asks_and_no_agent() {
+    let (d, _) = mail_daemon(None).await;
+    let shop = d.project("shop");
+    std::fs::write(shop.join(".yard"), "[services]\nemailulator = true\n").unwrap();
+    let d = d.start().await;
+    let report = doctor_of(&d).await;
+    let check = only(&report, "emailulator");
+    assert_eq!(check.status, CheckStatus::Fail, "{check:?}");
+    assert_eq!(check.message, "emailulator's LaunchAgent is not installed");
+    assert_eq!(check.hint.as_deref(), Some("yard service add emailulator"));
     d.shutdown().await.unwrap();
 }

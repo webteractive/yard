@@ -295,13 +295,14 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
 }
 
 /// Who catches mail (M4d spec §11): `emailulator`, with `emailulator-version`,
-/// `emailulator-status` and `mail-host` warnings. Nothing is said unless `services.toml`
-/// records emailulator, a `.yard` asks for it, or its LaunchAgent is installed.
+/// `emailulator-status` and `mail-host` warnings. Nothing is said unless a `.yard` asks for
+/// emailulator or its LaunchAgent is installed: `[emailulator]` in `services.toml` alone stays
+/// after `emailulator service uninstall`, which no Yard command undoes.
 fn emailulator_checks(view: &View, home: &Path) -> Vec<Check> {
     let recorded = view.services.as_ref().and_then(|s| s.emailulator.as_ref());
     let listed = view.projects.values().any(|loaded| loaded.ok().is_some_and(|file| file.emailulator));
     let agent = view.emailulator.as_ref().and_then(|p| p.agent.as_ref()).filter(|a| a.installed);
-    if recorded.is_none() && !listed && agent.is_none() {
+    if !listed && agent.is_none() {
         return vec![];
     }
     let Some(probe) = &view.emailulator else {
@@ -319,7 +320,7 @@ fn emailulator_checks(view: &View, home: &Path) -> Vec<Check> {
         ));
     }
     if let Some(why) = &probe.status_error {
-        let message = format!("emailulator service status failed: {why}");
+        let message = format!("could not ask emailulator: {why}");
         checks.push(warn("emailulator-status", message, "emailulator service status"));
     }
     let mail_site = view.sites.as_ref().is_some_and(|(_, sites)| !serves_mail(sites));
@@ -335,14 +336,17 @@ fn emailulator_checks(view: &View, home: &Path) -> Vec<Check> {
         }
         Some(_) => fail(EMAILULATOR, "emailulator is not answering", "emailulator service status"),
         // Before 0.1.3 Yard cannot read the agent; installed but unloaded, it is launchd's to say why.
-        None => {
-            let hint = match (old, agent) {
-                (Some(_), _) => "emailulator self-update",
-                (None, Some(_)) => "emailulator service status",
-                (None, None) => "yard service add emailulator",
-            };
-            fail(EMAILULATOR, "emailulator is not answering", hint)
-        }
+        None => match (old, agent) {
+            (Some(_), _) => fail(EMAILULATOR, "emailulator is not answering", "emailulator self-update"),
+            (None, Some(_)) => {
+                fail(EMAILULATOR, "emailulator is not answering", "emailulator service status")
+            }
+            (None, None) => fail(
+                EMAILULATOR,
+                "emailulator's LaunchAgent is not installed",
+                "yard service add emailulator",
+            ),
+        },
     });
     if mail_site && serving_agent(Some(probe)).is_some() {
         let tld = view.tld.as_deref().unwrap_or("yard");
