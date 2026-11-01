@@ -361,7 +361,9 @@ pub struct JobParams {
 }
 
 /// `services.add`: `version` is a line such as `8.4` (the engine's default when unset) and
-/// `port` pins the instance's port (the usual one, or the next free one, when unset).
+/// `port` pins the instance's port (the usual one, or the next free one, when unset). For
+/// emailulator, `port` is its SMTP port and `path` the binary the CLI found on the user's PATH
+/// (protocol 2.9).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceAddParams {
     pub engine: String,
@@ -369,6 +371,8 @@ pub struct ServiceAddParams {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// `services.start|stop|restart`: an instance name such as `mysql-8.4`.

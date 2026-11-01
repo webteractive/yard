@@ -157,7 +157,8 @@ pub async fn add_instance(
     // The line is the daemon's to default, so the new instance is found by what it added.
     let before: Vec<String> =
         if ctx.json { vec![] } else { instances(ctx).await?.into_iter().map(|s| s.name).collect() };
-    let params = ServiceAddParams { engine: engine.into(), version: version.map(Into::into), port };
+    let params =
+        ServiceAddParams { engine: engine.into(), version: version.map(Into::into), port, path: None };
     finished(with_trust(ctx, || run_job(ctx, methods::SERVICES_ADD, params.clone(), String::new)).await)?;
     if ctx.json {
         return Ok(());

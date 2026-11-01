@@ -23,6 +23,8 @@ pub const HTTP_USUAL: u16 = 8025;
 pub const MAIL_HOST_LABEL: &str = "mail";
 /// The `[services]` key and the instance name.
 pub const NAME: &str = "emailulator";
+/// The label `emailulator service install` gives its LaunchAgent.
+pub const LABEL: &str = "com.webteractive.emailulator";
 
 /// The binary: the path the CLI resolved on the user's PATH and yardd recorded, else where
 /// the installer puts it. The first that `is_exec` accepts wins.

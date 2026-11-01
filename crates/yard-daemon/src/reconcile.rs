@@ -141,6 +141,11 @@ impl Reconciler {
         &self.sleeper
     }
 
+    /// The user's home, where emailulator's installer puts it.
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = home;
         self

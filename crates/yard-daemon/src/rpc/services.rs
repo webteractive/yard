@@ -3,6 +3,7 @@
 //! (`FORMULA_UNTRUSTED` in particular), and the job re-checks what a job queued behind
 //! another can no longer rely on (`crate::services::Add`).
 
+use super::emailulator;
 use super::handlers::{reconcile, snapshot};
 use crate::daemon::Context;
 use crate::services::{self, Add, Resolved};
@@ -42,9 +43,12 @@ fn line_of(engine: Engine, version: Option<&str>) -> Result<Option<String>, Yard
 }
 
 pub(super) async fn add(ctx: &Context, p: ServiceAddParams) -> Result<JobStarted, YardError> {
+    if emailulator::is_emailulator(&p.engine) {
+        return emailulator::add(ctx, p).await;
+    }
     let engine = Engine::from_key(&p.engine).ok_or_else(|| {
         bad(format!("{:?} is not a service Yard runs", p.engine))
-            .with_hint("the engines are mysql, postgres, redis and minio")
+            .with_hint("the engines are mysql, postgres, redis, minio and emailulator")
     })?;
     let line = line_of(engine, p.version.as_deref())?;
     if p.port == Some(0) {
@@ -78,17 +82,22 @@ pub(super) async fn add(ctx: &Context, p: ServiceAddParams) -> Result<JobStarted
 pub(super) async fn list(ctx: &Context) -> Result<Vec<ServiceInfo>, YardError> {
     let snap = snapshot(ctx).await?;
     let supervisor = ctx.supervisor();
-    Ok(snap
+    let mut list: Vec<ServiceInfo> = snap
         .services
         .services
         .keys()
         .filter_map(|name| services::service_info(&snap, supervisor, &ctx.sleeper, name))
-        .collect())
+        .collect();
+    list.extend(emailulator::info(&snap));
+    Ok(list)
 }
 
 /// Refused with `SERVICE_IN_USE` while a linked site's `.yard` asks for the instance: the
 /// hint is the edit that frees it. Confirming the delete is the CLI's.
 pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), YardError> {
+    if emailulator::is_emailulator(&p.name) {
+        return Err(emailulator::refuse(ctx, true).await);
+    }
     let services = load_services(&ctx.paths)?;
     let Some(entry) = services.services.get(&p.name) else {
         return Err(services::not_found(&p.name));
@@ -153,7 +162,11 @@ pub(super) fn instance_info(
 }
 
 /// The engine of the instance `services.toml` lists as `name`, read from the file as it is now.
-fn engine_of(ctx: &Context, name: &str) -> Result<Engine, YardError> {
+/// emailulator is `SERVICE_EXTERNAL`: its LaunchAgent runs it, not Yard.
+async fn engine_of(ctx: &Context, name: &str) -> Result<Engine, YardError> {
+    if emailulator::is_emailulator(name) {
+        return Err(emailulator::refuse(ctx, false).await);
+    }
     load_services(&ctx.paths)?.services.get(name).map(|e| e.engine).ok_or_else(|| services::not_found(name))
 }
 
@@ -165,7 +178,7 @@ pub(super) async fn set_stopped(
     p: ServiceParams,
     stopped: bool,
 ) -> Result<ServiceInfo, YardError> {
-    engine_of(ctx, &p.name)?;
+    engine_of(ctx, &p.name).await?;
     services::set_stopped(&ctx.paths, &p.name, stopped)?;
     if !stopped && ctx.sleeper.is_asleep(&p.name) {
         // A start of an asleep instance wakes it; the CLI waits for it as for any start.
@@ -193,7 +206,7 @@ async fn refuse_left_out(ctx: &Context, name: &str) -> Result<(), YardError> {
 /// restart, so the state is this attempt's (`starting`), never the failure it replaces or a
 /// `running` that has not stopped yet.
 pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceInfo, YardError> {
-    engine_of(ctx, &p.name)?;
+    engine_of(ctx, &p.name).await?;
     let current = info(ctx, &p.name).await?;
     if current.stopped_by_user {
         return Err(YardError::new(
@@ -217,7 +230,7 @@ pub(super) async fn restart(ctx: &Context, p: ServiceParams) -> Result<ServiceIn
 /// `services.sleep.set`: `after` is a duration of at least 60s, `off`, or `default`, which
 /// removes the instance's key so `yard.toml` decides. A new setting restarts the idle clock.
 pub(super) async fn set_sleep(ctx: &Context, p: ServiceSleepParams) -> Result<ServiceInfo, YardError> {
-    engine_of(ctx, &p.name)?;
+    engine_of(ctx, &p.name).await?;
     let after = match p.after.as_str() {
         "default" => None,
         text => Some(text.parse::<SleepAfter>().map_err(|why| {
@@ -232,9 +245,14 @@ pub(super) async fn set_sleep(ctx: &Context, p: ServiceSleepParams) -> Result<Se
 }
 
 /// `services.logs`: the tail of `logs/<instance>.log`, empty while there is no file.
+/// emailulator's is the log its LaunchAgent writes.
 pub(super) async fn logs(ctx: &Context, p: ServiceLogsParams) -> Result<Vec<String>, YardError> {
-    engine_of(ctx, &p.name)?;
-    let (path, lines) = (ctx.paths.log(&p.name), p.lines.unwrap_or(LOG_LINES));
+    let lines = p.lines.unwrap_or(LOG_LINES);
+    if emailulator::is_emailulator(&p.name) {
+        return emailulator::logs(ctx, lines).await;
+    }
+    engine_of(ctx, &p.name).await?;
+    let path = ctx.paths.log(&p.name);
     tokio::task::spawn_blocking(move || services::tail(&path, lines)).await.map_err(YardError::internal)?
 }
 
@@ -242,7 +260,7 @@ pub(super) async fn logs(ctx: &Context, p: ServiceLogsParams) -> Result<Vec<Stri
 /// `yard ports set minio-console`), then reconciles, which restarts a running instance on
 /// it. A stopped instance's port moves too and it stays stopped.
 pub(super) async fn port(ctx: &Context, p: ServicePortParams) -> Result<ServiceInfo, YardError> {
-    let engine = engine_of(ctx, &p.name)?;
+    let engine = engine_of(ctx, &p.name).await?;
     if p.port == 0 {
         return Err(bad("0 is not a port".into())
             .with_hint(format!("yard service port {} <port>, such as 3307", p.name)));

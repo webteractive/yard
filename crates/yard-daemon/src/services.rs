@@ -144,8 +144,17 @@ pub fn used_by(snapshot: &Snapshot, engine: Engine, instance: &str) -> Vec<Strin
 /// `http(s)://minio.<tld>` with nginx's port for that scheme, left out when it is the
 /// scheme's own (80, 443).
 pub fn console_url(tld: &str, secure: bool, http: u16, https: u16) -> String {
+    host_url("minio", tld, secure, http, https)
+}
+
+/// `http(s)://<label>.<tld>`, as `console_url` spells it, for a host Yard serves for a service.
+pub fn host_url(label: &str, tld: &str, secure: bool, http: u16, https: u16) -> String {
     let (scheme, port, default) = if secure { ("https", https, 443) } else { ("http", http, 80) };
-    if port == default { format!("{scheme}://minio.{tld}") } else { format!("{scheme}://minio.{tld}:{port}") }
+    if port == default {
+        format!("{scheme}://{label}.{tld}")
+    } else {
+        format!("{scheme}://{label}.{tld}:{port}")
+    }
 }
 
 /// One instance of `services.toml` as the service methods report it, or `None` when

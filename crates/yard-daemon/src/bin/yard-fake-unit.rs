@@ -41,7 +41,8 @@ fn main() -> ExitCode {
 /// emailulator, linked into a directory of its own. Each call's arguments are appended to
 /// `calls` there. `--version` prints `version` (else 0.1.3); `service status --json` prints
 /// `agent.json` after its first line, which is the exit code, or exits 4 without it, and
-/// sleeps a minute first while `hang` is there.
+/// sleeps a minute first while `hang` is there. `service install` writes an answering
+/// `agent.json` on 127.0.0.1:1025 and 8025, or the SMTP address after `-- --smtp-addr`.
 fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
     let dir = argv0.parent().unwrap_or(Path::new("."));
     let calls = std::fs::read_to_string(dir.join("calls")).unwrap_or_default();
@@ -64,6 +65,24 @@ fn emailulator(argv0: &Path, args: &[String]) -> ExitCode {
             let (code, json) = text.split_once('\n').unwrap_or((&text, ""));
             print!("{json}");
             ExitCode::from(code.trim().parse::<u8>().unwrap_or(1))
+        }
+        ["service", "install", rest @ ..] => {
+            let smtp = match rest {
+                [] => "127.0.0.1:1025",
+                ["--", "--smtp-addr", addr] => addr,
+                _ => return fail(format!("fake emailulator: unexpected {args:?}")),
+            };
+            let log = dir.join("server.log");
+            let agent = format!(
+                "0\n{{\"label\":\"com.webteractive.emailulator\",\"installed\":true,\"loaded\":true,\
+                 \"running\":true,\"answering\":true,\"pid\":4242,\"smtp_addr\":\"{smtp}\",\
+                 \"http_addr\":\"127.0.0.1:8025\",\"tls\":false,\"log\":{:?}}}",
+                log.display().to_string()
+            );
+            match std::fs::write(dir.join("agent.json"), agent) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(format!("fake emailulator: cannot write agent.json: {e}")),
+            }
         }
         _ => fail(format!("fake emailulator: unexpected {args:?}")),
     }
