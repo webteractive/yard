@@ -138,7 +138,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - **Names:** `yard` / `yardd` / `Yard.app`. launchd labels `dev.more.yard.daemon`
   and `dev.more.yard.helper`.
 - **v1 scope:** core serving, multi-PHP + isolate, HTTPS, Node + services.
-  Linux, Windows, Intel Macs and PHP < 7.0 are non-goals.
+  Linux, Windows, Intel Macs and PHP < 7.0 are non-goals. On 2026-11-01 the maintainer tabled PHP 5.6
+  and Node older than 16 (his oldest project is PHP 7.3 and Node 16) to make 7.0–8.5 solid
+  instead, and left MariaDB as a later engine.
 
 ## Environment findings (checked 2026-10-19 on the maintainer's arm64 Mac)
 

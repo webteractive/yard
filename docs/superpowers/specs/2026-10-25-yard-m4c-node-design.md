@@ -47,7 +47,8 @@ Non-goals (for M4c):
 - `package.json` `engines.node`. It is a range (`>=18`) rather than a pin, so Yard ignores it.
   (fnm reads it by default, but Yard always gives fnm an explicit version, §4.)
 - Node older than 16. No Apple Silicon build of Node exists before 16.0.0, and Intel Macs are
-  a non-goal of Yard.
+  a non-goal of Yard. fnm's x64 builds under Rosetta could run one; the maintainer tabled that on
+  2026-11-01, since no project of his pins older than 16.
 - Global npm packages on the shell's PATH. `npm install -g` installs into that version's
   directory. It is reachable from `npm run` scripts, which put that version's `bin` first
   (§6), but not from a bare shell.

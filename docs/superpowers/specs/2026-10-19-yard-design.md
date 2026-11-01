@@ -35,7 +35,12 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
 
 - Linux or Windows support.
 - Intel Macs (arm64 only for v1; revisit at distribution time).
-- PHP older than 7.0.
+- PHP older than 7.0. The `shivammathur/php` tap still carries 5.6, but the maintainer tabled it on
+  2026-11-01: his oldest project is on 7.3, and the work goes into making 7.0–8.5 solid.
+- Node older than 16 (no Apple Silicon build; it would need fnm's x64 builds under Rosetta),
+  tabled with PHP 5.6 on 2026-11-01.
+- MariaDB as a service engine. The maintainer wants it later (2026-11-01); it is one more engine table
+  entry (M4b spec §5) when it comes.
 - Building our own PHP binaries (we lean on Homebrew; see §4).
 - Replacing nginx/dnsmasq with Rust (possible later behind the daemon API).
 - Writing to project `.env` files.

@@ -34,7 +34,8 @@ taps; Yard uses it instead of building one, and stops granting trust silently.
   no 5.7, which brew no longer ships and the maintainer's projects do not need **(maintainer)**. MinIO
   stays in although its upstream is archived (maintainer, after being told; §5.4).
 - **No MariaDB or Valkey in M4b (builder's call).** Engines are one table entry each
-  (§5), so either can follow if a project runs on it in production.
+  (§5), so either can follow if a project runs on it in production. The maintainer wants MariaDB as a
+  later engine (2026-11-01); it is not scheduled.
 - **No data import (maintainer).** Yard never reads DBngin's or Postgres.app's data; moving a
   project is a dump and a re-import into the Yard instance.
 - **Yard never creates databases, users or buckets (maintainer).** That stays with the user
