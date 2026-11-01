@@ -1,6 +1,7 @@
 //! `yard env`: the `.env` lines for a project's services. Prints; never writes a file.
 
 use super::{Ctx, Outcome, cwd_absolute};
+use yard_core::emailulator::NAME as EMAILULATOR;
 use yard_proto::methods::{self, EnvParams, SiteDetailParams};
 use yard_proto::{EnvBlock, ErrorCode, SiteDetail};
 
@@ -22,7 +23,7 @@ pub async fn env(ctx: &Ctx, site: Option<String>, service: Option<String>) -> Ou
             Ok(detail) => eprintln!("{}", nothing_for(&detail)),
             Err(e) if e.code == ErrorCode::SiteNotFound => {
                 eprintln!(
-                    "No service instances yet. Add one with yard service add <engine>: mysql, postgres, redis or minio."
+                    "No service instances yet. Add one with yard service add <engine>: mysql, postgres, redis, minio or emailulator."
                 );
             }
             Err(e) => eprintln!(
@@ -32,8 +33,25 @@ pub async fn env(ctx: &Ctx, site: Option<String>, service: Option<String>) -> Ou
         }
         return Ok(0);
     }
-    print!("{}", human(&blocks));
+    print!("{}", human(&warn_notes(blocks)));
     Ok(0)
+}
+
+/// Prints emailulator's note as a `warning:` on stderr when the block still has lines (it is
+/// caught but not answering), and drops it from what is pasted.
+pub fn warn_notes(blocks: Vec<EnvBlock>) -> Vec<EnvBlock> {
+    blocks
+        .into_iter()
+        .map(|mut block| {
+            if block.instance == EMAILULATOR
+                && !block.lines.is_empty()
+                && let Some(note) = block.note.take()
+            {
+                eprintln!("warning: {note}");
+            }
+            block
+        })
+        .collect()
 }
 
 /// Why a project prints nothing, and how to get lines anyway.

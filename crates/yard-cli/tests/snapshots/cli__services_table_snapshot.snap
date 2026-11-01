@@ -2,10 +2,12 @@
 source: crates/yard-cli/tests/cli.rs
 expression: stdout(&out)
 ---
-INSTANCE     ENGINE    VERSION  PORT  STATE    SLEEP  ACCOUNT                  USED BY
-mysql-8.4    mysql     8.4      3307  running  off    root (no password)       blog
-postgres-17  postgres  17       5433  stopped  off    dev (no password)        -
-redis        redis     -        6380  running  off    — (no auth)              blog, shop
-minio        minio     -        9000  failed   off    minioadmin / minioadmin  -
+INSTANCE     ENGINE    VERSION  PORT  STATE    SLEEP  ACCOUNT                  USED BY     MANAGED BY
+mysql-8.4    mysql     8.4      3307  running  off    root (no password)       blog        yard
+postgres-17  postgres  17       5433  stopped  off    dev (no password)        -           yard
+redis        redis     -        6380  running  off    — (no auth)              blog, shop  yard
+minio        minio     -        9000  failed   off    minioadmin / minioadmin  -           yard
+
+minio web UI: http://127.0.0.1:9001
 
 For agents and scripts: yard services --json

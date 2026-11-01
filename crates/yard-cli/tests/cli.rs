@@ -1298,7 +1298,7 @@ fn empty_services_says_what_to_do() {
     assert!(out.status.success(), "{}", stderr(&out));
     let so = stdout(&out);
     assert!(so.starts_with("No services yet. Add one with yard service add <engine>"), "{so}");
-    assert!(so.contains("mysql, postgres, redis or minio"), "{so}");
+    assert!(so.contains("mysql, postgres, redis, minio or emailulator"), "{so}");
 }
 
 fn mysql_env() -> Value {
@@ -2330,4 +2330,150 @@ fn port_on_a_sleeping_instance_succeeds() {
     let out = d.yard().args(["service", "port", "mysql-8.4", "3310"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "mysql-8.4 will listen on 127.0.0.1:3310 when it wakes.\n");
+}
+
+// ---- M4d: emailulator ----
+
+fn emailulator_row() -> Value {
+    json!({
+        "name": "emailulator", "engine": "emailulator", "version": "0.1.3",
+        "formula": "/Users/x/.local/bin/emailulator",
+        "ports": [{"name": "emailulator-smtp", "port": 1025}, {"name": "emailulator-http", "port": 8025}],
+        "state": "running", "stopped_by_user": false, "account": account(None, None),
+        "console": "http://mail.yard:8080", "used_by": ["shop"],
+        "managed_by": {"kind": "launch_agent", "label": "com.webteractive.emailulator", "pid": 3261},
+    })
+}
+
+fn mail_env(note: Option<&str>) -> Value {
+    json!([{
+        "instance": "emailulator",
+        "lines": ["MAIL_MAILER=smtp", "MAIL_HOST=127.0.0.1", "MAIL_PORT=1025", "MAIL_USERNAME=null",
+                  "MAIL_PASSWORD=null", "MAIL_ENCRYPTION=null", "MAIL_SCHEME=null"],
+        "note": note,
+    }])
+}
+
+fn mail_add_daemon() -> MockDaemon {
+    MockDaemon::start_sequenced_with_events(
+        &[
+            ("services.list", vec![Ok(json!([])), Ok(json!([emailulator_row()]))]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("services.add", vec![Ok(json!({"job_id": "service-add-1"}))]),
+            ("env.print", vec![Ok(mail_env(None))]),
+        ],
+        &[("services.add", job_events("service-add-1", json!(null)))],
+    )
+}
+
+#[test]
+fn service_add_sends_resolved_path() {
+    let bin = tempfile::tempdir().unwrap();
+    let exe = bin.path().join("emailulator");
+    std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // A directory and a file that is not executable, earlier on PATH, are passed over.
+    let earlier = tempfile::tempdir().unwrap();
+    std::fs::create_dir(earlier.path().join("emailulator")).unwrap();
+    let plain = tempfile::tempdir().unwrap();
+    std::fs::write(plain.path().join("emailulator"), "").unwrap();
+    let path = format!(
+        "{}:{}:{}:/usr/bin:/bin",
+        earlier.path().display(),
+        plain.path().display(),
+        bin.path().display()
+    );
+
+    let d = mail_add_daemon();
+    let out = d.yard().env("PATH", &path).args(["service", "add", "emailulator"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        d.params("services.add"),
+        [json!({"engine": "emailulator", "path": exe.display().to_string()})]
+    );
+    let so = stdout(&out);
+    assert!(
+        so.contains("emailulator catches mail; its web UI is http://mail.yard:8080. For your .env:"),
+        "{so}"
+    );
+    assert!(so.contains("# emailulator\nMAIL_MAILER=smtp\n"), "{so}");
+    assert_eq!(d.params("env.print"), [json!({"service": "emailulator"})]);
+
+    // Not on PATH: yardd looks where the installer puts it.
+    let d = mail_add_daemon();
+    let out = d.yard().env("PATH", "/usr/bin:/bin").args(["service", "add", "emailulator"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("services.add"), [json!({"engine": "emailulator"})]);
+}
+
+#[test]
+fn services_shows_launch_agent() {
+    let mut list = services_list();
+    list.push(emailulator_row());
+    let d = MockDaemon::start(&[("services.list", Ok(json!(list)))]);
+    let out = d.yard().arg("services").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let so = stdout(&out);
+    assert!(so.contains("MANAGED BY"), "{so}");
+    let row = so.lines().find(|l| l.starts_with("emailulator ")).unwrap_or_else(|| panic!("{so}"));
+    assert!(row.contains("LaunchAgent com.webteractive.emailulator"), "{row}");
+    let mysql = so.lines().find(|l| l.starts_with("mysql-8.4 ")).unwrap();
+    assert!(mysql.contains(" yard"), "{mysql}");
+    assert!(so.contains("emailulator web UI: http://mail.yard:8080\n"), "{so}");
+}
+
+#[test]
+fn service_stop_external_prints_hint() {
+    let refused = YardError::new(
+        ErrorCode::ServiceExternal,
+        "emailulator is run by its LaunchAgent com.webteractive.emailulator; Yard does not start or stop it",
+    )
+    .with_hint("emailulator service status");
+    let d = MockDaemon::start(&[("services.stop", Err(refused))]);
+    let out = d.yard().args(["service", "stop", "emailulator"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let se = stderr(&out);
+    assert!(se.contains("error: emailulator is run by its LaunchAgent com.webteractive.emailulator"), "{se}");
+    assert!(se.contains("hint: emailulator service status"), "{se}");
+}
+
+#[test]
+fn service_remove_emailulator_asks_nothing() {
+    let refused = YardError::new(
+        ErrorCode::ServiceExternal,
+        "emailulator is run by its LaunchAgent com.webteractive.emailulator; Yard does not start or stop it",
+    )
+    .with_hint("emailulator service uninstall");
+    let d = MockDaemon::start(&[
+        ("services.list", Ok(json!([emailulator_row()]))),
+        ("services.remove", Err(refused)),
+    ]);
+    let out = d.yard().args(["service", "remove", "emailulator"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let se = stderr(&out);
+    assert!(se.contains("hint: emailulator service uninstall"), "{se}");
+    assert!(!se.contains("NEEDS_CONFIRMATION") && !se.contains("needs a yes"), "{se}");
+}
+
+#[test]
+fn env_warning_on_stderr() {
+    let d = MockDaemon::start(&[(
+        "env.print",
+        Ok(mail_env(Some("emailulator is not answering; see yard doctor"))),
+    )]);
+    let out = d.yard().args(["env", "--service", "emailulator"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "warning: emailulator is not answering; see yard doctor\n");
+    let so = stdout(&out);
+    assert!(so.starts_with("# emailulator\nMAIL_MAILER=smtp\n"), "{so}");
+    assert!(!so.contains("not answering"), "{so}");
+}
+
+#[test]
+fn service_add_help_mentions_emailulator() {
+    let out = yard_at(short_root().path()).args(["service", "add", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let so = stdout(&out);
+    assert!(so.contains("mysql, postgres, redis, minio or emailulator"), "{so}");
+    assert!(so.contains("Yard never installs emailulator itself"), "{so}");
 }

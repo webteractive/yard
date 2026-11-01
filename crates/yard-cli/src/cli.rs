@@ -152,7 +152,8 @@ pub enum Command {
     /// first, for your shell profile; warns when another php or node (Herd's, nvm's, …)
     /// would still win. Edits nothing.
     InstallShims,
-    /// List the service instances (MySQL, PostgreSQL, Redis, MinIO), their ports and logins.
+    /// List the service instances (MySQL, PostgreSQL, Redis, MinIO, emailulator), their ports,
+    /// logins and who runs them.
     ///
     /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
     Services,
@@ -199,8 +200,14 @@ pub enum ServiceAction {
     /// Add a service: install its formula with brew if needed, give it a port, initialize
     /// its data, start it and print its .env lines. Shows brew's output; Ctrl-C cancels
     /// and undoes what the add created.
+    ///
+    /// Yard never installs emailulator itself: get it with its installer (curl -fsSL
+    /// https://raw.githubusercontent.com/webteractive/emailulator/main/install.sh | sh). Then
+    /// yard service add emailulator sets up its LaunchAgent (emailulator service install; --port
+    /// is its SMTP port) unless one already catches mail, and points Yard at it. Its LaunchAgent
+    /// runs it, so yard service start, stop, restart, port and remove refuse it.
     Add {
-        /// mysql, postgres, redis or minio.
+        /// mysql, postgres, redis, minio or emailulator.
         engine: String,
         /// The release line, e.g. 8.4 for MySQL or 17 for PostgreSQL; the engine's default
         /// when omitted. Redis and MinIO have none.

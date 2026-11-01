@@ -5,17 +5,20 @@ use super::{Ctx, Outcome, confirm, env, finished, interactive, run_job};
 use crate::client::CliError;
 use crate::output::{for_agents, print_json_line, table};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::signal::unix::{SignalKind, signal};
+use yard_core::emailulator::NAME as EMAILULATOR;
 use yard_core::services::sleep::SleepAfter;
 use yard_proto::methods::{
     self, EnvParams, ServiceAddParams, ServiceLogsParams, ServiceParams, ServicePortParams,
     ServiceRemoveParams, ServiceSleepParams,
 };
 use yard_proto::{
-    Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceState, SiteInfo, Topic, YardError,
+    Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceManager, ServiceState, SiteInfo, Topic,
+    YardError,
 };
 
 /// How long `start`, `restart` and `port` wait for an instance to come up: the same wait as
@@ -104,7 +107,7 @@ pub async fn list(ctx: &Ctx) -> Outcome {
     ctx.emit(&services, || {
         if services.is_empty() {
             return format!(
-                "No services yet. Add one with yard service add <engine>: mysql, postgres, redis or minio.\n\n{}",
+                "No services yet. Add one with yard service add <engine>: mysql, postgres, redis, minio or emailulator.\n\n{}",
                 for_agents("yard services")
             );
         }
@@ -123,12 +126,19 @@ pub async fn list(ctx: &Ctx) -> Outcome {
                     sleep_text(s),
                     account_text(&s.account),
                     used_by,
+                    managed_by(&s.managed_by),
                 ]
             })
             .collect();
-        let mut out =
-            table(&["INSTANCE", "ENGINE", "VERSION", "PORT", "STATE", "SLEEP", "ACCOUNT", "USED BY"], &rows);
+        let header = ["INSTANCE", "ENGINE", "VERSION", "PORT", "STATE", "SLEEP", "ACCOUNT", "USED BY", "MANAGED BY"];
+        let mut out = table(&header, &rows);
         out.push('\n');
+        let consoles: Vec<String> =
+            services.iter().filter_map(|s| Some(format!("{} web UI: {}\n", s.name, s.console.as_ref()?))).collect();
+        if !consoles.is_empty() {
+            consoles.iter().for_each(|line| out.push_str(line));
+            out.push('\n');
+        }
         let failures: Vec<String> = services.iter().filter_map(failure_line).collect();
         if !failures.is_empty() {
             failures.iter().for_each(|f| out.push_str(&format!("{f}\n")));
@@ -138,6 +148,24 @@ pub async fn list(ctx: &Ctx) -> Outcome {
         out
     });
     Ok(0)
+}
+
+/// `yard` or `LaunchAgent <label>`: who starts and stops the instance.
+pub fn managed_by(manager: &ServiceManager) -> String {
+    match manager {
+        ServiceManager::Yard => "yard".into(),
+        ServiceManager::LaunchAgent { label, .. } => format!("LaunchAgent {label}"),
+    }
+}
+
+/// The first executable regular file named `name` in a directory of `$PATH`, as a shell
+/// would run it. Relative directories are skipped: yardd's working directory is not ours.
+fn on_path(name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(name)).find(|candidate| {
+        candidate.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
 }
 
 /// `yard service add`: the job, then the new instance's `.env` lines.
@@ -157,11 +185,16 @@ pub async fn add_instance(
     // The line is the daemon's to default, so the new instance is found by what it added.
     let before: Vec<String> =
         if ctx.json { vec![] } else { instances(ctx).await?.into_iter().map(|s| s.name).collect() };
-    let params =
-        ServiceAddParams { engine: engine.into(), version: version.map(Into::into), port, path: None };
+    // emailulator comes from its own installer, so yardd is told which one this shell runs.
+    let path =
+        (engine == EMAILULATOR).then(|| on_path(EMAILULATOR)).flatten().map(|p| p.display().to_string());
+    let params = ServiceAddParams { engine: engine.into(), version: version.map(Into::into), port, path };
     finished(with_trust(ctx, || run_job(ctx, methods::SERVICES_ADD, params.clone(), String::new)).await)?;
     if ctx.json {
         return Ok(());
+    }
+    if engine == EMAILULATOR {
+        return print_mail(ctx).await;
     }
     let created = instances(ctx).await?.into_iter().find(|s| s.engine == engine && !before.contains(&s.name));
     let Some(created) = created else {
@@ -171,7 +204,20 @@ pub async fn add_instance(
     println!("Added {}. For your .env:", created.name);
     let params = EnvParams { service: Some(created.name), ..Default::default() };
     let blocks: Vec<EnvBlock> = ctx.client().await?.call(methods::ENV_PRINT, params).await?;
-    print!("{}", env::human(&blocks));
+    print!("{}", env::human(&env::warn_notes(blocks)));
+    Ok(())
+}
+
+/// After `yard service add emailulator`: where its web UI is, and its `.env` lines.
+async fn print_mail(ctx: &Ctx) -> Result<(), CliError> {
+    let row = instances(ctx).await?.into_iter().find(|s| s.name == EMAILULATOR);
+    match row.and_then(|r| r.console) {
+        Some(url) => println!("emailulator catches mail; its web UI is {url}. For your .env:"),
+        None => println!("emailulator catches mail. For your .env:"),
+    }
+    let params = EnvParams { service: Some(EMAILULATOR.into()), ..Default::default() };
+    let blocks: Vec<EnvBlock> = ctx.client().await?.call(methods::ENV_PRINT, params).await?;
+    print!("{}", env::human(&env::warn_notes(blocks)));
     Ok(())
 }
 
@@ -215,6 +261,13 @@ async fn check_removable(ctx: &Ctx, instance: &str) -> Result<(), CliError> {
 /// Checks the instance can be removed, then asks, then deletes. Without a terminal and
 /// without `--yes` it deletes nothing.
 pub async fn remove(ctx: &Ctx, instance: String, keep_data: bool, yes: bool) -> Outcome {
+    if instance == EMAILULATOR {
+        // Its LaunchAgent runs it and yardd refuses, naming emailulator's own command: nothing
+        // here is Yard's to delete, so there is nothing to ask.
+        let params = ServiceRemoveParams { name: instance, keep_data };
+        ctx.client().await?.call::<_, ()>(methods::SERVICES_REMOVE, params).await?;
+        return Ok(0);
+    }
     check_removable(ctx, &instance).await?;
     let dir = ctx.paths.service_data(&instance).display().to_string();
     if !yes {
