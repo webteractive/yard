@@ -222,6 +222,12 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   it behind `ext disable`). Brew's `conf.d` is mirrored into it as
   `10-brew-<file>.ini`, except files that load an extension `yard.toml` manages or a
   bundled one it disables. `99-overrides.ini` sorts last, so user overrides always win.
+  A brew ini that loads a `.so` by a path that is gone is not mirrored: `brew uninstall`
+  of an extension leaves its ini, and brew keeps a user's edited ini, writing its current
+  one beside it as `<file>.default`. Yard never writes brew's files, so `yard doctor` warns
+  `brew-ini:<ver>/<file>` (brew's own `php` warns about it on every run), with the hint
+  `rm <file>`, or `mv <file>.default <file>` when brew's current ini loads the same
+  extension (decided 2026-11-02).
 - `php.ini`, `fpm.conf` and the `conf.d` inis are rendered for every installed
   version, pool or not, so the CLI shims (§4.5) read the same configuration.
 

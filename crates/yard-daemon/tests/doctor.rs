@@ -181,6 +181,21 @@ async fn missing_formula_hint_names_brew_install() {
 }
 
 #[tokio::test]
+async fn an_ini_brew_uninstall_left_behind_warns() {
+    let e = env().await;
+    let v = "8.4".parse().unwrap();
+    let conf_d = e.brew().php_conf_d(v);
+    std::fs::create_dir_all(&conf_d).unwrap();
+    std::fs::write(conf_d.join("20-xdebug.ini"), "zend_extension=\"/gone/xdebug.so\"\n").unwrap();
+
+    let report = e.offline(&e.helper).await;
+
+    let c = only(&report, "brew-ini:8.4/20-xdebug.ini");
+    assert_eq!(c.status, CheckStatus::Warn);
+    assert_eq!(c.hint.as_deref(), Some(format!("rm {}", conf_d.join("20-xdebug.ini").display()).as_str()));
+}
+
+#[tokio::test]
 async fn foreign_resolver_fails() {
     let e = env().await;
     e.write_resolver("nameserver 10.0.0.1\n");

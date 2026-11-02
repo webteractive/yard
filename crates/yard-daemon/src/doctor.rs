@@ -23,6 +23,7 @@ use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
+use yard_core::render::php::{ini_loads, is_stale};
 use yard_core::services::brew_info;
 use yard_core::services::render::{init_command, old_php_can_log_in};
 use yard_core::services::{Engine, instance_name, plain_line};
@@ -195,6 +196,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         Ok(opt) => ok("formula.php", format!("PHP {v}, the default, is at {}", opt.display())),
         Err(e) => from_error("formula.php", &e),
     });
+    checks.extend(stale_brew_inis(brew, &brew.installed_php(&exists, &read_link)));
 
     checks.push(match &view.config_error {
         None => ok("config", "yard.toml, sites.toml and ports.toml parse"),
@@ -478,6 +480,48 @@ fn php_constraint(site: &SiteInfo, installed: &[PhpVersion]) -> Option<Check> {
     };
     let id = format!("php-constraint:{}", site.name);
     Some(warn(&id, format!("{} wants php {wanted} (composer.json) but runs {runs}", site.name), hint))
+}
+
+/// `brew-ini:<v>/<file>` warns about an ini in brew's conf.d that loads a `.so` by a path that
+/// is gone: `brew uninstall` of an extension leaves its ini, and brew keeps a user's edited
+/// ini, writing its current one beside it as `<file>.default`. Yard skips such a file, but
+/// brew's own `php` warns about it on every run, and nothing else ever removes it.
+fn stale_brew_inis(brew: &Brew, installed: &[PhpVersion]) -> Vec<Check> {
+    let exists = |p: &Path| p.exists();
+    let mut checks = vec![];
+    for v in installed {
+        let dir = brew.php_conf_d(*v);
+        for (name, text) in crate::reconcile::ini_files(&dir) {
+            let Some((module, gone)) =
+                ini_loads(&text).find(|(_, value)| value.starts_with('/') && !exists(Path::new(value)))
+            else {
+                continue;
+            };
+            let file = dir.join(&name);
+            let current = dir.join(format!("{name}.default"));
+            let replaced = std::fs::read_to_string(&current)
+                .is_ok_and(|t| ini_loads(&t).any(|(m, _)| m == module) && !is_stale(&t, &exists));
+            let (message, hint) = if replaced {
+                (
+                    format!(
+                        "PHP {v}'s {name} loads {gone}, which is gone, so {module} does not load; \
+                         brew's current ini is {name}.default beside it"
+                    ),
+                    format!("mv {} {}", current.display(), file.display()),
+                )
+            } else {
+                (
+                    format!(
+                        "PHP {v}'s {name} loads {gone}, which is gone (brew uninstall leaves the ini); \
+                         brew's own php warns about it on every run"
+                    ),
+                    format!("rm {}", file.display()),
+                )
+            };
+            checks.push(warn(&format!("brew-ini:{v}/{name}"), message, hint));
+        }
+    }
+    checks
 }
 
 /// `project-file:<site>` for a site served from a `.yard`: fails while the file does not
@@ -1186,5 +1230,68 @@ mod tests {
         );
         assert!(env_differences(&env(&[("XDG_CONFIG_HOME", "/same")]), &own).is_empty());
         assert!(env_differences(&BTreeMap::new(), &own).is_empty());
+    }
+
+    /// A brew prefix whose PHP `v` conf.d holds `files`, as `(name, text)`.
+    fn brew_with(v: PhpVersion, files: &[(&str, &str)]) -> (tempfile::TempDir, Brew) {
+        let dir = tempfile::tempdir().unwrap();
+        let brew = Brew::new(dir.path());
+        let conf_d = brew.php_conf_d(v);
+        std::fs::create_dir_all(&conf_d).unwrap();
+        for (name, text) in files {
+            std::fs::write(conf_d.join(name), text).unwrap();
+        }
+        (dir, brew)
+    }
+
+    #[test]
+    fn an_ini_left_by_brew_uninstall_is_a_warning_to_remove_it() {
+        let v = PhpVersion { major: 8, minor: 4 };
+        let (_dir, brew) = brew_with(
+            v,
+            &[
+                ("20-xdebug.ini", "[xdebug]\nzend_extension=\"/gone/xdebug@8.4/xdebug.so\"\n"),
+                ("ext-opcache.ini", "zend_extension=\"opcache.so\"\n"),
+            ],
+        );
+        let checks = stale_brew_inis(&brew, &[v]);
+        let file = brew.php_conf_d(v).join("20-xdebug.ini");
+        assert_eq!(checks.len(), 1, "a bare name is PHP's to find: {checks:?}");
+        assert_eq!(checks[0].id, "brew-ini:8.4/20-xdebug.ini");
+        assert_eq!(checks[0].status, CheckStatus::Warn);
+        assert!(checks[0].message.contains("/gone/xdebug@8.4/xdebug.so"), "{}", checks[0].message);
+        assert_eq!(checks[0].hint.as_deref(), Some(format!("rm {}", file.display()).as_str()));
+    }
+
+    #[test]
+    fn a_stale_ini_beside_brews_current_one_is_replaced_by_it() {
+        let v = PhpVersion { major: 7, minor: 4 };
+        let (dir, brew) = brew_with(v, &[]);
+        let so = dir.path().join("opt/phpredis@7.4/redis.so");
+        std::fs::create_dir_all(so.parent().unwrap()).unwrap();
+        std::fs::write(&so, "").unwrap();
+        let conf_d = brew.php_conf_d(v);
+        std::fs::write(conf_d.join("20-redis.ini"), "extension=\"/gone/redis@7.4/redis.so\"\n").unwrap();
+        std::fs::write(conf_d.join("20-redis.ini.default"), format!("extension=\"{}\"\n", so.display()))
+            .unwrap();
+        let checks = stale_brew_inis(&brew, &[v]);
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert!(checks[0].message.contains("redis does not load"), "{}", checks[0].message);
+        let file = conf_d.join("20-redis.ini");
+        assert_eq!(
+            checks[0].hint.as_deref(),
+            Some(format!("mv {}.default {}", file.display(), file.display()).as_str())
+        );
+    }
+
+    #[test]
+    fn nothing_is_said_when_every_ini_loads() {
+        let v = PhpVersion { major: 8, minor: 4 };
+        let (_dir, brew) = brew_with(v, &[("ext-intl.ini", "extension=\"intl.so\"\n")]);
+        assert!(stale_brew_inis(&brew, &[v]).is_empty());
+        assert!(
+            stale_brew_inis(&brew, &[PhpVersion { major: 7, minor: 0 }]).is_empty(),
+            "no conf.d, nothing to say"
+        );
     }
 }

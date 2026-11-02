@@ -40,7 +40,9 @@ triggers:
   `brew` extension's `50-<name>.ini` loads the path brew's own ini names. The formula's
   keg name can differ from the extension (`redis@7.1` installs `phpredis@7.1`).
   `brew uninstall` removes the keg but leaves the ini in `etc/php/<v>/conf.d`; Yard
-  ignores an ini whose absolute `.so` is gone (`render::php::is_stale`).
+  ignores an ini whose absolute `.so` is gone (`render::php::is_stale`), and `yard doctor`
+  warns `brew-ini:<v>/<file>` with the `rm` (or `mv <file>.default`) to run; Yard never
+  deletes it itself. `scripts/e2e-m2.sh` removes the ones its own adds leave.
 - **Never Herd's PHP.** Herd puts its `php` and `composer` first on PATH. Run PHP tools
   by absolute keg path (`Brew::php_bin`, never a bare `php`), and give every child the
   PATH from `yard_core::shim::child_path` (keg `bin` first, `Herd` directories dropped):

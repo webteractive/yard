@@ -41,6 +41,16 @@ unit_pid() {
   "$yard" status --json | python3 -c 'import json, sys; print(next((u["pid"] for u in json.load(sys.stdin)["units"] if u["name"] == sys.argv[1]), ""))' "$1"
 }
 
+# brew's conf.d for the two versions this run adds extensions to. brew uninstall removes an
+# extension's keg but leaves its ini there, still loading the .so it removed, so brew's own
+# php warns on every run; cleanup removes the ones this run added.
+brew_confd=(/opt/homebrew/etc/php/7.1/conf.d /opt/homebrew/etc/php/8.4/conf.d)
+brew_inis() { local d; for d in "${brew_confd[@]}"; do find "$d" -maxdepth 1 -name '*.ini' 2>/dev/null; done | sort; }
+# The absolute .so ini $1 loads; nothing for a bare name, which is PHP's to find.
+ini_so() { sed -n 's/^[[:space:]]*\(zend_\)\{0,1\}extension[[:space:]]*=[[:space:]]*"\{0,1\}\(\/[^"]*\)"\{0,1\}.*$/\2/p' "$1" | head -1; }
+inis_taken=false
+inis_before=""
+
 # `php -m` through the shim, in project $1.
 modules() { (cd "$1" && "$shim" -m); }
 # has_module <dir> <module> <what>: fails showing all of php -m's output when it is missing.
@@ -71,6 +81,13 @@ cleanup() {
     # shellcheck disable=SC2086
     "$yard" ext remove $ext >/dev/null 2>&1 || true
   done
+  if [[ $inis_taken == true ]]; then
+    local ini so
+    while IFS= read -r ini; do
+      so="$(ini_so "$ini")"
+      if [[ -n $so && ! -e $so ]]; then rm -f "$ini"; fi
+    done < <(comm -13 <(printf '%s\n' "$inis_before") <(brew_inis))
+  fi
   "$yard" unlink hello-php >/dev/null 2>&1 || true
   "$yard" unlink hello-php71 >/dev/null 2>&1 || true
   local stub
@@ -96,6 +113,8 @@ pass "http://hello-php71.yard:8080/ runs PHP $v71"
 
 # 5. Extensions load, seen through the shim in each project.
 [[ -x $shim ]] || fail "$shim is not linked; is yardd the release build next to yard-shim?"
+inis_before="$(brew_inis)"
+inis_taken=true
 # Registered before the add, so cleanup removes even an add that failed halfway.
 added+=("redis --php 7.1")
 quiet "$yard" ext add redis --php 7.1
@@ -153,4 +172,9 @@ cleanup
 after="$(sum "$herd_resolver")"
 [[ $before == "$after" ]] || fail "$herd_resolver changed"
 pass "$herd_resolver is unchanged"
+while IFS= read -r ini; do
+  so="$(ini_so "$ini")"
+  if [[ -n $so && ! -e $so ]]; then fail "$ini still loads $so, which is gone"; fi
+done < <(comm -13 <(printf '%s\n' "$inis_before") <(brew_inis))
+pass "brew's conf.d keeps no ini this run added for a removed extension"
 pass "PHP 7.1 stays installed; yard php uninstall 7.1 removes it"

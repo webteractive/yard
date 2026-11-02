@@ -178,7 +178,12 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - For M2 (2026-10-20) the maintainer approved `brew install shivammathur/php/php@7.1`, which
   stays installed; the e2e adds and removes `redis@7.1` and `xdebug@8.4`. Brew's
   extension formulas keep the `.so` in their own keg (`redis@7.1` installs keg
-  `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`.
+  `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`. On
+  2026-11-02 four such inis from e2e runs (xdebug for 8.4; redis, igbinary and msgpack for 7.1)
+  were removed by hand (maintainer approved), `e2e-m2.sh` now removes the ones its adds leave, and
+  `yard doctor` warns `brew-ini:<v>/<file>`. PHP 7.4's `20-redis.ini` (the maintainer's, from 2025) named
+  `redis@7.4`, which brew renamed `phpredis@7.4`, so redis did not load in 7.4 until brew's
+  current `20-redis.ini.default` replaced it the same day (maintainer approved, doctor's own hint).
 - On 2026-10-22 brew also had `php@7.3` and `php@7.4` installed (and the plain `php`
   formula).
 - On 2026-11-01 the maintainer approved installing PHP 7.0 (`yard php install 7.0`, brew's 7.0.33), which
@@ -236,7 +241,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - `scripts/e2e-m1.sh` — real-machine check in the standard profile. It needs the
   brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
 - `scripts/e2e-m2.sh` — real-machine M2 check after `e2e-m1.sh`: brew-installs php@7.1
-  and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Run PHP only as
+  and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Its
+  cleanup removes the inis in brew's `conf.d` that its adds left for a removed extension, and it
+  fails if one is left. Run PHP only as
   `"$HOME/.yard/bin/php"`; a bare `php` here is Herd's.
 - `scripts/e2e-m3.sh` — real-machine M3 check after `e2e-m1.sh`: secures a scratch site and
   curls it over HTTPS with `--cacert`, so it needs no keychain trust; ask the maintainer first. Tests
