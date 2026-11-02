@@ -99,6 +99,8 @@ pub struct Context {
     pub app_dirs: Vec<PathBuf>,
     /// Which service instances sleep; the reconciler holds the same one.
     pub sleeper: Arc<Sleeper>,
+    /// The asks that may wait on a wake at once (`wake::WAKE_SLOTS`).
+    pub wake_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl Context {
@@ -159,6 +161,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         usual_ports: opts.usual_ports.clone(),
         app_dirs: opts.app_dirs.clone(),
         sleeper,
+        wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });
 
     claim(&socket).await?;

@@ -275,7 +275,14 @@ impl Runner {
         match &self.spec.health {
             Health::Tcp(port) => {
                 let connect = TcpStream::connect(("127.0.0.1", *port));
-                matches!(tokio::time::timeout(HEALTH_TIMEOUT, connect).await, Ok(Ok(_)))
+                let Ok(Ok(stream)) = tokio::time::timeout(HEALTH_TIMEOUT, connect).await else {
+                    return false;
+                };
+                // The connection it leaves in TIME_WAIT is yardd's, not a client of the unit.
+                if let Ok(local) = stream.local_addr() {
+                    crate::conns::own_connection(local.port());
+                }
+                true
             }
             Health::Unix(path) => {
                 matches!(tokio::time::timeout(HEALTH_TIMEOUT, UnixStream::connect(path)).await, Ok(Ok(_)))

@@ -171,6 +171,47 @@ impl Reconciler {
         self.published.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// `f` of the last good snapshot, read in place: what a wake polls, without a copy.
+    pub fn read<T>(&self, f: impl FnOnce(&Snapshot) -> T) -> Option<T> {
+        self.published.read().unwrap_or_else(|e| e.into_inner()).as_ref().map(f)
+    }
+
+    /// Whether the last good reconcile ran nothing for the instance, for a reason
+    /// (`FORMULA_MISSING`).
+    pub fn is_left_out(&self, instance: &str) -> bool {
+        self.read(|s| s.left_out.contains_key(instance)).unwrap_or(false)
+    }
+
+    /// Starts each instance that is awake again but has no unit, from the unit the last good
+    /// reconcile made for it, beside every unit that reconcile asked for. A wake falls back on
+    /// this when its own reconcile fails (a TOML that does not parse), as a parse error keeps
+    /// the last good config serving.
+    pub async fn wake_from_last_good(&self) {
+        let mut state = self.state.lock().await;
+        let woken: Vec<String> = state.slept.keys().filter(|i| !self.sleeper.is_asleep(i)).cloned().collect();
+        if woken.is_empty() {
+            return;
+        }
+        let mut desired = state.applied.clone();
+        for instance in &woken {
+            if let Some(spec) = state.slept.remove(instance) {
+                desired.push(spec);
+            }
+        }
+        tracing::info!("waking {} from the last good config", woken.join(", "));
+        if let Some(snapshot) = &state.snapshot {
+            write_sleeping(
+                &state.paths,
+                &snapshot.resolution.sites,
+                &snapshot.services,
+                &snapshot.projects,
+                &self.sleeper,
+            );
+        }
+        self.supervisor.apply(desired.clone()).await;
+        state.applied = desired;
+    }
+
     pub async fn last_error(&self) -> Option<YardError> {
         self.state.lock().await.last_error.clone()
     }
@@ -615,21 +656,22 @@ impl Reconciler {
                 pid_file: None,
             });
         }
-        // An asleep instance keeps its ports and gets no unit, which stops a running one.
-        let awake = |instance: &str| !self.sleeper.is_asleep(instance);
-        for (instance, entry) in services_cfg.services.iter().filter(|(i, e)| !e.stopped && awake(i)) {
+        // An asleep instance keeps its ports and gets no unit, which stops a running one. The
+        // unit it would run is kept, for a wake while a later TOML does not parse.
+        let mut slept = BTreeMap::new();
+        for (instance, entry) in services_cfg.services.iter().filter(|(_, e)| !e.stopped) {
             let Some(ports) = service_ports.get(instance) else { continue };
+            let asleep = self.sleeper.is_asleep(instance);
             let cmd =
                 services::unit_command(&state.brew, &paths, entry.engine, instance, &entry.formula, ports);
             if let Some(missing) = services::missing_program(&state.brew, &entry.formula, &cmd.program) {
-                report.warnings.push(left_out_warning(instance, &missing));
-                left_out.insert(instance.clone(), missing);
+                if !asleep {
+                    report.warnings.push(left_out_warning(instance, &missing));
+                    left_out.insert(instance.clone(), missing);
+                }
                 continue;
             }
-            if service_confs.get(instance).is_some_and(|conf| changed.contains(conf)) {
-                restart.push(instance.clone());
-            }
-            desired.push(UnitSpec {
+            let spec = UnitSpec {
                 name: instance.clone(),
                 program: cmd.program,
                 args: cmd.args,
@@ -642,7 +684,15 @@ impl Reconciler {
                 stop_timeout: Some(services::STOP_TIMEOUT),
                 start_timeout: services::start_timeout(entry.engine),
                 pid_file: Some(paths.service_pid(instance)),
-            });
+            };
+            if asleep {
+                slept.insert(instance.clone(), spec);
+                continue;
+            }
+            if service_confs.get(instance).is_some_and(|conf| changed.contains(conf)) {
+                restart.push(instance.clone());
+            }
+            desired.push(spec);
         }
         if !existing.contains("nginx")
             && let Some(pid) = self.nginx.stop_orphan().await
@@ -654,6 +704,18 @@ impl Reconciler {
         write_sleeping(&paths, &resolution.sites, &services_cfg, &projects, &self.sleeper);
         // A unit apply started reads the new files itself; restarting or reloading it on
         // top would start it twice.
+        // This apply stops the unit of an instance that fell asleep: a wake waits past that
+        // process. One woken before now stays in `desired`, and its process is the instance.
+        let units = self.supervisor.list();
+        for instance in slept.keys() {
+            let pid = units.iter().find(|u| u.name == *instance).and_then(|u| u.pid);
+            self.sleeper.set_stopping(instance, pid);
+        }
+        for spec in desired.iter().filter(|s| services_cfg.services.contains_key(&s.name)) {
+            self.sleeper.set_stopping(&spec.name, None);
+        }
+        state.applied = desired.clone();
+        state.slept = slept;
         let started = self.supervisor.apply(desired).await;
         self.supervisor.sockets().release_except(&inherit);
         for name in restart.iter().filter(|n| existing.contains(*n) && !started.contains(*n)) {

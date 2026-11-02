@@ -82,8 +82,9 @@ the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git statu
 (installing what is missing with brew), asks each one a question, and removes what it added,
 `scripts/e2e-m4c.sh` Node: it installs Node 16.14.0 and 22 with fnm, runs them through the
 shims (a native module build included), and removes only what it installed, and
-`scripts/e2e-m4e.sh` sleeping services: it lets a scratch Redis fall asleep, wakes it from a
-page, from `php` and with a held connection, and removes it, and `scripts/e2e-m4d.sh`
+`scripts/e2e-m4e.sh` sleeping services: it lets scratch Redis, MySQL 8.0 and PostgreSQL 17
+instances fall asleep, times each one's cold start, wakes them from a page and from `php`,
+keeps them awake with held connections, and removes them, and `scripts/e2e-m4d.sh`
 emailulator: against the agent already installed (it never installs, starts or stops it), it
 checks `yard doctor`, the external port entries, `mail.yard:8080` and a project's `MAIL_PORT`.
 
@@ -124,12 +125,19 @@ Yard adds makes it the default, for `root` too. Every MySQL instance also defaul
 Service instances can sleep when nothing uses them, which frees their memory. It is off
 until you turn it on: `service_sleep_after = "15m"` in `yard.toml` for every instance, or
 `yard service sleep-after <instance> 15m` for one (`off` keeps it awake, `default` follows
-`yard.toml`; at least `60s`). An instance with no client connection and no wake for that
-long is stopped gracefully; its port stays its own. It wakes when a PHP request comes in for
+`yard.toml`; at least `60s`). An instance with no client, no connection closed since the last
+look (so a `schedule:run` that connects for a moment every minute counts) and no wake for that
+long is stopped gracefully, once yardd has checked again that nothing connected meanwhile; its
+port stays its own. It wakes when a PHP request comes in for
 a site whose `.yard` lists it, when `php` or `composer` runs in that site (they print
 `yard: waking the services <site> uses …` and wait up to 30 s), or with
 `yard service start <instance>`. A GUI client or a `mysql` run outside a site cannot wake one
-and gets "connection refused": start it, or set `off` for an instance used that way.
+and gets "connection refused": start it, or set `off` for an instance used that way. If
+another program takes a sleeping instance's port, the site's pages answer 503 and `php`
+refuses to run, naming the program, rather than talk to it; `yard doctor` shows it. Once that
+program lets go of the port, the next page or `php` starts the instance again. On a site that
+can wake services, a server-level `error_page` in its nginx override no longer applies to PHP
+requests (the wake's own `error_page` takes its place); PHP's own error pages are unaffected.
 `yard services` shows `sleeping 2h` and the SLEEP setting, and every instance starts awake
 with yardd. Setting it back to `off`, or removing the key, wakes an instance that sleeps.
 While nothing may sleep, PHP requests never ask yardd anything.

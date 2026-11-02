@@ -209,6 +209,26 @@ async fn ask(d: &Daemon, site: &str, wait: u64) -> (String, Duration) {
 }
 
 const NO_CONTENT: &str = "HTTP/1.1 204 No Content";
+const FORBIDDEN: &str = "HTTP/1.1 403 Forbidden";
+
+/// [`ask`], with the answer's body.
+async fn ask_body(d: &Daemon, site: &str, wait: u64) -> (String, Duration, String) {
+    let socket = d.fx.paths.wake_socket();
+    let request = format!("GET /wake/{site}?wait={wait} HTTP/1.1\r\nHost: yard\r\nConnection: close\r\n\r\n");
+    tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(40))).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        let status = answer.lines().next().unwrap_or_default().to_string();
+        let body = answer.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        (status, started.elapsed(), body)
+    })
+    .await
+    .unwrap()
+}
 
 /// A daemon whose `redis`, which `blog` needs, is asleep.
 async fn asleep_for_blog(port: u16) -> (Daemon, Client) {
@@ -320,17 +340,59 @@ async fn a_stopped_instance_is_never_woken() {
     d.shutdown().await.unwrap();
 }
 
+/// Another program took the port while the instance slept: the ask is refused, so neither a
+/// page nor a shim talks to whatever holds it (it could pose as the database).
 #[tokio::test]
-async fn a_held_port_answers_at_once_and_fails() {
+async fn a_held_port_refuses_the_ask() {
     let port = free_port();
     let (d, mut c) = asleep_for_blog(port).await;
     sleep_long(&d, &mut c).await;
     let _holder = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let (status, took) = ask(&d, "blog", 10).await;
-    assert_eq!(status, NO_CONTENT);
+    let (status, took, body) = ask_body(&d, "blog", 10).await;
+    assert_eq!(status, FORBIDDEN);
     assert!(took < Duration::from_secs(2), "a held port ends the wait: {took:?}");
+    assert!(
+        body.contains("redis") && body.contains(&port.to_string()),
+        "names the instance and port: {body}"
+    );
     let info = redis_until(&mut c, Duration::from_secs(2), |i| i["state"].get("failed").is_some()).await;
     assert_eq!(info["state"]["failed"]["reason"]["code"], "PORT_IN_USE", "{info}");
+    assert_eq!(ask(&d, "blog", 10).await.0, FORBIDDEN, "asked again, it is still refused");
+    // Still listed, so the next php or composer asks too, and is refused too.
+    let listed = || sleeping_file(&d) == "blog\n";
+    assert!(wait_until(listed, Duration::from_secs(2)).await, "{:?}", sleeping_file(&d));
+    d.shutdown().await.unwrap();
+}
+
+/// Once the other program lets go of the port, the next ask starts the instance: the site
+/// does not stay refused until someone restarts it.
+#[tokio::test]
+async fn a_freed_port_lets_the_next_ask_wake_it() {
+    let port = free_port();
+    let (d, mut c) = asleep_for_blog(port).await;
+    sleep_long(&d, &mut c).await;
+    let holder = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    assert_eq!(ask(&d, "blog", 10).await.0, FORBIDDEN);
+    drop(holder);
+    let (status, _) = ask(&d, "blog", 10).await;
+    assert_eq!(status, NO_CONTENT);
+    let unit = redis_unit(&mut c).await.expect("a redis unit");
+    assert_eq!(unit["state"], "running", "{unit}");
+    redis_until(&mut c, Duration::from_secs(2), |i| running(i) && i.get("sleeping_since").is_none()).await;
+    assert_eq!(sleeping_file(&d), "", "and the site is no longer listed");
+    d.shutdown().await.unwrap();
+}
+
+/// Real redis, PostgreSQL and MinIO say nothing until asked, so each health check that
+/// connects and closes leaves a TIME_WAIT: yardd's own connections must not keep an instance
+/// awake.
+#[tokio::test]
+async fn health_checks_do_not_keep_it_awake() {
+    let d = with_redis(free_port(), "service_sleep_after = \"60s\"\n", "").await;
+    std::fs::write(d.fx.brew.path().join("fake-no-greeting"), "").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), asleep).await;
     d.shutdown().await.unwrap();
 }
 
@@ -561,5 +623,140 @@ async fn status_lists_a_stopping_sleeper_once() {
     let units = status["units"].as_array().unwrap();
     assert!(units.iter().all(|u| u["name"] != "redis"), "listed as a unit too: {status}");
     assert_eq!(status["sleeping"][0]["name"], "redis", "{status}");
+    d.shutdown().await.unwrap();
+}
+
+// ---- Production hardening (2026-11-02) ----
+
+/// A client that connects for a moment, again and again (a `schedule:run` every minute, run
+/// by `PHP_BINARY` and so past the shim), is never there when the clients are counted, but
+/// the connections it closed are: each counts as use once.
+#[tokio::test]
+async fn short_connections_keep_it_awake() {
+    let port = free_port();
+    let d = with_redis(port, "service_sleep_after = \"60s\"\n", "").await.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let client = tokio::task::spawn_blocking(move || {
+        let until = Instant::now() + Duration::from_millis(800);
+        while Instant::now() < until {
+            // A real client reads the server's greeting before it closes; closing with it
+            // unread resets the connection, which leaves no TIME_WAIT.
+            if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                let _ = stream.read(&mut [0u8; 16]);
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    });
+    client.await.unwrap();
+    let info = redis(&mut c).await;
+    assert!(
+        running(&info) && info.get("sleeping_since").is_none(),
+        "short connections keep it awake: {info}"
+    );
+    redis_until(&mut c, Duration::from_secs(3), asleep).await;
+    d.shutdown().await.unwrap();
+}
+
+/// The sites are listed in `run/sleeping` before the instance stops, and its clients are
+/// counted again then: one that came in after the first count (a `php` that read the file a
+/// moment before) keeps it awake instead of being cut off by the stop.
+#[tokio::test]
+async fn a_client_that_comes_while_it_drains_keeps_it_awake() {
+    let port = free_port();
+    let d = with_redis(port, "service_sleep_after = \"60s\"\n", "").await;
+    write_yard(&d.project("blog"), "[services]\nredis = true\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let listed = || sleeping_file(&d) == "blog\n";
+    assert!(wait_until(listed, Duration::from_secs(5)).await, "blog is listed before redis stops");
+    let held = std::net::TcpStream::connect(("127.0.0.1", port)).ok();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let info = redis(&mut c).await;
+    assert!(held.is_some(), "redis still listened while its site was listed");
+    assert!(running(&info) && info.get("sleeping_since").is_none(), "the client keeps it awake: {info}");
+    assert_eq!(sleeping_file(&d), "", "and its site is no longer listed");
+    drop(held);
+    d.shutdown().await.unwrap();
+}
+
+/// Two asks while the instance is still stopping: neither answers before the new process
+/// runs (the stopping one still shows `running` with its old pid until it exits).
+#[tokio::test]
+async fn asks_during_a_stop_wait_for_the_new_process() {
+    let d = with_redis(free_port(), "service_sleep_after = \"60s\"\n", "").await;
+    write_yard(&d.project("blog"), "[services]\nredis = true\n");
+    std::fs::write(d.fx.brew.path().join("fake-stop-delay"), "500").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let old_pid: i32 =
+        std::fs::read_to_string(d.fx.paths.service_pid("redis")).unwrap().trim().parse().unwrap();
+    // From now on a start takes a second, as a woken MySQL's does.
+    std::fs::write(d.fx.brew.path().join("fake-listen-delay"), "1000").unwrap();
+    let log = d.fx.paths.log("redis");
+    let stopping = || std::fs::read_to_string(&log).is_ok_and(|t| t.contains("fake stopping"));
+    assert!(wait_until(stopping, Duration::from_secs(5)).await, "redis began to stop");
+    std::fs::write(d.fx.paths.yard_toml(), "service_sleep_after = \"24h\"\n").unwrap();
+    let after_ask = |delay: u64| {
+        let d = &d;
+        async move {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            let (status, _) = ask(d, "blog", 10).await;
+            let mut c = d.client().await;
+            (status, redis_unit(&mut c).await)
+        }
+    };
+    let ((a, unit_a), (b, unit_b)) = tokio::join!(after_ask(0), after_ask(100));
+    for (status, unit) in [(a, unit_a), (b, unit_b)] {
+        assert_eq!(status, NO_CONTENT);
+        let unit = unit.expect("a redis unit");
+        assert_eq!(unit["state"], "running", "answered before the new process ran: {unit}");
+        assert_ne!(unit["pid"], old_pid, "answered on the stopping process: {unit}");
+    }
+    d.shutdown().await.unwrap();
+}
+
+/// A TOML that no longer parses keeps every site serving the last good config (config
+/// ownership rule), and that includes waking what they need.
+#[tokio::test]
+async fn a_broken_toml_does_not_stop_a_wake() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    std::fs::write(d.fx.paths.sites_toml(), "[sites\n").unwrap();
+    let broken = async {
+        loop {
+            let status = c.call("status", Value::Null).await.unwrap();
+            if status["config_error"].is_object() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), broken).await.expect("the reconcile fails");
+    let (status, took) = ask(&d, "blog", 5).await;
+    assert_eq!(status, NO_CONTENT);
+    assert!(took < Duration::from_secs(3), "the ask waited out its wait: {took:?}");
+    let unit = redis_unit(&mut c).await.expect("a redis unit");
+    assert_eq!(unit["state"], "running", "{unit}");
+    d.shutdown().await.unwrap();
+}
+
+/// Past a cap on asks waiting at once, an ask is answered straight away (the wake still goes
+/// ahead), so a flood of requests cannot pile up in yardd.
+#[tokio::test]
+async fn asks_beyond_the_cap_answer_at_once() {
+    let (d, mut c) = asleep_for_blog(free_port()).await;
+    sleep_long(&d, &mut c).await;
+    std::fs::write(d.fx.brew.path().join("fake-listen-delay"), "2000").unwrap();
+    let mut asks = tokio::task::JoinSet::new();
+    for _ in 0..80 {
+        asks.spawn(raw(d.fx.paths.wake_socket(), b"GET /wake/blog?wait=10 HTTP/1.1\r\n\r\n"));
+    }
+    let answers = asks.join_all().await;
+    assert!(answers.iter().all(|(status, _)| status == NO_CONTENT));
+    let quick = answers.iter().filter(|(_, took)| *took < Duration::from_millis(1000)).count();
+    assert_eq!(quick, 80 - yard_daemon::wake::WAKE_SLOTS, "the asks past the cap answer at once");
     d.shutdown().await.unwrap();
 }

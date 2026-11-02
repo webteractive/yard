@@ -31,7 +31,7 @@ fn main() -> ExitCode {
         Some("initdb") => initdb(Path::new(&argv0), &args),
         Some("postgres") => postgres(&args),
         Some("postgres-backend") => backend(),
-        Some("redis-server") => redis_server(&args),
+        Some("redis-server") => redis_server(Path::new(&argv0), &args),
         Some("minio") => minio(&args),
         Some("emailulator") => emailulator(Path::new(&argv0), &args),
         _ => mode(&args),
@@ -729,7 +729,7 @@ fn backend() -> ExitCode {
 
 /// `redis-server <conf>`; listens on the `port` in the conf. Like real redis it exits 1 at
 /// config load when the conf's `dir` is not a directory.
-fn redis_server(args: &[String]) -> ExitCode {
+fn redis_server(argv0: &Path, args: &[String]) -> ExitCode {
     let Some(conf) = args.first() else { return fail("redis-server needs a config file".into()) };
     let text = std::fs::read_to_string(conf).unwrap_or_default();
     let dir = text.lines().find_map(|l| Some(l.trim().strip_prefix("dir ")?.trim().trim_matches('"')));
@@ -748,6 +748,13 @@ fn redis_server(args: &[String]) -> ExitCode {
         }
         // SAFETY: installing a handler that makes only an async-signal-safe call.
         unsafe { libc::signal(libc::SIGTERM, slow as libc::sighandler_t) };
+    }
+    // A slow start, as a woken MySQL's, for the tests that wait on one.
+    delay_from(argv0, "fake-listen-delay");
+    // Real redis says nothing until asked, so a health check that connects and closes leaves
+    // a TIME_WAIT; with `<prefix>/fake-no-greeting` the fake does the same.
+    if argv0.ancestors().nth(4).is_some_and(|p| p.join("fake-no-greeting").exists()) {
+        GREET.store(false, std::sync::atomic::Ordering::SeqCst);
     }
     listen_tcp(text.lines().find_map(|l| l.trim().strip_prefix("port ")?.trim().parse().ok()))
 }
@@ -800,10 +807,15 @@ fn serve(listener: TcpListener, http: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Whether `hold` greets: off for an engine that, like real redis, waits to be asked.
+static GREET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 /// Greets the client first, as MySQL's handshake does, so a test knows a server took the
 /// connection rather than a listener's backlog; then holds it until the client closes it.
 fn hold(mut stream: std::net::TcpStream) {
-    let _ = stream.write_all(b"fake\n");
+    if GREET.load(std::sync::atomic::Ordering::SeqCst) {
+        let _ = stream.write_all(b"fake\n");
+    }
     let _ = std::io::copy(&mut stream, &mut std::io::sink());
 }
 

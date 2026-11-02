@@ -19,6 +19,7 @@ server {
 
     location ~ \.php$ {
         auth_request /__yard_wake;
+        error_page 403 = @yard_wake_refused;
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
         fastcgi_pass "unix:/Users/me/Library/Application Support/Yard/run/php-8.4.sock";
         fastcgi_index index.php;
@@ -40,11 +41,16 @@ server {
         proxy_set_header Content-Length "";
         proxy_read_timeout 15s;
         proxy_intercept_errors on;
-        error_page 400 401 403 404 500 502 503 504 = @yard_wake_skipped;
+        error_page 400 401 404 500 502 503 504 = @yard_wake_skipped;
     }
 
     location @yard_wake_skipped {
         return 204;
+    }
+
+    location @yard_wake_refused {
+        default_type text/plain;
+        return 503 "A service this site needs cannot start: another program holds its port. Run yard doctor to see which.\n";
     }
 
     include "/Users/me/Library/Application Support/Yard/nginx/overrides/blog.conf";

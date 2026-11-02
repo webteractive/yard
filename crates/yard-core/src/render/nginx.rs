@@ -115,10 +115,7 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
                 .map(|v| ctx.paths.fpm_socket(v))
                 .unwrap_or_else(|_| ctx.paths.fpm_socket(PhpVersion::DEFAULT));
             let (ask, wake_block) = if wake {
-                (
-                    "        auth_request /__yard_wake;\n",
-                    format!("\n{}", wake_location(&ctx.paths.wake_socket(), &site.name)),
-                )
+                (WAKE_ASK, format!("\n{}", wake_location(&ctx.paths.wake_socket(), &site.name)))
             } else {
                 ("", String::new())
             };
@@ -156,10 +153,17 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
     server_blocks(ctx, &format!("{host} *.{host}"), &body, &override_file, tls)
 }
 
+/// The lines a PHP location starts with to ask before PHP runs ([`wake_location`]). yardd's
+/// one refusal, a `403`, becomes `@yard_wake_refused`'s 503.
+pub const WAKE_ASK: &str =
+    "        auth_request /__yard_wake;\n        error_page 403 = @yard_wake_refused;\n";
+
 /// The subrequest a PHP location makes with `auth_request /__yard_wake;`: yardd's wake socket
 /// answers once `site`'s services are up (at most 10 s, which `proxy_read_timeout` outlasts).
 /// Any error, a missing socket and a timeout included, falls through to an empty `204`, so a
-/// request never fails because yardd could not wake a service. The client's headers, cookies
+/// request never fails because yardd could not wake a service. The exception is yardd's `403`:
+/// another program holds a port the site's services need, and could pose as the database, so
+/// the page is a 503 that says so rather than PHP talking to it. The client's headers, cookies
 /// included, and body stay out of the ask: yardd needs only the path. The whole URL is one quoted
 /// argument: nginx rejects a quoted socket path inside `http://unix:…:`.
 pub fn wake_location(wake_socket: &Path, site: &str) -> String {
@@ -172,11 +176,16 @@ pub fn wake_location(wake_socket: &Path, site: &str) -> String {
         proxy_set_header Content-Length \"\";
         proxy_read_timeout 15s;
         proxy_intercept_errors on;
-        error_page 400 401 403 404 500 502 503 504 = @yard_wake_skipped;
+        error_page 400 401 404 500 502 503 504 = @yard_wake_skipped;
     }}
 
     location @yard_wake_skipped {{
         return 204;
+    }}
+
+    location @yard_wake_refused {{
+        default_type text/plain;
+        return 503 \"A service this site needs cannot start: another program holds its port. Run yard doctor to see which.\\n\";
     }}
 ",
         url = nginx_str(&format!("http://unix:{}:/wake/{site}?wait=10", wake_socket.display())),

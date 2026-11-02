@@ -119,6 +119,7 @@ async fn real_nginx_serves_on_an_inherited_socket() {
 const HANG: u8 = 0;
 const ERROR_500: u8 = 1;
 const NO_CONTENT_AFTER_300_MS: u8 = 2;
+const FORBIDDEN: u8 = 3;
 
 /// The head of the last request the stand-in for `wake.sock` read.
 static LAST_ASK: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
@@ -138,6 +139,14 @@ fn fake_wake(socket: &Path, mode: &'static std::sync::atomic::AtomicU8) {
                         let _ = stream
                             .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
                     }
+                    FORBIDDEN => {
+                        let body = "redis: port 6380 is held by nc (pid 9)\n";
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+                            body.len()
+                        );
+                    }
                     _ => {
                         std::thread::sleep(Duration::from_millis(300));
                         let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
@@ -150,20 +159,27 @@ fn fake_wake(socket: &Path, mode: &'static std::sync::atomic::AtomicU8) {
 
 /// The status line of `GET <path>`, and how long it took.
 fn status(port: u16, path: &str) -> (String, Duration) {
+    let (line, took, _) = response(port, path);
+    (line, took)
+}
+
+/// The status line, how long it took and the whole answer of `GET <path>`.
+fn response(port: u16, path: &str) -> (String, Duration, String) {
     let started = std::time::Instant::now();
     let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
-        return (String::new(), started.elapsed());
+        return (String::new(), started.elapsed(), String::new());
     };
     let _ = s.set_read_timeout(Some(Duration::from_secs(20)));
     let _ = write!(s, "GET {path} HTTP/1.0\r\nHost: blog.yard\r\nCookie: session=secret\r\n\r\n");
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
-    (out.lines().next().unwrap_or_default().to_string(), started.elapsed())
+    (out.lines().next().unwrap_or_default().to_string(), started.elapsed(), out)
 }
 
-/// M4e spec §5.1: the wake hook Yard renders never stops a PHP request. With no socket, a
-/// socket that answers 500, or one that never answers, the request is served; a socket that
-/// answers 204 holds it until then.
+/// M4e spec §5.1: the wake hook Yard renders never stops a PHP request because yardd cannot
+/// answer. With no socket, a socket that answers 500, or one that never answers, the request
+/// is served; a socket that answers 204 holds it until then. A 403 (another program holds a
+/// port the site's services need) is the one refusal: a 503 that says so.
 #[tokio::test]
 #[ignore = "needs brew nginx"]
 async fn the_wake_hook_fails_open() {
@@ -177,10 +193,11 @@ async fn the_wake_hook_fails_open() {
     let port = support::free_port();
     let conf = |wake: &str| {
         format!(
-            "daemon off;\nmaster_process off;\npid {pid};\nerror_log {log};\nevents {{}}\nhttp {{\n    access_log off;\n    server {{\n        listen 127.0.0.1:{port};\n        root {www};\n\n    location ~ \\.php$ {{\n        auth_request /__yard_wake;\n        default_type text/plain;\n    }}\n\n{wake}    }}\n}}\n",
+            "daemon off;\nmaster_process off;\npid {pid};\nerror_log {log};\nevents {{}}\nhttp {{\n    access_log off;\n    server {{\n        listen 127.0.0.1:{port};\n        root {www};\n\n    location ~ \\.php$ {{\n{ask}        default_type text/plain;\n    }}\n\n{wake}    }}\n}}\n",
             pid = dir.path().join("nginx.pid").display(),
             log = dir.path().join("error.log").display(),
             www = www.display(),
+            ask = yard_core::render::nginx::WAKE_ASK,
         )
     };
     let args = nginx_args(dir.path());
@@ -221,6 +238,11 @@ async fn the_wake_hook_fails_open() {
     let ask = LAST_ASK.lock().unwrap().clone();
     assert!(ask.starts_with("GET /wake/blog?wait=10 "), "{ask}");
     assert!(!ask.contains("secret"), "the browser's cookie stays out of the ask: {ask}");
+
+    MODE.store(FORBIDDEN, std::sync::atomic::Ordering::SeqCst);
+    let (line, _, page) = response(port, "/index.php");
+    assert!(line.contains(" 503 "), "a 403 from the socket: {line}\n{}", log());
+    assert!(page.contains("yard doctor") && !page.contains("static"), "PHP never ran: {page}");
 
     drop(nginx);
 }

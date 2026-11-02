@@ -174,6 +174,22 @@ mod tests {
         assert!(wake.contains("        proxy_pass_request_headers off;\n"), "{wake}");
     }
 
+    /// yardd refuses the ask when another program holds a port the site's services need: the
+    /// page is a 503 saying so, never PHP talking to that program (it could pose as the
+    /// database). Every other failure still falls through.
+    #[test]
+    fn a_refused_wake_is_a_503() {
+        let wake = nginx::wake_location(Path::new("/r/run/wake.sock"), "blog");
+        assert!(wake.contains("error_page 400 401 404 500 502 503 504 = @yard_wake_skipped;"), "{wake}");
+        assert!(wake.contains("    location @yard_wake_refused {\n"), "{wake}");
+        assert!(wake.contains("return 503 "), "{wake}");
+        assert!(
+            nginx::WAKE_ASK.contains("        error_page 403 = @yard_wake_refused;\n"),
+            "{}",
+            nginx::WAKE_ASK
+        );
+    }
+
     #[test]
     fn nginx_site_proxy() {
         let (p, b) = ctx_parts();

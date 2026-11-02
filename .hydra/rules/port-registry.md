@@ -103,3 +103,7 @@ triggers:
 - A sleeping service instance (M4e) keeps its `pinned` ports: nothing listens on them while it
   sleeps, and no other unit may take them. The runtime scan still watches them, so a program
   that binds one meanwhile is a `port_conflict`, and the next wake fails with `PORT_IN_USE`.
+  That wake's ask is refused (`403` on `wake.sock`, a 503 page, a shim that exits 1), since
+  the program holding the port could pose as the database (M4e spec §5.1). The site stays in
+  `run/sleeping` (the `Sleeper`'s `refused` flag), so every later ask is refused too, and the
+  first ask after the port is free again restarts the instance (`restart_and_wait`).

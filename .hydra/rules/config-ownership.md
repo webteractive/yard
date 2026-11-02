@@ -64,10 +64,11 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     `services.sleep.set` writes or removes the instance key through `TomlFile`
     (`services::set_sleep_after`); nothing else writes either key. Whether an instance sleeps is
     runtime state in yardd's `Sleeper`, never written to a TOML: sleeping is not `stopped`.
-  - `run/sleeping` is generated (M4e): the linked sites that need a sleeping instance, one per
-    line, written atomically (`sleep::write_sleeping`) in every reconcile when it changed,
-    before that reconcile stops or starts a unit, so a site is listed while its instance is still
-    stopping (the reconcile is its only writer, under its lock), and emptied at yardd start
+  - `run/sleeping` is generated (M4e): the linked sites that need a sleeping or draining
+    instance, or one whose wake was refused over a held port, one per line, written atomically (`sleep::write_sleeping`) in every reconcile when
+    it changed, before that reconcile stops or starts a unit, so a site is listed from the moment
+    its instance starts to drain, through its stop (the reconcile is its only writer, under its
+    lock, and `Reconciler::wake_from_last_good` under the same lock), and emptied at yardd start
     before the first reconcile. The shims read it; nobody edits it.
   - The reconcile forgets the sleep of an instance that is stopped, removed, or no longer set to
     sleep, so editing a TOML always undoes a sleep; and it renders the nginx wake hook only for a

@@ -231,6 +231,11 @@ fn write_sleeping(s: &Setup, text: &str) {
 
 /// A wake.sock that records each request line and answers 204.
 fn fake_wake(s: &Setup) -> Arc<Mutex<Vec<String>>> {
+    fake_wake_answering(s, "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+}
+
+/// A wake.sock that records each request line and answers `answer`.
+fn fake_wake_answering(s: &Setup, answer: &'static str) -> Arc<Mutex<Vec<String>>> {
     std::fs::create_dir_all(s.root.join("run")).unwrap();
     let listener = UnixListener::bind(s.root.join("run/wake.sock")).unwrap();
     let seen = Arc::new(Mutex::new(vec![]));
@@ -241,7 +246,7 @@ fn fake_wake(s: &Setup) -> Arc<Mutex<Vec<String>>> {
             let mut line = String::new();
             let _ = BufReader::new(&stream).read_line(&mut line);
             record.lock().unwrap().push(line.trim_end().to_string());
-            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(answer.as_bytes());
         }
     });
     seen
@@ -282,6 +287,24 @@ fn a_dead_socket_still_runs_php() {
     assert!(stdout.contains("php@7.1/bin/php"), "{stdout}");
     assert!(stderr.contains("yard: could not wake old's services ("), "{stderr}");
     assert!(stderr.contains("); running anyway"), "{stderr}");
+}
+
+/// yardd refuses when another program holds a port the site's services need: PHP does not
+/// run against it, and the shim says why.
+#[test]
+fn a_refused_wake_does_not_run_php() {
+    let s = setup();
+    write_sleeping(&s, "old\n");
+    fake_wake_answering(
+        &s,
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: 39\r\nConnection: close\r\n\r\nredis: port 6380 is held by nc (pid 9)\n",
+    );
+    let out = run_as(&s, "php", &["-v"]);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(!stdout.contains("php@7.1/bin/php"), "PHP ran: {stdout}");
+    assert!(stderr.contains("redis: port 6380 is held by nc (pid 9)"), "{stderr}");
+    assert!(stderr.contains("yard doctor"), "{stderr}");
 }
 
 #[test]

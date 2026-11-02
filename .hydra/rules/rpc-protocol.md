@@ -48,8 +48,13 @@ triggers:
   internally tagged enum reads an unknown kind with fields too. An `Other` need is not
   installable, and `ServiceManager::Other` shows as `-`.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
-  route (`GET /wake/<site>?wait=<s>`, capped at 30), always `204`, for nginx's `auth_request`
-  and the shims. It never adds, changes or removes anything; keep it that narrow.
+  route (`GET /wake/<site>?wait=<s>`, capped at 30), for nginx's `auth_request` and the shims.
+  It answers `204`, except `403` with one line per instance (`redis: port 6380 is held by …`)
+  when an instance the site needs failed because another program holds its port: nginx then
+  serves a 503 and the shims exit 1 without running PHP (M4e spec §5.1). Every ask is refused
+  until the port is free, and the next one then restarts the instance. At most
+  `wake::WAKE_SLOTS` (64) asks wait at once; the rest are answered straight away. It never
+  adds, changes or removes anything; keep it that narrow.
 - Adding a method touches, in one change: the `yard-proto` const and params, the daemon
   handler, the CLI command, the CLI tests' `MockDaemon`, and the method list in spec §6.2.
 - Mutations go through `TomlFile` and then `reconcile`. Handlers never write generated

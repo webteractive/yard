@@ -1,6 +1,7 @@
 //! What the daemon last applied, and what went wrong since.
 
 use crate::emailulator::Probe;
+use crate::supervisor::UnitSpec;
 use std::collections::BTreeMap;
 use yard_core::Paths;
 use yard_core::brew::Brew;
@@ -51,6 +52,10 @@ pub struct State {
     /// The last time emailulator was asked, whether or not that reconcile succeeded: its
     /// agent is kept when a later answer cannot be read.
     pub emailulator: Option<Probe>,
+    /// The units the last reconcile to reach the supervisor asked for, and the unit each
+    /// asleep instance would run: a wake starts from these while a TOML does not parse.
+    pub applied: Vec<UnitSpec>,
+    pub slept: BTreeMap<String, UnitSpec>,
 }
 
 impl State {
@@ -65,6 +70,8 @@ impl State {
             hashes,
             nginx_reload_pending: false,
             emailulator: None,
+            applied: vec![],
+            slept: BTreeMap::new(),
         })
     }
 }

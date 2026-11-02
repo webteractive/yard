@@ -2,7 +2,9 @@
 //! sleeping services are needed (M4e spec §5.1, §5.2). One route,
 //! `GET /wake/<site>?wait=<s>`, and every connection is answered `204`, whatever it sent and
 //! whatever the wake did, so asking never stops a request: a wake that fails is the
-//! instance's own `failed` state.
+//! instance's own `failed` state. The one exception is `403`, with a body naming them, when
+//! an instance the site needs cannot start because another program holds its port: that
+//! program could pose as the database, so nginx answers `503` and the shims do not run.
 
 use crate::daemon::Context;
 use crate::sleep::{needed_by, wake};
@@ -20,6 +22,10 @@ const MAX_HEAD: usize = 8192;
 const MAX_WAIT_SECS: u64 = 30;
 /// The wait when the request names none.
 const DEFAULT_WAIT_SECS: u64 = 10;
+
+/// How many asks may wait on a wake at once; one past it starts the wake and is answered
+/// straight away, so a flood of requests cannot pile up in yardd.
+pub const WAKE_SLOTS: usize = 64;
 
 const ANSWER: &[u8] = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
@@ -40,20 +46,42 @@ pub async fn serve(listener: UnixListener, ctx: Arc<Context>) {
 
 async fn answer(mut stream: UnixStream, ctx: Arc<Context>) {
     let head = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream)).await.unwrap_or_default();
+    let mut blocked = vec![];
     match parse(&head) {
-        Some((site, wait)) => match ctx.reconciler.snapshot().await {
-            Some(snapshot) if snapshot.resolution.sites.iter().any(|s| s.name == site) => {
-                let instances = needed_by(&snapshot, &site);
-                wake(&ctx, &instances, Duration::from_secs(wait)).await;
+        Some((site, wait)) => {
+            let needed = ctx
+                .reconciler
+                .read(|s| s.resolution.sites.iter().any(|x| x.name == site).then(|| needed_by(s, &site)))
+                .flatten();
+            match needed {
+                Some(instances) => {
+                    // Past the cap, the wake still goes ahead but nobody waits on it.
+                    let slot = ctx.wake_slots.clone().try_acquire_owned().ok();
+                    let wait = if slot.is_some() { Duration::from_secs(wait) } else { Duration::ZERO };
+                    blocked = wake(&ctx, &instances, wait).await;
+                }
+                None => tracing::info!("wake.sock: no site named {site:?}"),
             }
-            _ => tracing::info!("wake.sock: no site named {site:?}"),
-        },
+        }
         None => {
             tracing::info!("wake.sock: not a wake request: {:?}", head.lines().next().unwrap_or_default())
         }
     }
-    let _ = stream.write_all(ANSWER).await;
+    let _ = stream.write_all(&answer_for(&blocked)).await;
     let _ = stream.shutdown().await;
+}
+
+/// `204`, or `403` with one line per instance whose port another program holds.
+fn answer_for(blocked: &[String]) -> Vec<u8> {
+    if blocked.is_empty() {
+        return ANSWER.to_vec();
+    }
+    let body = format!("{}\n", blocked.join("\n"));
+    format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
 }
 
 /// The head up to its blank line, or what arrived of it within `MAX_HEAD` bytes.
@@ -95,6 +123,16 @@ fn parse(head: &str) -> Option<(String, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_port_is_a_403_naming_it() {
+        assert_eq!(answer_for(&[]), ANSWER);
+        let answer =
+            String::from_utf8(answer_for(&["redis: port 6380 is held by nc (pid 9)".into()])).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{answer}");
+        assert!(answer.ends_with("\r\n\r\nredis: port 6380 is held by nc (pid 9)\n"), "{answer}");
+        assert!(answer.contains("Content-Length: 39\r\n"), "{answer}");
+    }
 
     #[test]
     fn parse_takes_the_one_route() {

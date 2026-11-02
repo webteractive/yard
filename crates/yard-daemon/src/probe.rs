@@ -49,7 +49,16 @@ fn bind(addr: &SocketAddr, ty: Type, proto: Protocol, reuse: bool) -> io::Result
 }
 
 fn answers(addrs: &[SocketAddr]) -> bool {
-    addrs.iter().any(|a| TcpStream::connect_timeout(a, Duration::from_millis(200)).is_ok())
+    addrs.iter().any(|a| match TcpStream::connect_timeout(a, Duration::from_millis(200)) {
+        Ok(stream) => {
+            // Not a client of whatever answers: an instance it reaches stays free to sleep.
+            if let Ok(local) = stream.local_addr() {
+                crate::conns::own_connection(local.port());
+            }
+            true
+        }
+        Err(_) => false,
+    })
 }
 
 pub fn is_listening(port: u16) -> bool {

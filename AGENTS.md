@@ -80,7 +80,13 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   engine's own sockets is not a client, the wake ask forwards no client headers, and an
   unknown `ServiceState` with data reads as `Other` (2fb79d6). `scripts/e2e-m1.sh` and `e2e-m4e.sh`
   passed again against yardd built from 2fb79d6 on 2026-10-27 (a wake ask took 0.18 ms at p50),
-  so M4e is done.
+  so M4e is done. On 2026-11-02 the maintainer asked for it to be made ready for production: closed
+  connections (`TIME_WAIT`) now count as use, a sleep drains first and rechecks, asks during a
+  stop wait for the new process, a held port refuses every ask (503, shim exit 1) until it is
+  free, a broken TOML no longer stops a wake, and asks are capped at 64. The e2e now runs real
+  Redis, MySQL 8.0 and PostgreSQL 17. `scripts/e2e-m1.sh` and `e2e-m4e.sh` passed on their first
+  run against yardd built with those changes the same day (maintainer approved the run): cold starts
+  0.46–0.90 s, a page waking all three in 1.51 s, a wake ask 0.10 ms at p50.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
@@ -279,15 +285,20 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   It needs yardd running and jq; it backs up and restores `sites.toml` and removes its
   scratch override, and fails if Herd's resolver changed; ask the maintainer first.
   `shellcheck scripts/e2e-m4d.sh` stays clean.
-- `scripts/e2e-m4e.sh` — real-machine M4e check after `e2e-m1.sh`: adds a scratch `redis` with
-  `sleep_after = "60s"`, links a scratch project under `$TMPDIR` whose `.yard` lists it, waits for
-  it to sleep (nothing listens on its port), then checks a page wakes it (a PHP `PING` gets
-  `PONG`), that `php` through the shim wakes it and says so, and that a held `redis-cli`
-  connection keeps it awake. It prints the p50 of a wake ask while awake. It needs yardd
-  running and brew's `redis` (from M4b) and installs nothing; ask the maintainer first. It stops before
-  changing anything if `redis` is already in `services.toml`, backs up and restores
-  `yard.toml`, `services.toml`, `ports.toml` and `sites.toml`, and fails if the listeners on
-  3306, 5432 and 6379 or Herd's resolver changed. `shellcheck scripts/e2e-m4e.sh` stays clean.
+- `scripts/e2e-m4e.sh` — real-machine M4e check after `e2e-m1.sh`, with the real engines: adds
+  scratch `redis`, `mysql-8.0` and `postgres-17` instances with `sleep_after = "60s"`, links a
+  scratch project under `$TMPDIR` whose `.yard` lists them, waits for them to sleep (nothing
+  listens on their ports), times each engine's cold start through `yard service start`, then
+  checks a page wakes all three within nginx's 10 s wait (PHP gets `PONG` from Redis and runs
+  `SELECT 1` on MySQL and PostgreSQL through PDO), that `php` through the shim wakes them and
+  says so, and that a held client connection keeps each awake (PostgreSQL's held by a forked
+  backend). It prints the p50 of a wake ask while awake. It needs yardd running and brew's
+  `redis`, `mysql@8.0` and `postgresql@17` kegs, and installs nothing; ask the maintainer first. It never
+  touches another instance (the maintainer's `mysql-8.4` included), stops before changing anything if one
+  of the three is already in `services.toml`, backs up and restores `yard.toml`,
+  `services.toml`, `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and
+  6379 or Herd's resolver changed. It runs on macOS's bash 3.2. `shellcheck scripts/e2e-m4e.sh`
+  stays clean.
 
 ## Verifying a change on this machine
 

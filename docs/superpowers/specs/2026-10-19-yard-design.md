@@ -99,7 +99,8 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
   would put every site on the network, so this is the one job root does for nginx.
 - **`wake.sock`** (M4e) is yardd's second socket, `run/wake.sock` (mode 0600, the user's),
   beside the JSON-RPC `yardd.sock`. It answers minimal HTTP/1.1 on one route,
-  `GET /wake/<site>?wait=<s>`, always with `204`: nginx's `auth_request` before a PHP request
+  `GET /wake/<site>?wait=<s>`, with `204` (or `403` when another program holds a port the
+  site's instances need, so nothing talks to it): nginx's `auth_request` before a PHP request
   and the `php`/`composer` shims ask it to wake the sleeping service instances a site's
   `.yard` lists. It can only start instances that exist and the user has not stopped; it
   adds, changes and removes nothing (M4e spec §5.1).
@@ -357,7 +358,8 @@ profile; Yard does not edit dotfiles.
 - Before it execs, `php` or `composer` in a linked site reads `run/sleeping`, and when it
   lists the site asks yardd's `wake.sock` to wake the site's services, waiting up to 30 s
   (M4e spec §5.2). With yardd down it prints one line and runs anyway, so the shims still
-  run without a daemon; they just cannot wake anything.
+  run without a daemon; they just cannot wake anything. When yardd refuses (another program
+  holds the port of an instance the site needs), it exits 1 without running PHP.
 - The shim reads `yard.toml` and `sites.toml` itself, with no daemon. The containing
   site is the linked site whose `path` is the longest ancestor of the cwd; one that is
   not isolated falls through to `.yard-php`. A bad `.yard-php` is `INVALID_ARGUMENT`
@@ -526,8 +528,9 @@ profile; Yard does not edit dotfiles.
   A linked project whose docroot (e.g. `public/`) appears later is picked up by
   the periodic scan.
 - A service instance with `sleep_after` set (M4e) falls asleep after that long without a
-  client: the reconcile leaves it out of the desired units, so `apply` stops it with its own
-  signal, and a wake puts it back. Sleep is runtime state in yardd, never written to a TOML,
+  client: its sites are listed in `run/sleeping` first and its clients counted again, then
+  the reconcile leaves it out of the desired units, so `apply` stops it with its own
+  signal, and a wake puts it back (from the last good units when a TOML does not parse). Sleep is runtime state in yardd, never written to a TOML,
   and every instance starts awake with yardd.
 - On `yardd` shutdown, all child units are stopped, nginx included.
 

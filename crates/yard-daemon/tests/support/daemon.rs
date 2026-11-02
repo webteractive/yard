@@ -54,7 +54,11 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         app_dirs: vec![no_apps],
         // A sample every 50 ms and a millisecond for each second of a `sleep_after`, so
         // `"60s"` lasts 60 ms.
-        sleep: SleepConfig { sample_interval: Duration::from_millis(50), second: Duration::from_millis(1) },
+        sleep: SleepConfig {
+            sample_interval: Duration::from_millis(50),
+            second: Duration::from_millis(1),
+            drain: Duration::from_millis(200),
+        },
         // Never this machine's home: its emailulator and LaunchAgent are not a test's.
         home,
     }

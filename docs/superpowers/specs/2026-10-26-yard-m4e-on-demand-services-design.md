@@ -63,7 +63,9 @@ Anti-goals (a failure even if it works):
 - Waking an instance the user stopped, or sleeping one and leaving `stopped` behind.
 - Killing an engine mid-write: sleep is the unit's graceful stop with its 30 s stop timeout
   (M4b §15), never SIGKILL first.
-- A site that answers 5xx because yardd is down or slow. The wake hook fails open (§5.1).
+- A site that answers 5xx because yardd is down or slow. The wake hook fails open (§5.1). The
+  one deliberate 503 is a site whose instance cannot start because another program holds its
+  port (§5.1, added 2026-11-02): serving the page would let PHP talk to that program.
 - Any database byte passing through yardd.
 - An instance's port moving because it slept.
 
@@ -154,6 +156,7 @@ built `--with-http_auth_request_module` (checked 2026-10-26):
 ```nginx
 location ~ \.php$ {
     auth_request /__yard_wake;
+    error_page 403 = @yard_wake_refused;
     # ... unchanged fastcgi block ...
 }
 
@@ -165,11 +168,16 @@ location = /__yard_wake {
     proxy_set_header Content-Length "";
     proxy_read_timeout 15s;
     proxy_intercept_errors on;
-    error_page 400 401 403 404 500 502 503 504 = @yard_wake_skipped;
+    error_page 400 401 404 500 502 503 504 = @yard_wake_skipped;
 }
 
 location @yard_wake_skipped {
     return 204;
+}
+
+location @yard_wake_refused {
+    default_type text/plain;
+    return 503 "A service this site needs cannot start: another program holds its port. Run yard doctor to see which.\n";
 }
 ```
 
@@ -191,13 +199,36 @@ location @yard_wake_skipped {
 - **yardd answers `204` once every instance the site needs is awake and healthy**, or
   immediately when none is asleep. It answers `204` too when it gives up (§6.3), so the app
   shows its own connection error rather than nginx showing a 500.
-- **Fails open.** If `wake.sock` is missing, yardd is down, or yardd answers anything but 2xx,
-  `error_page` turns the subrequest into `204` and the request goes through as it does today.
+- **Fails open.** If `wake.sock` is missing, yardd is down, or yardd answers anything but 2xx
+  or `403`, `error_page` turns the subrequest into `204` and the request goes through as it does today.
   nginx applies `error_page` to the subrequest's own upstream errors, and with
   `proxy_intercept_errors on` to an error status yardd might answer, so the 4xx codes
   `auth_request` would turn into a refusal are caught too (checked 2026-10-26 with brew's
   nginx: no socket, a `500`, a hang past the timeout and a late `204` all serve the page,
   `the_wake_hook_fails_open`) **(built)**.
+- **Refused when another program holds the port (2026-11-02, a security review's finding).** A
+  sleeping instance leaves its 127.0.0.1 port unbound, and another local user (or any program)
+  can bind it and pose as the database: on PHP 7.0 and 7.1, whose `mysqli.allow_local_infile`
+  is on, a fake MySQL can read the developer's files with `LOAD DATA LOCAL INFILE`, and a fake
+  Redis can feed Laravel's cache a crafted serialized value. So when an instance the site needs
+  is `failed` with `PORT_IN_USE` (its start found the port held, §8), yardd answers `403` with
+  a line per such instance (`redis: port 6380 is held by nc (pid 9)`); `auth_request` turns it
+  into a refusal and the PHP location's `error_page 403` serves `@yard_wake_refused`'s 503,
+  which names `yard doctor`. PHP never runs (checked with brew's nginx in
+  `the_wake_hook_fails_open`) **(built)**. A refused instance keeps its sites listed in
+  `run/sleeping` until it runs, so every `php` and `composer` asks and is refused too, not
+  only the first; and once the other program lets go of the port, the next ask restarts the
+  instance (`restart_and_wait`) instead of leaving the site refused until someone runs
+  `yard service restart`. Only nginx-made errors are affected by the location's `error_page`:
+  nginx inherits a server-level `error_page` (a user's override) only into a location that has
+  none, so on a site with the wake hook such an override no longer applies to PHP requests (a
+  custom 502 page for PHP-FPM being down, say). PHP's own error pages are untouched, since
+  nginx does not intercept them **(Claude's call: the 503 that says why is worth it)**.
+- **A cap on waiting asks (2026-11-02).** At most 64 asks wait on a wake at once
+  (`wake::WAKE_SLOTS`); one past that starts the wake and is answered at once, so a flood of
+  requests (a hostile page firing at `*.<site>.yard`) cannot pile up in yardd. A waiting ask
+  reads the snapshot in place (`Reconciler::read`) rather than copying it every poll
+  **(built)**.
 - **`wake.sock`** is a unix socket under `run/`, mode 0600, owned by the user, served by
   yardd as minimal HTTP/1.1 (one route, `GET /wake/<site>?wait=<s>`). It is a second way into
   yardd beside the JSON-RPC `yardd.sock` that main spec §3.1 and the rpc-protocol rule
@@ -230,8 +261,8 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
   does for PHP, and asks for that site.
 - It reads `run/sleeping`, a small file yardd rewrites atomically in every reconcile when it
   changed, before that reconcile stops or starts a unit (so a site linked, or a `.yard`
-  edited, while an instance sleeps is listed too, and a site is listed while its instance is
-  still stopping; built), listing **the linked sites that need a sleeping instance**, one per line
+  edited, while an instance sleeps is listed too, and a site is listed from the moment its
+  instance starts to drain, before it stops, §6.2; built), listing **the linked sites that need a sleeping instance**, one per line
   (code check: yardd knows which instances each site needs; the shim does not). When the
   site is not listed, the shim does nothing more: an awake machine costs one small file
   read, and no socket connect **(builder's call)**.
@@ -240,9 +271,11 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
   to stderr so a pause is not a mystery. Then it `exec`s as today. The line names the site,
   `yard: waking the services <site> uses …`, since `run/sleeping` lists sites, not instances
   **(built)**.
-- **It never fails the command.** A missing socket, a dead daemon or a timeout prints
+- **It never fails the command because yardd cannot answer.** A missing socket, a dead daemon or a timeout prints
   `yard: could not wake <site>'s services (<error>); running anyway` and runs the command
-  **(accepted, the maintainer, §13)**. A unix-socket connect does not block (a missing or dead socket
+  **(accepted, the maintainer, §13)**. The one refusal is yardd's `403` (§5.1): the shim prints
+  `yard: <site>'s services cannot start, so PHP did not run: <what holds which port>` with the
+  hint `yard doctor`, and exits 1 without running PHP **(built, 2026-11-02)**. A unix-socket connect does not block (a missing or dead socket
   fails at once, and a hung yardd's backlog takes the connect), so there is no separate
   connect timeout: the read and write timeouts are 31 s, one more than the `wait` **(built)**.
 - `node`, `npm`, `npx`, `pecl`, `phpize` and `php-config` never wake anything.
@@ -292,7 +325,8 @@ new `ServiceState` variants (§11): `sleeping` is `stopped` with `sleeping_since
   - a missing keg is left out of the desired set (M4b), and the ask is answered at once.
 
   The waiting asks are answered `204` at the latest after their `wait` (10 s from nginx, 30 s
-  from a shim, §6.3), whatever the unit is still doing.
+  from a shim, §6.3), whatever the unit is still doing, except that an instance `failed` with
+  `PORT_IN_USE` makes the answer `403` (§5.1).
 
 ### 6.2 How it maps onto the supervisor
 
@@ -315,9 +349,15 @@ to a `YardError`, and `services.start` and `restart` refuse with whatever it hol
 - `apply` deletes a unit that is no longer wanted from the supervisor's table, so `yard status`
   (which lists that table) would lose a sleeping instance; status reads the sleeping set too
   (§9, §11).
-- Falling asleep: the idle check (§7) marks the instance asleep and triggers a reconcile, which
-  stops the unit through `apply` with the unit's own stop signal and 30 s timeout (M4b §15).
-  Its sites are listed in `run/sleeping` before the stop begins, so a shim run during the stop
+- Falling asleep takes two passes **(built 2026-11-02, after a robustness review: a client that
+  connected between the count and the stop was cut off by it, and a `migrate` killed mid-DDL
+  is not undone)**. First the idle check (§7) marks the instance *draining* and triggers a
+  reconcile, which lists its sites in `run/sleeping` while it still runs, so a shim run from
+  then on asks for a wake, which counts as use. After `SleepConfig.drain` (1 s) its clients
+  are counted again; any client, closed connection or use since the drain began keeps it
+  awake (and the next reconcile takes its sites out of the file again). Only then is it marked
+  asleep, and a reconcile stops the unit through `apply` with the unit's own stop signal and
+  30 s timeout (M4b §15). Its sites stay listed through the stop, so a shim run during the stop
   asks for a wake, which waits for the stop and starts it again, rather than finding a
   stopping engine **(built, after the final review; this spec first listed them only once the
   process was gone)**. The idle check and the marking happen under one lock, so a use that
@@ -327,6 +367,19 @@ to a `YardError`, and `services.start` and `restart` refuse with whatever it hol
 - Waking: mark awake, remove it from `run/sleeping`, reconcile, and wait for the first health
   check, bounded by the unit's `start_timeout` (120 s for MySQL and PostgreSQL, 10 s for Redis
   and MinIO, M4b §15).
+- **The stopping process is not the instance (2026-11-02).** While a sleep's stop is under
+  way the supervisor still lists the unit `running` with its old pid, so the reconcile that
+  stops it records that pid as it hands the supervisor its units (`Sleeper::set_stopping`;
+  `None` for an instance it keeps), and no wake counts the instance up until a different
+  process runs (`Sleeper::running`). It is recorded there, not when the sleep is decided: a
+  wake in between keeps the unit, and its process is then the instance. Before this, a second ask during a stop answered at once, and cleared the first ask's
+  wait with it.
+- **A wake while a TOML does not parse (2026-11-02).** A wake needs a reconcile, and one that
+  fails at load (a half-saved `sites.toml`) used to leave the instance down, every request
+  waiting out its `wait`. The reconcile keeps the units it last applied and the unit each
+  asleep instance would run (`State.applied`, `State.slept`), and a wake whose reconcile fails
+  starts the woken instances from those (`Reconciler::wake_from_last_good`), as a parse error
+  keeps the last good config serving everything else.
 - **A faster first health check (code check).** The supervisor checks health once at spawn and
   then every `health_interval` (5 s) until the first pass (`supervisor/unit.rs`). For §1.1's
   wake times, a starting unit polls much faster until its first pass, every 200 ms
@@ -358,14 +411,24 @@ would pay the cold start.
 
 ## 7. Detecting idle
 
-An instance is idle when **both** hold for the whole of `sleep_after`:
+An instance is idle when **all three** hold for the whole of `sleep_after`:
 
 1. **No ask.** No `/wake` request named a site that needs it (each ask stamps a last-use time,
    kept in memory per instance), and no shim wake or `yard service start` touched it.
-2. **No client connections.** yardd samples the engine process's open sockets every 30 s
-   **(builder's call)** and counts connected client sockets (TCP `ESTABLISHED`, and accepted
-   unix-domain sockets for MySQL's and PostgreSQL's sockets under `run/`), not listeners. A
-   sample with any client connection resets the idle clock.
+2. **No client connections.** yardd samples the engine process's open sockets every 20 s
+   **(builder's call; 30 s until 2026-11-02)** and counts connected client sockets (TCP
+   `ESTABLISHED`, and accepted unix-domain sockets for MySQL's and PostgreSQL's sockets under
+   `run/`), not listeners. A sample with any client connection resets the idle clock.
+3. **No connection closed since the last sample (2026-11-02).** A client that connects for a
+   moment (`schedule:run` every minute, which Laravel runs by `PHP_BINARY`, the keg's path, and
+   so past the shim; the MinIO console; a proxied Node app) is rarely there when a sample
+   looks. The connection it closed is: macOS keeps it in `TIME_WAIT` for 30 s
+   (`net.inet.tcp.msl` is 15 s; measured 31 s on the maintainer's machine), longer than the sample
+   interval. Each sample reads `/usr/sbin/netstat -an -p tcp`, and a `TIME_WAIT` on an
+   instance's loopback port that it has not seen before counts as one use of that instance,
+   whichever instance the pass is about (`conns::Closed`, `touch_closed`); the same port on
+   another host is another server. A client that resets its connection instead of closing it
+   leaves none and is missed.
 
 - **Count across the unit's process tree, not its pid alone (code check).** PostgreSQL hands
   each client connection to a forked backend and the postmaster closes its copy, so the
@@ -380,11 +443,12 @@ An instance is idle when **both** hold for the whole of `sleep_after`:
   two ends both belong to the tree (MinIO's console calling its own API) is the engine talking
   to itself and does not count **(built, after the final review)**. A count that fails keeps
   the instance awake.
-- **Yard's own health checks.** The supervisor's health check is a TCP connect that closes at
-  once (main spec §6.1), and once a unit runs it is every 5 s, so a 30 s sample rarely sees
-  one. When it does, the instance stays awake one sample longer. That is accepted rather
-  than skipping samples while a check is in flight **(built; replaces the builder's call
-  here)**.
+- **Yard's own connections.** The supervisor's health check is a TCP connect that closes at
+  once (main spec §6.1), every 5 s while a unit runs, and `yard ports` and `yard doctor`
+  probe ports the same way. Each records its local port (`conns::own_connection`), and a
+  `TIME_WAIT` whose other end is one of those is not a client **(built 2026-11-02; before it,
+  an open health check seen by a sample kept the instance awake one sample longer, which still
+  holds)**.
 - **Long transactions, `tinker`, queue workers, GUI clients** hold connections, so the
   instance stays awake for as long as they do. That is the intended behaviour: something is
   using it **(builder's call)**.
@@ -518,9 +582,19 @@ Each was the yard session's recommendation, and the maintainer took them all ("P
   lists it, waits for it to sleep and checks the process is gone, curls the site and checks it
   answers with a working DB query, checks a `php` through the shim wakes it, checks a held
   connection keeps it awake, then restores every TOML it touched. DBngin's, Postgres.app's and
-  Herd's ports and files come out unchanged.
+  Herd's ports and files come out unchanged. Since 2026-11-02 it does this with scratch Redis,
+  MySQL 8.0 and PostgreSQL 17 instances at once, times each engine's cold start through
+  `yard service start` against §1.1's targets, fails a waking page slower than nginx's 10 s
+  wait, and holds a connection to each engine.
 
 ## 15. When built
+
+Hardened on 2026-11-02 for production, after a robustness review and a security review of the
+feature: closed connections count as use (§7), an instance drains before it stops (§6.2), a
+stopping process is not taken for the woken one and a wake works while a TOML does not parse
+(§6.2), a port another program holds refuses the ask (§5.1), and waiting asks are capped
+(§5.1). `scripts/e2e-m4e.sh` now runs the loop with real Redis, MySQL 8.0 and PostgreSQL 17
+at once and times each engine's cold start (§14).
 
 Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`, and
 verified on the maintainer's machine the same day with `scripts/e2e-m1.sh` and `scripts/e2e-m4e.sh`

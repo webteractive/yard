@@ -123,7 +123,7 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
         && let Some(site) = site_at(&cwd, &sites, &canonical)
         && read_small(&paths.sleeping_file()).and_then(Result::ok).is_some_and(|t| lists_site(&t, &site))
     {
-        wake(&paths, &site);
+        wake(&paths, &site)?;
     }
     let e = Command::new(&program).args(pre).args(args).envs(env).exec();
     Err(YardError::new(ErrorCode::Internal, format!("cannot run {}: {e}", program.display())))
@@ -133,19 +133,34 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
 const WAKE_TIMEOUT: Duration = Duration::from_secs(31);
 
 /// Asks yardd to wake the services `site` uses and waits until they run or yardd gives up
-/// (M4e spec §5.2). PHP runs either way: a wake that fails is the service's own error.
-fn wake(paths: &Paths, site: &str) {
+/// (M4e spec §5.2). PHP runs either way, a wake that fails being the service's own error,
+/// except when yardd refuses (`403`): another program holds a port the site's services need,
+/// and could pose as the database, so PHP must not reach it.
+fn wake(paths: &Paths, site: &str) -> Result<(), YardError> {
     eprintln!("yard: waking the services {site} uses …");
-    let ask = || -> std::io::Result<()> {
+    let ask = || -> std::io::Result<String> {
         let mut stream = UnixStream::connect(paths.wake_socket())?;
         stream.set_read_timeout(Some(WAKE_TIMEOUT))?;
         stream.set_write_timeout(Some(WAKE_TIMEOUT))?;
         write!(stream, "GET /wake/{site}?wait=30 HTTP/1.1\r\nHost: yard\r\nConnection: close\r\n\r\n")?;
-        stream.read_to_end(&mut Vec::new())?;
-        Ok(())
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer)?;
+        Ok(String::from_utf8_lossy(&answer).into_owned())
     };
-    if let Err(e) = ask() {
-        eprintln!("yard: could not wake {site}'s services ({e}); running anyway");
+    match ask() {
+        Ok(answer) if answer.starts_with("HTTP/1.1 403 ") => {
+            let held = answer.split_once("\r\n\r\n").map_or("", |(_, body)| body.trim());
+            Err(YardError::new(
+                ErrorCode::PortInUse,
+                format!("{site}'s services cannot start, so PHP did not run: {held}"),
+            )
+            .with_hint("yard doctor"))
+        }
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("yard: could not wake {site}'s services ({e}); running anyway");
+            Ok(())
+        }
     }
 }
 

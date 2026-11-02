@@ -69,8 +69,14 @@ triggers:
   its stdin and stdout), as the real postmaster forks a backend. `listen-tcp-after <port> <ms>`
   listens only after a delay, and with `<prefix>/fake-stop-delay` (ms) an engine logs
   `fake stopping` on SIGTERM or SIGINT and exits after the delay, so a test can act during a stop.
-- Sleep tests (M4e) run on `SleepConfig { sample_interval: 50 ms, second: 1 ms }`, so a
-  `sleep_after` of `"60s"` lasts 60 ms; a test that must not fall asleep uses a long one.
+- Sleep tests (M4e) run on `SleepConfig { sample_interval: 50 ms, second: 1 ms, drain: 200 ms }`,
+  so a `sleep_after` of `"60s"` lasts 60 ms; a test that must not fall asleep uses a long one.
+  A test client that connects for a moment reads the fake's greeting before it closes:
+  closing with it unread resets the connection, which leaves no `TIME_WAIT` for the idle
+  count to see (M4e spec §7). Real redis, postgres and minio send nothing first; with
+  `<prefix>/fake-no-greeting` the fakes do the same, so a health check's connect-and-close
+  leaves a `TIME_WAIT` that only `conns::own_connection` keeps from counting. With `<prefix>/fake-listen-delay` (ms) the fake `mysqld` and
+  `redis-server` open their port only after the delay, a slow start for a wake to wait on.
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
   never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not
   to retry. Run timing suites several times before calling them done.
