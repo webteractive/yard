@@ -90,7 +90,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 - Approved on 2026-10-22: the `.yard` project file
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
-  (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5, not built yet).
+  (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5), planned in
+  `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03, built inline on
+  main; not built yet).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
