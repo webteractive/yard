@@ -1,4 +1,4 @@
-//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, fnm, security, emailulator and the
+//! Test stand-in for nginx, dnsmasq, php-fpm, php, pecl, brew, fnm, security, emailulator, cloudflared and the
 //! service engines (mysqld, postgres, initdb, redis-server, minio), chosen by `argv[0]`. Each reads the
 //! config Yard rendered and listens where it says. Never shipped.
 
@@ -34,8 +34,205 @@ fn main() -> ExitCode {
         Some("redis-server") => redis_server(Path::new(&argv0), &args),
         Some("minio") => minio(&args),
         Some("emailulator") => emailulator(Path::new(&argv0), &args),
+        Some("cloudflared") => cloudflared(Path::new(&argv0), &args),
         _ => mode(&args),
     }
+}
+
+/// cloudflared, linked at brew's keg path, with its state beside it. Each call's arguments are
+/// appended to `calls`. `--origincert <path>` may come anywhere after `tunnel` and is ignored.
+/// - `tunnel --config <yml> [run]` serves the yml's `metrics` address: `/ready` answers 200,
+///   or 503 while `not-ready` is there, and `/quicktunnel` names `quick-<origin port>
+///   .trycloudflare.com` for a quick tunnel (`url:`) and nothing for a named one. A named one
+///   whose `credentials-file` is missing exits 1 as cloudflared does, and any run exits 1 at
+///   once while `start-fails` is there. SIGTERM is a clean exit.
+/// - `tunnel login` writes `$HOME/.cloudflared/cert.pem`, or fails while `login-fails` is there.
+/// - `tunnel list --name <n> -o json`, `create --credentials-file <f> <name>`, `cleanup <id>`
+///   and `delete <id>` keep `tunnels.json`; `delete` fails while `delete-fails` is there.
+/// - `tunnel route dns [-f] <id> <host>` refuses a host listed in `dns-records` without `-f`
+///   (code 1003) and one under a zone listed in `foreign-zones`, else lists it.
+fn cloudflared(argv0: &Path, args: &[String]) -> ExitCode {
+    let dir = argv0.parent().unwrap_or(Path::new("."));
+    let calls = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("calls"));
+    let _ = calls.and_then(|mut f| f.write_all(format!("{}\n", args.join(" ")).as_bytes()));
+    let Some(rest) = args.strip_prefix(&["tunnel".to_string()]) else {
+        return fail(format!("cloudflared {args:?} is not faked"));
+    };
+    let mut words: Vec<&str> = vec![];
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--origincert" {
+            iter.next();
+        } else {
+            words.push(arg);
+        }
+    }
+    let tunnels_file = dir.join("tunnels.json");
+    let tunnels = || -> Vec<serde_json::Value> {
+        std::fs::read_to_string(&tunnels_file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    };
+    let save = |list: &[serde_json::Value]| {
+        let _ = std::fs::write(&tunnels_file, serde_json::to_string(list).unwrap_or_default());
+    };
+    let lines = |file: &str| -> Vec<String> {
+        std::fs::read_to_string(dir.join(file)).unwrap_or_default().lines().map(str::to_string).collect()
+    };
+    match words.as_slice() {
+        ["--config", yml] | ["--config", yml, "run"] => cloudflared_run(dir, Path::new(yml)),
+        ["login"] => {
+            if dir.join("login-fails").exists() {
+                eprintln!("Failed to write the certificate");
+                return ExitCode::from(1);
+            }
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+            let cert = home.join(".cloudflared/cert.pem");
+            let _ = std::fs::create_dir_all(home.join(".cloudflared"));
+            if std::fs::write(&cert, "fake").is_err() {
+                return fail(format!("cannot write {}", cert.display()));
+            }
+            println!(
+                "Please open the following URL and log in with your Cloudflare account:\n\nhttps://dash.cloudflare.com/argotunnel?fake\n"
+            );
+            println!("You have successfully logged in.");
+            ExitCode::SUCCESS
+        }
+        ["list", ..] => {
+            let name = words.iter().position(|w| *w == "--name").and_then(|i| words.get(i + 1)).copied();
+            let found: Vec<_> =
+                tunnels().into_iter().filter(|t| Some(t["name"].as_str().unwrap_or("")) == name).collect();
+            println!("{}", serde_json::Value::Array(found));
+            ExitCode::SUCCESS
+        }
+        ["create", "--credentials-file", file, name] => {
+            let mut list = tunnels();
+            if list.iter().any(|t| t["name"] == *name) {
+                eprintln!(
+                    "failed to create tunnel: Create Tunnel API call failed: tunnel with name already exists"
+                );
+                return ExitCode::from(1);
+            }
+            let id = format!("id-{name}");
+            list.push(serde_json::json!({"id": id, "name": name}));
+            save(&list);
+            let file = Path::new(file);
+            if let Some(parent) = file.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(file, "{\"fake\": true}");
+            println!("Created tunnel {name} with id {id}");
+            ExitCode::SUCCESS
+        }
+        ["route", "dns", route @ ..] => {
+            let force = route.iter().any(|w| *w == "-f" || *w == "--overwrite-dns");
+            let positional: Vec<&str> = route.iter().copied().filter(|w| !w.starts_with('-')).collect();
+            let [_, host] = positional.as_slice() else {
+                return fail(format!("route dns {route:?} is not faked"));
+            };
+            let records = lines("dns-records");
+            if records.iter().any(|r| r == host) && !force {
+                eprintln!(
+                    "Failed to add route: code: 1003, reason: An A, AAAA, or CNAME record with that host already exists."
+                );
+                return ExitCode::from(1);
+            }
+            if lines("foreign-zones").iter().any(|z| host.ends_with(z.as_str())) {
+                eprintln!("Failed to add route: zone not found");
+                return ExitCode::from(1);
+            }
+            if !records.iter().any(|r| r == host) {
+                let file =
+                    std::fs::OpenOptions::new().create(true).append(true).open(dir.join("dns-records"));
+                let _ = file.and_then(|mut f| f.write_all(format!("{host}\n").as_bytes()));
+            }
+            println!("Added CNAME {host} which will route to this tunnel");
+            ExitCode::SUCCESS
+        }
+        ["cleanup", _] => ExitCode::SUCCESS,
+        ["delete", id] => {
+            if dir.join("delete-fails").exists() {
+                eprintln!("failed to delete tunnel: active connections");
+                return ExitCode::from(1);
+            }
+            let list: Vec<_> = tunnels().into_iter().filter(|t| t["id"] != *id).collect();
+            save(&list);
+            ExitCode::SUCCESS
+        }
+        _ => fail(format!("cloudflared {args:?} is not faked")),
+    }
+}
+
+/// `tunnel --config <yml> [run]`: serves the metrics port until SIGTERM.
+fn cloudflared_run(dir: &Path, yml: &Path) -> ExitCode {
+    if dir.join("start-fails").exists() {
+        eprintln!("failed to connect to the edge (start-fails)");
+        return ExitCode::from(1);
+    }
+    let Ok(text) = std::fs::read_to_string(yml) else {
+        return fail(format!("cannot read {}", yml.display()));
+    };
+    let key = |k: &str| {
+        text.lines().find_map(|l| l.strip_prefix(k)).map(|v| v.trim().trim_matches('"').to_string())
+    };
+    let origin_port = key("url:").and_then(|u| u.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()));
+    if let Some(credentials) = key("credentials-file:")
+        && !Path::new(&credentials).exists()
+    {
+        eprintln!("Tunnel credentials file '{credentials}' doesn't exist or is not a file");
+        return ExitCode::from(1);
+    }
+    let Some(metrics) = key("metrics:") else {
+        return fail(format!("{} has no metrics", yml.display()));
+    };
+    extern "C" fn term(_: libc::c_int) {
+        // SAFETY: _exit(2) is async-signal-safe.
+        unsafe { libc::_exit(0) };
+    }
+    // SAFETY: installing a handler that makes only an async-signal-safe call.
+    unsafe { libc::signal(libc::SIGTERM, term as libc::sighandler_t) };
+    let listener = match TcpListener::bind(&metrics) {
+        Ok(l) => l,
+        Err(e) => return fail(format!("cannot listen on {metrics}: {e}")),
+    };
+    let dir = dir.to_path_buf();
+    for stream in listener.incoming().flatten() {
+        let dir = dir.clone();
+        std::thread::spawn(move || metrics_answer(stream, &dir, origin_port));
+    }
+    ExitCode::SUCCESS
+}
+
+fn metrics_answer(mut stream: std::net::TcpStream, dir: &Path, origin_port: Option<u16>) {
+    use std::io::Read;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut request = vec![];
+    let mut buf = [0u8; 512];
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => request.extend_from_slice(&buf[..n]),
+        }
+    }
+    let line = String::from_utf8_lossy(&request);
+    let path = line.split(' ').nth(1).unwrap_or("");
+    let (status, body) = match path {
+        "/ready" if dir.join("not-ready").exists() => {
+            ("503 Service Unavailable", r#"{"status":503,"readyConnections":0}"#.to_string())
+        }
+        "/ready" => ("200 OK", r#"{"status":200,"readyConnections":1}"#.to_string()),
+        "/quicktunnel" => {
+            let host = origin_port.map(|p| format!("quick-{p}.trycloudflare.com")).unwrap_or_default();
+            ("200 OK", format!(r#"{{"hostname":"{host}"}}"#))
+        }
+        _ => ("404 Not Found", String::new()),
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
 }
 
 /// emailulator, linked into a directory of its own. Each call's arguments are appended to

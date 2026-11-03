@@ -106,6 +106,15 @@ impl Fixture {
     pub fn add_fnm(&self) {
         place(&self.brew.path().join("bin/fnm"), |dst| symlink(&self.fake, dst));
     }
+
+    /// The fake cloudflared at brew's keg path, as `brew install cloudflared` leaves it. Its
+    /// state (`calls`, `tunnels.json`, `dns-records`, the switches) lives in the returned
+    /// directory.
+    pub fn add_cloudflared(&self) -> PathBuf {
+        let bin = yard_core::brew::Brew::new(self.brew.path()).cloudflared_bin();
+        place(&bin, |dst| symlink(&self.fake, dst));
+        bin.parent().unwrap().to_path_buf()
+    }
 }
 
 impl Fixture {

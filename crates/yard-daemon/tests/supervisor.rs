@@ -692,3 +692,82 @@ async fn stale_pid_files_are_removed() {
     assert_eq!(orphans::stop(&junk, program, grace, libc::SIGTERM).await, None);
     assert!(!junk.exists());
 }
+
+/// `GET path` on 127.0.0.1:`port`: the status and the body, or `None` if nothing answers.
+fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    write!(s, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").ok()?;
+    let mut text = String::new();
+    s.read_to_string(&mut text).ok()?;
+    let status = text.split(' ').nth(1)?.parse().ok()?;
+    Some((status, text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()))
+}
+
+#[test]
+fn fake_cloudflared_serves_ready_and_a_quick_hostname() {
+    use yard_core::tunnel::cloudflared::{Origin, quick_yml};
+    let fx = support::Fixture::new();
+    let dir = fx.add_cloudflared();
+    let (origin_port, metrics_port) = (free_port(), free_port());
+    let yml = fx.root.path().join("quick.yml");
+    std::fs::write(&yml, quick_yml(Origin { origin_port, metrics_port })).unwrap();
+    let mut child = std::process::Command::new(dir.join("cloudflared"))
+        .arg("tunnel")
+        .arg("--config")
+        .arg(&yml)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let ready = loop {
+        if let Some(answer) = http_get(metrics_port, "/ready") {
+            break answer;
+        }
+        assert!(Instant::now() < deadline, "the fake never served its metrics port");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(ready.0, 200, "{ready:?}");
+    let (status, body) = http_get(metrics_port, "/quicktunnel").unwrap();
+    assert_eq!(status, 200);
+    assert!(body.contains(&format!("quick-{origin_port}.trycloudflare.com")), "{body}");
+    std::fs::write(dir.join("not-ready"), "").unwrap();
+    assert_eq!(http_get(metrics_port, "/ready").unwrap().0, 503);
+    // SAFETY: signalling our own child.
+    unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    assert!(child.wait().unwrap().success(), "SIGTERM is a clean exit");
+}
+
+#[test]
+fn fake_cloudflared_manages_tunnels() {
+    let fx = support::Fixture::new();
+    let dir = fx.add_cloudflared();
+    let creds = fx.root.path().join("creds/yard-blog.json");
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(dir.join("cloudflared")).args(args).output().unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr),
+        )
+    };
+    let cert = "/c/cert.pem";
+    let creds_arg = creds.to_str().unwrap();
+    let (code, out) =
+        run(&["tunnel", "--origincert", cert, "create", "--credentials-file", creds_arg, "yard-blog"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("Created tunnel yard-blog with id id-yard-blog"), "{out}");
+    assert!(creds.exists());
+    let (code, out) = run(&["tunnel", "--origincert", cert, "list", "--name", "yard-blog", "-o", "json"]);
+    assert_eq!(code, Some(0));
+    let listed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(listed[0]["id"], "id-yard-blog");
+    assert_eq!(run(&["tunnel", "route", "dns", "id-yard-blog", "blog.example.com"]).0, Some(0));
+    let (code, out) = run(&["tunnel", "route", "dns", "id-yard-blog", "blog.example.com"]);
+    assert_eq!(code, Some(1));
+    assert!(out.contains("code: 1003") && out.contains("already exists"), "{out}");
+    assert_eq!(run(&["tunnel", "route", "dns", "-f", "id-yard-blog", "blog.example.com"]).0, Some(0));
+    assert_eq!(run(&["tunnel", "delete", "id-yard-blog"]).0, Some(0));
+    let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+    assert_eq!(calls.lines().count(), 6, "{calls}");
+    assert!(calls.lines().next().unwrap().contains("--origincert /c/cert.pem create"), "{calls}");
+}
