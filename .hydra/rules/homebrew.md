@@ -8,6 +8,7 @@ paths:
   - "crates/yard-daemon/src/rpc/sources.rs"
   - "crates/yard-daemon/src/node.rs"
   - "crates/yard-daemon/src/rpc/node.rs"
+  - "crates/yard-daemon/src/tunnel/**"
 commands:
   - "brew "
 triggers:
@@ -15,6 +16,7 @@ triggers:
   - launching a brew-installed binary
   - gating an install on brew's trust, or trusting a tap or formula
   - installing Node or running fnm
+  - running cloudflared
 ---
 
 # Homebrew is a package source, never a source of truth
@@ -118,5 +120,11 @@ triggers:
   missing; it is homebrew/core's, so no trust gate. `node.list --available` runs `fnm
   ls-remote` outside a job under the 30 s `BREW_TIMEOUT`. Nothing else runs fnm: doctor and the
   shims only look at `node/node-versions`, and never nvm's or Herd's Node.
+- **cloudflared (M5).** Run it only as `Brew::cloudflared_bin` (`<prefix>/opt/cloudflared/bin/cloudflared`),
+  as the user, as a yardd unit or inside a tunnel job; never `brew services`, never root, never
+  through the helper, and every config sets `no-autoupdate: true`. Yard never installs it: a
+  missing binary is `FORMULA_MISSING`, hint `brew install cloudflared` (homebrew/core, no trust
+  gate). Yard never reads, copies or moves its certificates or credentials files; it only
+  checks they exist (tunnels spec P5, P7).
 - A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)
   gets the hint `brew reinstall <formula>`, not `brew install`.

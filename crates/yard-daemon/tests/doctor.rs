@@ -1594,6 +1594,8 @@ mod tunnels {
         let check = find(&last, "tunnel:blog").expect("a tunnel check");
         assert_eq!(status(&last, "tunnel:blog").as_deref(), Some("warn"), "{check:?}");
         assert!(check.message.contains("connecting to Cloudflare"), "{check:?}");
+        let log = d.fx.paths.root().join("logs/tunnel-blog.log");
+        assert_eq!(check.hint, Some(format!("tail -n 50 {}", log.display())), "{check:?}");
         d.shutdown().await.unwrap();
     }
 

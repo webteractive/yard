@@ -92,8 +92,11 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   (`docs/superpowers/specs/2026-10-22-yard-project-file-design.md`; M4a builds `php`,
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
   (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5), planned in
-  `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03, built inline on
-  main; not built yet).
+  `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03). M5 is built
+  inline on main (2026-11-03, one commit per task with the maintainer's approval, not pushed);
+  `scripts/e2e-m5.sh` has not run yet, and a named tunnel is the maintainer's manual check on his own
+  zone (`yard tunnels domain add <domain>`, `yard tunnel --host <name>.<domain>`, curl it,
+  `yard untunnel`, delete the CNAME, `yard doctor` clears once the record is gone).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -309,6 +312,15 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `services.toml`, `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and
   6379 or Herd's resolver changed. It runs on macOS's bash 3.2. `shellcheck scripts/e2e-m4e.sh`
   stays clean.
+- `scripts/e2e-m5.sh` — real-machine M5 check after `e2e-m1.sh`, with the network and no
+  Cloudflare account: links a scratch PHP project under `$TMPDIR`, runs `yard tunnel --quick
+  --json` in it, curls the `trycloudflare.com` URL (retrying up to 60 s) and checks PHP sees
+  `HTTPS=on`, the public host and a `REMOTE_ADDR` that is not loopback, checks the tunnel's
+  origin port serves only that site whatever Host it gets, then `yard untunnel` leaves no
+  `tunnel-<site>` unit and no port entry. It needs yardd running, jq and brew's `cloudflared`
+  (installs nothing), backs up and restores `sites.toml` and `ports.toml`, and fails if Herd's
+  resolver changed or `~/.cloudflared` was created; ask the maintainer first.
+  `shellcheck scripts/e2e-m5.sh` stays clean.
 
 ## Verifying a change on this machine
 
@@ -377,7 +389,7 @@ Rule files are in `.hydra/rules`.
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
 | adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` | config-ownership.md |
 | running yard against the real data root on this machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
-| installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary · gating an install on brew's trust, or trusting a tap or formula · installing Node or running fnm | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `crates/yard-core/src/sources.rs` · `crates/yard-daemon/src/sources.rs` · `crates/yard-daemon/src/rpc/sources.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` · `brew ` | homebrew.md |
+| installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary · gating an install on brew's trust, or trusting a tap or formula · installing Node or running fnm · running cloudflared | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `crates/yard-core/src/sources.rs` · `crates/yard-daemon/src/sources.rs` · `crates/yard-daemon/src/rpc/sources.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` · `crates/yard-daemon/src/tunnel/**` · `brew ` | homebrew.md |
 | a unit needs a TCP or UDP port · adding a service or proxy that listens on or targets a port | `crates/yard-core/src/ports/**` · `crates/yard-daemon/src/probe.rs` · `crates/yard-daemon/src/holder.rs` · `crates/yard-daemon/src/portscan.rs` | port-registry.md |
 | adding or changing a privileged operation · installing or uninstalling the root helper | `crates/yard-helper/**` · `crates/yard-daemon/src/helper_client.rs` · `sudo ` · `launchctl` | root-helper.md |
 | adding or changing a daemon API method, event or error code | `crates/yard-proto/**` · `crates/yard-daemon/src/rpc/**` · `crates/yard-cli/src/client.rs` | rpc-protocol.md |

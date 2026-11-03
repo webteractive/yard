@@ -147,12 +147,13 @@ yardd keeps the root `0700` at every start, since a home folder is often readabl
 local users and the old location inherited `~/Library`'s `0700`.
 
 ```
-yard.toml                     # global: default php, default_node, tld override, secure_by_default, [php."<ver>".extensions]
-sites.toml                    # links, per-site php and node, secure flag, docroot overrides, proxies
+yard.toml                     # global: default php, default_node, tld override, secure_by_default, [php."<ver>".extensions], [tunnels.cloudflared] domains (M5)
+sites.toml                    # links, per-site php and node, secure flag, docroot overrides, proxies, [sites.<site>.tunnel] (M5)
 ports.toml                    # port registry and active profile (§7)
 services.toml                 # the service instances (§8.2), one [services."<instance>"] table each, and [emailulator] path (M4d)
 state/hashes.json             # hash of every generated file as Yard last wrote it
 state/php-modules.json        # each PHP keg's compiled-in modules (`php -n -m`), keyed by its canonical path
+state/tunnels.json            # M5, 0600: each named tunnel's Cloudflare id, name, credentials path and routed hosts, and the DNS records left (dns_left)
 dnsmasq/dnsmasq.conf          # generated
 php/<ver>/php.ini             # generated
 php/<ver>/fpm.conf            # generated
@@ -160,8 +161,10 @@ php/<ver>/conf.d/             # generated: brew's conf.d mirrored (10-brew-<file
 php/<ver>/conf.d/99-overrides.ini   # USER-OWNED, never written by Yard except via `php config set`
 php/<ver>/pecl.conf           # generated before each pecl run: a PEAR user config (§4.3)
 nginx/nginx.conf              # generated
-nginx/sites/<site>.conf       # generated
+nginx/sites/<site>.conf       # generated; a tunnelled site's also has its tunnel listener on 127.0.0.1 (M5)
 nginx/overrides/<site>.conf   # USER-OWNED, included inside the site's server block
+nginx/tunnel-overrides/<site>.conf  # USER-OWNED, included only in the site's tunnel listener (M5)
+tunnels/<site>.yml            # generated: the tunnel's cloudflared config (a managed directory, M5)
 nginx/services/<name>.conf    # generated: minio.<tld>, the console proxied, and emailulator.conf for mail.<tld> (a managed directory)
 nginx/overrides/mail.conf     # USER-OWNED, included in mail.<tld>'s server block (M4d)
 nginx/default/index.html      # generated site list served for unknown hosts
@@ -504,6 +507,18 @@ profile; Yard does not edit dotfiles.
 - No `yard migrate herd` (dropped 2026-10-20): Yard does not import Herd's
   config. Each project moves by running `yard link` in it.
 
+### 5.6 Tunnels (M5)
+
+A site Yard serves can be shared at a public HTTPS URL through cloudflared, designed in
+`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`. `yard tunnel` makes a quick
+tunnel (a random `trycloudflare.com` URL, held only in yardd's memory) or, with `--host`, a
+named one on a domain set up with `yard tunnels domain add` (kept in `sites.toml`, with its
+Cloudflare facts in `state/tunnels.json`). Each tunnel is a `tunnel-<site>` unit running brew's
+cloudflared with a generated `tunnels/<site>.yml`, in front of its own nginx listener on
+127.0.0.1 that serves only that site, with `HTTPS on` and the visitor's address from
+`CF-Connecting-IP`. `yard untunnel` deletes the Cloudflare tunnel Yard made, and names the
+DNS record it cannot delete; `yard doctor` reminds the user until the record is gone.
+
 ## 6. Daemon
 
 ### 6.1 Supervisor
@@ -538,6 +553,10 @@ profile; Yard does not edit dotfiles.
   the reconcile leaves it out of the desired units, so `apply` stops it with its own
   signal, and a wake puts it back (from the last good units when a TOML does not parse). Sleep is runtime state in yardd, never written to a TOML,
   and every instance starts awake with yardd.
+- A tunnel unit (M5) is health-checked by a TCP connect to cloudflared's metrics port, so
+  losing the network never restarts it (a quick tunnel would lose its URL); its readiness
+  (`connecting` or `ready`) is read from `/ready` by yardd's tunnel monitor every 2 s. Tunnel
+  units get a 30 s start timeout. A quick tunnel ends with yardd.
 - On `yardd` shutdown, all child units are stopped, nginx included.
 
 ### 6.2 API
@@ -568,8 +587,10 @@ profile; Yard does not edit dotfiles.
   In the CLI, Ctrl-C during a job cancels it and waits; a second Ctrl-C stops waiting
   and exits 130.
 - Subscriptions (`subscribe` with topic list: `units`, `sites`, `logs`, `ports`,
-  `jobs`) push events tagged `unit_state_changed`, `site_added`, `site_removed`,
-  `job_progress`, `job_finished`, `log_line`, `port_conflict`.
+  `jobs`, `tunnels`) push events tagged `unit_state_changed`, `site_added`, `site_removed`,
+  `job_progress`, `job_finished`, `log_line`, `port_conflict`, `tunnel_changed` (M5, when a
+  tunnel's state, URL or last error changes). From protocol 2.10 `job_finished` carries an
+  optional `result`, the job's answer on success (`tunnels.add` sends its `TunnelInfo`).
 - Types are defined once in `yard-proto` (serde). `cargo xtask schema` emits
   JSON Schema; the Swift `Codable` models are generated from it and checked in
   CI for drift.
@@ -588,7 +609,10 @@ Every error is `{ code, message, hint, data? }`. Codes are stable strings, e.g.
 `PROJECT_FILE_EXISTS`, `SERVICE_NOT_FOUND`, `SERVICE_EXISTS`, `SERVICE_IN_USE`, `SERVICE_VERSION_UNSUPPORTED`,
 `FORMULA_UNTRUSTED`, `NEEDS_CONFIRMATION`, `NODE_MISSING`, `NODE_IN_USE` (M4c), `EMAILULATOR_NOT_FOUND`
 (`data.searched`, hint emailulator's installer) and `SERVICE_EXTERNAL` (`data { label, pid }`, hint
-`emailulator service status`, or `emailulator service uninstall` for a remove; M4d). The CLI prints message and hint;
+`emailulator service status`, or `emailulator service uninstall` for a remove; M4d), and for tunnels (M5,
+tunnels spec §12) `TUNNEL_NOT_LOGGED_IN`, `TUNNEL_DOMAIN_NOT_SET_UP`, `TUNNEL_KIND_REQUIRED`,
+`TUNNEL_EXISTS`, `TUNNEL_NOT_FOUND`, `TUNNEL_CREDENTIALS_MISSING`, `TUNNEL_DNS_EXISTS`,
+`TUNNEL_DNS_FAILED`, `TUNNEL_NOT_READY` and `SITE_TUNNELLED`. The CLI prints message and hint;
 the app shows them inline with an action button when the hint maps to a command.
 
 ### 6.4 CLI
@@ -625,7 +649,12 @@ redis        = { port = 6380,  mode = "pinned" }
 emailulator-smtp = { port = 1025,  mode = "external" }   # emailulator's own LaunchAgent (M4d): written and
 emailulator-http = { port = 8025,  mode = "external" }   # moved by reconcile to follow the agent, removed when none serves
 "proxy:api"  = { port = 3000,  mode = "external" }
+tunnel-blog        = { port = 33012, mode = "auto" }   # M5: cloudflared's metrics server
+nginx-tunnel-blog  = { port = 33011, mode = "auto" }   # M5: nginx's tunnel listener for blog
 ```
+
+Each tunnel (M5) has these two `auto` entries, allocated when it starts and removed when it
+ends; nginx owns `nginx-tunnel-*`.
 
 **Modes**
 
@@ -935,7 +964,10 @@ Each milestone is usable on its own and gets its own implementation plan.
      the maintainer's machine on 2026-10-26.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
    cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
-   Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`.
+   Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`
+   and planned in `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved
+   2026-11-03); built on main on 2026-11-03. `scripts/e2e-m5.sh` (a quick tunnel) has not run
+   yet, and a named tunnel is the maintainer's manual check on his own zone.
 6. **M6 Yard.app:** client, menu bar, main window, onboarding.
 7. **M7 Distribution:** signing, notarization, appdater, brew tap.
 

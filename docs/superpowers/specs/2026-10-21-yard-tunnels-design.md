@@ -1,8 +1,11 @@
 # Yard tunnels — design spec
 
 Date: 2026-10-21
-Status: approved by the maintainer on 2026-10-22. It extends `2026-10-19-yard-design.md` (the main
-spec), which is updated when M5 is built (§15).
+Status: approved by the maintainer on 2026-10-22; built on main on 2026-11-03 from
+`docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md`, whose rulings P1–P12 (made while
+planning) replace the builder's calls they change and are written into the sections below.
+`scripts/e2e-m5.sh` has not run yet. It extends `2026-10-19-yard-design.md` (the main spec),
+updated in the same change (§15).
 
 Milestone numbers follow the order the maintainer set on 2026-10-21: M4 Node and services,
 **M5 Tunnels**, M6 Yard.app, M7 Distribution. The main spec's §12 is being renumbered
@@ -129,21 +132,23 @@ From the main spec and `.hydra/rules/`:
 The Cloudflare account and the domains a named tunnel may use are set up once, ahead of
 any tunnel, rather than discovered when one is made.
 
-- `yard tunnels domain add [DOMAIN]` runs `cloudflared tunnel login` for the user: it opens
+- `yard tunnels domain add DOMAIN` runs `cloudflared tunnel login` for the user: it opens
   the browser, where they sign in to Cloudflare and pick the zone. It is a job whose output
   streams to the terminal, and it must run in a real terminal. When it finishes, Yard
-  records the zone as a domain in `yard.toml` (§6). `DOMAIN` is checked against the zone
-  picked; without it, Yard records whatever zone was picked.
+  records the domain in `yard.toml` (§6). **`DOMAIN` is required (P6):** Yard cannot learn
+  which zone was picked without reading the certificate, so it tells the user which one to pick
+  (`In the browser, pick the zone <domain>.`) and records that; a wrong pick shows up at the
+  first `yard tunnel --host` as `TUNNEL_DNS_FAILED`.
 - `yard tunnels domain remove DOMAIN` forgets a domain. Named tunnels already on it keep
   running; `yard tunnel --host` can no longer pick it.
 - `yard tunnels domains` lists them, with whether cloudflared's login is still present
   (an existence check, never a read; §2 anti-goals).
-- **Several domains.** A `cloudflared tunnel login` authorizes one zone. Whether the
-  certificate it writes also lets `tunnel route dns` add records in a second zone of the
-  same account is for the plan to check on the installed cloudflared. If it does not, each
-  domain gets its own certificate, written by cloudflared to a path Yard names per domain
-  and passed back to cloudflared with `--origincert`; Yard still never reads, copies or
-  moves it **(builder's call)**.
+- **Several domains: one certificate per domain, always (P5).** `tunnels.domain_add` runs
+  `cloudflared tunnel login` with `HOME=<home>/.cloudflared/yard/<domain>`, so cloudflared
+  itself writes `<home>/.cloudflared/yard/<domain>/.cloudflared/cert.pem`, and every
+  management command passes that path with `--origincert`. Yard checks that it exists and
+  never reads, copies or moves it. This works whether or not one certificate covers several
+  zones, and never touches a `~/.cloudflared/cert.pem` the user made for something else.
 
 **Choosing a URL.** With no domain set up, `yard tunnel` makes a quick tunnel, as before.
 Once a domain is set up, `yard tunnel` with neither `--quick` nor `--host` asks:
@@ -357,9 +362,14 @@ loglevel: info
 
 - The catch-all `http_status:404` means a hostname someone else points at this tunnel gets
   a 404, not the site.
-- `credentials-file` is cloudflared's own default path; Yard writes the path, never the
-  file, and never reads it **(builder's call: secrets stay out of the data root and its
-  backups)**.
+- `credentials-file` (P7): a tunnel Yard creates gets
+  `<home>/.cloudflared/yard/<domain>/<tunnel-name>.json` (`tunnel create --credentials-file`);
+  an adopted one (`--tunnel`) keeps cloudflared's own default, `<home>/.cloudflared/<uuid>.json`.
+  Either path is recorded as `credentials` in `state/tunnels.json`. Yard writes the path, never
+  the file, and never reads it (secrets stay out of the data root and its backups). A named
+  tunnel whose credentials file is gone gets no unit (P12): reconcile warns with
+  `TUNNEL_CREDENTIALS_MISSING`'s message and hint, and doctor fails
+  `tunnel-credentials:<site>`.
 - `loglevel: info` always. At `debug` cloudflared logs request headers, cookies included,
   into `logs/tunnel-<site>.log`.
 - cloudflared has no include, so this file has no user-owned sibling **(builder's call)**.
@@ -401,18 +411,19 @@ its implementation.
 - Env: `HOME` (cloudflared finds `~/.cloudflared/cert.pem` for management commands), and
   PATH from `shim::child_path`. Nothing else from the caller.
 - Stop: SIGTERM, which cloudflared handles with a grace period; SIGKILL after the supervisor's
-  stop timeout. The plan checks cloudflared's default `grace-period` (30 s) against Yard's 5 s
-  stop timeout and sets `grace-period` in the yml to fit.
+  stop timeout. Every yml sets `grace-period: 3s`, under Yard's 5 s stop timeout (P3).
 - Reload: `Restart`. cloudflared does not reload a local config. A changed yml restarts the
   unit; quick tunnels then get a new URL, which is why nothing a quick tunnel depends on
   changes during normal reconciles (its yml depends only on its two ports).
-- **Health: HTTP `GET /ready` on the metrics port, 200 = ready (builder's call).** This adds
-  `Health::Http { port, path }` to the supervisor. A TCP connect would only prove the
-  metrics server is up, not that the tunnel reached Cloudflare. cloudflared keeps retrying
-  the edge itself, so a running unit that never becomes ready stays `Starting` until
-  `start_grace`, then counts as a failure and backs off; `TunnelInfo.state` shows
-  `connecting` meanwhile. The known nginx flake with HTTP health checks (main spec §6.1)
-  came from inherited privileged sockets, which cloudflared does not have.
+- **Health: a TCP connect to the metrics port (P1), not `GET /ready`.** The supervisor stops
+  a running unit after two failed health checks, so with `/ready` as health a Wi-Fi drop
+  would restart cloudflared, and a quick tunnel restarted gets a new URL. cloudflared
+  reconnects to the edge by itself. Readiness is read from `/ready` by yardd's tunnel monitor
+  every 2 s instead, and shows as `connecting` or `ready` in `TunnelInfo.state`; losing the
+  edge is `connecting`, never a restart. A wedged cloudflared that keeps its metrics port
+  open but never reconnects stays `connecting` until `yard restart tunnel-<site>`, and
+  doctor warns meanwhile. Tunnel units get `start_timeout` 30 s (P2): a quick tunnel's
+  metrics port opens only once it has a hostname, which needs the network.
 - Quick tunnel URL: read from the metrics server's `/quicktunnel` endpoint (JSON with the
   hostname), with the log line naming `trycloudflare.com` as a fallback. The plan verifies
   the endpoint on the installed version before relying on it.
@@ -431,7 +442,10 @@ cloudflared first and alone in M5.
 
 - **One trait, one module per provider.** `yard-daemon` gets a `tunnel::Provider` trait and
   `tunnel::cloudflared` as its only implementation in M5 **(builder's call on the shape)**.
-  The trait covers what differs between providers:
+  In M5 the trait covers the running unit only (program, args, env, the real-IP header); the
+  add, remove and login steps are functions in `tunnel::cloudflared` that the RPC handlers
+  call, until a second provider shows what they share (P11). Over time, what differs between
+  providers is:
   - the unit for a running tunnel (program, args, env, health check)
   - the add and remove steps run inside jobs
   - how the public URL is learned
@@ -502,7 +516,10 @@ Yard does not hold a Cloudflare API token (open question 2). What Yard does to m
 - A `yard doctor` warning per `dns_left` entry. Doctor resolves the host with the system
   resolver; once it no longer resolves (NXDOMAIN), the entry is dropped from state
   **(builder's call: the user deletes the record and the warning clears itself, no
-  acknowledge command)**. A record repointed at another tunnel still resolves; for that,
+  acknowledge command)**. The lookup is `getaddrinfo` behind `DaemonOptions.resolve_host`
+  (P10): only `EAI_NONAME` counts as gone, and a lookup that fails otherwise keeps the entry.
+  Only the running yardd drops one; the CLI's doctor while yardd is down reports and writes
+  nothing. A record repointed at another tunnel still resolves; for that,
   `yard tunnels forget-dns <host>` is a possible follow-up, not in v1.
 
 ## 9. Host header and HTTPS between cloudflared and nginx
@@ -545,7 +562,7 @@ server {
     # … the site's body, as for its http block, with for PHP:
     #   fastcgi_param HTTPS on;  fastcgi_param SERVER_PORT 443;
     # and for a proxy:
-    #   X-Forwarded-Proto https, X-Forwarded-Host $host, X-Forwarded-For the visitor
+    #   X-Forwarded-Proto https, X-Forwarded-Host $host, X-Forwarded-For $remote_addr
 
     include ".../nginx/overrides/blog.conf";
     include ".../nginx/tunnel-overrides/blog.conf";
@@ -557,8 +574,9 @@ server {
   `$remote_addr` becomes the visitor's IP from `CF-Connecting-IP`, trusted only from
   loopback.
 - `HTTPS on` for PHP is true: the visitor's connection is HTTPS at the edge.
-- The plan checks how cloudflared sets `X-Forwarded-For` and `X-Forwarded-Proto` so the
-  proxy branch neither duplicates nor drops the visitor's address.
+- The proxy branch sends `X-Forwarded-For $remote_addr` (the visitor, after
+  `real_ip_header CF-Connecting-IP`), `X-Forwarded-Proto https` and `X-Forwarded-Host $host`
+  (P4), not `$proxy_add_x_forwarded_for`, which would pass on a list a visitor forged.
 - In the privileged profile nginx still binds this port itself, as the user; only 80/443
   come from the helper.
 
@@ -687,11 +705,13 @@ New error codes (stable, each with a hint that is the command that fixes it):
 | `TUNNEL_CREDENTIALS_MISSING` | the tunnel's credentials file is gone | `yard untunnel <site> && yard tunnel <site> --host <host>` |
 | `TUNNEL_DNS_EXISTS` | a record for the host already exists | `yard tunnel <site> --host <host> --overwrite-dns` |
 | `TUNNEL_DNS_FAILED` | `route dns` failed otherwise; `data.output` | check the zone is in this account |
-| `TUNNEL_NOT_READY` | no `/ready` within 30 s; `data.tail` has the log | `yard logs tunnel-<site>` (or the log path until M4 adds logs) |
-| `SITE_TUNNELLED` | `unlink`/`unproxy` of a tunnelled site | `yard untunnel <site>` |
+| `TUNNEL_NOT_READY` | no `/ready` within 30 s; `data.tail` has the log | `tail -n 50 <root>/logs/tunnel-<site>.log` (P9: there is no `yard logs` for units) |
+| `SITE_TUNNELLED` | `unlink`/`unproxy` of a site with a named tunnel | `yard untunnel <site>` |
 
 `SITE_TUNNELLED` **(builder's call)**: unlinking silently would leave a Cloudflare tunnel and
-a DNS record behind, so it refuses and points at the command that cleans up. A site already
+a DNS record behind, so it refuses and points at the command that cleans up. Only a named
+tunnel (a `[sites.<site>.tunnel]` table) refuses: unlinking or unproxying a site with a quick
+tunnel just ends the quick tunnel, which leaves nothing at Cloudflare (P8). A site already
 having a different tunnel is `INVALID_ARGUMENT` (hint `yard untunnel <site>` first). A
 missing `cloudflared` reuses `FORMULA_MISSING`.
 
@@ -704,7 +724,7 @@ records a tunnel or a left DNS record:
 |---|---|---|
 | `cloudflared` | brew's cloudflared is at its keg | fail: `brew install cloudflared` |
 | `tunnel-login` | each domain in `yard.toml` has its certificate (stat only) | warn per missing one: `yard tunnels domain add <domain>` (running needs no login; changing does) |
-| `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error when failed or backing off (`yard restart tunnel-<site>`); warn while `connecting` (`yard logs tunnel-<site>`) |
+| `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error when failed or backing off (`yard restart tunnel-<site>`); warn while `connecting` (`tail -n 50 <root>/logs/tunnel-<site>.log`, P9) |
 | `tunnel-credentials:<site>` | credentials file exists (stat only) | fail: `TUNNEL_CREDENTIALS_MISSING` hint |
 | `tunnel-leftover:<name>` | — | warn per tunnel Yard made whose site has no `[tunnel]` (its delete failed): `cloudflared tunnel delete <id>` |
 | `tunnel-dns:<host>` | — | warn per `dns_left` record still resolving (or not answerable): "the DNS record <host> → <target> is still there", hint "delete the CNAME <host> in the Cloudflare dashboard"; one that no longer resolves is dropped from `state/tunnels.json` by yardd's doctor (the CLI's doctor while yardd is down never writes it) |
@@ -723,9 +743,9 @@ that fails for lack of network leaves the entry in place.
 |---|---|
 | cloudflared not installed | `tunnel` refused with `FORMULA_MISSING`; configured named tunnels' units fail without retry (a missing binary is fatal, like a missing helper). |
 | Not logged in | `tunnel --host` refused (`TUNNEL_NOT_LOGGED_IN`); existing tunnels keep running, since `run` needs only the credentials file. |
-| Credentials file deleted | unit fails fatally with `TUNNEL_CREDENTIALS_MISSING`; doctor names the fix. |
+| Credentials file deleted | the tunnel gets no unit; reconcile warns with `TUNNEL_CREDENTIALS_MISSING` and doctor fails `tunnel-credentials:<site>` with the fix (P12). |
 | Tunnel deleted in the dashboard | cloudflared exits with an auth error; backoff, then `failed`; the error names the tunnel; hint is untunnel and tunnel again. |
-| No network, sleep, Wi-Fi change | cloudflared reconnects by itself; `/ready` fails meanwhile and state is `connecting`. Repeated failures past `start_grace` back off and may reach `failed`; `yard restart tunnel-<site>` resets. The plan tunes `start_grace` for tunnels so a laptop waking up does not end in `failed`. |
+| No network, sleep, Wi-Fi change | cloudflared reconnects by itself; `/ready` fails meanwhile and state is `connecting`. The unit's health is its metrics port (P1), so it is never restarted for it and a quick tunnel keeps its URL. |
 | UDP 7844 blocked | cloudflared falls back from QUIC to HTTP/2 itself (`protocol: auto`). |
 | Quick tunnel rate-limited or refused | the add job fails `TUNNEL_NOT_READY` with the log tail; nothing persists. |
 | DNS record exists | `TUNNEL_DNS_EXISTS`; nothing overwritten. |
@@ -742,7 +762,7 @@ that fails for lack of network leaves the entry in place.
 
 **M5 Tunnels**, after M4 Node and services and before M6 Yard.app (the maintainer's order,
 2026-10-21). It needs only what M1–M3 built (units, registry, reconcile, jobs, nginx
-rendering) plus the `Health::Http` check and `JobFinished.result` above. Landing it before
+rendering) plus `JobFinished.result` above. Landing it before
 the app means the app's generated models include tunnels from the start. It gets its own
 plan in `docs/superpowers/plans/`, and an `scripts/e2e-m5.sh` that runs a quick tunnel
 against a scratch site and curls the trycloudflare URL; it needs the network and no
@@ -753,7 +773,7 @@ ngrok and Tailscale Funnel come after M5 as providers behind §7.1, each with it
 spec and plan (maintainer, 2026-10-21). Where they fall in the milestone order is not set yet.
 
 When built, the same change updates: main spec §3.3 (data layout), §5 (a tunnels section),
-§6.1 (HTTP health), §6.2 (methods, topic), §6.3 (codes), §7 (tunnel entries), §12; the
+§6.1 (tunnel units' health and readiness), §6.2 (methods, topic), §6.3 (codes), §7 (tunnel entries), §12; the
 README; `AGENTS.md`; and the cli-output, port-registry, config-ownership and homebrew rules.
 
 ## 16. Open questions for the maintainer

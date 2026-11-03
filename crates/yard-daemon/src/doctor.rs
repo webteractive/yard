@@ -346,7 +346,8 @@ async fn tunnel_checks(input: &DoctorInput<'_>, yard: Option<&YardConfig>, sites
         match t.state {
             TunnelState::Ready => checks.push(ok(&id, format!("shared at {at}"))),
             TunnelState::Connecting => {
-                checks.push(warn(&id, "connecting to Cloudflare", format!("yard logs {}", t.unit)))
+                let log = paths.log(&t.unit);
+                checks.push(warn(&id, "connecting to Cloudflare", format!("tail -n 50 {}", log.display())))
             }
             TunnelState::Failed | TunnelState::Backoff => checks.push(fail(
                 &id,
