@@ -59,6 +59,12 @@ pub const NODE_UNINSTALL: &str = "node.uninstall";
 pub const NODE_DEFAULT: &str = "node.default";
 pub const NODE_USE: &str = "node.use";
 pub const NODE_UNUSE: &str = "node.unuse";
+pub const TUNNELS_LIST: &str = "tunnels.list";
+pub const TUNNELS_DOMAINS: &str = "tunnels.domains";
+pub const TUNNELS_DOMAIN_ADD: &str = "tunnels.domain_add";
+pub const TUNNELS_DOMAIN_REMOVE: &str = "tunnels.domain_remove";
+pub const TUNNELS_ADD: &str = "tunnels.add";
+pub const TUNNELS_REMOVE: &str = "tunnels.remove";
 pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
@@ -226,10 +232,72 @@ pub struct SubscribeParams {
     pub topics: Vec<Topic>,
 }
 
+/// `tunnels.add`: a quick tunnel without `host`, a named one with it. `provider` defaults to
+/// cloudflared; `tunnel` adopts an existing Cloudflare tunnel by name or id; `overwrite_dns`
+/// replaces a DNS record already there (`route dns -f`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelAddParams {
+    pub site: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub tunnel: Option<String>,
+    #[serde(default)]
+    pub overwrite_dns: bool,
+}
+
+/// `tunnels.remove`. `keep_tunnel` keeps a Cloudflare tunnel Yard created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelRemoveParams {
+    pub site: String,
+    #[serde(default)]
+    pub keep_tunnel: bool,
+}
+
+/// `tunnels.domain_add`: sign in to Cloudflare for `domain` (the zone to pick).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelDomainAddParams {
+    #[serde(default)]
+    pub provider: Option<String>,
+    pub domain: String,
+}
+
+/// `tunnels.domain_remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelDomainParams {
+    pub domain: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tunnel_method_names() {
+        assert_eq!(
+            [
+                TUNNELS_LIST,
+                TUNNELS_DOMAINS,
+                TUNNELS_DOMAIN_ADD,
+                TUNNELS_DOMAIN_REMOVE,
+                TUNNELS_ADD,
+                TUNNELS_REMOVE
+            ],
+            [
+                "tunnels.list",
+                "tunnels.domains",
+                "tunnels.domain_add",
+                "tunnels.domain_remove",
+                "tunnels.add",
+                "tunnels.remove"
+            ]
+        );
+        let p: TunnelAddParams = serde_json::from_value(json!({"site": "blog"})).unwrap();
+        assert_eq!((p.host, p.overwrite_dns), (None, false));
+    }
 
     #[test]
     fn method_names_match_spec() {

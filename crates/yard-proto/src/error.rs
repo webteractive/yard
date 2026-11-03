@@ -77,6 +77,26 @@ pub enum ErrorCode {
     /// The service is run by something other than Yard (emailulator's LaunchAgent), so Yard
     /// does not start, stop or remove it; `data` names the `label` and `pid`.
     ServiceExternal,
+    /// A named tunnel needs Cloudflare and its domain's certificate is missing.
+    TunnelNotLoggedIn,
+    /// `--host` is under no domain set up with `yard tunnels domain add`.
+    TunnelDomainNotSetUp,
+    /// Domains are set up and there is no terminal to ask quick or named in.
+    TunnelKindRequired,
+    /// `yard-<site>` exists in the Cloudflare account, but Yard did not make it.
+    TunnelExists,
+    /// The site has no tunnel, or `--tunnel` names none.
+    TunnelNotFound,
+    /// The tunnel's credentials file is gone.
+    TunnelCredentialsMissing,
+    /// A DNS record for the host already exists; `--overwrite-dns` replaces it.
+    TunnelDnsExists,
+    /// `cloudflared tunnel route dns` failed otherwise; `data.output` has its output.
+    TunnelDnsFailed,
+    /// The tunnel did not connect to Cloudflare in time; `data.tail` has its log.
+    TunnelNotReady,
+    /// `unlink` or `unproxy` of a site shared through a named tunnel.
+    SiteTunnelled,
     Internal,
 }
 

@@ -237,7 +237,7 @@ pub async fn run_job<P: Serialize>(
                     println!("{line}");
                 }
             }
-            Event::JobFinished { job_id, error } if *job_id == started.job_id => {
+            Event::JobFinished { job_id, error, .. } if *job_id == started.job_id => {
                 if ctx.json {
                     print_json_line(&event);
                 }

@@ -74,13 +74,13 @@ impl Jobs {
             // Cancelled while it waited: it never starts.
             let error = if *ctx.cancel.borrow() { Some(cancelled(&id)) } else { work(ctx).await.err() };
             pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != id);
-            bus.emit(Event::JobFinished { job_id: id, error });
+            bus.emit(Event::JobFinished { job_id: id, error, result: None });
         });
         if self.queue.send(job).is_err() {
             // The worker is gone only when the runtime is shutting down.
             self.pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != job_id);
             let error = Some(YardError::internal("yardd is shutting down"));
-            self.bus.emit(Event::JobFinished { job_id: job_id.clone(), error });
+            self.bus.emit(Event::JobFinished { job_id: job_id.clone(), error, result: None });
         }
         JobStarted { job_id }
     }

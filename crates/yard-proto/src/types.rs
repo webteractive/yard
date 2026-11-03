@@ -678,8 +678,102 @@ pub struct JobStarted {
     pub job_id: String,
 }
 
+/// The service a tunnel runs through (tunnels spec §7.1). Only cloudflared is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelProvider {
+    #[default]
+    Cloudflared,
+    /// A provider a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
+}
+
+/// A quick tunnel has a random URL and lives in yardd's memory; a named one has a hostname
+/// on the user's domain and lives in `sites.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelKind {
+    Quick,
+    Named,
+    /// A kind a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
+}
+
+/// The tunnel's unit state, refined by cloudflared's `/ready`: `connecting` is running but
+/// not yet connected to Cloudflare's edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelState {
+    Connecting,
+    Ready,
+    Backoff,
+    Failed,
+    Stopped,
+    /// A state a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
+}
+
+/// The Cloudflare tunnel behind a named tunnel. `created_by_yard` decides whether
+/// `yard untunnel` deletes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelRef {
+    pub name: String,
+    pub id: String,
+    pub created_by_yard: bool,
+}
+
+/// One tunnel (`tunnels.list`, the `tunnels.add` job's result, `tunnel_changed`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelInfo {
+    pub site: String,
+    pub provider: TunnelProvider,
+    pub kind: TunnelKind,
+    /// `None` while a quick tunnel has no hostname yet.
+    pub url: Option<String>,
+    /// Named tunnels only.
+    pub host: Option<String>,
+    /// Named tunnels only.
+    pub tunnel: Option<TunnelRef>,
+    pub state: TunnelState,
+    /// `tunnel-<site>`.
+    pub unit: String,
+    /// nginx's loopback listener for the tunnel.
+    pub origin_port: u16,
+    /// cloudflared's metrics server, which answers `/ready`.
+    pub metrics_port: u16,
+    pub last_error: Option<String>,
+}
+
+/// A DNS record Yard made and cannot delete: the user deletes it in Cloudflare's dashboard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsRecord {
+    pub host: String,
+    /// `<tunnel id>.cfargotunnel.com`.
+    pub target: String,
+}
+
+/// The `tunnels.remove` job's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelRemoved {
+    pub site: String,
+    pub deleted_tunnel: bool,
+    pub dns_left: Vec<DnsRecord>,
+}
+
+/// A domain set up with `yard tunnels domain add`; `logged_in` is whether its certificate
+/// exists (Yard never reads it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelDomain {
+    pub provider: TunnelProvider,
+    pub domain: String,
+    pub logged_in: bool,
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
@@ -1108,5 +1202,35 @@ mod tests {
         let env =
             EnvBlock { instance: "redis".into(), lines: vec!["REDIS_HOST=127.0.0.1".into()], note: None };
         assert_eq!(serde_json::from_value::<EnvBlock>(serde_json::to_value(&env).unwrap()).unwrap(), env);
+    }
+
+    pub(crate) fn sample_tunnel() -> TunnelInfo {
+        TunnelInfo {
+            site: "blog".into(),
+            provider: TunnelProvider::Cloudflared,
+            kind: TunnelKind::Quick,
+            url: None,
+            host: None,
+            tunnel: None,
+            state: TunnelState::Connecting,
+            unit: "tunnel-blog".into(),
+            origin_port: 33011,
+            metrics_port: 33012,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn tunnel_wire_names() {
+        use crate::ErrorCode;
+        assert_eq!(serde_json::to_value(TunnelProvider::Cloudflared).unwrap(), json!("cloudflared"));
+        assert_eq!(serde_json::to_value(TunnelState::Connecting).unwrap(), json!("connecting"));
+        assert_eq!(serde_json::from_value::<TunnelState>(json!("paused")).unwrap(), TunnelState::Other);
+        assert_eq!(serde_json::from_value::<TunnelKind>(json!("funnel")).unwrap(), TunnelKind::Other);
+        assert_eq!(serde_json::from_value::<TunnelProvider>(json!("ngrok")).unwrap(), TunnelProvider::Other);
+        assert_eq!(serde_json::to_value(ErrorCode::SiteTunnelled).unwrap(), json!("SITE_TUNNELLED"));
+        assert_eq!(serde_json::to_value(ErrorCode::TunnelDnsExists).unwrap(), json!("TUNNEL_DNS_EXISTS"));
+        let t = sample_tunnel();
+        assert_eq!(serde_json::from_value::<TunnelInfo>(serde_json::to_value(&t).unwrap()).unwrap(), t);
     }
 }

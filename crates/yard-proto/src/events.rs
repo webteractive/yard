@@ -1,6 +1,6 @@
 //! Events pushed to subscribers after `subscribe`.
 
-use crate::{Holder, SiteInfo, UnitState, YardError};
+use crate::{Holder, SiteInfo, TunnelInfo, UnitState, YardError};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -11,6 +11,7 @@ pub enum Topic {
     Logs,
     Ports,
     Jobs,
+    Tunnels,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,10 +42,17 @@ pub enum Event {
         job_id: String,
         line: String,
     },
-    /// The job is over; `error` is why it failed.
+    /// The job is over; `error` is why it failed. `result` is what a job that produces
+    /// something made (a `TunnelInfo` from `tunnels.add`, protocol 2.10).
     JobFinished {
         job_id: String,
         error: Option<YardError>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<serde_json::Value>,
+    },
+    /// A tunnel's state or URL changed. Boxed, like `SiteAdded`.
+    TunnelChanged {
+        tunnel: Box<TunnelInfo>,
     },
 }
 
@@ -56,6 +64,7 @@ impl Event {
             Event::LogLine { .. } => Topic::Logs,
             Event::PortConflict { .. } => Topic::Ports,
             Event::JobProgress { .. } | Event::JobFinished { .. } => Topic::Jobs,
+            Event::TunnelChanged { .. } => Topic::Tunnels,
         }
     }
 }
@@ -76,12 +85,24 @@ mod tests {
             Topic::Ports
         );
         assert_eq!(serde_json::to_value(Topic::Units).unwrap(), json!("units"));
-        let done = Event::JobFinished { job_id: "php-install-1".into(), error: None };
+        let done = Event::JobFinished { job_id: "php-install-1".into(), error: None, result: None };
         assert_eq!(done.topic(), Topic::Jobs);
         assert_eq!(
             serde_json::to_value(&done).unwrap(),
             json!({"type": "job_finished", "job_id": "php-install-1", "error": null})
         );
         assert_eq!(serde_json::to_value(Topic::Jobs).unwrap(), json!("jobs"));
+    }
+
+    #[test]
+    fn job_finished_carries_a_result_and_reads_without_one() {
+        let old: Event =
+            serde_json::from_value(json!({"type":"job_finished","job_id":"j-1","error":null})).unwrap();
+        assert!(matches!(old, Event::JobFinished { result: None, .. }));
+        let done =
+            Event::JobFinished { job_id: "j-1".into(), error: None, result: Some(json!({"site":"blog"})) };
+        assert_eq!(serde_json::to_value(&done).unwrap()["result"]["site"], "blog");
+        let changed = Event::TunnelChanged { tunnel: Box::new(crate::types::tests::sample_tunnel()) };
+        assert_eq!(changed.topic(), Topic::Tunnels);
     }
 }

@@ -20,7 +20,7 @@ async fn outcome(rx: &mut broadcast::Receiver<Event>, id: &str) -> (Vec<String>,
         loop {
             match rx.recv().await.unwrap() {
                 Event::JobProgress { job_id, line } if job_id == id => lines.push(line),
-                Event::JobFinished { job_id, error } if job_id == id => return error,
+                Event::JobFinished { job_id, error, .. } if job_id == id => return error,
                 _ => {}
             }
         }
