@@ -92,6 +92,29 @@ impl Paths {
         self.root.join(format!("nginx/overrides/{name}.conf"))
     }
 
+    /// User-owned nginx files included only in a site's tunnel listener (tunnels spec §6).
+    pub fn tunnel_overrides_dir(&self) -> PathBuf {
+        self.root.join("nginx/tunnel-overrides")
+    }
+
+    pub fn tunnel_override(&self, site: &str) -> PathBuf {
+        self.tunnel_overrides_dir().join(format!("{site}.conf"))
+    }
+
+    /// The generated cloudflared configs, one per tunnel.
+    pub fn tunnels_dir(&self) -> PathBuf {
+        self.root.join("tunnels")
+    }
+
+    pub fn tunnel_yml(&self, site: &str) -> PathBuf {
+        self.tunnels_dir().join(format!("{site}.yml"))
+    }
+
+    /// Named tunnels' ids and the DNS records left behind.
+    pub fn tunnels_state(&self) -> PathBuf {
+        self.root.join("state/tunnels.json")
+    }
+
     /// Generated nginx blocks for services that have a web console (`minio.<tld>`).
     pub fn nginx_services_dir(&self) -> PathBuf {
         self.root.join("nginx/services")

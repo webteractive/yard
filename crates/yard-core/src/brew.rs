@@ -59,6 +59,11 @@ impl Brew {
         self.prefix.join("opt/nginx/bin/nginx")
     }
 
+    /// brew's cloudflared, which runs every tunnel (tunnels spec §7).
+    pub fn cloudflared_bin(&self) -> PathBuf {
+        self.prefix.join("opt/cloudflared/bin/cloudflared")
+    }
+
     pub fn dnsmasq_bin(&self) -> PathBuf {
         self.prefix.join("opt/dnsmasq/sbin/dnsmasq")
     }
