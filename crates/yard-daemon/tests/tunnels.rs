@@ -3,10 +3,12 @@
 
 mod support;
 
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
+use support::daemon::{Client, Daemon, prepared};
 use support::{Fixture, fast, free_port, spawn_helper};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
@@ -19,6 +21,14 @@ use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
 use yard_proto::{PortMode, UnitInfo, UnitState};
+
+/// A `range` line for `ports.toml`: ten ports of its own, below macOS's ephemeral range, so
+/// parallel tests never hand two tunnels the same `auto` port.
+fn auto_range() -> String {
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let start = 41000 + (std::process::id() % 50) as u16 * 100 + NEXT.fetch_add(1, Ordering::Relaxed) * 10;
+    format!("range = \"{start}-{}\"\n", start + 9)
+}
 
 struct Env {
     fx: Fixture,
@@ -35,13 +45,9 @@ async fn env() -> Env {
     let cloudflared = fx.add_cloudflared();
     let resolver = tempfile::tempdir().unwrap();
     let helper = spawn_helper(&fx, resolver.path(), &[]).await;
-    // Each env allocates `auto` ports from its own ten, below macOS's ephemeral range, so
-    // parallel tests never hand two tunnels the same one.
-    static NEXT: AtomicU16 = AtomicU16::new(0);
-    let start = 41000 + (std::process::id() % 50) as u16 * 100 + NEXT.fetch_add(1, Ordering::Relaxed) * 10;
     let ports = format!(
-        "range = \"{start}-{}\"\n[ports]\nnginx-http = {{ port = {}, mode = \"pinned\" }}\nnginx-https = {{ port = {}, mode = \"pinned\" }}\ndnsmasq = {{ port = {}, mode = \"pinned\" }}\n",
-        start + 9,
+        "{}[ports]\nnginx-http = {{ port = {}, mode = \"pinned\" }}\nnginx-https = {{ port = {}, mode = \"pinned\" }}\ndnsmasq = {{ port = {}, mode = \"pinned\" }}\n",
+        auto_range(),
         free_port(),
         free_port(),
         free_port()
@@ -248,4 +254,77 @@ async fn a_named_tunnel_with_facts_runs() {
         "{calls}"
     );
     e.sup.shutdown().await;
+}
+
+/// A daemon with the fake cloudflared, `blog` linked and a quick tunnel on it from the start
+/// (Task 9 moves this to `tunnels.add`).
+async fn quick_daemon() -> Daemon {
+    let d = prepared("").await;
+    d.fx.add_cloudflared();
+    let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    std::fs::write(d.fx.paths.ports_toml(), format!("{}{ports}", auto_range())).unwrap();
+    d.project("blog");
+    d.opts.tunnels.add_quick("blog");
+    d.start().await
+}
+
+/// `blog`'s entry in `tunnels.list` once `done` holds for it.
+async fn tunnel_where(c: &mut Client, done: impl Fn(&Value) -> bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let list = c.call("tunnels.list", Value::Null).await.unwrap();
+        let blog = list.as_array().unwrap().iter().find(|t| t["site"] == "blog").cloned();
+        if let Some(t) = blog.clone().filter(|t| done(t)) {
+            return t;
+        }
+        assert!(Instant::now() < deadline, "blog's tunnel: timed out; last seen {blog:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn unit_pid(c: &mut Client, name: &str) -> Value {
+    let units = c.call("status", Value::Null).await.unwrap()["units"].clone();
+    units.as_array().unwrap().iter().find(|u| u["name"] == name).map(|u| u["pid"].clone()).unwrap_or_default()
+}
+
+#[tokio::test]
+async fn tunnels_list_shows_a_quick_url_once_known() {
+    let d = quick_daemon().await;
+    let mut c = d.client().await;
+    let t = tunnel_where(&mut c, |t| t["state"] == "ready" && !t["url"].is_null()).await;
+    let origin = t["origin_port"].as_u64().unwrap();
+    assert_eq!(t["url"], format!("https://quick-{origin}.trycloudflare.com"));
+    assert_eq!(t["kind"], "quick");
+    assert_eq!(t["unit"], "tunnel-blog");
+    assert_eq!(t["provider"], "cloudflared");
+    assert!(t["host"].is_null() && t["tunnel"].is_null(), "{t}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn quick_tunnel_survives_losing_the_edge() {
+    let d = quick_daemon().await;
+    let cloudflared = Brew::new(d.fx.brew.path()).cloudflared_bin().parent().unwrap().to_path_buf();
+    let mut c = d.client().await;
+    let ready = tunnel_where(&mut c, |t| t["state"] == "ready" && !t["url"].is_null()).await;
+    let pid = unit_pid(&mut c, "tunnel-blog").await;
+    let mut events = d.client().await;
+    events.call("subscribe", json!({"topics": ["tunnels"]})).await.unwrap();
+
+    std::fs::write(cloudflared.join("not-ready"), "").unwrap();
+    let changed = events
+        .event_where(Duration::from_secs(2), |e| {
+            e["type"] == "tunnel_changed" && e["tunnel"]["state"] == "connecting"
+        })
+        .await;
+    assert!(changed.is_some(), "a tunnel_changed for connecting");
+    tunnel_where(&mut c, |t| t["state"] == "connecting").await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(unit_pid(&mut c, "tunnel-blog").await, pid, "the unit is not restarted");
+
+    std::fs::remove_file(cloudflared.join("not-ready")).unwrap();
+    let again = tunnel_where(&mut c, |t| t["state"] == "ready").await;
+    assert_eq!(again["url"], ready["url"]);
+    assert_eq!(unit_pid(&mut c, "tunnel-blog").await, pid);
+    d.shutdown().await.unwrap();
 }

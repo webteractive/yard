@@ -51,8 +51,14 @@ pub struct DaemonOptions {
     pub app_dirs: Vec<PathBuf>,
     /// How the idle loop samples service instances and keeps time (M4e).
     pub sleep: SleepConfig,
-    /// The user's home, where emailulator's installer puts its binary (`.local/bin`).
+    /// The user's home, where emailulator's installer puts its binary (`.local/bin`), and the
+    /// `HOME` cloudflared runs with.
     pub home: PathBuf,
+    /// How often each running tunnel's metrics server is asked whether it is ready (M5).
+    pub tunnel_poll: Duration,
+    /// The quick tunnels yardd starts with: none in production, since they end with yardd;
+    /// a test marks one here before its first reconcile.
+    pub tunnels: Arc<tunnel::Runtime>,
 }
 
 impl DaemonOptions {
@@ -73,6 +79,8 @@ impl DaemonOptions {
             app_dirs: app_dirs(),
             sleep: SleepConfig::production(),
             home: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+            tunnel_poll: Duration::from_secs(2),
+            tunnels: Arc::default(),
         }
     }
 }
@@ -136,7 +144,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
     let sleeper = Arc::new(Sleeper::new(opts.sleep.default_after));
-    let tunnels = Arc::new(tunnel::Runtime::default());
+    let tunnels = opts.tunnels.clone();
     let reconciler = Arc::new(
         Reconciler::new(
             opts.paths.clone(),
@@ -201,6 +209,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let scan = portscan::spawn(ctx.clone(), opts.port_scan_interval);
     let idle = sleep::spawn(ctx.clone(), opts.sleep);
     let wakes = tokio::spawn(wake::serve(wake_listener, ctx.clone()));
+    let monitor = tunnel::monitor::spawn(ctx.clone(), opts.tunnel_poll);
 
     rpc::server::serve(listener, ctx.clone(), shutdown).await;
 
@@ -208,6 +217,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     scan.abort();
     idle.abort();
     wakes.abort();
+    monitor.abort();
     let _ = std::fs::remove_file(&wake_socket);
     ctx.supervisor().shutdown().await;
     // The port goes back to the system: the next yardd asks the helper again.

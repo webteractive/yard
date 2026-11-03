@@ -4,6 +4,7 @@
 //! `state/tunnels.json`.
 
 pub mod cloudflared;
+pub mod monitor;
 
 use crate::describe;
 use crate::probe::Proto;
@@ -21,7 +22,10 @@ use yard_core::services::render::UnitCommand;
 use yard_core::tunnel::cloudflared::{Origin, named_yml, quick_yml};
 use yard_core::tunnel::facts::{Facts, NamedFacts};
 use yard_core::tunnel::{UNIT_PREFIX, origin_entry, unit};
-use yard_proto::{ErrorCode, PortMode, SiteInfo, TunnelKind, YardError};
+use yard_proto::{
+    ErrorCode, PortMode, SiteInfo, TunnelInfo, TunnelKind, TunnelProvider, TunnelRef, TunnelState, UnitInfo,
+    UnitState, YardError,
+};
 
 /// How long a tunnel may take to reach Cloudflare before its start counts as failed (P2).
 pub const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -85,6 +89,42 @@ pub struct Planned {
 impl Planned {
     fn origin(&self) -> Origin {
         Origin { origin_port: self.origin_port, metrics_port: self.metrics_port }
+    }
+}
+
+/// How a tunnel looks from outside: `ready` once its unit runs and its metrics server says it
+/// reached the edge, `connecting` while it runs or starts otherwise, and the unit's state after
+/// that (no unit is `stopped`). A quick tunnel has a URL once its hostname is known.
+pub fn info(site: &str, planned: &Planned, unit_info: Option<&UnitInfo>, live: Option<&Live>) -> TunnelInfo {
+    let ready = live.is_some_and(|l| l.ready);
+    let state = match unit_info.map(|u| &u.state) {
+        Some(UnitState::Running) if ready => TunnelState::Ready,
+        Some(UnitState::Running | UnitState::Starting) => TunnelState::Connecting,
+        Some(UnitState::Backoff { .. }) => TunnelState::Backoff,
+        Some(UnitState::Failed { .. }) => TunnelState::Failed,
+        Some(UnitState::Stopped) | None => TunnelState::Stopped,
+    };
+    let url = match planned.kind {
+        TunnelKind::Named => planned.host.as_ref(),
+        _ => live.and_then(|l| l.hostname.as_ref()),
+    }
+    .map(|host| format!("https://{host}"));
+    TunnelInfo {
+        site: site.to_string(),
+        provider: TunnelProvider::Cloudflared,
+        kind: planned.kind,
+        url,
+        host: planned.host.clone(),
+        tunnel: planned.facts.as_ref().map(|f| TunnelRef {
+            name: f.name.clone(),
+            id: f.id.clone(),
+            created_by_yard: f.created_by_yard,
+        }),
+        state,
+        unit: unit(site),
+        origin_port: planned.origin_port,
+        metrics_port: planned.metrics_port,
+        last_error: unit_info.and_then(|u| u.last_error.clone()),
     }
 }
 

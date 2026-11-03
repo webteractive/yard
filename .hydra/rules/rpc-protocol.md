@@ -47,6 +47,13 @@ triggers:
   `kind`, and each has an `Other` fallback the daemon never sends: `#[serde(other)]` on an
   internally tagged enum reads an unknown kind with fields too. An `Other` need is not
   installable, and `ServiceManager::Other` shows as `-`.
+- Protocol 2.10 (M5, tunnels): `job_finished` carries an optional `result` (a job's answer, sent
+  only on success); `tunnels.list` returns every tunnel the last reconcile ran as `TunnelInfo`,
+  sorted by site, and `tunnel_changed` (topic `tunnels`) goes out when a tunnel's state, url or
+  last error changes. `tunnel::monitor` asks each running tunnel's metrics server `/ready` (and
+  a quick one's `/quicktunnel` until it has a hostname) every `DaemonOptions.tunnel_poll` (2 s);
+  losing the edge is `connecting`, never a restart. `TunnelProvider`, `TunnelKind` and
+  `TunnelState` each have an `Other` fallback the daemon never sends.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), for nginx's `auth_request` and the shims.
   It answers `204`, except `403` with one line per instance (`redis: port 6380 is held by …`)

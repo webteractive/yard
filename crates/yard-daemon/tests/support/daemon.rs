@@ -63,6 +63,8 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         },
         // Never this machine's home: its emailulator and LaunchAgent are not a test's.
         home,
+        tunnel_poll: Duration::from_millis(100),
+        tunnels: Default::default(),
     }
 }
 
