@@ -87,12 +87,72 @@ http {{
     )
 }
 
+/// The loopback listener a site's tunnel connects to (tunnels spec §9): its registry port,
+/// and the header carrying the visitor's address, which only loopback may set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunnelListener {
+    pub port: u16,
+    pub real_ip_header: &'static str,
+}
+
+/// Which `X-Forwarded-*` headers a reverse proxy sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forwarded {
+    /// A browser on this Mac: the scheme and the port it used, and its address list.
+    Local,
+    /// A tunnel: the visitor reached Cloudflare over https, and `$remote_addr` is the visitor
+    /// (from the real-IP header). A client's own `X-Forwarded-For` arrives with the visitor
+    /// appended, so it is not passed on.
+    Tunnel,
+}
+
 /// A site's server blocks. With `wake` (a PHP site whose `.yard` lists services), each PHP
-/// request first asks yardd to wake the site's sleeping services (M4e spec §5.1).
-pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
+/// request first asks yardd to wake the site's sleeping services (M4e spec §5.1). With
+/// `tunnel`, a loopback-only block for the site's tunnel follows them.
+pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool, tunnel: Option<&TunnelListener>) -> String {
     let override_file = ctx.paths.nginx_override(&site.name);
+    let tls = site.secure.then(|| (ctx.paths.cert(&site.name), ctx.paths.cert_key(&site.name)));
     let host = &site.host;
-    let body = match &site.kind {
+    let body = site_body(ctx, site, wake, false);
+    let mut conf = server_blocks(ctx, &format!("{host} *.{host}"), &body, &override_file, tls);
+    if let Some(t) = tunnel {
+        conf.push_str(&tunnel_block(ctx, site, wake, t));
+    }
+    conf
+}
+
+/// The tunnel's server block. It answers any `Host` on its own port, which only cloudflared
+/// dials, so the default server and the site list are never reachable through it. It is
+/// plain http whether or not the site is secured: TLS ends at Cloudflare's edge.
+fn tunnel_block(ctx: &RenderCtx, site: &SiteInfo, wake: bool, t: &TunnelListener) -> String {
+    let body = site_body(ctx, site, wake, true);
+    format!(
+        "
+# Tunnel listener: only cloudflared ({unit}) connects here.
+server {{
+    listen 127.0.0.1:{port};
+    server_name _;
+    client_max_body_size 1G;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header {header};
+
+{body}
+    include {over};
+    include {tunnel_over};
+}}
+",
+        unit = crate::tunnel::unit(&site.name),
+        port = t.port,
+        header = t.real_ip_header,
+        over = q(&ctx.paths.nginx_override(&site.name)),
+        tunnel_over = q(&ctx.paths.tunnel_override(&site.name)),
+    )
+}
+
+/// What a site's server block serves. `tunnelled` tells PHP the visitor's connection is
+/// https on 443, and makes a proxy send the tunnel's `X-Forwarded-*`.
+fn site_body(ctx: &RenderCtx, site: &SiteInfo, wake: bool, tunnelled: bool) -> String {
+    match &site.kind {
         // Every request gets the page naming what the `.yard` needs, with a 503.
         SiteKind::Php { .. } if site.needs_setup() => format!(
             "    root {root};
@@ -133,7 +193,7 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
         fastcgi_pass {pass};
         fastcgi_index index.php;
         include {params};
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+{https}        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
         fastcgi_param PATH_INFO $fastcgi_path_info;
         fastcgi_read_timeout 3600;
     }}
@@ -145,12 +205,18 @@ pub fn nginx_site(ctx: &RenderCtx, site: &SiteInfo, wake: bool) -> String {
                 root = nginx_str(docroot),
                 pass = nginx_str(&format!("unix:{}", socket.display())),
                 params = q(&ctx.brew.nginx_fastcgi_params()),
+                https = if tunnelled {
+                    "        fastcgi_param HTTPS on;\n        fastcgi_param SERVER_PORT 443;\n"
+                } else {
+                    ""
+                },
             )
         }
-        SiteKind::Proxy { target } => proxy_location(target, "$host", ""),
-    };
-    let tls = site.secure.then(|| (ctx.paths.cert(&site.name), ctx.paths.cert_key(&site.name)));
-    server_blocks(ctx, &format!("{host} *.{host}"), &body, &override_file, tls)
+        SiteKind::Proxy { target } => {
+            let forwarded = if tunnelled { Forwarded::Tunnel } else { Forwarded::Local };
+            proxy_location(target, "$host", "", forwarded)
+        }
+    }
 }
 
 /// The lines a PHP location starts with to ask before PHP runs ([`wake_location`]). yardd's
@@ -192,10 +258,15 @@ pub fn wake_location(wake_socket: &Path, site: &str) -> String {
     )
 }
 
-/// The `location /` of a reverse proxy to `target`, which sends `host` as `Host` and keeps the
-/// port the browser used in `X-Forwarded-Host` (`$http_host`; `$host` would drop it).
-/// `extra` is more lines for the block, each ending in a newline.
-fn proxy_location(target: &str, host: &str, extra: &str) -> String {
+/// The `location /` of a reverse proxy to `target`, which sends `host` as `Host`. Locally it
+/// keeps the port the browser used in `X-Forwarded-Host` (`$http_host`; `$host` would drop
+/// it); through a tunnel the public host has no port. `extra` is more lines for the block,
+/// each ending in a newline.
+fn proxy_location(target: &str, host: &str, extra: &str, forwarded: Forwarded) -> String {
+    let (xff, proto, xfh) = match forwarded {
+        Forwarded::Local => ("$proxy_add_x_forwarded_for", "$scheme", "$http_host"),
+        Forwarded::Tunnel => ("$remote_addr", "https", "$host"),
+    };
     format!(
         "    location / {{
         proxy_pass {target};
@@ -203,9 +274,9 @@ fn proxy_location(target: &str, host: &str, extra: &str) -> String {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host {host};
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-For {xff};
+        proxy_set_header X-Forwarded-Proto {proto};
+        proxy_set_header X-Forwarded-Host {xfh};
         proxy_read_timeout 3600;
 {extra}    }}
 ",
@@ -274,7 +345,7 @@ server {{
 /// instance's `overrides.conf`.
 pub fn service_site(ctx: &RenderCtx, name: &str, upstream_port: u16, secure: bool) -> String {
     let upstream = format!("127.0.0.1:{upstream_port}");
-    let body = proxy_location(&format!("http://{upstream}"), &upstream, "");
+    let body = proxy_location(&format!("http://{upstream}"), &upstream, "", Forwarded::Local);
     let certs = ctx.paths.services_certs_dir();
     let tls = secure.then(|| (certs.join(format!("{name}.pem")), certs.join(format!("{name}.key"))));
     server_blocks(ctx, &format!("{name}.{}", ctx.tld), &body, &ctx.paths.service_overrides(name), tls)
@@ -303,7 +374,7 @@ pub fn mail_host(ctx: &RenderCtx, m: &MailHost) -> String {
     // The upstream is loopback and its certificate emailulator's own.
     let verify = if m.upstream_tls { "        proxy_ssl_verify off;\n" } else { "" };
     let extra = format!("        proxy_buffering off;\n        client_max_body_size 25m;\n{verify}");
-    let body = proxy_location(&format!("{scheme}://{upstream}"), &upstream, &extra);
+    let body = proxy_location(&format!("{scheme}://{upstream}"), &upstream, &extra, Forwarded::Local);
     let certs = ctx.paths.services_certs_dir();
     let tls = m.secure.then(|| (certs.join("emailulator.pem"), certs.join("emailulator.key")));
     let server_name = format!("{host} *.{host}", host = m.host);

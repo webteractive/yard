@@ -472,7 +472,7 @@ impl Reconciler {
             let wake = matches!(site.kind, SiteKind::Php { .. })
                 && !site.needs_setup()
                 && instances_for(&services_cfg, &projects, &site.name).iter().any(|i| may_sleep(i));
-            rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site, wake));
+            rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site, wake, None));
             if site.needs_setup() {
                 rendered.insert(paths.nginx_setup_page(&site.name), setup_page(&ctx, site));
             }

@@ -147,6 +147,55 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn cloudflared_listener() -> nginx::TunnelListener {
+        nginx::TunnelListener { port: 33011, real_ip_header: "CF-Connecting-IP" }
+    }
+
+    #[test]
+    fn tunnel_listener_serves_only_its_site() {
+        let (p, b) = ctx_parts();
+        let site = php_site("blog", "/code/blog");
+        let conf = nginx::nginx_site(&ctx(&p, &b), &site, false, Some(&cloudflared_listener()));
+        let block = conf.split("# Tunnel listener").nth(1).expect("a tunnel block");
+        assert!(block.contains("listen 127.0.0.1:33011;"), "{block}");
+        assert!(!block.contains("[::1]") && !block.contains("default_server"), "{block}");
+        assert!(block.contains("server_name _;"), "{block}");
+        assert!(
+            block.contains("set_real_ip_from 127.0.0.1;\n    real_ip_header CF-Connecting-IP;"),
+            "{block}"
+        );
+        assert!(
+            block.contains("fastcgi_param HTTPS on;") && block.contains("fastcgi_param SERVER_PORT 443;"),
+            "{block}"
+        );
+        let over = block.find("nginx/overrides/blog.conf").unwrap();
+        let tunnel_over = block.find("nginx/tunnel-overrides/blog.conf").unwrap();
+        assert!(over < tunnel_over);
+        // The site's own blocks are unchanged.
+        assert!(conf.starts_with(&nginx::nginx_site(&ctx(&p, &b), &site, false, None)));
+    }
+
+    #[test]
+    fn tunnel_proxy_trusts_only_the_visitor_address() {
+        let (p, b) = ctx_parts();
+        let conf = nginx::nginx_site(&ctx(&p, &b), &proxy_site(), false, Some(&cloudflared_listener()));
+        let block = conf.split("# Tunnel listener").nth(1).unwrap();
+        assert!(block.contains("proxy_set_header X-Forwarded-For $remote_addr;"), "{block}");
+        assert!(block.contains("proxy_set_header X-Forwarded-Proto https;"), "{block}");
+        assert!(block.contains("proxy_set_header X-Forwarded-Host $host;"), "{block}");
+        assert!(!block.contains("$proxy_add_x_forwarded_for"), "{block}");
+    }
+
+    #[test]
+    fn a_secured_site_tunnel_block_has_no_redirect() {
+        let (p, b) = ctx_parts();
+        let site = secure(php_site("blog", "/code/blog"));
+        let conf = nginx::nginx_site(&ctx(&p, &b), &site, false, Some(&cloudflared_listener()));
+        let block = conf.split("# Tunnel listener").nth(1).unwrap();
+        assert!(!block.contains("return 301") && !block.contains("ssl_certificate"), "{block}");
+        assert!(conf.contains("return 301"), "the site's own http block still redirects");
+    }
+
     #[test]
     fn nginx_main_trial() {
         let (p, b) = ctx_parts();
@@ -156,7 +205,12 @@ mod tests {
     #[test]
     fn nginx_site_php() {
         let (p, b) = ctx_parts();
-        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &php_site("blog", "/Users/me/Herd/blog"), false));
+        assert_snapshot!(nginx::nginx_site(
+            &ctx(&p, &b),
+            &php_site("blog", "/Users/me/Herd/blog"),
+            false,
+            None
+        ));
     }
 
     /// A PHP site whose `.yard` lists services asks yardd to wake them before PHP runs, and
@@ -164,7 +218,12 @@ mod tests {
     #[test]
     fn nginx_site_php_wake() {
         let (p, b) = ctx_parts();
-        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &php_site("blog", "/Users/me/Herd/blog"), true));
+        assert_snapshot!(nginx::nginx_site(
+            &ctx(&p, &b),
+            &php_site("blog", "/Users/me/Herd/blog"),
+            true,
+            None
+        ));
     }
 
     #[test]
@@ -193,7 +252,7 @@ mod tests {
     #[test]
     fn nginx_site_proxy() {
         let (p, b) = ctx_parts();
-        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &proxy_site(), false));
+        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &proxy_site(), false, None));
     }
 
     fn secure(mut site: SiteInfo) -> SiteInfo {
@@ -208,7 +267,8 @@ mod tests {
         assert_snapshot!(nginx::nginx_site(
             &ctx(&p, &b),
             &secure(php_site("blog", "/Users/me/Herd/blog")),
-            false
+            false,
+            None
         ));
     }
 
@@ -230,7 +290,8 @@ mod tests {
         assert_snapshot!(nginx::nginx_site(
             &ctx(&p, &b),
             &needs_php("eepower", "/Users/me/Yard/eepower"),
-            false
+            false,
+            None
         ));
     }
 
@@ -238,7 +299,7 @@ mod tests {
     fn nginx_site_setup_secure() {
         let (p, b) = ctx_parts();
         let site = secure(needs_php("eepower", "/Users/me/Yard/eepower"));
-        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &site, false));
+        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &site, false, None));
     }
 
     #[test]
@@ -308,7 +369,7 @@ mod tests {
     #[test]
     fn nginx_site_proxy_secure() {
         let (p, b) = ctx_parts();
-        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &secure(proxy_site()), false));
+        assert_snapshot!(nginx::nginx_site(&ctx(&p, &b), &secure(proxy_site()), false, None));
     }
 
     #[test]
@@ -392,7 +453,7 @@ mod tests {
             assert!(conf.lines().any(|l| l.trim() == line), "{line}\n{conf}");
         }
         assert!(!conf.contains("$host;"), "{conf}");
-        let site = nginx::nginx_site(&ctx(&p, &b), &proxy_site(), false);
+        let site = nginx::nginx_site(&ctx(&p, &b), &proxy_site(), false, None);
         assert!(site.lines().any(|l| l.trim() == "proxy_set_header X-Forwarded-Host $http_host;"), "{site}");
     }
 
@@ -407,7 +468,7 @@ mod tests {
     fn nginx_site_secure_on_443_redirects_without_a_port() {
         let (p, b) = ctx_parts();
         let c = RenderCtx { http_port: 80, https_port: 443, ..ctx(&p, &b) };
-        let conf = nginx::nginx_site(&c, &secure(proxy_site()), false);
+        let conf = nginx::nginx_site(&c, &secure(proxy_site()), false, None);
         assert!(conf.lines().any(|l| l.trim() == "return 301 https://$host$request_uri;"), "{conf}");
         assert!(conf.lines().any(|l| l.trim() == "listen 127.0.0.1:443 ssl;"), "{conf}");
         assert!(conf.lines().any(|l| l.trim() == "listen 127.0.0.1:80;"), "{conf}");
@@ -493,8 +554,8 @@ mod tests {
         let c = ctx(&p, &b);
         let outputs = [
             nginx::nginx_main(&c),
-            nginx::nginx_site(&c, &php_site("my-app", "/Users/me/Herd/my app"), false),
-            nginx::nginx_site(&c, &secure(php_site("my-app", "/Users/me/Herd/my app")), false),
+            nginx::nginx_site(&c, &php_site("my-app", "/Users/me/Herd/my app"), false, None),
+            nginx::nginx_site(&c, &secure(php_site("my-app", "/Users/me/Herd/my app")), false, None),
             nginx::service_site(&c, "minio", 9001, false),
             nginx::service_site(&c, "minio", 9001, true),
             php::fpm_conf(&c, v("8.4")),
@@ -524,7 +585,7 @@ mod tests {
         let c = ctx(&p, &b);
         for out in [
             nginx::nginx_main(&c),
-            nginx::nginx_site(&c, &proxy_site(), false),
+            nginx::nginx_site(&c, &proxy_site(), false, None),
             dnsmasq::dnsmasq_conf(&c, 53535),
         ] {
             assert!(out.starts_with("# Generated by Yard — edit "), "{out}");
@@ -542,7 +603,7 @@ mod tests {
         let site = proxy_site();
         for (file, out) in [
             (p.nginx_conf(), nginx::nginx_main(&c)),
-            (p.nginx_site(&site.name), nginx::nginx_site(&c, &site, false)),
+            (p.nginx_site(&site.name), nginx::nginx_site(&c, &site, false, None)),
             (p.nginx_default_index(), nginx::default_index(&c, &[])),
             (p.nginx_service("minio"), nginx::service_site(&c, "minio", 9001, true)),
             (p.nginx_service("emailulator"), nginx::mail_host(&c, &mail(true, false))),
