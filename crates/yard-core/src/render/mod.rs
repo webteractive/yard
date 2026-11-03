@@ -191,6 +191,26 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_php_trusts_only_the_visitor_address() {
+        // A visitor's own X-Forwarded-* would reach PHP, where an app trusting every proxy
+        // (Laravel's trustProxies('*')) would build links on a forged host.
+        let (p, b) = ctx_parts();
+        let site = php_site("blog", "/p/blog");
+        let conf = nginx::nginx_site(&ctx(&p, &b), &site, false, Some(&cloudflared_listener()));
+        let block = conf.split("# Tunnel listener").nth(1).unwrap();
+        for param in [
+            "fastcgi_param HTTP_X_FORWARDED_FOR $remote_addr;",
+            "fastcgi_param HTTP_X_FORWARDED_PROTO https;",
+            "fastcgi_param HTTP_X_FORWARDED_HOST $host;",
+            "fastcgi_param HTTP_X_FORWARDED_PORT 443;",
+        ] {
+            assert!(block.contains(param), "{param}\n{block}");
+        }
+        let local = conf.split("# Tunnel listener").next().unwrap();
+        assert!(!local.contains("HTTP_X_FORWARDED"), "{local}");
+    }
+
+    #[test]
     fn a_secured_site_tunnel_block_has_no_redirect() {
         let (p, b) = ctx_parts();
         let site = secure(php_site("blog", "/code/blog"));

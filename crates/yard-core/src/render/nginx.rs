@@ -205,8 +205,14 @@ fn site_body(ctx: &RenderCtx, site: &SiteInfo, wake: bool, tunnelled: bool) -> S
                 root = nginx_str(docroot),
                 pass = nginx_str(&format!("unix:{}", socket.display())),
                 params = q(&ctx.brew.nginx_fastcgi_params()),
+                // Through a tunnel, a visitor's own X-Forwarded-* are replaced, as the proxy
+                // branch does (P4): an app trusting every proxy must not build URLs on them.
                 https = if tunnelled {
-                    "        fastcgi_param HTTPS on;\n        fastcgi_param SERVER_PORT 443;\n"
+                    "        fastcgi_param HTTPS on;\n        fastcgi_param SERVER_PORT 443;\n        \
+                     fastcgi_param HTTP_X_FORWARDED_FOR $remote_addr;\n        \
+                     fastcgi_param HTTP_X_FORWARDED_PROTO https;\n        \
+                     fastcgi_param HTTP_X_FORWARDED_HOST $host;\n        \
+                     fastcgi_param HTTP_X_FORWARDED_PORT 443;\n"
                 } else {
                     ""
                 },

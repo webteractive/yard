@@ -205,6 +205,9 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     for (instance, pid) in services::stop_orphans(&opts.paths, &ctx.brew).await {
         tracing::warn!("stopped {instance} (pid {pid}), which an earlier yardd left running");
     }
+    for (unit, pid) in crate::tunnel::stop_orphans(&opts.paths, &ctx.brew).await {
+        tracing::warn!("stopped {unit} (pid {pid}), which an earlier yardd left running");
+    }
     // Every instance starts awake (M4e spec §6.4), so a list a killed yardd left is stale.
     let sleeping = opts.paths.sleeping_file();
     if let Err(e) = yard_core::generated::write_atomic(&sleeping, "") {

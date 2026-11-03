@@ -1722,7 +1722,7 @@ mod tunnels {
         let checks = checks(&mut c).await;
         let check = find(&checks, "tunnel-leftover:yard-old").expect("a leftover check");
         assert_eq!(status(&checks, "tunnel-leftover:yard-old").as_deref(), Some("warn"));
-        assert_eq!(check.hint.as_deref(), Some("cloudflared tunnel delete id-old"));
+        assert_eq!(check.hint.as_deref(), Some("yard untunnel old"));
         d.shutdown().await.unwrap();
     }
 }

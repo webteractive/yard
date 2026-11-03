@@ -561,6 +561,7 @@ server {
 
     # … the site's body, as for its http block, with for PHP:
     #   fastcgi_param HTTPS on;  fastcgi_param SERVER_PORT 443;
+    #   and HTTP_X_FORWARDED_FOR $remote_addr, _PROTO https, _HOST $host, _PORT 443
     # and for a proxy:
     #   X-Forwarded-Proto https, X-Forwarded-Host $host, X-Forwarded-For $remote_addr
 
@@ -576,7 +577,9 @@ server {
 - `HTTPS on` for PHP is true: the visitor's connection is HTTPS at the edge.
 - The proxy branch sends `X-Forwarded-For $remote_addr` (the visitor, after
   `real_ip_header CF-Connecting-IP`), `X-Forwarded-Proto https` and `X-Forwarded-Host $host`
-  (P4), not `$proxy_add_x_forwarded_for`, which would pass on a list a visitor forged.
+  (P4), not `$proxy_add_x_forwarded_for`, which would pass on a list a visitor forged. The PHP
+  branch sets the same four as `HTTP_X_FORWARDED_*` fastcgi params, which keeps a visitor's own
+  headers from PHP, so an app that trusts every proxy builds its URLs on the real host.
 - In the privileged profile nginx still binds this port itself, as the user; only 80/443
   come from the helper.
 
@@ -726,7 +729,7 @@ records a tunnel or a left DNS record:
 | `tunnel-login` | each domain in `yard.toml` has its certificate (stat only) | warn per missing one: `yard tunnels domain add <domain>` (running needs no login; changing does) |
 | `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error when failed or backing off (`yard restart tunnel-<site>`); warn while `connecting` (`tail -n 50 <root>/logs/tunnel-<site>.log`, P9) |
 | `tunnel-credentials:<site>` | credentials file exists (stat only) | fail: `TUNNEL_CREDENTIALS_MISSING` hint |
-| `tunnel-leftover:<name>` | — | warn per tunnel Yard made whose site has no `[tunnel]` (its delete failed): `cloudflared tunnel delete <id>` |
+| `tunnel-leftover:<name>` | — | warn per tunnel Yard made whose site has no `[tunnel]` (its delete failed): `yard untunnel <site>`, which retries the delete from the facts |
 | `tunnel-dns:<host>` | — | warn per `dns_left` record still resolving (or not answerable): "the DNS record <host> → <target> is still there", hint "delete the CNAME <host> in the Cloudflare dashboard"; one that no longer resolves is dropped from `state/tunnels.json` by yardd's doctor (the CLI's doctor while yardd is down never writes it) |
 | `tunnel-hot:<site>` | — | warn when the docroot has `public/hot` |
 | `generated` (existing) | covers `tunnels/<site>.yml` | as now |
@@ -754,7 +757,7 @@ that fails for lack of network leaves the entry in place.
 | Hand-edited `tunnels/<site>.yml` | write rule: kept and reported, or backed up when the render changes. |
 | nginx config rejected | the whole write set rolls back (`NGINX_CONFIG_INVALID`) and the tunnel is not added. |
 | yardd stops or crashes | tunnels drop with it; visitors get Cloudflare's error page; named tunnels return on start. |
-| Site or its `tunnel` table removed by hand in `sites.toml` | reconcile stops the unit and drops the nginx block, and warns that the Cloudflare tunnel and DNS record remain. Its facts stay in `state/tunnels.json`; doctor reports the leftover tunnel (hint `cloudflared tunnel delete <id>`) and its record, as in §8. |
+| Site or its `tunnel` table removed by hand in `sites.toml` | reconcile stops the unit and drops the nginx block, and warns that the Cloudflare tunnel and DNS record remain. Its facts stay in `state/tunnels.json`; doctor reports the leftover tunnel (hint `yard untunnel <site>`, which deletes it from its facts) and its record, as in §8. |
 | TLD or profile change | no effect on tunnels (§9). |
 | `brew upgrade cloudflared` | the running unit keeps the old binary until it restarts; nothing breaks. |
 

@@ -76,8 +76,9 @@ impl Manage<'_> {
     /// The tunnel named `name` in the account, if any.
     pub async fn find(&self, name: &str) -> Result<Option<Listed>, YardError> {
         let args = self.args(&["list", "--name", name, "-o", "json"]);
-        let (ok, lines) = self.job.capture(&self.program, &args, &self.env()).await?;
-        let text = lines.join("\n");
+        // stdout alone: cloudflared logs to stderr, with brackets of its own.
+        let (ok, output) = self.job.capture_stdout(&self.program, &args, &self.env()).await?;
+        let (text, lines) = (output.stdout.join("\n"), output.lines);
         let json = match (text.find('['), text.rfind(']')) {
             (Some(a), Some(b)) if ok && a < b => &text[a..=b],
             _ => {

@@ -757,9 +757,14 @@ fn fake_cloudflared_manages_tunnels() {
     assert_eq!(code, Some(0), "{out}");
     assert!(out.contains("Created tunnel yard-blog with id id-yard-blog"), "{out}");
     assert!(creds.exists());
-    let (code, out) = run(&["tunnel", "--origincert", cert, "list", "--name", "yard-blog", "-o", "json"]);
-    assert_eq!(code, Some(0));
-    let listed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    // stdout alone is the list: stderr has cloudflared's log line, brackets and all.
+    let out = std::process::Command::new(dir.join("cloudflared"))
+        .args(["tunnel", "--origincert", cert, "list", "--name", "yard-blog", "-o", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("No file [config.yml"));
+    let listed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(listed[0]["id"], "id-yard-blog");
     assert_eq!(run(&["tunnel", "route", "dns", "id-yard-blog", "blog.example.com"]).0, Some(0));
     let (code, out) = run(&["tunnel", "route", "dns", "id-yard-blog", "blog.example.com"]);

@@ -370,7 +370,7 @@ async fn tunnel_checks(input: &DoctorInput<'_>, yard: Option<&YardConfig>, sites
             checks.push(warn(
                 &format!("tunnel-leftover:{}", f.name),
                 format!("the Cloudflare tunnel {} that Yard made for {site} is no longer used", f.name),
-                format!("cloudflared tunnel delete {}", f.id),
+                format!("yard untunnel {site}"),
             ));
         }
     }

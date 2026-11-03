@@ -33,6 +33,32 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 const ORIGIN_PREFIX: &str = "nginx-tunnel-";
 
+/// How long an orphaned cloudflared gets after SIGTERM: its `grace-period` is 3 s (P3).
+const ORPHAN_GRACE: Duration = Duration::from_secs(5);
+
+/// Stops every cloudflared a killed yardd left running, from its `run/tunnel-<site>.pid`, before
+/// the first reconcile: one would keep a public URL up, and could serve another site once its
+/// origin port went to that site's tunnel. Returns each unit stopped and its pid.
+pub async fn stop_orphans(paths: &Paths, brew: &Brew) -> Vec<(String, u32)> {
+    let Ok(entries) = std::fs::read_dir(paths.run_dir()) else { return vec![] };
+    let program = brew.cloudflared_bin();
+    let mut stopped = vec![];
+    for entry in entries.flatten() {
+        let file = entry.path();
+        let Some(name) = file.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".pid"))
+        else {
+            continue;
+        };
+        if !name.starts_with(UNIT_PREFIX) {
+            continue;
+        }
+        if let Some(pid) = crate::orphans::stop(&file, &program, ORPHAN_GRACE, libc::SIGTERM).await {
+            stopped.push((name.to_string(), pid));
+        }
+    }
+    stopped
+}
+
 /// What a running tunnel last said about itself, from its metrics server.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Live {

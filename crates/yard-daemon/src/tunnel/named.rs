@@ -117,6 +117,8 @@ pub async fn add(
         job.line(format!("Routing {} to it…", a.host));
         cf.route(&a.site, &record.id, &a.host, &a.domain, a.overwrite_dns).await?;
         routed = true;
+        // The record is this tunnel's again, not one left for the user to delete.
+        facts.dns_left.retain(|l| l.host != a.host);
         if !record.routed.contains(&a.host) {
             record.routed.push(a.host.clone());
         }

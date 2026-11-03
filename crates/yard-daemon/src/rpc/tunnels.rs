@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use yard_core::Paths;
 use yard_core::config::{TomlFile, load_yard};
 use yard_core::tunnel::cloudflared::cert_path;
+use yard_core::tunnel::facts::Facts;
 use yard_core::tunnel::{domain_for, unit, valid_host};
 use yard_proto::methods::{TunnelAddParams, TunnelDomainAddParams, TunnelDomainParams, TunnelRemoveParams};
 use yard_proto::{
@@ -218,7 +219,10 @@ fn not_ready(paths: &Paths, site: &str, wait: Duration) -> YardError {
 
 /// `tunnels.remove`: a site with no tunnel is refused at once; a job ends the tunnel.
 pub async fn remove(ctx: &Context, p: TunnelRemoveParams) -> Result<JobStarted, YardError> {
-    if !has_tunnel(ctx, &p.site) {
+    // A Cloudflare tunnel whose delete failed, or whose remove stopped after its table went,
+    // is still in the facts: untunnel retries it.
+    let leftover = Facts::load(&ctx.paths.tunnels_state()).is_ok_and(|f| f.named.contains_key(&p.site));
+    if !leftover && !has_tunnel(ctx, &p.site) {
         return Err(YardError::new(ErrorCode::TunnelNotFound, format!("{} has no tunnel", p.site))
             .with_hint(format!("yard tunnel {}", p.site)));
     }

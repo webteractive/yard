@@ -66,7 +66,8 @@ triggers:
   (`TUNNEL_DNS_EXISTS` without `overwrite_dns`), writes `[sites.<site>.tunnel]` and records the
   facts; a failure deletes a tunnel the job made and leaves a routed host in `dns_left`, and a
   tunnel that is not ready in time keeps its config. `tunnels.remove` of one deletes it only
-  when Yard made it and `keep_tunnel` is not set, and `sites.unlink`/`unproxy` refuse a site
+  when Yard made it and `keep_tunnel` is not set (and also acts on a site with only a facts entry,
+  retrying a delete that failed), and `sites.unlink`/`unproxy` refuse a site
   with a named tunnel (`SITE_TUNNELLED`). `env.print` for a site ends with an `instance: "tunnel"`
   block, `APP_URL=<url>`, while the site's tunnel has a URL. `TunnelProvider`, `TunnelKind` and
   `TunnelState` each have an `Other` fallback the daemon never sends.

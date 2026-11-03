@@ -421,6 +421,40 @@ async fn quick_tunnels_end_with_yardd() {
 }
 
 #[tokio::test]
+async fn a_tunnel_a_killed_yardd_left_is_stopped_at_start() {
+    // A killed yardd's cloudflared, reparented to launchd, would keep a public URL up and, once
+    // its origin port went to another site's tunnel, serve that site.
+    let d = prepared("").await;
+    d.fx.add_cloudflared();
+    let port = free_port();
+    let cloudflared = Brew::new(d.fx.brew.path()).cloudflared_bin();
+    let yml = d.fx.root.path().join("orphan.yml");
+    std::fs::write(&yml, quick_yml(Origin { origin_port: free_port(), metrics_port: port })).unwrap();
+    let out = std::process::Command::new("/bin/sh")
+        .args(["-c", "\"$0\" tunnel --config \"$1\" >/dev/null 2>&1 & echo $!"])
+        .arg(&cloudflared)
+        .arg(&yml)
+        .output()
+        .unwrap();
+    let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    assert!(
+        support::wait_until(
+            || support::ppid(pid) == 1 && std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            Duration::from_secs(5),
+        )
+        .await
+    );
+    let pid_file = d.fx.paths.run_dir().join("tunnel-blog.pid");
+    std::fs::write(&pid_file, format!("{pid}\n")).unwrap();
+
+    let d = d.start().await;
+    // SAFETY: signal 0 only checks that the pid exists.
+    assert!(support::wait_until(|| unsafe { libc::kill(pid as i32, 0) } != 0, Duration::from_secs(5)).await);
+    assert!(!pid_file.exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn untunnel_without_a_tunnel_is_not_found() {
     let d = tunnel_daemon().await;
     let mut c = d.client().await;
@@ -773,6 +807,22 @@ async fn untunnel_deletes_and_leaves_the_record() {
 }
 
 #[tokio::test]
+async fn routing_a_left_host_again_forgets_it() {
+    let d = named_daemon().await;
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    assert_eq!(error, None);
+    let (_, error, _) = untunnel(&d, "blog").await;
+    assert_eq!(error, None);
+    assert_eq!(facts(&d).dns_left.len(), 1);
+    let params = json!({"site": "blog", "host": "blog.example.com", "overwrite_dns": true});
+    let (lines, error, _) = add_named(&d, params).await;
+    assert_eq!(error, None, "{lines:?}");
+    // The record is the live tunnel's again, so doctor must not say to delete it.
+    assert!(facts(&d).dns_left.is_empty(), "{:?}", facts(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_failed_delete_keeps_the_id() {
     let d = named_daemon().await;
     let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
@@ -786,6 +836,14 @@ async fn a_failed_delete_keeps_the_id() {
     assert_eq!(f.named["blog"].id, "id-yard-blog");
     assert!(f.named["blog"].routed.is_empty());
     assert_eq!(f.dns_left.len(), 1);
+    // The next untunnel retries the delete, though the [tunnel] table is gone.
+    std::fs::remove_file(cloudflared_dir(&d).join("delete-fails")).unwrap();
+    let (lines, error, removed) = untunnel(&d, "blog").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert_eq!(removed["deleted_tunnel"], true, "{removed}");
+    let f = facts(&d);
+    assert!(f.named.is_empty(), "{f:?}");
+    assert_eq!(f.dns_left.len(), 1, "{f:?}");
     d.shutdown().await.unwrap();
 }
 

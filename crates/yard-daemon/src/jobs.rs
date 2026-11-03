@@ -150,7 +150,7 @@ impl JobCtx {
         args: &[&str],
         env: &[(String, String)],
     ) -> Result<(), YardError> {
-        let (shown, ended, lines) = self.exec(program, args, env, true).await?;
+        let (shown, ended, Output { lines, .. }) = self.exec(program, args, env, true).await?;
         let Err(ended) = ended else { return Ok(()) };
         let tail: Vec<&String> = lines.iter().skip(lines.len().saturating_sub(TAIL)).collect();
         Err(YardError::new(ErrorCode::JobFailed, format!("{shown} exited with {ended}"))
@@ -165,18 +165,30 @@ impl JobCtx {
         args: &[&str],
         env: &[(String, String)],
     ) -> Result<(bool, Vec<String>), YardError> {
-        let (_, success, lines) = self.exec(program, args, env, false).await?;
+        let (_, success, Output { lines, .. }) = self.exec(program, args, env, false).await?;
         Ok((success.is_ok(), lines))
     }
 
-    /// The command as shown, `Err(how it ended)` unless it exited 0, and its output lines.
+    /// As [`capture`](Self::capture), with stdout's lines apart too, for output to parse that
+    /// stderr's log lines must not mix into.
+    pub async fn capture_stdout(
+        &self,
+        program: &Path,
+        args: &[&str],
+        env: &[(String, String)],
+    ) -> Result<(bool, Output), YardError> {
+        let (_, success, output) = self.exec(program, args, env, false).await?;
+        Ok((success.is_ok(), output))
+    }
+
+    /// The command as shown, `Err(how it ended)` unless it exited 0, and its output.
     async fn exec(
         &self,
         program: &Path,
         args: &[&str],
         env: &[(String, String)],
         stream: bool,
-    ) -> Result<(String, Result<(), String>, Vec<String>), YardError> {
+    ) -> Result<(String, Result<(), String>, Output), YardError> {
         if !program.is_absolute() {
             return Err(YardError::internal(format!("{} is not an absolute path", program.display())));
         }
@@ -201,21 +213,24 @@ impl JobCtx {
             .spawn()
             .map_err(|e| YardError::new(ErrorCode::JobFailed, format!("cannot run {shown}: {e}")))?;
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(bool, String)>();
         let readers = [
-            child.stdout.take().map(|o| tokio::spawn(forward(o, tx.clone()))),
-            child.stderr.take().map(|e| tokio::spawn(forward(e, tx.clone()))),
+            child.stdout.take().map(|o| tokio::spawn(forward(o, true, tx.clone()))),
+            child.stderr.take().map(|e| tokio::spawn(forward(e, false, tx.clone()))),
         ];
         drop(tx);
-        let mut lines = vec![];
+        let mut output = Output::default();
         let was_cancelled = loop {
             tokio::select! {
                 line = rx.recv() => match line {
-                    Some(line) => {
+                    Some((from_stdout, line)) => {
                         if stream {
                             self.line(line.clone());
                         }
-                        lines.push(line);
+                        if from_stdout {
+                            output.stdout.push(line.clone());
+                        }
+                        output.lines.push(line);
                     }
                     None => break false,
                 },
@@ -238,8 +253,15 @@ impl JobCtx {
         } else {
             Err(status.code().map_or_else(|| "a signal".to_string(), |c| c.to_string()))
         };
-        Ok((shown, ended, lines))
+        Ok((shown, ended, output))
     }
+}
+
+/// What a command printed: every line as it arrived, and stdout's alone.
+#[derive(Debug, Default)]
+pub struct Output {
+    pub lines: Vec<String>,
+    pub stdout: Vec<String>,
 }
 
 /// Resolves once a cancel is requested; never, if the job can no longer be cancelled.
@@ -264,10 +286,10 @@ async fn stop_group(child: &mut tokio::process::Child) {
     }
 }
 
-async fn forward(pipe: impl AsyncRead + Unpin, tx: mpsc::UnboundedSender<String>) {
+async fn forward(pipe: impl AsyncRead + Unpin, stdout: bool, tx: mpsc::UnboundedSender<(bool, String)>) {
     let mut lines = BufReader::new(pipe).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        if tx.send(line).is_err() {
+        if tx.send((stdout, line)).is_err() {
             return;
         }
     }

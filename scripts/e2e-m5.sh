@@ -2,8 +2,8 @@
 # M5 end-to-end check on a real Mac, in the standard profile, after e2e-m1.sh passes.
 #
 # Shares a scratch PHP site through a quick tunnel (no Cloudflare account) and checks what a
-# visitor's request looks like to PHP: HTTPS on, the public host, and the visitor's address
-# rather than 127.0.0.1. The tunnel's origin listener serves only that site whatever Host it is
+# visitor's request looks like to PHP: HTTPS on, the public host, the visitor's address
+# rather than 127.0.0.1, and no forged X-Forwarded-Host. The tunnel's origin listener serves only that site whatever Host it is
 # sent. `yard untunnel` then leaves no unit and no port entry behind.
 #
 # Needs: yardd running, built from this tree (e2e-m1.sh), brew's cloudflared, jq and the
@@ -72,6 +72,7 @@ echo "site=yard-e2e-tunnel\n";
 echo "https=", $_SERVER['HTTPS'] ?? '', "\n";
 echo "host=", $_SERVER['HTTP_HOST'] ?? '', "\n";
 echo "addr=", $_SERVER['REMOTE_ADDR'] ?? '', "\n";
+echo "xfh=", $_SERVER['HTTP_X_FORWARDED_HOST'] ?? '', "\n";
 PHP
 (cd "$work/$site" && "$yard" link "$site" >/dev/null) || fail "yard link $site failed"
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$site.yard:8080/")"
@@ -101,6 +102,12 @@ grep -qx "host=$public_host" <<<"$page" || fail "PHP did not see the public host
 addr="$(sed -n 's/^addr=//p' <<<"$page")"
 [[ -n $addr && $addr != 127.0.0.1 && $addr != ::1 ]] || fail "PHP saw REMOTE_ADDR $addr, not the visitor's address: $page"
 pass "through the tunnel PHP sees HTTPS=on, Host $public_host and REMOTE_ADDR $addr"
+
+# 4b. A visitor's own X-Forwarded-Host never reaches PHP, where an app trusting every proxy
+# would build its links on it.
+page="$(curl -s --max-time 10 -H 'X-Forwarded-Host: forged.example' "$url/")"
+grep -qx "xfh=$public_host" <<<"$page" || fail "PHP saw a forged X-Forwarded-Host: $page"
+pass "a forged X-Forwarded-Host is replaced by $public_host"
 
 # 5. The origin listener serves only this site, whatever Host it is sent.
 if [[ -n $other ]]; then
