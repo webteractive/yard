@@ -345,7 +345,9 @@ change to serving, the helper or reconcile is only observable there, through `ya
 
 - **`AGENTS.md` is the only agent instruction file.** Do not add a `CLAUDE.md`
   (or any other harness-specific copy); project guidance goes here or in `.hydra/rules/`.
-- **Never commit or push without asking the maintainer.** Commit messages are lean prose:
+- **Never commit or push without asking the maintainer.** The remote is `origin`,
+  `git@github.com:webteractive/yard.git` (private, added 2026-11-03; `gh` acts as
+  `maintainer` for the webteractive org). Commit messages are lean prose:
   a lowercase subject with no type prefix, prose paragraphs, no trailers.
 - **Docs move with the code**: the spec, the active plan, README, `--help`
   text, this file and the hydra rules.
