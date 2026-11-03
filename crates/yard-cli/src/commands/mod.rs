@@ -204,6 +204,28 @@ pub async fn run_job<P: Serialize>(
     params: P,
     done: impl FnOnce() -> String,
 ) -> Outcome {
+    match wait_job(ctx, method, params).await? {
+        JobEnd::Finished(_) => {
+            if !ctx.json {
+                print!("{}", done());
+            }
+            Ok(0)
+        }
+        JobEnd::Abandoned(code) => Ok(code),
+    }
+}
+
+/// How a job [`wait_job`] waited for ended: finished, with what it made, or no longer waited
+/// for (Ctrl-C twice), with the exit code.
+#[derive(Debug)]
+pub enum JobEnd {
+    Finished(#[expect(dead_code, reason = "yard tunnel reads it (M5 Task 14)")] Option<serde_json::Value>),
+    Abandoned(i32),
+}
+
+/// [`run_job`]'s waiting: starts the job, prints its progress (each event under `--json`),
+/// cancels it on Ctrl-C, and returns its result once it succeeds. A failed job is the error.
+pub async fn wait_job<P: Serialize>(ctx: &Ctx, method: &str, params: P) -> Result<JobEnd, CliError> {
     let mut client = ctx.client().await?;
     client.subscribe(&[Topic::Jobs]).await?;
     let started: JobStarted = client.call(method, params).await?;
@@ -216,7 +238,7 @@ pub async fn run_job<P: Serialize>(
             _ = interrupt.recv() => {
                 if cancelling {
                     eprintln!("Stopped waiting; {} may still be finishing.", started.job_id);
-                    return Ok(130);
+                    return Ok(JobEnd::Abandoned(130));
                 }
                 cancelling = true;
                 eprintln!("Cancelling {} (Ctrl-C again to stop waiting)…", started.job_id);
@@ -237,18 +259,13 @@ pub async fn run_job<P: Serialize>(
                     println!("{line}");
                 }
             }
-            Event::JobFinished { job_id, error, .. } if *job_id == started.job_id => {
+            Event::JobFinished { job_id, error, result } if *job_id == started.job_id => {
                 if ctx.json {
                     print_json_line(&event);
                 }
                 return match error {
                     Some(e) => Err(e.clone().into()),
-                    None => {
-                        if !ctx.json {
-                            print!("{}", done());
-                        }
-                        Ok(0)
-                    }
+                    None => Ok(JobEnd::Finished(result.clone())),
                 };
             }
             _ => {}

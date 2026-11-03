@@ -58,7 +58,13 @@ impl Jobs {
     {
         let job_id = format!("{kind}-{}", self.next.fetch_add(1, Ordering::Relaxed));
         let (cancel, cancelled_rx) = watch::channel(false);
-        let ctx = JobCtx { job_id: job_id.clone(), bus: self.bus.clone(), cancel: cancelled_rx };
+        let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::default();
+        let ctx = JobCtx {
+            job_id: job_id.clone(),
+            bus: self.bus.clone(),
+            cancel: cancelled_rx,
+            result: result.clone(),
+        };
         let ahead = {
             let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
             let ahead = pending.last().map(|(id, _)| id.clone());
@@ -74,7 +80,11 @@ impl Jobs {
             // Cancelled while it waited: it never starts.
             let error = if *ctx.cancel.borrow() { Some(cancelled(&id)) } else { work(ctx).await.err() };
             pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != id);
-            bus.emit(Event::JobFinished { job_id: id, error, result: None });
+            let result = match error {
+                None => result.lock().unwrap_or_else(|p| p.into_inner()).take(),
+                Some(_) => None,
+            };
+            bus.emit(Event::JobFinished { job_id: id, error, result });
         });
         if self.queue.send(job).is_err() {
             // The worker is gone only when the runtime is shutting down.
@@ -106,6 +116,8 @@ pub struct JobCtx {
     job_id: String,
     bus: EventBus,
     cancel: watch::Receiver<bool>,
+    /// What the job made, sent with `job_finished` if it succeeds.
+    result: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
 impl JobCtx {
@@ -117,6 +129,12 @@ impl JobCtx {
     /// command checks this between polls.
     pub fn check_cancelled(&self) -> Result<(), YardError> {
         if *self.cancel.borrow() { Err(cancelled(&self.job_id)) } else { Ok(()) }
+    }
+
+    /// What a successful job hands back in `JobFinished.result`; the last value set wins.
+    /// A failed job sends none.
+    pub fn set_result(&self, value: serde_json::Value) {
+        *self.result.lock().unwrap_or_else(|p| p.into_inner()) = Some(value);
     }
 
     pub fn line(&self, text: impl Into<String>) {

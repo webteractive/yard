@@ -203,3 +203,35 @@ async fn cancelling_an_unknown_or_finished_job_is_job_not_found() {
     assert_eq!(e.code, ErrorCode::JobNotFound);
     assert!(e.message.contains(&done.job_id), "{}", e.message);
 }
+
+/// The `result` of job `id`'s `job_finished`.
+async fn finished_result(rx: &mut broadcast::Receiver<Event>, id: &str) -> Option<serde_json::Value> {
+    let wait = async {
+        loop {
+            if let Event::JobFinished { job_id, result, .. } = rx.recv().await.unwrap()
+                && job_id == id
+            {
+                return result;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), wait).await.expect("the job finished")
+}
+
+#[tokio::test]
+async fn a_job_result_rides_job_finished() {
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    let ok = jobs.start("tunnel-add", |job: JobCtx| async move {
+        job.set_result(serde_json::json!({"n": 0}));
+        job.set_result(serde_json::json!({"n": 1}));
+        Ok(())
+    });
+    assert_eq!(finished_result(&mut rx, &ok.job_id).await, Some(serde_json::json!({"n": 1})));
+    let failed = jobs.start("tunnel-add", |job: JobCtx| async move {
+        job.set_result(serde_json::json!({"n": 2}));
+        Err(YardError::internal("it broke after setting a result"))
+    });
+    assert_eq!(finished_result(&mut rx, &failed.job_id).await, None);
+}

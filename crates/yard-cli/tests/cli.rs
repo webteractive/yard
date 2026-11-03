@@ -376,6 +376,26 @@ fn php_install_json_prints_each_event() {
 }
 
 #[test]
+fn a_job_result_leaves_run_job_output_unchanged() {
+    let mut events = job_events("php-install-1", json!(null));
+    events[3]["result"] = json!({"site": "blog"});
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("php.install", Ok(json!({"job_id": "php-install-1"})))],
+        &[("php.install", events.clone())],
+    );
+    let out = d.yard().args(["php", "install", "7.1"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "==> Downloading php@7.1\n==> Pouring php@7.1\nInstalled PHP 7.1.\n");
+    let d = MockDaemon::start_with_events(
+        &[("subscribe", Ok(json!(null))), ("php.install", Ok(json!({"job_id": "php-install-1"})))],
+        &[("php.install", events)],
+    );
+    let out = d.yard().args(["php", "install", "7.1", "--json"]).output().unwrap();
+    let last: Value = serde_json::from_str(stdout(&out).lines().last().unwrap()).unwrap();
+    assert_eq!(last["result"], json!({"site": "blog"}));
+}
+
+#[test]
 fn php_default_and_uninstall_send_the_version() {
     let d = MockDaemon::start(&[("php.default", Ok(json!(null)))]);
     let out = d.yard().args(["php", "default", "8.3"]).output().unwrap();
