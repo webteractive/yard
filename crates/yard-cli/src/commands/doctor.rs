@@ -52,6 +52,8 @@ async fn offline(ctx: &Ctx) -> DoctorReport {
         client_env: Default::default(),
         sleeping: Default::default(),
         home: &home,
+        tunnels: vec![],
+        resolve_host: yard_daemon::tunnel::resolves_with_getaddrinfo,
     })
     .await
 }

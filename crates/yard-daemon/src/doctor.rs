@@ -9,8 +9,9 @@ use crate::helper_client::HelperClient;
 use crate::reconcile::serves_mail;
 use crate::sources::{self, BREW_TIMEOUT, TrustRead};
 use crate::state::State;
+use crate::tunnel;
 use crate::{holder, portscan, services, tls};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use yard_core::brew::Brew;
@@ -28,10 +29,12 @@ use yard_core::services::brew_info;
 use yard_core::services::render::{init_command, old_php_can_log_in};
 use yard_core::services::{Engine, instance_name, plain_line};
 use yard_core::sources::{tap_dir, tap_of};
+use yard_core::tunnel::cloudflared::cert_path;
+use yard_core::tunnel::facts::Facts;
 use yard_core::{Paths, PhpVersion, sites};
 use yard_proto::{
     Check, CheckStatus, DoctorReport, Holder, HolderKind, IgnoredBecause, Need, PortInfo, PortMode,
-    PortStatus, SettingSource, SiteInfo, SiteKind, UnitInfo, UnitState, YardError,
+    PortStatus, SettingSource, SiteInfo, SiteKind, TunnelInfo, TunnelState, UnitInfo, UnitState, YardError,
 };
 
 /// How many of a failed unit's last log lines the `units` check quotes.
@@ -56,6 +59,10 @@ pub struct DoctorInput<'a> {
     pub sleeping: BTreeMap<String, OffsetDateTime>,
     /// The user's home, where emailulator's installer puts it (M4d).
     pub home: &'a Path,
+    /// The tunnels yardd runs, as `tunnels.list` shows them; empty without yardd (M5).
+    pub tunnels: Vec<TunnelInfo>,
+    /// Whether a host still resolves (`DaemonOptions.resolve_host`).
+    pub resolve_host: fn(&str) -> Option<bool>,
 }
 
 /// What the config-dependent checks read: yardd's last good snapshot, or the files.
@@ -289,11 +296,133 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         checks.extend(service_checks(&ask, sites, &view.projects).await);
     }
     checks.extend(emailulator_checks(&view, input.home));
+    checks.extend(tunnel_checks(&input, view.yard.as_ref(), sites).await);
     checks.extend(
         sources_checks(brew, &trust, view.yard.as_ref(), view.services.as_ref(), &input.client_env).await,
     );
     checks.extend(units(&input.units, input.daemon_running));
     DoctorReport { checks }
+}
+
+/// Tunnels (tunnels spec §13): cloudflared, each domain's login, each tunnel's state, a named
+/// tunnel's credentials, a tunnel Yard made that no site uses, the DNS records Yard left and a
+/// tunnelled site's Vite `hot` file. Nothing is said unless a tunnel is configured or running,
+/// or `state/tunnels.json` records something. A left record that no longer resolves is dropped
+/// from that file by the running yardd only; the CLI's doctor never writes it.
+async fn tunnel_checks(input: &DoctorInput<'_>, yard: Option<&YardConfig>, sites: &[SiteInfo]) -> Vec<Check> {
+    let paths = input.paths;
+    let sites_cfg = match input.state.and_then(|s| s.snapshot.as_ref()) {
+        Some(snap) => Some(snap.sites_cfg.clone()),
+        None => load_sites(paths).ok(),
+    };
+    let named: BTreeMap<String, String> = sites_cfg
+        .iter()
+        .flat_map(|cfg| cfg.sites.iter())
+        .filter_map(|(site, entry)| entry.tunnel.as_ref().map(|t| (site.clone(), t.host.get_ref().clone())))
+        .collect();
+    let facts = Facts::load(&paths.tunnels_state()).unwrap_or_default();
+    if named.is_empty() && input.tunnels.is_empty() && facts.named.is_empty() && facts.dns_left.is_empty() {
+        return vec![];
+    }
+    let mut checks = vec![];
+    checks.push(if input.brew.cloudflared_bin().exists() {
+        ok("cloudflared", "cloudflared is installed")
+    } else {
+        fail(
+            "cloudflared",
+            "cloudflared is not installed",
+            format!("brew install {}", tunnel::cloudflared::FORMULA),
+        )
+    });
+    for domain in yard.map_or(&[][..], |y| y.tunnel_domains.as_slice()) {
+        if !cert_path(input.home, domain).exists() {
+            let e = tunnel::cloudflared::not_logged_in(domain);
+            checks.push(warn("tunnel-login", e.message, e.hint.unwrap_or_default()));
+        }
+    }
+    for t in &input.tunnels {
+        let id = format!("tunnel:{}", t.site);
+        let at = t.url.as_deref().unwrap_or("no URL yet");
+        match t.state {
+            TunnelState::Ready => checks.push(ok(&id, format!("shared at {at}"))),
+            TunnelState::Connecting => {
+                checks.push(warn(&id, "connecting to Cloudflare", format!("yard logs {}", t.unit)))
+            }
+            TunnelState::Failed | TunnelState::Backoff => checks.push(fail(
+                &id,
+                t.last_error.clone().unwrap_or_else(|| format!("{} is not running", t.unit)),
+                format!("yard restart {}", t.unit),
+            )),
+            TunnelState::Stopped | TunnelState::Other => {}
+        }
+    }
+    for (site, host) in &named {
+        if let Some(f) = facts.named.get(site).filter(|f| !f.credentials.exists()) {
+            checks.push(from_error(
+                &format!("tunnel-credentials:{site}"),
+                &tunnel::credentials_missing(site, host, f),
+            ));
+        }
+    }
+    for (site, f) in &facts.named {
+        if f.created_by_yard && !named.contains_key(site) {
+            checks.push(warn(
+                &format!("tunnel-leftover:{}", f.name),
+                format!("the Cloudflare tunnel {} that Yard made for {site} is no longer used", f.name),
+                format!("cloudflared tunnel delete {}", f.id),
+            ));
+        }
+    }
+    checks.extend(left_records(input, &facts).await);
+    let tunnelled: BTreeSet<&str> =
+        input.tunnels.iter().map(|t| t.site.as_str()).chain(named.keys().map(String::as_str)).collect();
+    for site in sites.iter().filter(|s| tunnelled.contains(&s.name.as_str())) {
+        let SiteKind::Php { path, docroot, .. } = &site.kind else { continue };
+        let hot = Path::new(path).join(docroot).join("hot");
+        if hot.is_file() {
+            checks.push(warn(
+                &format!("tunnel-hot:{}", site.name),
+                "Vite's dev server is running, so visitors get pages that load assets from this Mac",
+                format!("stop npm run dev, or delete {}", hot.display()),
+            ));
+        }
+    }
+    checks
+}
+
+/// A warning per `dns_left` record that still resolves or could not be asked. With yardd running,
+/// the records that no longer resolve are dropped from the facts file, read again just before
+/// it is written so a tunnel job's change in between is kept.
+async fn left_records(input: &DoctorInput<'_>, facts: &Facts) -> Vec<Check> {
+    let resolve = input.resolve_host;
+    let hosts: Vec<String> = facts.dns_left.iter().map(|l| l.host.clone()).collect();
+    let answers =
+        tokio::task::spawn_blocking(move || hosts.into_iter().map(|h| (resolve(&h), h)).collect::<Vec<_>>())
+            .await
+            .unwrap_or_default();
+    let gone: Vec<&str> =
+        answers.iter().filter(|(a, _)| *a == Some(false)).map(|(_, h)| h.as_str()).collect();
+    if input.state.is_some() && !gone.is_empty() {
+        let file = input.paths.tunnels_state();
+        if let Ok(mut now) = Facts::load(&file) {
+            now.dns_left.retain(|l| !gone.contains(&l.host.as_str()));
+            if let Err(e) = now.save(&file) {
+                tracing::warn!("cannot drop gone DNS records: {}", crate::describe(&e));
+            }
+        }
+    }
+    facts
+        .dns_left
+        .iter()
+        .filter(|l| !gone.contains(&l.host.as_str()))
+        .map(|l| {
+            warn(
+                &format!("tunnel-dns:{}", l.host),
+                format!("the DNS record {} → {} is still there", l.host, l.target),
+                format!("delete the CNAME {} in the Cloudflare dashboard", l.host),
+            )
+        })
+        .collect()
 }
 
 /// Who catches mail (M4d spec §11): `emailulator`, with `emailulator-version`,

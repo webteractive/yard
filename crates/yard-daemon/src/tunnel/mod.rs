@@ -64,6 +64,24 @@ impl Runtime {
     }
 }
 
+/// Whether `host` resolves, asked of the system resolver (P10): `Some(false)` only when it
+/// answers that the name does not exist, `None` when it could not be asked. Blocks.
+pub fn resolves_with_getaddrinfo(host: &str) -> Option<bool> {
+    let name = std::ffi::CString::new(host).ok()?;
+    let mut found: *mut libc::addrinfo = std::ptr::null_mut();
+    // SAFETY: `name` is a valid C string, the hints may be null, and `found` is freed below.
+    let code = unsafe { libc::getaddrinfo(name.as_ptr(), std::ptr::null(), std::ptr::null(), &mut found) };
+    if !found.is_null() {
+        // SAFETY: `found` came from getaddrinfo and is freed once.
+        unsafe { libc::freeaddrinfo(found) };
+    }
+    match code {
+        0 => Some(true),
+        libc::EAI_NONAME => Some(false),
+        _ => None,
+    }
+}
+
 /// A tunnel provider, as far as running one goes (P11): the command its unit runs and the
 /// header its edge puts the visitor's address in.
 pub trait Provider {

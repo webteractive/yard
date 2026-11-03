@@ -6,10 +6,9 @@ mod support;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 use support::daemon::{Client, Daemon, prepared, run_job_result};
-use support::{Fixture, fast, free_port, spawn_helper};
+use support::{Fixture, auto_range, fast, free_port, spawn_helper};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
@@ -23,14 +22,6 @@ use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
 use yard_proto::{ErrorCode, PortMode, UnitInfo, UnitState, YardError};
-
-/// A `range` line for `ports.toml`: ten ports of its own, below macOS's ephemeral range, so
-/// parallel tests never hand two tunnels the same `auto` port.
-fn auto_range() -> String {
-    static NEXT: AtomicU16 = AtomicU16::new(0);
-    let start = 41000 + (std::process::id() % 50) as u16 * 100 + NEXT.fetch_add(1, Ordering::Relaxed) * 10;
-    format!("range = \"{start}-{}\"\n", start + 9)
-}
 
 struct Env {
     fx: Fixture,

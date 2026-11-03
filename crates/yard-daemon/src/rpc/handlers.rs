@@ -446,6 +446,8 @@ async fn doctor(ctx: &Context, params: DoctorParams) -> DoctorReport {
         client_env: params.client_env,
         sleeping: ctx.sleeper.asleep(),
         home: ctx.reconciler.home(),
+        tunnels: tunnels::infos(&ctx.reconciler, &ctx.tunnels).await,
+        resolve_host: ctx.resolve_host,
     })
     .await
 }

@@ -191,6 +191,15 @@ pub fn ports_toml(http: u16, https: u16, dns: u16) -> String {
 /// binary. macOS allocates ephemeral ports in sequence, but every health check and probe
 /// connection takes one too, so the sequence wraps within seconds and `:0` would give a
 /// second test a port the first has not bound yet.
+/// A `range` line for `ports.toml`: ten ports of its own, below macOS's ephemeral range, so
+/// parallel tests never hand two tunnels the same `auto` port.
+pub fn auto_range() -> String {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let start = 41000 + (std::process::id() % 50) as u16 * 100 + NEXT.fetch_add(1, Ordering::Relaxed) * 10;
+    format!("range = \"{start}-{}\"\n", start + 9)
+}
+
 pub fn free_port() -> u16 {
     let mut given = given();
     loop {

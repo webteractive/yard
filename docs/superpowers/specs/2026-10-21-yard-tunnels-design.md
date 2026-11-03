@@ -697,15 +697,17 @@ missing `cloudflared` reuses `FORMULA_MISSING`.
 
 ## 13. `yard doctor`
 
-New checks, only when at least one tunnel is configured or running:
+New checks, only when at least one tunnel is configured or running, or `state/tunnels.json`
+records a tunnel or a left DNS record:
 
 | id | ok | warn / fail |
 |---|---|---|
 | `cloudflared` | brew's cloudflared is at its keg | fail: `brew install cloudflared` |
 | `tunnel-login` | each domain in `yard.toml` has its certificate (stat only) | warn per missing one: `yard tunnels domain add <domain>` (running needs no login; changing does) |
-| `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error; warn while `connecting` |
+| `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error when failed or backing off (`yard restart tunnel-<site>`); warn while `connecting` (`yard logs tunnel-<site>`) |
 | `tunnel-credentials:<site>` | credentials file exists (stat only) | fail: `TUNNEL_CREDENTIALS_MISSING` hint |
-| `tunnel-dns:<host>` | — | warn per `dns_left` record still resolving: "delete the CNAME <host> → <target> in the Cloudflare dashboard" |
+| `tunnel-leftover:<name>` | — | warn per tunnel Yard made whose site has no `[tunnel]` (its delete failed): `cloudflared tunnel delete <id>` |
+| `tunnel-dns:<host>` | — | warn per `dns_left` record still resolving (or not answerable): "the DNS record <host> → <target> is still there", hint "delete the CNAME <host> in the Cloudflare dashboard"; one that no longer resolves is dropped from `state/tunnels.json` by yardd's doctor (the CLI's doctor while yardd is down never writes it) |
 | `tunnel-hot:<site>` | — | warn when the docroot has `public/hot` |
 | `generated` (existing) | covers `tunnels/<site>.yml` | as now |
 | `ports` (existing) | covers the two entries per tunnel | as now |

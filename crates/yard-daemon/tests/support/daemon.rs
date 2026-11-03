@@ -65,6 +65,8 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         home,
         tunnel_poll: Duration::from_millis(100),
         tunnel_ready_wait: Duration::from_secs(2),
+        // No test asks the real DNS: a host starting `kept.` still resolves, any other is gone.
+        resolve_host: |host| Some(host.starts_with("kept.")),
     }
 }
 

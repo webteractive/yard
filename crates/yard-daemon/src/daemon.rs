@@ -58,6 +58,9 @@ pub struct DaemonOptions {
     pub tunnel_poll: Duration,
     /// How long `tunnels.add` waits for a tunnel to reach Cloudflare.
     pub tunnel_ready_wait: Duration,
+    /// Whether a host still resolves, for doctor's `dns_left` check (P10): `Some(false)` when it
+    /// does not, `None` when the resolver could not say.
+    pub resolve_host: fn(&str) -> Option<bool>,
 }
 
 impl DaemonOptions {
@@ -80,6 +83,7 @@ impl DaemonOptions {
             home: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
             tunnel_poll: Duration::from_secs(2),
             tunnel_ready_wait: Duration::from_secs(30),
+            resolve_host: tunnel::resolves_with_getaddrinfo,
         }
     }
 }
@@ -110,6 +114,8 @@ pub struct Context {
     pub tunnels: Arc<tunnel::Runtime>,
     /// `DaemonOptions.tunnel_ready_wait`.
     pub tunnel_ready_wait: Duration,
+    /// `DaemonOptions.resolve_host`.
+    pub resolve_host: fn(&str) -> Option<bool>,
     /// The asks that may wait on a wake at once (`wake::WAKE_SLOTS`).
     pub wake_slots: Arc<tokio::sync::Semaphore>,
 }
@@ -177,6 +183,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         sleeper,
         tunnels,
         tunnel_ready_wait: opts.tunnel_ready_wait,
+        resolve_host: opts.resolve_host,
         wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });
 

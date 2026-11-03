@@ -41,7 +41,7 @@ pub async fn list(ctx: &Context) -> Result<Vec<TunnelInfo>, YardError> {
     Ok(infos(&ctx.reconciler, &ctx.tunnels).await)
 }
 
-async fn infos(reconciler: &Reconciler, runtime: &Runtime) -> Vec<TunnelInfo> {
+pub(super) async fn infos(reconciler: &Reconciler, runtime: &Runtime) -> Vec<TunnelInfo> {
     let Some(snapshot) = reconciler.snapshot().await else { return vec![] };
     let units = reconciler.supervisor().list();
     let live = runtime.live.lock().unwrap_or_else(PoisonError::into_inner);

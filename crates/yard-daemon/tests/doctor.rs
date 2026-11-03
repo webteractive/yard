@@ -72,6 +72,8 @@ impl Env {
             client_env: Default::default(),
             sleeping: Default::default(),
             home: &self.fx.paths.root().join("home"),
+            tunnels: vec![],
+            resolve_host: |_| None,
         })
         .await
     }
@@ -156,6 +158,8 @@ async fn all_ok_on_healthy_fixture() {
         client_env: Default::default(),
         sleeping: Default::default(),
         home: &e.fx.paths.root().join("home"),
+        tunnels: vec![],
+        resolve_host: |_| None,
     })
     .await;
     sup.shutdown().await;
@@ -282,6 +286,8 @@ async fn failed_unit_reports_last_lines() {
         client_env: Default::default(),
         sleeping: Default::default(),
         home: &e.fx.paths.root().join("home"),
+        tunnels: vec![],
+        resolve_host: |_| None,
     })
     .await;
 
@@ -353,6 +359,8 @@ async fn failed_reconcile_fails_config_and_units() {
         client_env: Default::default(),
         sleeping: Default::default(),
         home: &e.fx.paths.root().join("home"),
+        tunnels: vec![],
+        resolve_host: |_| None,
     })
     .await;
 
@@ -692,6 +700,8 @@ impl Env {
             client_env: client_env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             sleeping: Default::default(),
             home: &self.fx.paths.root().join("home"),
+            tunnels: vec![],
+            resolve_host: |_| None,
         })
         .await
     }
@@ -1483,4 +1493,234 @@ async fn doctor_says_not_installed_when_a_yard_asks_and_no_agent() {
     assert_eq!(check.message, "emailulator's LaunchAgent is not installed");
     assert_eq!(check.hint.as_deref(), Some("yard service add emailulator"));
     d.shutdown().await.unwrap();
+}
+
+mod tunnels {
+    use super::support::auto_range;
+    use super::support::daemon::{Client, Daemon, prepared, run_job};
+    use serde_json::{Value, json};
+    use std::time::Duration;
+    use yard_core::brew::Brew;
+    use yard_core::tunnel::cloudflared::cert_path;
+    use yard_core::tunnel::facts::{Facts, LeftRecord, NamedFacts};
+    use yard_daemon::doctor::{self, DoctorInput};
+    use yard_daemon::helper_client::HelperClient;
+    use yard_proto::Check;
+
+    /// A daemon with the fake cloudflared and `blog` linked (its docroot `public/`), not started.
+    async fn tunnel_daemon() -> Daemon {
+        let d = prepared("").await;
+        d.fx.add_cloudflared();
+        let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+        std::fs::write(d.fx.paths.ports_toml(), format!("{}{ports}", auto_range())).unwrap();
+        let blog = d.project("blog");
+        std::fs::create_dir_all(blog.join("public")).unwrap();
+        d
+    }
+
+    async fn checks(c: &mut Client) -> Vec<Check> {
+        let report = c.call("doctor", Value::Null).await.unwrap();
+        serde_json::from_value(report["checks"].clone()).unwrap()
+    }
+
+    fn find<'a>(checks: &'a [Check], id: &str) -> Option<&'a Check> {
+        checks.iter().find(|c| c.id == id)
+    }
+
+    fn status(checks: &[Check], id: &str) -> Option<String> {
+        find(checks, id).map(|c| serde_json::to_value(c.status).unwrap().as_str().unwrap().to_string())
+    }
+
+    async fn add_quick(c: &mut Client) {
+        let (lines, error) = run_job(c, "tunnels.add", json!({"site": "blog"})).await;
+        assert_eq!(error, None, "{lines:?}");
+    }
+
+    fn cloudflared_dir(d: &Daemon) -> std::path::PathBuf {
+        Brew::new(d.fx.brew.path()).cloudflared_bin().parent().unwrap().to_path_buf()
+    }
+
+    #[tokio::test]
+    async fn doctor_is_silent_without_tunnels() {
+        let d = tunnel_daemon().await.start().await;
+        let mut c = d.client().await;
+        let checks = checks(&mut c).await;
+        let ids: Vec<&str> = checks
+            .iter()
+            .map(|c| c.id.as_str())
+            .filter(|id| id.contains("tunnel") || *id == "cloudflared")
+            .collect();
+        assert!(ids.is_empty(), "{ids:?}");
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doctor_reports_a_ready_tunnel_and_a_missing_login() {
+        let d = tunnel_daemon().await;
+        std::fs::write(
+            d.fx.paths.yard_toml(),
+            "[tunnels.cloudflared]\ndomains = [\"example.com\", \"example.org\"]\n",
+        )
+        .unwrap();
+        let cert = cert_path(&d.opts.home, "example.com");
+        std::fs::create_dir_all(cert.parent().unwrap()).unwrap();
+        std::fs::write(&cert, "x").unwrap();
+        let d = d.start().await;
+        let mut c = d.client().await;
+        add_quick(&mut c).await;
+        let checks = checks(&mut c).await;
+        assert_eq!(status(&checks, "cloudflared").as_deref(), Some("ok"), "{checks:?}");
+        assert_eq!(status(&checks, "tunnel:blog").as_deref(), Some("ok"), "{checks:?}");
+        let login: Vec<&Check> = checks.iter().filter(|c| c.id == "tunnel-login").collect();
+        assert_eq!(login.len(), 1, "{login:?}");
+        assert_eq!(login[0].hint.as_deref(), Some("yard tunnels domain add example.org"));
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doctor_warns_while_connecting() {
+        let d = tunnel_daemon().await.start().await;
+        let mut c = d.client().await;
+        add_quick(&mut c).await;
+        std::fs::write(cloudflared_dir(&d).join("not-ready"), "").unwrap();
+        let mut last = vec![];
+        for _ in 0..50 {
+            last = checks(&mut c).await;
+            if status(&last, "tunnel:blog").as_deref() == Some("warn") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let check = find(&last, "tunnel:blog").expect("a tunnel check");
+        assert_eq!(status(&last, "tunnel:blog").as_deref(), Some("warn"), "{check:?}");
+        assert!(check.message.contains("connecting to Cloudflare"), "{check:?}");
+        d.shutdown().await.unwrap();
+    }
+
+    fn named_facts(d: &Daemon, credentials: std::path::PathBuf) {
+        let mut text = std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap();
+        text.push_str("\n[sites.blog.tunnel]\nhost = \"blog.example.com\"\n");
+        std::fs::write(d.fx.paths.sites_toml(), text).unwrap();
+        let mut facts = Facts::default();
+        facts.named.insert(
+            "blog".into(),
+            NamedFacts {
+                id: "id-1".into(),
+                name: "yard-blog".into(),
+                created_by_yard: true,
+                routed: vec!["blog.example.com".into()],
+                credentials,
+                domain: "example.com".into(),
+            },
+        );
+        facts.save(&d.fx.paths.tunnels_state()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn doctor_fails_missing_credentials() {
+        let d = tunnel_daemon().await;
+        named_facts(&d, d.opts.home.join("gone.json"));
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let checks = checks(&mut c).await;
+        let check = find(&checks, "tunnel-credentials:blog").expect("a credentials check");
+        assert_eq!(status(&checks, "tunnel-credentials:blog").as_deref(), Some("fail"));
+        assert!(check.message.contains("gone.json"), "{check:?}");
+        assert_eq!(
+            check.hint.as_deref(),
+            Some("yard untunnel blog && yard tunnel blog --host blog.example.com")
+        );
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doctor_drops_a_gone_record_and_warns_a_kept_one() {
+        let d = tunnel_daemon().await;
+        let mut facts = Facts::default();
+        for host in ["gone.example.com", "kept.example.com"] {
+            facts.dns_left.push(LeftRecord {
+                host: host.into(),
+                target: "id-1.cfargotunnel.com".into(),
+                since: "2026-11-01".into(),
+            });
+        }
+        facts.save(&d.fx.paths.tunnels_state()).unwrap();
+        // The CLI's doctor while yardd is down warns but never writes the file.
+        let helper = HelperClient::new(&d.opts.helper_socket);
+        let brew = Brew::new(d.fx.brew.path());
+        let offline = doctor::run(DoctorInput {
+            paths: &d.fx.paths,
+            brew: &brew,
+            helper: &helper,
+            state: None,
+            units: vec![],
+            daemon_running: false,
+            resolver_dir: &d.opts.resolver_dir,
+            security: &d.fx.security,
+            client_env: Default::default(),
+            sleeping: Default::default(),
+            home: &d.opts.home,
+            tunnels: vec![],
+            resolve_host: d.opts.resolve_host,
+        })
+        .await;
+        assert!(offline.checks.iter().any(|c| c.id == "tunnel-dns:kept.example.com"), "{:?}", offline.checks);
+        assert_eq!(Facts::load(&d.fx.paths.tunnels_state()).unwrap(), facts);
+
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let checks = checks(&mut c).await;
+        let dns: Vec<&Check> = checks.iter().filter(|c| c.id.starts_with("tunnel-dns:")).collect();
+        assert_eq!(dns.len(), 1, "{dns:?}");
+        assert_eq!(dns[0].id, "tunnel-dns:kept.example.com");
+        assert_eq!(dns[0].message, "the DNS record kept.example.com → id-1.cfargotunnel.com is still there");
+        assert_eq!(
+            dns[0].hint.as_deref(),
+            Some("delete the CNAME kept.example.com in the Cloudflare dashboard")
+        );
+        let left = Facts::load(&d.fx.paths.tunnels_state()).unwrap().dns_left;
+        assert_eq!(left.iter().map(|l| l.host.as_str()).collect::<Vec<_>>(), ["kept.example.com"]);
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doctor_warns_a_vite_hot_file() {
+        let d = tunnel_daemon().await;
+        let hot = d.projects.path().join("blog/public/hot");
+        std::fs::write(&hot, "http://127.0.0.1:5173").unwrap();
+        let d = d.start().await;
+        let mut c = d.client().await;
+        add_quick(&mut c).await;
+        let checks = checks(&mut c).await;
+        let check = find(&checks, "tunnel-hot:blog").expect("a hot-file check");
+        assert_eq!(status(&checks, "tunnel-hot:blog").as_deref(), Some("warn"));
+        let hint = check.hint.clone().unwrap_or_default();
+        assert!(hint.starts_with("stop npm run dev, or delete ") && hint.ends_with("public/hot"), "{hint}");
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doctor_names_a_leftover_tunnel() {
+        let d = tunnel_daemon().await;
+        let mut facts = Facts::default();
+        facts.named.insert(
+            "old".into(),
+            NamedFacts {
+                id: "id-old".into(),
+                name: "yard-old".into(),
+                created_by_yard: true,
+                routed: vec![],
+                credentials: d.opts.home.join("x.json"),
+                domain: "example.com".into(),
+            },
+        );
+        facts.save(&d.fx.paths.tunnels_state()).unwrap();
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let checks = checks(&mut c).await;
+        let check = find(&checks, "tunnel-leftover:yard-old").expect("a leftover check");
+        assert_eq!(status(&checks, "tunnel-leftover:yard-old").as_deref(), Some("warn"));
+        assert_eq!(check.hint.as_deref(), Some("cloudflared tunnel delete id-old"));
+        d.shutdown().await.unwrap();
+    }
 }
