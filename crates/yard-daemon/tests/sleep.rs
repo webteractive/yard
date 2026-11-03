@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use support::daemon::{Client, Daemon, prepared};
 use support::{free_port, wait_until};
+use yard_core::services::sleep::SleepAfter;
 
 /// A `ports.toml` line pinning `unit` to `port`.
 fn pin(unit: &str, port: u16) -> String {
@@ -72,6 +73,33 @@ async fn nothing_sleeps_without_a_setting() {
     assert!(running(&info), "{info}");
     assert!(info.get("sleeping_since").is_none(), "{info}");
     assert_eq!(info["sleep_after_source"], "default");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn with_no_setting_an_instance_sleeps_after_the_default() {
+    let mut d = with_redis(free_port(), "", "").await;
+    d.opts.sleep.default_after = Some(SleepAfter::After(60));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    let info = redis_until(&mut c, Duration::from_secs(2), asleep).await;
+    assert_eq!(info["sleep_after_secs"], 60);
+    assert_eq!(info["sleep_after_source"], "default");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_instance_key_off_opts_out_of_the_default() {
+    let mut d = with_redis(free_port(), "", "sleep_after = \"off\"\n").await;
+    d.opts.sleep.default_after = Some(SleepAfter::After(60));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    redis_until(&mut c, Duration::from_secs(10), running).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let info = redis(&mut c).await;
+    assert!(running(&info), "{info}");
+    assert_eq!(info["sleep_after_source"], "services_toml");
     d.shutdown().await.unwrap();
 }
 

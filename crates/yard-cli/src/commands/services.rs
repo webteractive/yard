@@ -17,8 +17,8 @@ use yard_proto::methods::{
     ServiceRemoveParams, ServiceSleepParams,
 };
 use yard_proto::{
-    Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceManager, ServiceState, SiteInfo, Topic,
-    YardError,
+    Account, EnvBlock, ErrorCode, Event, ServiceInfo, ServiceManager, ServiceState, SettingSource, SiteInfo,
+    Topic, YardError,
 };
 
 /// How long `start`, `restart` and `port` wait for an instance to come up: the same wait as
@@ -346,6 +346,9 @@ pub async fn sleep_after(ctx: &Ctx, instance: String, after: String) -> Outcome 
     let params = ServiceSleepParams { name: instance, after: after.clone() };
     let info: ServiceInfo = ctx.client().await?.call(methods::SERVICES_SLEEP_SET, params).await?;
     ctx.emit(&info, || match (after.as_str(), info.sleep_after_secs) {
+        ("default", _) if info.sleep_after_source == SettingSource::Default => {
+            format!("{} now follows the default ({})\n", info.name, sleep_text(&info))
+        }
         ("default", _) => format!("{} now follows yard.toml ({})\n", info.name, sleep_text(&info)),
         (_, None) => format!("{} never sleeps\n", info.name),
         (_, Some(_)) => format!("{} now sleeps after {} without use\n", info.name, sleep_text(&info)),

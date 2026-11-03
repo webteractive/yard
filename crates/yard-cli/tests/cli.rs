@@ -2290,6 +2290,7 @@ fn sleep_after_sends_and_prints() {
             Ok(redis(json!(3600), "services_toml")),
             Ok(redis(Value::Null, "services_toml")),
             Ok(redis(json!(900), "yard_toml")),
+            Ok(redis(json!(900), "default")),
         ],
     )]);
     let run =
@@ -2297,11 +2298,13 @@ fn sleep_after_sends_and_prints() {
     assert_eq!(run("1h"), "redis now sleeps after 1h without use\n");
     assert_eq!(run("off"), "redis never sleeps\n");
     assert_eq!(run("default"), "redis now follows yard.toml (15m)\n");
+    assert_eq!(run("default"), "redis now follows the default (15m)\n");
     assert_eq!(
         d.params("services.sleep.set"),
         [
             json!({"name": "redis", "after": "1h"}),
             json!({"name": "redis", "after": "off"}),
+            json!({"name": "redis", "after": "default"}),
             json!({"name": "redis", "after": "default"}),
         ]
     );

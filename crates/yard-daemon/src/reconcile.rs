@@ -460,7 +460,10 @@ impl Reconciler {
         // not asleep, so this pass starts it and its sites leave `run/sleeping`.
         let may_sleep = |instance: &str| {
             services_cfg.services.get(instance).is_some_and(|e| {
-                !e.stopped && effective_sleep(e.sleep_after, yard.service_sleep_after).0.is_some()
+                !e.stopped
+                    && effective_sleep(e.sleep_after, yard.service_sleep_after, self.sleeper.default_after())
+                        .0
+                        .is_some()
             })
         };
         for name in self.sleeper.asleep().keys().filter(|name| !may_sleep(name)) {

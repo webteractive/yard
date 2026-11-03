@@ -923,7 +923,8 @@ Each milestone is usable on its own and gets its own implementation plan.
      approved 2026-10-26; built on main and verified with `scripts/e2e-m4d.sh` on
      the maintainer's machine on 2026-11-01.
    - **M4e on-demand services** (approved 2026-10-26, the fifth plan): service
-     instances that opt in sleep when idle and wake on a PHP request, a shim or
+     instances sleep when idle (opt-in when built; on by default, 15 min, since
+     2026-11-03) and wake on a PHP request, a shim or
      `yard service start`. Designed in
      `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md`, whose §13
      records the maintainer's answers to its open questions, and planned in

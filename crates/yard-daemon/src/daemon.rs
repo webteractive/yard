@@ -133,7 +133,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let brew = Brew::new(&opts.brew_prefix);
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
-    let sleeper = Arc::new(Sleeper::default());
+    let sleeper = Arc::new(Sleeper::new(opts.sleep.default_after));
     let reconciler = Arc::new(
         Reconciler::new(
             opts.paths.clone(),

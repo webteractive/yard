@@ -36,7 +36,7 @@ M4e changes.
 
 Goals:
 
-1. With sleeping turned on (it is off by default, §4), a service instance that nothing has
+1. With sleeping turned on (on by default since 2026-11-03, §4), a service instance that nothing has
    used for `sleep_after` is stopped gracefully, the way `yard service stop` stops it, and shows as `sleeping`.
 2. A request to a linked site whose `.yard` lists a sleeping instance wakes it, holds the
    request until the instance passes its health check, and then serves it. MySQL wakes in
@@ -129,8 +129,13 @@ sleep_after = "off"     # this instance never sleeps; or a duration, e.g. "1h"
   with `CONFIG_INVALID` once the key is set, as it would for `default_node`.
 - Durations take `s`, `m`, `h` (`"90s"`, `"15m"`, `"2h"`), minimum `60s`; `"off"` disables.
   Anything else is `CONFIG_INVALID` with file, line and column, like the other TOMLs.
-- **Off by default; opt-in (maintainer, §13).** With no `service_sleep_after` in `yard.toml` and no
-  `sleep_after` on the instance, nothing sleeps, and Yard behaves as M4b. Turning it on is
+- **On by default, 15 minutes (maintainer, 2026-11-03; it was off by default, opt-in, from §13 until
+  then).** With no `service_sleep_after` in `yard.toml` and no `sleep_after` on the instance, the
+  instance sleeps after 15 minutes unused (`DEFAULT_SLEEP_AFTER`, applied by yardd's
+  `SleepConfig.default_after`; test daemons have none). `service_sleep_after = "off"` keeps every
+  instance up, `sleep_after = "off"` one. The GUI gap below is the price the maintainer accepted with it.
+  What follows is the opt-in text of 2026-10-26, kept for its reasoning: with no setting,
+  nothing slept, and Yard behaved as M4b. Turning it on is
   `service_sleep_after = "15m"` for every instance, or `sleep_after` on one. Sleeping on for
   everyone would break every GUI client after 15 idle minutes until its user learned why
   (§5.3). When turned on, it applies to every engine alike, Redis included; `sleep_after =
@@ -294,7 +299,8 @@ whose `.yard` lists services, it wakes them before `exec` **(builder's call on w
   seen before it connects. Against a sleeping instance it gets "connection refused". The fix
   is `yard service start <i>`, or `sleep_after = "off"` for an instance used that way. This is
   the price of keeping yardd out of the data path (§2) and is documented in `--help` and
-  README. **Accepted, since sleeping is opt-in (maintainer, §13).** `yard services` shows the
+  README. **Accepted, since sleeping is opt-in (maintainer, §13); accepted again when sleeping became the
+default (maintainer, 2026-11-03).** `yard services` shows the
   instance as `sleeping`, and the hint is `yard service start <i>`.
 
 ## 6. Instance lifecycle
@@ -541,7 +547,7 @@ An instance is idle when **all three** hold for the whole of `sleep_after`:
 Each was the yard session's recommendation, and the maintainer took them all ("Proceed").
 
 1. **Default on or opt-in?** Opt-in: `service_sleep_after` is off unless set, with a
-   per-instance override (§4).
+   per-instance override (§4). **Changed 2026-11-03 (maintainer): on by default, 15 minutes.**
 2. **Start asleep at login?** No. Instances start awake as today and sleep only after being
    idle (§6.4).
 3. **The GUI gap?** Acceptable, since sleeping is opt-in; `yard services` shows `sleeping` and

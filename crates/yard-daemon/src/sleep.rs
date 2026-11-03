@@ -18,7 +18,7 @@ use yard_core::Paths;
 use yard_core::config::ServicesConfig;
 use yard_core::project::{Projects, ServiceWant};
 use yard_core::services::instance_name;
-use yard_core::services::sleep::{effective_sleep, sleeping_text};
+use yard_core::services::sleep::{DEFAULT_SLEEP_AFTER, SleepAfter, effective_sleep, sleeping_text};
 use yard_proto::{SiteInfo, UnitState};
 
 /// How the idle loop keeps time.
@@ -33,6 +33,10 @@ pub struct SleepConfig {
     /// counted again and it stops: long enough for a client that came in just after the first
     /// count to show.
     pub drain: Duration,
+    /// The `sleep_after` of an instance that has none of its own and none from `yard.toml`:
+    /// [`DEFAULT_SLEEP_AFTER`] in production. Tests leave it `None`, so an instance there
+    /// sleeps only when a test sets something.
+    pub default_after: Option<SleepAfter>,
 }
 
 impl SleepConfig {
@@ -43,6 +47,7 @@ impl SleepConfig {
             sample_interval: Duration::from_secs(20),
             second: Duration::from_secs(1),
             drain: Duration::from_secs(1),
+            default_after: Some(DEFAULT_SLEEP_AFTER),
         }
     }
 
@@ -58,6 +63,8 @@ pub struct Sleeper {
     instances: Mutex<BTreeMap<String, Instance>>,
     /// The closed connections the idle loop has counted.
     closed: Closed,
+    /// [`SleepConfig::default_after`], which every reader of a `sleep_after` needs.
+    default_after: Option<SleepAfter>,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +86,16 @@ struct Instance {
 }
 
 impl Sleeper {
+    /// With [`SleepConfig::default_after`].
+    pub fn new(default_after: Option<SleepAfter>) -> Self {
+        Self { default_after, ..Self::default() }
+    }
+
+    /// How long an instance with no `sleep_after` anywhere may idle.
+    pub fn default_after(&self) -> Option<SleepAfter> {
+        self.default_after
+    }
+
     fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Instance>> {
         self.instances.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -287,7 +304,9 @@ async fn sample(ctx: &Context, cfg: &SleepConfig) {
         if !sleeper.running(name, Some(pid)) {
             continue;
         }
-        let (Some(secs), _) = effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after) else {
+        let (Some(secs), _) =
+            effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after, sleeper.default_after())
+        else {
             continue;
         };
         sleeper.seen(name);
@@ -331,7 +350,7 @@ async fn sample(ctx: &Context, cfg: &SleepConfig) {
     for (name, pid) in &draining {
         let may_sleep = snapshot.as_ref().and_then(|s| {
             let entry = s.services.services.get(name).filter(|e| !e.stopped)?;
-            effective_sleep(entry.sleep_after, s.yard.service_sleep_after).0
+            effective_sleep(entry.sleep_after, s.yard.service_sleep_after, sleeper.default_after()).0
         });
         if may_sleep.is_none() {
             sleeper.stay_awake(name);

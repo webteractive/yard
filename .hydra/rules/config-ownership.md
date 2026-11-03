@@ -59,8 +59,10 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     and then reconcile. The edit itself checks the entry is still there (`SERVICE_NOT_FOUND`
     otherwise): setting a key under a missing table would write a stub entry that `services.toml`
     cannot parse. Nothing else, `services.restart` included, ever clears `stopped`.
-  - Sleep (M4e) is opt-in user config: `service_sleep_after` in `yard.toml` and `sleep_after` per
-    instance in `services.toml` (`"15m"`, `"off"`, at least 60 s; the instance key wins).
+  - Sleep (M4e) is user config: `service_sleep_after` in `yard.toml` and `sleep_after` per
+    instance in `services.toml` (`"15m"`, `"off"`, at least 60 s; the instance key wins). With
+    neither, yardd's `SleepConfig.default_after` applies: `DEFAULT_SLEEP_AFTER`, 15 min, in
+    production (on by default since 2026-11-03, the maintainer; it was opt-in), `None` in test daemons.
     `services.sleep.set` writes or removes the instance key through `TomlFile`
     (`services::set_sleep_after`); nothing else writes either key. Whether an instance sleeps is
     runtime state in yardd's `Sleeper`, never written to a TOML: sleeping is not `stopped`.

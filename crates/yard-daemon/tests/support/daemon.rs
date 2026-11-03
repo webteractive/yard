@@ -58,6 +58,8 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
             sample_interval: Duration::from_millis(50),
             second: Duration::from_millis(1),
             drain: Duration::from_millis(200),
+            // Nothing sleeps unless a test says so; the production default is 15 min.
+            default_after: None,
         },
         // Never this machine's home: its emailulator and LaunchAgent are not a test's.
         home,

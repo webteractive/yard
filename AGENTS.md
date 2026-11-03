@@ -68,7 +68,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   M4e, on-demand services (instances sleep when idle and wake on use), is designed in
   `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
   written in another session and checked against the code; the maintainer answered its §13 questions
-  and approved it on 2026-10-26: sleeping is opt-in) and planned in
+  and approved it on 2026-10-26: sleeping is opt-in; on 2026-11-03 the maintainer made it the default, 15 min
+  unused, `off` per instance or in `yard.toml` to opt out) and planned in
   `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26). It
   is built on main (2026-10-26, before M4d) and verified on this machine on 2026-10-26 with
   `scripts/e2e-m1.sh` and `e2e-m4e.sh` passing on their first run (maintainer approved the run); a wake

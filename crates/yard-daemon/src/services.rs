@@ -202,7 +202,7 @@ pub fn service_info(
         _ => None,
     };
     let (sleep_after_secs, sleep_after_source) =
-        effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after);
+        effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after, sleeper.default_after());
     let port_of = |unit: &str, usual: u16| snapshot.registry.entries.get(unit).map_or(usual, |e| e.port);
     let console = (engine == Engine::Minio && serves_console(&snapshot.services, &snapshot.resolution.sites))
         .then(|| {

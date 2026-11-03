@@ -155,7 +155,7 @@ pub enum Command {
     /// List the service instances (MySQL, PostgreSQL, Redis, MinIO, emailulator), their ports,
     /// logins and who runs them.
     ///
-    /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
+    /// Instances sleep after 15 minutes unused unless set otherwise (service_sleep_after in yard.toml, or yard service sleep-after; off keeps one awake); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
     Services,
     /// Add, remove, start, stop or inspect one service instance.
     Service {
@@ -236,7 +236,7 @@ pub enum ServiceAction {
     },
     /// Start an instance (and keep it started across yardd restarts), then wait until it is up.
     ///
-    /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
+    /// Instances sleep after 15 minutes unused unless set otherwise (service_sleep_after in yard.toml, or yard service sleep-after; off keeps one awake); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
     Start { instance: String },
     /// Stop an instance; yardd leaves it stopped until yard service start.
     Stop { instance: String },
@@ -256,11 +256,11 @@ pub enum ServiceAction {
     Port { instance: String, port: u16 },
     /// Set how long an instance may go unused before it sleeps, in services.toml.
     ///
-    /// Instances can sleep when idle (service_sleep_after in yard.toml, or yard service sleep-after); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
+    /// Instances sleep after 15 minutes unused unless set otherwise (service_sleep_after in yard.toml, or yard service sleep-after; off keeps one awake); a sleeping one wakes on the next PHP request, php or composer in a site that uses it, or yard service start. GUI clients cannot wake one.
     SleepAfter {
         instance: String,
         /// A duration of at least 60s (90s, 15m, 1h), off to keep it awake, or default to
-        /// follow service_sleep_after in yard.toml.
+        /// follow service_sleep_after in yard.toml (15m when that is unset too).
         after: String,
     },
 }

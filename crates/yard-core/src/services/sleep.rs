@@ -10,6 +10,11 @@ use yard_proto::SettingSource;
 /// The shortest `sleep_after`: a shorter one would stop an instance between two requests.
 pub const MIN_SLEEP_SECS: u64 = 60;
 
+/// How long an instance with no `sleep_after` of its own, and none in `yard.toml`, may go
+/// unused before it sleeps (maintainer, 2026-11-03; sleeping was opt-in before). `"off"` on the
+/// instance or in `yard.toml` keeps instances awake.
+pub const DEFAULT_SLEEP_AFTER: SleepAfter = SleepAfter::After(15 * 60);
+
 /// `service_sleep_after` in `yard.toml` or an instance's `sleep_after` in `services.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
@@ -67,15 +72,17 @@ impl fmt::Display for SleepAfter {
 }
 
 /// The seconds an instance may idle, and where that comes from: its own key wins over
-/// `yard.toml`'s; `off` (or neither) is `None`.
+/// `yard.toml`'s, and either over `default` (yardd's [`DEFAULT_SLEEP_AFTER`]); `off` is `None`.
 pub fn effective_sleep(
     instance: Option<SleepAfter>,
     machine: Option<SleepAfter>,
+    default: Option<SleepAfter>,
 ) -> (Option<u64>, SettingSource) {
-    let (setting, source) = match (instance, machine) {
-        (Some(s), _) => (s, SettingSource::ServicesToml),
-        (None, Some(s)) => (s, SettingSource::YardToml),
-        (None, None) => return (None, SettingSource::Default),
+    let (setting, source) = match (instance, machine, default) {
+        (Some(s), _, _) => (s, SettingSource::ServicesToml),
+        (None, Some(s), _) => (s, SettingSource::YardToml),
+        (None, None, Some(s)) => (s, SettingSource::Default),
+        (None, None, None) => return (None, SettingSource::Default),
     };
     match setting {
         SleepAfter::Off => (None, source),
@@ -122,15 +129,22 @@ mod tests {
     }
 
     #[test]
-    fn effective_sleep_instance_then_machine_then_off() {
+    fn effective_sleep_instance_then_machine_then_the_default() {
         use SleepAfter::*;
+        let default = Some(DEFAULT_SLEEP_AFTER);
         assert_eq!(
-            effective_sleep(Some(After(3600)), Some(After(900))),
+            effective_sleep(Some(After(3600)), Some(After(900)), default),
             (Some(3600), SettingSource::ServicesToml)
         );
-        assert_eq!(effective_sleep(None, Some(After(900))), (Some(900), SettingSource::YardToml));
-        assert_eq!(effective_sleep(Some(Off), Some(After(900))), (None, SettingSource::ServicesToml));
-        assert_eq!(effective_sleep(None, None), (None, SettingSource::Default));
+        assert_eq!(effective_sleep(None, Some(After(1800)), default), (Some(1800), SettingSource::YardToml));
+        assert_eq!(
+            effective_sleep(Some(Off), Some(After(900)), default),
+            (None, SettingSource::ServicesToml)
+        );
+        assert_eq!(effective_sleep(None, Some(Off), default), (None, SettingSource::YardToml));
+        assert_eq!(effective_sleep(None, None, default), (Some(900), SettingSource::Default));
+        assert_eq!(effective_sleep(None, None, None), (None, SettingSource::Default));
+        assert_eq!(DEFAULT_SLEEP_AFTER.to_string(), "15m");
     }
 
     #[test]
