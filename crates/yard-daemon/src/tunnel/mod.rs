@@ -5,6 +5,7 @@
 
 pub mod cloudflared;
 pub mod monitor;
+pub mod named;
 
 use crate::describe;
 use crate::probe::Proto;

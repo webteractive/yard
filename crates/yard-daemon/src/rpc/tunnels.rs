@@ -5,6 +5,7 @@ use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::reconcile::Reconciler;
 use crate::services::{missing_program, tail};
+use crate::tunnel::named::{self, AddNamed};
 use crate::tunnel::{self, Runtime};
 use std::path::Path;
 use std::sync::PoisonError;
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use yard_core::Paths;
 use yard_core::config::{TomlFile, load_yard};
 use yard_core::tunnel::cloudflared::cert_path;
-use yard_core::tunnel::{unit, valid_host};
+use yard_core::tunnel::{domain_for, unit, valid_host};
 use yard_proto::methods::{TunnelAddParams, TunnelDomainAddParams, TunnelDomainParams, TunnelRemoveParams};
 use yard_proto::{
     ErrorCode, JobStarted, TunnelDomain, TunnelInfo, TunnelProvider, TunnelRemoved, TunnelState, YardError,
@@ -77,8 +78,16 @@ pub async fn add(ctx: &Context, p: TunnelAddParams) -> Result<JobStarted, YardEr
     {
         return Err(missing);
     }
-    if p.host.is_some() {
-        return Err(YardError::new(ErrorCode::InvalidArgument, "named tunnels are not built yet"));
+    if let Some(host) = &p.host {
+        let named = check_named(ctx, &p, host)?;
+        return Ok(start_named(ctx, named));
+    }
+    if p.tunnel.is_some() {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            "a tunnel to adopt needs the host to route to it",
+        )
+        .with_hint(format!("yard tunnel {} --host <host> --tunnel <name>", p.site)));
     }
     let (reconciler, runtime, paths, wait) =
         (ctx.reconciler.clone(), ctx.tunnels.clone(), ctx.paths.clone(), ctx.tunnel_ready_wait);
@@ -105,6 +114,70 @@ pub async fn add(ctx: &Context, p: TunnelAddParams) -> Result<JobStarted, YardEr
             }
         }
     }))
+}
+
+/// The checks a named tunnel gets before its job: a valid host under a domain that is set up and
+/// signed in, and no other site's tunnel on it.
+fn check_named(ctx: &Context, p: &TunnelAddParams, host: &str) -> Result<AddNamed, YardError> {
+    if !valid_host(host) {
+        return Err(YardError::new(ErrorCode::InvalidArgument, format!("{host:?} is not a host name"))
+            .with_hint("give a lowercase name such as blog.example.com"));
+    }
+    let (yard, _) = load_yard(&ctx.paths)?;
+    let Some(domain) = domain_for(host, &yard.tunnel_domains) else {
+        let labels: Vec<&str> = host.rsplitn(3, '.').take(2).collect();
+        let zone = format!("{}.{}", labels[1], labels[0]);
+        return Err(YardError::new(
+            ErrorCode::TunnelDomainNotSetUp,
+            format!("{host} is not under a domain set up for tunnels"),
+        )
+        .with_hint(format!("yard tunnels domain add {zone}")));
+    };
+    if !cert_path(ctx.reconciler.home(), domain).exists() {
+        return Err(tunnel::cloudflared::not_logged_in(domain));
+    }
+    let taken = ctx
+        .reconciler
+        .read(|s| {
+            s.sites_cfg
+                .sites
+                .iter()
+                .find(|(name, e)| *name != &p.site && e.tunnel.as_ref().is_some_and(|t| t.host() == host))
+                .map(|(name, _)| name.clone())
+        })
+        .flatten();
+    if let Some(other) = taken {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("{host} is already {other}'s tunnel host"),
+        )
+        .with_hint(format!("yard untunnel {other}")));
+    }
+    Ok(AddNamed {
+        site: p.site.clone(),
+        host: host.to_string(),
+        domain: domain.to_string(),
+        tunnel: p.tunnel.clone(),
+        overwrite_dns: p.overwrite_dns,
+    })
+}
+
+/// The `tunnel-add` job for a named tunnel: set it up, then wait for it to be ready. A tunnel
+/// that is set up but not ready yet keeps its config; its unit keeps trying.
+fn start_named(ctx: &Context, a: AddNamed) -> JobStarted {
+    let (reconciler, runtime, brew, paths, wait) = (
+        ctx.reconciler.clone(),
+        ctx.tunnels.clone(),
+        ctx.brew.clone(),
+        ctx.paths.clone(),
+        ctx.tunnel_ready_wait,
+    );
+    ctx.jobs.start("tunnel-add", move |job: JobCtx| async move {
+        named::add(&job, &reconciler, &brew, &paths, &a).await?;
+        let info = ready(&job, &reconciler, &runtime, &paths, &a.site, wait).await?;
+        job.set_result(serde_json::to_value(info).map_err(YardError::internal)?);
+        Ok(())
+    })
 }
 
 /// The tunnel's info once it is ready and has its URL; `TUNNEL_NOT_READY` after `wait`, and
@@ -150,7 +223,12 @@ pub async fn remove(ctx: &Context, p: TunnelRemoveParams) -> Result<JobStarted, 
             .with_hint(format!("yard tunnel {}", p.site)));
     }
     if !ctx.tunnels.quick_sites().contains(&p.site) {
-        return Err(YardError::new(ErrorCode::InvalidArgument, "named tunnels are not built yet"));
+        let (reconciler, brew, paths) = (ctx.reconciler.clone(), ctx.brew.clone(), ctx.paths.clone());
+        return Ok(ctx.jobs.start("tunnel-remove", move |job: JobCtx| async move {
+            let removed = named::remove(&job, &reconciler, &brew, &paths, &p.site, p.keep_tunnel).await?;
+            job.set_result(serde_json::to_value(removed).map_err(YardError::internal)?);
+            Ok(())
+        }));
     }
     let (reconciler, runtime) = (ctx.reconciler.clone(), ctx.tunnels.clone());
     let site = p.site;

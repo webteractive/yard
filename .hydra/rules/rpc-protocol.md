@@ -61,7 +61,13 @@ triggers:
   site is unlinked or unproxied (P8). `tunnels.domains` lists `[tunnels.cloudflared] domains`
   with `logged_in`; `tunnels.domain_add` (a `tunnel-login` job) runs `cloudflared tunnel login`
   only when the domain has no certificate yet and records the domain only once it has one;
-  `tunnels.domain_remove` forgets a domain and keeps its certificate. `TunnelProvider`, `TunnelKind` and
+  `tunnels.domain_remove` forgets a domain and keeps its certificate. With a `host`, `tunnels.add`
+  is a named tunnel (spec §8): it creates `yard-<site>` (or adopts `tunnel`), routes the host
+  (`TUNNEL_DNS_EXISTS` without `overwrite_dns`), writes `[sites.<site>.tunnel]` and records the
+  facts; a failure deletes a tunnel the job made and leaves a routed host in `dns_left`, and a
+  tunnel that is not ready in time keeps its config. `tunnels.remove` of one deletes it only
+  when Yard made it and `keep_tunnel` is not set, and `sites.unlink`/`unproxy` refuse a site
+  with a named tunnel (`SITE_TUNNELLED`). `TunnelProvider`, `TunnelKind` and
   `TunnelState` each have an `Other` fallback the daemon never sends.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), for nginx's `auth_request` and the shims.

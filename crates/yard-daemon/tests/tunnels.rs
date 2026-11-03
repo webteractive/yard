@@ -14,7 +14,9 @@ use tempfile::TempDir;
 use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
 use yard_core::ports::Registry;
-use yard_core::tunnel::cloudflared::{Origin, cert_path, named_yml, quick_yml};
+use yard_core::tunnel::cloudflared::{
+    Origin, cert_path, created_credentials, default_credentials, named_yml, quick_yml,
+};
 use yard_core::tunnel::facts::{Facts, NamedFacts};
 use yard_daemon::events::EventBus;
 use yard_daemon::privileged::PrivilegedSockets;
@@ -543,5 +545,281 @@ async fn domain_remove_forgets_only_the_domain() {
     let e = c.call("tunnels.domain_remove", json!({"domain": "example.com"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidArgument);
     assert_eq!(e.hint.as_deref(), Some("yard tunnels domains"));
+    d.shutdown().await.unwrap();
+}
+
+/// A started daemon with `blog` and `shop` linked and `example.com` set up and signed in.
+async fn named_daemon() -> Daemon {
+    let d = prepared("").await;
+    d.fx.add_cloudflared();
+    let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    std::fs::write(d.fx.paths.ports_toml(), format!("{}{ports}", auto_range())).unwrap();
+    std::fs::write(d.fx.paths.yard_toml(), "[tunnels.cloudflared]\ndomains = [\"example.com\"]\n").unwrap();
+    let cert = cert_path(&d.opts.home, "example.com");
+    std::fs::create_dir_all(cert.parent().unwrap()).unwrap();
+    std::fs::write(&cert, "fake").unwrap();
+    d.project("blog");
+    d.project("shop");
+    d.start().await
+}
+
+async fn add_named(d: &Daemon, params: Value) -> (Vec<String>, Option<YardError>, Value) {
+    let mut c = d.client().await;
+    run_job_result(&mut c, "tunnels.add", params).await
+}
+
+async fn untunnel(d: &Daemon, site: &str) -> (Vec<String>, Option<YardError>, Value) {
+    let mut c = d.client().await;
+    run_job_result(&mut c, "tunnels.remove", json!({"site": site})).await
+}
+
+/// The fake's management calls, without `tunnel`, `--origincert <cert>` or the unit's runs.
+fn managed_calls(d: &Daemon) -> Vec<String> {
+    calls(d)
+        .lines()
+        .filter(|l| !l.starts_with("tunnel --config"))
+        .map(|l| {
+            let words: Vec<&str> = l.split(' ').collect();
+            let mut kept = vec![];
+            let mut skip = false;
+            for w in words.into_iter().skip(1) {
+                if skip {
+                    skip = false;
+                } else if w == "--origincert" {
+                    skip = true;
+                } else {
+                    kept.push(w);
+                }
+            }
+            kept.join(" ")
+        })
+        .collect()
+}
+
+fn facts(d: &Daemon) -> Facts {
+    Facts::load(&d.fx.paths.tunnels_state()).unwrap()
+}
+
+fn sites_toml(d: &Daemon) -> String {
+    std::fs::read_to_string(d.fx.paths.sites_toml()).unwrap()
+}
+
+#[tokio::test]
+async fn named_tunnel_creates_routes_and_runs() {
+    let d = named_daemon().await;
+    let (lines, error, result) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "Creating the Cloudflare tunnel yard-blog…"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "Routing blog.example.com to it…"), "{lines:?}");
+    let credentials = created_credentials(&d.opts.home, "example.com", "yard-blog");
+    assert_eq!(
+        managed_calls(&d),
+        [
+            "list --name yard-blog -o json".to_string(),
+            format!("create --credentials-file {} yard-blog", credentials.display()),
+            "list --name yard-blog -o json".to_string(),
+            "route dns id-yard-blog blog.example.com".to_string(),
+        ]
+    );
+    assert_eq!(result["url"], "https://blog.example.com");
+    assert_eq!(result["state"], "ready");
+    assert_eq!(result["tunnel"], json!({"name": "yard-blog", "id": "id-yard-blog", "created_by_yard": true}));
+    assert!(
+        sites_toml(&d).contains("[sites.blog.tunnel]\nhost = \"blog.example.com\""),
+        "{}",
+        sites_toml(&d)
+    );
+    let f = facts(&d).named["blog"].clone();
+    assert_eq!(
+        f,
+        NamedFacts {
+            id: "id-yard-blog".into(),
+            name: "yard-blog".into(),
+            created_by_yard: true,
+            routed: vec!["blog.example.com".into()],
+            credentials,
+            domain: "example.com".into(),
+        }
+    );
+    // Another site cannot take the same host.
+    let mut c = d.client().await;
+    let e = c.call("tunnels.add", json!({"site": "shop", "host": "blog.example.com"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument, "{e:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn named_tunnel_refuses_a_foreign_yard_tunnel() {
+    let d = named_daemon().await;
+    std::fs::write(cloudflared_dir(&d).join("tunnels.json"), r#"[{"id":"x1","name":"yard-blog"}]"#).unwrap();
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    let e = error.expect("refused");
+    assert_eq!(e.code, ErrorCode::TunnelExists, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some("yard tunnel blog --host blog.example.com --tunnel yard-blog"));
+    assert!(!sites_toml(&d).contains("tunnel"), "{}", sites_toml(&d));
+    assert!(!d.fx.paths.tunnels_state().exists());
+    assert!(!managed_calls(&d).iter().any(|c| c.starts_with("create") || c.starts_with("delete")));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn adopting_with_tunnel_never_deletes() {
+    let d = named_daemon().await;
+    std::fs::write(cloudflared_dir(&d).join("tunnels.json"), r#"[{"id":"shared-id","name":"blog-shared"}]"#)
+        .unwrap();
+    let credentials = default_credentials(&d.opts.home, "shared-id");
+    std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+    std::fs::write(&credentials, "{}").unwrap();
+    let (lines, error, _) =
+        add_named(&d, json!({"site": "blog", "host": "blog.example.com", "tunnel": "blog-shared"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(sites_toml(&d).contains("tunnel = \"blog-shared\""), "{}", sites_toml(&d));
+    let f = facts(&d).named["blog"].clone();
+    assert!(!f.created_by_yard);
+    assert_eq!(f.credentials, credentials);
+
+    let (_, error, removed) = untunnel(&d, "blog").await;
+    assert_eq!(error, None);
+    assert!(!managed_calls(&d).iter().any(|c| c.starts_with("delete") || c.starts_with("cleanup")));
+    assert_eq!(
+        removed,
+        json!({"site": "blog", "deleted_tunnel": false,
+               "dns_left": [{"host": "blog.example.com", "target": "shared-id.cfargotunnel.com"}]})
+    );
+    assert!(!facts(&d).named.contains_key("blog"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_existing_record_is_dns_exists_and_overwrite_passes_f() {
+    let d = named_daemon().await;
+    std::fs::write(cloudflared_dir(&d).join("dns-records"), "blog.example.com\n").unwrap();
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    let e = error.expect("refused");
+    assert_eq!(e.code, ErrorCode::TunnelDnsExists, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some("yard tunnel blog --host blog.example.com --overwrite-dns"));
+    assert!(managed_calls(&d).contains(&"delete id-yard-blog".to_string()), "{:?}", managed_calls(&d));
+    assert!(!facts(&d).named.contains_key("blog"));
+    assert!(facts(&d).dns_left.is_empty());
+    assert!(!sites_toml(&d).contains("tunnel"));
+
+    let (lines, error, _) =
+        add_named(&d, json!({"site": "blog", "host": "blog.example.com", "overwrite_dns": true})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(managed_calls(&d).contains(&"route dns -f id-yard-blog blog.example.com".to_string()));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_foreign_zone_deletes_the_new_tunnel() {
+    let d = named_daemon().await;
+    std::fs::write(cloudflared_dir(&d).join("foreign-zones"), "example.com\n").unwrap();
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    let e = error.expect("refused");
+    assert_eq!(e.code, ErrorCode::TunnelDnsFailed, "{e:?}");
+    assert_eq!(
+        e.hint.as_deref(),
+        Some("check that example.com is in the Cloudflare account you signed in to")
+    );
+    assert!(
+        e.data.as_ref().is_some_and(|d| d["output"].as_str().is_some_and(|o| o.contains("zone not found")))
+    );
+    assert!(managed_calls(&d).contains(&"delete id-yard-blog".to_string()));
+    assert!(!facts(&d).named.contains_key("blog"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn untunnel_deletes_and_leaves_the_record() {
+    let d = named_daemon().await;
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    assert_eq!(error, None);
+    let (_, error, removed) = untunnel(&d, "blog").await;
+    assert_eq!(error, None);
+    assert_eq!(
+        removed,
+        json!({"site": "blog", "deleted_tunnel": true,
+               "dns_left": [{"host": "blog.example.com", "target": "id-yard-blog.cfargotunnel.com"}]})
+    );
+    let calls = managed_calls(&d);
+    let cleanup = calls.iter().position(|c| c == "cleanup id-yard-blog").expect("cleanup");
+    let delete = calls.iter().position(|c| c == "delete id-yard-blog").expect("delete");
+    assert!(cleanup < delete);
+    let f = facts(&d);
+    assert!(!f.named.contains_key("blog"));
+    assert_eq!(f.dns_left.len(), 1);
+    assert_eq!(f.dns_left[0].host, "blog.example.com");
+    assert_eq!(f.dns_left[0].since.len(), 10, "{:?}", f.dns_left[0]);
+    assert!(!sites_toml(&d).contains("tunnel"));
+    let mut c = d.client().await;
+    assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_delete_keeps_the_id() {
+    let d = named_daemon().await;
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    assert_eq!(error, None);
+    std::fs::write(cloudflared_dir(&d).join("delete-fails"), "").unwrap();
+    let (lines, error, removed) = untunnel(&d, "blog").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with("warning:")), "{lines:?}");
+    assert_eq!(removed["deleted_tunnel"], false);
+    let f = facts(&d);
+    assert_eq!(f.named["blog"].id, "id-yard-blog");
+    assert!(f.named["blog"].routed.is_empty());
+    assert_eq!(f.dns_left.len(), 1);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn named_tunnel_returns_after_restart() {
+    let mut d = named_daemon().await;
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    assert_eq!(error, None);
+    d.stop().await.unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let t = tunnel_where(&mut c, |t| t["state"] == "ready").await;
+    assert_eq!(t["kind"], "named");
+    assert_eq!(t["url"], "https://blog.example.com");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unlink_refuses_a_named_tunnel() {
+    let d = named_daemon().await;
+    let (_, error, _) = add_named(&d, json!({"site": "blog", "host": "blog.example.com"})).await;
+    assert_eq!(error, None);
+    let mut c = d.client().await;
+    let e = c.call("sites.unlink", json!({"name": "blog"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::SiteTunnelled);
+    assert_eq!(e.message, "blog is shared through a named tunnel");
+    assert_eq!(e.hint.as_deref(), Some("yard untunnel blog"));
+    assert!(sites_toml(&d).contains("[sites.blog]"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn host_outside_every_domain_is_not_set_up() {
+    let d = named_daemon().await;
+    let mut c = d.client().await;
+    let e = c.call("tunnels.add", json!({"site": "blog", "host": "blog.other.net"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::TunnelDomainNotSetUp);
+    assert_eq!(e.hint.as_deref(), Some("yard tunnels domain add other.net"));
+    let e = c.call("tunnels.add", json!({"site": "blog", "host": "Not A Host"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_certificate_is_not_logged_in() {
+    let d = named_daemon().await;
+    std::fs::remove_file(cert_path(&d.opts.home, "example.com")).unwrap();
+    let mut c = d.client().await;
+    let e = c.call("tunnels.add", json!({"site": "blog", "host": "blog.example.com"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::TunnelNotLoggedIn);
+    assert_eq!(e.hint.as_deref(), Some("yard tunnels domain add example.com"));
     d.shutdown().await.unwrap();
 }

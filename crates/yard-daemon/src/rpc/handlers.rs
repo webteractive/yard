@@ -323,6 +323,15 @@ async fn unlink(ctx: &Context, p: NameParams, key: &str) -> Result<(), YardError
             )
             .with_hint("yard sites lists them"));
         }
+        let tunnelled =
+            file.doc().get("sites").and_then(|s| s.get(&p.name)).and_then(|s| s.get("tunnel")).is_some();
+        if tunnelled {
+            return Err(YardError::new(
+                ErrorCode::SiteTunnelled,
+                format!("{} is shared through a named tunnel", p.name),
+            )
+            .with_hint(format!("yard untunnel {}", p.name)));
+        }
         file.remove(&["sites", &p.name]);
         Ok(())
     })?;

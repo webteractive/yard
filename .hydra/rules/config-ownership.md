@@ -96,6 +96,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   and stays when the tunnel ends. `state/tunnels.json` (the named tunnels' facts) is Yard's state,
   written 0600; reconcile only reads it. `[tunnels.cloudflared] domains` in `yard.toml` is the
   user's, written only by `tunnels.domain_add` and `domain_remove` through `TomlFile`
+  (as `[sites.<site>.tunnel]` in `sites.toml` is only by `tunnels.add` and `remove`, beside the
+  facts they save)
   (`array_push_unique`, `array_remove`). Each domain's certificate is cloudflared's, under
   `~/.cloudflared/yard/<domain>/` (P5): Yard checks it exists and never reads, copies, moves or
   deletes it.
