@@ -189,7 +189,11 @@ error, 3 `yardd` is not running.
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |
 | `yard source trust\|untrust <formula> [--tap]` | yes | Runs `brew trust` / `brew untrust` for one formula, or with `--tap` a whole tap. Needs no terminal. Untrusting something installed does not stop it serving, but brew will no longer load it. |
 | `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx` first. The PHP ones follow the nearest `.yard`, then the site's managed `.yard`, then the site's isolated version, then `.yard-php`, then the default; the Node ones the nearest pin, where in one directory a `.yard`'s `node` beats the site's pin, which beats `.nvmrc`, then `.node-version`; with none, the default. Warns when another `php` or `node` would still win, naming Herd's, nvm's, mise's, fnm's or brew's. |
-| `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq or `php-fpm-<version>`. |
+| `yard tunnel [site] [--quick \| --host <hostname>] [--tunnel <name\|uuid>] [--overwrite-dns]` | yes | Shares a site at a public URL through cloudflared (`brew install cloudflared`). `--quick` gives a random `trycloudflare.com` URL until yardd stops; `--host` a name on a domain set up with `yard tunnels domain add`, kept in `sites.toml` until `yard untunnel`. With neither, it asks when a domain is set up (and without a terminal fails with `TUNNEL_KIND_REQUIRED`, exit 2), and makes a quick tunnel when none is. Prints the URL and the `APP_URL` to use. |
+| `yard untunnel [site] [--keep-tunnel]` | yes | Stops sharing a site. For a named tunnel it deletes the Cloudflare tunnel Yard made (unless `--keep-tunnel`, and never one adopted with `--tunnel`) and names the DNS record left for you to delete in Cloudflare's dashboard. |
+| `yard tunnels` | yes | One row per tunnel: `SITE URL KIND STATE TUNNEL`. |
+| `yard tunnels domain add <domain>` / `remove <domain>`, `yard tunnels domains` | yes | Signs cloudflared in to Cloudflare for a domain in your browser (in a terminal only) and records it in `yard.toml`; `remove` forgets it and keeps the sign-in; `domains` lists them with `SIGNED IN`. |
+| `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq, `php-fpm-<version>` or `tunnel-<site>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 
 ## Development

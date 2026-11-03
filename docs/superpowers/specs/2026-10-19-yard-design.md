@@ -550,7 +550,9 @@ profile; Yard does not edit dotfiles.
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs|port|sleep.set`, `sites.info`,
   `sources.list|trust|untrust`,
-  `ca.info`, `node.list|install|uninstall|default|use|unuse`, `units.restart`, `jobs.cancel`, `env.print`.
+  `ca.info`, `node.list|install|uninstall|default|use|unuse`,
+  `tunnels.list|add|remove|domains|domain_add|domain_remove` (M5, tunnels spec §12), `units.restart`,
+  `jobs.cancel`, `env.print`.
 - Long operations (brew installs) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20

@@ -186,7 +186,44 @@ pub enum Command {
         #[command(subcommand)]
         action: SourceAction,
     },
-    /// Restart a unit: nginx, dnsmasq or php-fpm-<version>.
+    /// Share a site at a public URL through a cloudflared tunnel. --quick gives a random
+    /// trycloudflare.com URL that lasts until yardd stops; --host gives a name on a domain you set
+    /// up with yard tunnels domain add, which stays until yard untunnel. With neither, it asks
+    /// when a domain is set up, and makes a quick tunnel when none is.
+    Tunnel {
+        /// The site; defaults to the site that contains the current directory.
+        site: Option<String>,
+        /// A random trycloudflare.com URL, until yardd stops.
+        #[arg(long, conflicts_with = "host")]
+        quick: bool,
+        /// The public name, under a domain set up with yard tunnels domain add.
+        #[arg(long, value_name = "HOSTNAME")]
+        host: Option<String>,
+        /// The tunnel provider; cloudflared is the only one.
+        #[arg(long, value_name = "NAME")]
+        provider: Option<String>,
+        /// An existing Cloudflare tunnel to use instead of creating yard-<site>; it is never deleted.
+        #[arg(long, value_name = "NAME|UUID", requires = "host")]
+        tunnel: Option<String>,
+        /// Replace a DNS record the host already has.
+        #[arg(long, requires = "host")]
+        overwrite_dns: bool,
+    },
+    /// Stop sharing a site. For a named tunnel, also deletes the Cloudflare tunnel Yard created;
+    /// the DNS record is left for you to delete.
+    Untunnel {
+        /// The site; defaults to the site that contains the current directory.
+        site: Option<String>,
+        /// Keep the Cloudflare tunnel Yard created.
+        #[arg(long)]
+        keep_tunnel: bool,
+    },
+    /// List the sites shared through tunnels, with their public URLs and state.
+    Tunnels {
+        #[command(subcommand)]
+        command: Option<TunnelsCommand>,
+    },
+    /// Restart a unit: nginx, dnsmasq, php-fpm-<version> or tunnel-<site>.
     Restart { unit: String },
     /// Install or remove the root helper; run with sudo.
     Helper {
@@ -263,6 +300,31 @@ pub enum ServiceAction {
         /// follow service_sleep_after in yard.toml (15m when that is unset too).
         after: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TunnelsCommand {
+    /// Set up or forget a domain that yard tunnel --host may use.
+    Domain {
+        #[command(subcommand)]
+        command: DomainCommand,
+    },
+    /// List the domains set up for named tunnels, and whether cloudflared is signed in for each.
+    Domains,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DomainCommand {
+    /// Sign in to Cloudflare in your browser and pick a domain that yard tunnel --host may use.
+    Add {
+        /// The domain, as Cloudflare shows the zone, e.g. example.com.
+        domain: String,
+        /// The tunnel provider; cloudflared is the only one.
+        #[arg(long, value_name = "NAME")]
+        provider: Option<String>,
+    },
+    /// Forget a domain. Tunnels on it keep running; its sign-in stays.
+    Remove { domain: String },
 }
 
 #[derive(Debug, Subcommand)]

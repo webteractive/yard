@@ -108,6 +108,13 @@ triggers:
   RESTARTS `-`). `yard service sleep-after <i> <duration|off|default>` prints
   `<i> now sleeps after <d> without use`, `<i> never sleeps`, `<i> now follows yard.toml (<d>)` or,
   with nothing in `yard.toml`, `<i> now follows the default (15m)`.
+- Tunnels (M5, `commands/tunnels.rs`): `yard tunnel` with neither `--quick` nor `--host` asks
+  the tunnels spec §4.1 question (`Choice [2]: `) only when `interactive`; with domains set up and
+  no terminal (or `--json`) it prints `TUNNEL_KIND_REQUIRED` and exits 2, sending no `tunnels.add`.
+  `yard tunnels domain add` refuses without a terminal (`INVALID_ARGUMENT`, hint `run it in a
+  terminal`), since cloudflared opens a browser. Their jobs print the spec §5 text from the job's
+  `result`; under `--json` the job's events and then the result as the last NDJSON line.
+  `yard untunnel` reads `tunnels.list` first, since `TunnelRemoved` does not name the tunnel.
 - Output meant to be pasted (`yard env`) has no header or footer lines (no `For agents and
   scripts` footer), only a blank line between blocks: notes are `# …` comments, and what to do about an empty result
   goes to stderr. A request the daemon resolves against a directory (`env`, `info`) sends

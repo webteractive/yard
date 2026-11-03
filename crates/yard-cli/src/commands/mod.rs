@@ -16,12 +16,13 @@ mod shims;
 mod sites;
 mod sources;
 mod trust;
+mod tunnels;
 mod units;
 mod version;
 
 use crate::cli::{
-    Cli, Command, ExtAction, HelperAction, NodeAction, OnOff, PhpAction, PortsAction, ServiceAction,
-    SourceAction,
+    Cli, Command, DomainCommand, ExtAction, HelperAction, NodeAction, OnOff, PhpAction, PortsAction,
+    ServiceAction, SourceAction, TunnelsCommand,
 };
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
@@ -166,6 +167,17 @@ pub async fn run(cli: Cli) -> i32 {
             sources::change(&ctx, target, tap, false).await
         }
         Command::InstallShims => shims::install(&ctx),
+        Command::Tunnel { site, quick, host, provider, tunnel, overwrite_dns } => {
+            let args = tunnels::TunnelArgs { site, quick, host, provider, tunnel, overwrite_dns };
+            tunnels::tunnel(&ctx, args).await
+        }
+        Command::Untunnel { site, keep_tunnel } => tunnels::untunnel(&ctx, site, keep_tunnel).await,
+        Command::Tunnels { command: None } => tunnels::list(&ctx).await,
+        Command::Tunnels { command: Some(TunnelsCommand::Domains) } => tunnels::domains(&ctx).await,
+        Command::Tunnels { command: Some(TunnelsCommand::Domain { command }) } => match command {
+            DomainCommand::Add { domain, provider } => tunnels::domain_add(&ctx, domain, provider).await,
+            DomainCommand::Remove { domain } => tunnels::domain_remove(&ctx, domain).await,
+        },
         Command::Restart { unit } => units::restart(&ctx, unit).await,
         Command::Helper { action: HelperAction::Install } => helper::install(&ctx).await,
         Command::Helper { action: HelperAction::Uninstall } => helper::uninstall(&ctx).await,
@@ -219,7 +231,7 @@ pub async fn run_job<P: Serialize>(
 /// for (Ctrl-C twice), with the exit code.
 #[derive(Debug)]
 pub enum JobEnd {
-    Finished(#[expect(dead_code, reason = "yard tunnel reads it (M5 Task 14)")] Option<serde_json::Value>),
+    Finished(Option<serde_json::Value>),
     Abandoned(i32),
 }
 
