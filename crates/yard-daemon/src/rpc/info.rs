@@ -72,7 +72,22 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
     };
     let mut blocks = note_clashes(blocks);
     blocks.extend(mail);
+    if let Some(site) = site {
+        blocks.extend(tunnel_block(ctx, &site.name).await);
+    }
     Ok(blocks)
+}
+
+/// The public `APP_URL` while `site` is shared through a tunnel that has a URL (tunnels spec
+/// §10); Yard never writes it into `.env`.
+async fn tunnel_block(ctx: &Context, site: &str) -> Option<EnvBlock> {
+    let infos = super::tunnels::infos(&ctx.reconciler, &ctx.tunnels).await;
+    let url = infos.into_iter().find(|t| t.site == site)?.url?;
+    Some(EnvBlock {
+        instance: "tunnel".into(),
+        lines: vec![format!("APP_URL={url}")],
+        note: Some(format!("while {site} is shared through a tunnel; Yard does not write .env")),
+    })
 }
 
 /// emailulator's `MAIL_*` lines while its LaunchAgent owns mail, with a note when it does not

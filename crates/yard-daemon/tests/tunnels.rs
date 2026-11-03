@@ -366,6 +366,31 @@ async fn quick_tunnel_add_and_remove_by_rpc() {
 }
 
 #[tokio::test]
+async fn env_prints_the_tunnel_app_url() {
+    let d = tunnel_daemon().await;
+    let (_, error, result) = add_quick(&d, "blog").await;
+    assert_eq!(error, None);
+    let origin = result["origin_port"].as_u64().unwrap();
+    let mut c = d.client().await;
+    let blocks = c.call("env.print", json!({"site": "blog"})).await.unwrap();
+    let tunnel = blocks.as_array().unwrap().last().cloned();
+    assert_eq!(
+        tunnel,
+        Some(json!({
+            "instance": "tunnel",
+            "lines": [format!("APP_URL=https://quick-{origin}.trycloudflare.com")],
+            "note": "while blog is shared through a tunnel; Yard does not write .env",
+        })),
+        "{blocks}"
+    );
+    let (_, error, _) = run_job_result(&mut c, "tunnels.remove", json!({"site": "blog"})).await;
+    assert_eq!(error, None);
+    let blocks = c.call("env.print", json!({"site": "blog"})).await.unwrap();
+    assert!(!blocks.as_array().unwrap().iter().any(|b| b["instance"] == "tunnel"), "{blocks}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_quick_tunnel_that_never_connects_leaves_nothing() {
     let d = tunnel_daemon().await;
     let cloudflared = Brew::new(d.fx.brew.path()).cloudflared_bin().parent().unwrap().to_path_buf();
