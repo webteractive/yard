@@ -215,6 +215,7 @@ mod tests {
             extensions: Default::default(),
             default_node: None,
             service_sleep_after: None,
+            tunnel_domains: vec![],
         }
     }
 

@@ -21,6 +21,8 @@ pub struct YardConfig {
     pub default_node: Option<NodeSpec>,
     /// How long a service instance may go unused before it sleeps (M4e spec §4).
     pub service_sleep_after: Option<SleepAfter>,
+    /// `[tunnels.cloudflared] domains`: where `yard tunnel --host` may put a name (tunnels spec §4.1).
+    pub tunnel_domains: Vec<String>,
 }
 
 /// Where an extension comes from. `bundled` is one PHP ships with (opcache), listed only
@@ -127,6 +129,22 @@ struct Raw {
     secure_by_default: bool,
     #[serde(default)]
     php: BTreeMap<toml::Spanned<String>, RawPhp>,
+    #[serde(default)]
+    tunnels: RawTunnels,
+}
+
+/// `[tunnels.<provider>]`; only cloudflared is built.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTunnels {
+    cloudflared: Option<RawTunnelProvider>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTunnelProvider {
+    #[serde(default)]
+    domains: Vec<toml::Spanned<String>>,
 }
 
 pub fn valid_tld(tld: &str) -> bool {
@@ -153,6 +171,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             tld: None,
             secure_by_default: false,
             php: BTreeMap::new(),
+            tunnels: RawTunnels::default(),
         },
     };
     let mut warnings = vec![];
@@ -209,6 +228,15 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
         }
         extensions.insert(v, exts);
     }
+    let mut tunnel_domains = vec![];
+    for domain in raw.tunnels.cloudflared.map(|c| c.domains).unwrap_or_default() {
+        if !crate::tunnel::valid_host(domain.get_ref()) {
+            let message =
+                format!("tunnel domain {:?} must be a lowercase DNS name like example.com", domain.get_ref());
+            return Err(config_error(file, text, Some(domain.span()), &message));
+        }
+        tunnel_domains.push(domain.into_inner());
+    }
     Ok((
         YardConfig {
             default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT),
@@ -217,6 +245,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             extensions,
             default_node: raw.default_node,
             service_sleep_after: raw.service_sleep_after,
+            tunnel_domains,
         },
         warnings,
     ))
@@ -387,5 +416,16 @@ custom = { source = "path", so = "/opt/ext/custom.so" }
     fn unsupported_php_is_config_invalid() {
         let e = parse(Some("default_php = \"5.6\"\n")).unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
+    }
+
+    #[test]
+    fn tunnel_domains_are_parsed_and_checked() {
+        let (c, _) =
+            parse_yard(Some("[tunnels.cloudflared]\ndomains = [\"example.com\"]\n"), Path::new(FILE))
+                .unwrap();
+        assert_eq!(c.tunnel_domains, ["example.com"]);
+        let e = parse(Some("[tunnels.cloudflared]\ndomains = [\"Example\"]\n")).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        assert!(parse(Some("[tunnels.ngrok]\ndomains = []\n")).is_err());
     }
 }

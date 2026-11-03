@@ -18,6 +18,7 @@ pub mod sites;
 pub mod sources;
 pub mod supervise;
 pub mod tls;
+pub mod tunnel;
 
 pub use paths::Paths;
 pub use php::PhpVersion;
