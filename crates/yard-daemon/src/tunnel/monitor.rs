@@ -8,33 +8,49 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::{Arc, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
+use yard_core::tunnel::valid_host;
 use yard_proto::{Event, TunnelInfo, TunnelKind, UnitState};
 
 /// How long one question to a metrics server may take.
 const ASK_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// The most of an answer read: cloudflared's are a line of JSON, and whatever else might hold
+/// the port must not grow yardd.
+const MAX_ANSWER: usize = 64 * 1024;
+
 /// An HTTP/1.1 `GET` of `path` on `127.0.0.1:<port>`: the status and the body, or `None` when
-/// nothing answered in `timeout`. Blocks.
+/// nothing answered in `timeout`, which bounds the whole exchange. At most `MAX_ANSWER` bytes
+/// are read. Blocks.
 pub fn http_get(port: u16, path: &str, timeout: Duration) -> Option<(u16, String)> {
+    let deadline = Instant::now() + timeout;
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut s = TcpStream::connect_timeout(&addr, timeout).ok()?;
-    s.set_read_timeout(Some(timeout)).ok()?;
     s.set_write_timeout(Some(timeout)).ok()?;
     write!(s, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").ok()?;
-    let mut text = String::new();
-    s.read_to_string(&mut text).ok()?;
+    let mut answer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while answer.len() < MAX_ANSWER {
+        let left = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())?;
+        s.set_read_timeout(Some(left)).ok()?;
+        match s.read(&mut chunk).ok()? {
+            0 => break,
+            n => answer.extend_from_slice(&chunk[..n.min(MAX_ANSWER - answer.len())]),
+        }
+    }
+    let text = String::from_utf8_lossy(&answer);
     let status = text.split(' ').nth(1)?.parse().ok()?;
     let body = text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
     Some((status, body))
 }
 
-/// The hostname in `/quicktunnel`'s `{"hostname": "…"}`, when it has one yet.
+/// The hostname in `/quicktunnel`'s `{"hostname": "…"}`, when it has one yet. Only a host under
+/// `trycloudflare.com` is taken, since it becomes the URL `yard tunnel` prints.
 fn quick_hostname(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    v["hostname"].as_str().filter(|h| !h.is_empty()).map(str::to_string)
+    v["hostname"].as_str().filter(|h| valid_host(h) && h.ends_with(".trycloudflare.com")).map(str::to_string)
 }
 
 /// Whether two infos differ in what `tunnel_changed` reports.
@@ -128,6 +144,42 @@ mod tests {
         );
         assert_eq!(quick_hostname(r#"{"hostname":""}"#), None);
         assert_eq!(quick_hostname("not json"), None);
+    }
+
+    #[test]
+    fn a_quick_hostname_is_a_trycloudflare_host() {
+        for bad in [
+            "evil.example.com",
+            "trycloudflare.com",
+            "a.trycloudflare.com/x",
+            "user@a.trycloudflare.com",
+            "a.trycloudflare.com:8443",
+            "A.trycloudflare.com",
+            "a b.trycloudflare.com",
+        ] {
+            let body = serde_json::json!({ "hostname": bad }).to_string();
+            assert_eq!(quick_hostname(&body), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_answer_is_read_up_to_a_cap() {
+        let _ports = crate::PORT_TESTS.lock().unwrap_or_else(PoisonError::into_inner);
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = write!(s, "HTTP/1.1 200 OK\r\n\r\n");
+            let chunk = vec![b'x'; 64 * 1024];
+            for _ in 0..64 {
+                if s.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+        });
+        let (status, body) = http_get(port, "/ready", Duration::from_secs(2)).expect("an answer");
+        assert_eq!(status, 200);
+        assert!(body.len() < MAX_ANSWER, "{}", body.len());
     }
 
     #[test]
