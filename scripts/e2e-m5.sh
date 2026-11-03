@@ -89,10 +89,20 @@ origin="$(jq -r '.origin_port' <<<"$info")"
 public_host="${url#https://}"
 pass "shared $site at $url (origin port $origin)"
 
-# 4. A visitor's request. A new trycloudflare.com name can take a while to resolve.
+# 4. A visitor's request. A new trycloudflare.com name takes a few seconds to be published,
+# and asking this Mac's resolver before then caches its NXDOMAIN for longer than the run, so
+# the address comes from Cloudflare's own resolver and curl is pinned to it.
+addr_ip=""
+for _ in $(seq 1 30); do
+  addr_ip="$(dig +short @1.1.1.1 "$public_host" A | grep -E '^[0-9.]+$' | head -n1 || true)"
+  [[ -n $addr_ip ]] && break
+  sleep 2
+done
+[[ -n $addr_ip ]] || fail "$public_host did not resolve at 1.1.1.1 within 60 s"
+visit() { curl -sS --max-time 10 --resolve "$public_host:443:$addr_ip" "$@" "$url/" 2>&1; }
 page=""
 for _ in $(seq 1 30); do
-  page="$(curl -s --max-time 10 "$url/" || true)"
+  page="$(visit || true)"
   [[ $page == site=yard-e2e-tunnel* ]] && break
   sleep 2
 done
@@ -105,7 +115,7 @@ pass "through the tunnel PHP sees HTTPS=on, Host $public_host and REMOTE_ADDR $a
 
 # 4b. A visitor's own X-Forwarded-Host never reaches PHP, where an app trusting every proxy
 # would build its links on it.
-page="$(curl -s --max-time 10 -H 'X-Forwarded-Host: forged.example' "$url/")"
+page="$(visit -H 'X-Forwarded-Host: forged.example')"
 grep -qx "xfh=$public_host" <<<"$page" || fail "PHP saw a forged X-Forwarded-Host: $page"
 pass "a forged X-Forwarded-Host is replaced by $public_host"
 

@@ -963,11 +963,14 @@ Each milestone is usable on its own and gets its own implementation plan.
      built on main on 2026-10-26, before M4d, and verified with `scripts/e2e-m4e.sh` on
      the maintainer's machine on 2026-10-26.
 5. **M5 Tunnels:** share a site at a public URL, or with whoever has the link, through
-   cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale
-   Funnel can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`
-   and planned in `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved
-   2026-11-03); built on main on 2026-11-03. `scripts/e2e-m5.sh` (a quick tunnel) has not run
-   yet, and a named tunnel is the maintainer's manual check on his own zone.
+   cloudflared, for webhooks and similar, behind a provider seam so ngrok and Tailscale Funnel
+   can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md` and
+   planned in `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03);
+   built on main on 2026-11-03 and, for a quick tunnel, verified with `scripts/e2e-m1.sh` and
+   `e2e-m5.sh` passing against yardd built from 0df393e (maintainer approved the run; its first pass
+   found that this Mac's resolver cached the NXDOMAIN of a URL asked for before Cloudflare
+   published it, so the script now resolves through 1.1.1.1). A named tunnel is the maintainer's manual
+   check on his own zone.
 6. **M6 Yard.app:** client, menu bar, main window, onboarding.
 7. **M7 Distribution:** signing, notarization, appdater, brew tap.
 

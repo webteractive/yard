@@ -4,7 +4,8 @@ Date: 2026-10-21
 Status: approved by the maintainer on 2026-10-22; built on main on 2026-11-03 from
 `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md`, whose rulings P1–P12 (made while
 planning) replace the builder's calls they change and are written into the sections below.
-`scripts/e2e-m5.sh` has not run yet. It extends `2026-10-19-yard-design.md` (the main spec),
+A quick tunnel was verified on this machine on 2026-11-03 (`scripts/e2e-m5.sh` passing); a named
+tunnel is the maintainer's manual check. It extends `2026-10-19-yard-design.md` (the main spec),
 updated in the same change (§15).
 
 Milestone numbers follow the order the maintainer set on 2026-10-21: M4 Node and services,

@@ -93,10 +93,13 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   `docroot`, `secure` and `extensions`, M4b `[services]`, M4c `node`) and tunnels
   (`docs/superpowers/specs/2026-10-21-yard-tunnels-design.md`, M5), planned in
   `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03). M5 is built
-  inline on main (2026-11-03, one commit per task with the maintainer's approval, not pushed);
-  `scripts/e2e-m5.sh` has not run yet, and a named tunnel is the maintainer's manual check on his own
-  zone (`yard tunnels domain add <domain>`, `yard tunnel --host <name>.<domain>`, curl it,
-  `yard untunnel`, delete the CNAME, `yard doctor` clears once the record is gone).
+  inline on main (2026-11-03, one commit per task with the maintainer's approval); a quick tunnel is
+  verified on this machine on 2026-11-03 with `scripts/e2e-m1.sh` and `e2e-m5.sh` passing
+  against yardd built from 0df393e (maintainer approved the run; its first pass found that this Mac's
+  resolver cached the NXDOMAIN of a URL asked for before Cloudflare published it, so the script
+  now resolves through 1.1.1.1); a named tunnel is the maintainer's manual check on his own zone (`yard
+  tunnels domain add <domain>`, `yard tunnel --host <name>.<domain>`, curl it, `yard untunnel`,
+  delete the CNAME, `yard doctor` clears once the record is gone).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -314,7 +317,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   stays clean.
 - `scripts/e2e-m5.sh` — real-machine M5 check after `e2e-m1.sh`, with the network and no
   Cloudflare account: links a scratch PHP project under `$TMPDIR`, runs `yard tunnel --quick
-  --json` in it, curls the `trycloudflare.com` URL (retrying up to 60 s) and checks PHP sees
+  --json` in it, resolves the `trycloudflare.com` name through 1.1.1.1 with `dig` (this Mac's resolver,
+  asked before the name is published, caches the NXDOMAIN past the run) and curls it pinned to that
+  address with `--resolve` (each wait up to 60 s), and checks PHP sees
   `HTTPS=on`, the public host and a `REMOTE_ADDR` that is not loopback, checks the tunnel's
   origin port serves only that site whatever Host it gets, then `yard untunnel` leaves no
   `tunnel-<site>` unit and no port entry. It needs yardd running, jq and brew's `cloudflared`

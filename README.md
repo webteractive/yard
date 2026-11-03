@@ -36,7 +36,7 @@ running as its own LaunchAgent: `mail.<tld>` shows its web UI, `yard env` prints
 lines, and a `.yard` can say `emailulator = true`. M5 shares a site at a public HTTPS URL
 through cloudflared: `yard tunnel` gives a random `trycloudflare.com` URL with no account, or
 with `--host` a stable name on a Cloudflare domain you set up with `yard tunnels domain add`
-(built; its end-to-end check has not run yet). Yard.app (M6) comes later.
+(a quick tunnel is verified end to end; a named one awaits a check on a real domain). Yard.app (M6) comes later.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080`. Herd keeps its `.test` domain,
@@ -92,7 +92,8 @@ emailulator: against the agent already installed (it never installs, starts or s
 checks `yard doctor`, the external port entries, `mail.yard:8080` and a project's `MAIL_PORT`.
 `scripts/e2e-m5.sh` checks a quick tunnel with no Cloudflare account (it needs the network and
 brew's `cloudflared`): PHP behind the `trycloudflare.com` URL sees HTTPS, the public host and the
-visitor's address, and `yard untunnel` leaves nothing behind.
+visitor's address, and `yard untunnel` leaves nothing behind. It looks the new name up through
+1.1.1.1 and pins curl to that address, since a local resolver asked too early caches the miss.
 
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in
