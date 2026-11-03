@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use yard_core::brew::Brew;
 use yard_core::config::TomlFile;
 use yard_core::ports::Registry;
-use yard_core::tunnel::cloudflared::{Origin, named_yml, quick_yml};
+use yard_core::tunnel::cloudflared::{Origin, cert_path, named_yml, quick_yml};
 use yard_core::tunnel::facts::{Facts, NamedFacts};
 use yard_daemon::events::EventBus;
 use yard_daemon::privileged::PrivilegedSockets;
@@ -452,5 +452,96 @@ async fn unlink_ends_a_quick_tunnel() {
     d.project("blog");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
+    d.shutdown().await.unwrap();
+}
+
+fn cloudflared_dir(d: &Daemon) -> PathBuf {
+    Brew::new(d.fx.brew.path()).cloudflared_bin().parent().unwrap().to_path_buf()
+}
+
+fn calls(d: &Daemon) -> String {
+    std::fs::read_to_string(cloudflared_dir(d).join("calls")).unwrap_or_default()
+}
+
+#[tokio::test]
+async fn domain_add_signs_in_and_records_the_domain() {
+    let d = tunnel_daemon().await;
+    let mut c = d.client().await;
+    let (lines, error, result) =
+        run_job_result(&mut c, "tunnels.domain_add", json!({"domain": "example.com"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "In the browser, pick the zone example.com."), "{lines:?}");
+    assert!(calls(&d).lines().any(|l| l == "tunnel login"), "{}", calls(&d));
+    assert!(cert_path(&d.opts.home, "example.com").exists());
+    assert!(d.opts.home.join(".cloudflared/yard/example.com/.cloudflared/cert.pem").exists());
+    let yard = std::fs::read_to_string(d.fx.paths.yard_toml()).unwrap();
+    assert!(yard.contains("[tunnels.cloudflared]") && yard.contains("\"example.com\""), "{yard}");
+    let want = json!({"provider": "cloudflared", "domain": "example.com", "logged_in": true});
+    assert_eq!(result, want);
+    assert_eq!(c.call("tunnels.domains", Value::Null).await.unwrap(), json!([want]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn domain_add_with_a_certificate_skips_login() {
+    let d = tunnel_daemon().await;
+    let cert = cert_path(&d.opts.home, "example.com");
+    std::fs::create_dir_all(cert.parent().unwrap()).unwrap();
+    std::fs::write(&cert, "mine").unwrap();
+    let mut c = d.client().await;
+    let (lines, error, _) =
+        run_job_result(&mut c, "tunnels.domain_add", json!({"domain": "example.com"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "Already signed in for example.com."), "{lines:?}");
+    assert!(!calls(&d).contains("login"), "{}", calls(&d));
+    assert_eq!(std::fs::read_to_string(&cert).unwrap(), "mine");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_login_records_nothing() {
+    let d = tunnel_daemon().await;
+    std::fs::write(cloudflared_dir(&d).join("login-fails"), "").unwrap();
+    let mut c = d.client().await;
+    let (_, error, result) =
+        run_job_result(&mut c, "tunnels.domain_add", json!({"domain": "example.com"})).await;
+    assert!(error.is_some());
+    assert_eq!(result, Value::Null);
+    let yard = std::fs::read_to_string(d.fx.paths.yard_toml()).unwrap_or_default();
+    assert!(!yard.contains("example.com"), "{yard}");
+    assert_eq!(c.call("tunnels.domains", Value::Null).await.unwrap(), json!([]));
+    let e = c.call("tunnels.domain_add", json!({"domain": "Not A Domain"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    let e = c
+        .call("tunnels.domain_add", json!({"domain": "example.com", "provider": "ngrok"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.message, "no tunnel provider ngrok; the providers are: cloudflared");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn domain_remove_forgets_only_the_domain() {
+    let d = tunnel_daemon().await;
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "[tunnels.cloudflared]\n# the zones I own\ndomains = [\"example.com\", \"example.org\"]\n",
+    )
+    .unwrap();
+    for domain in ["example.com", "example.org"] {
+        let cert = cert_path(&d.opts.home, domain);
+        std::fs::create_dir_all(cert.parent().unwrap()).unwrap();
+        std::fs::write(&cert, "x").unwrap();
+    }
+    let mut c = d.client().await;
+    let left = c.call("tunnels.domain_remove", json!({"domain": "example.com"})).await.unwrap();
+    assert_eq!(left, json!([{"provider": "cloudflared", "domain": "example.org", "logged_in": true}]));
+    let yard = std::fs::read_to_string(d.fx.paths.yard_toml()).unwrap();
+    assert!(yard.contains("# the zones I own"), "{yard}");
+    assert!(!yard.contains("example.com"), "{yard}");
+    assert!(cert_path(&d.opts.home, "example.com").exists(), "the certificate stays");
+    let e = c.call("tunnels.domain_remove", json!({"domain": "example.com"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    assert_eq!(e.hint.as_deref(), Some("yard tunnels domains"));
     d.shutdown().await.unwrap();
 }

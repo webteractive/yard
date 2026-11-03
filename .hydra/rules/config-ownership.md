@@ -94,7 +94,11 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   maps it there); `tunnels/` is a managed directory, so an ended tunnel's yml is removed. Its
   `nginx/tunnel-overrides/<site>.conf`, included only in that site's tunnel listener, is user-owned
   and stays when the tunnel ends. `state/tunnels.json` (the named tunnels' facts) is Yard's state,
-  written 0600; reconcile only reads it.
+  written 0600; reconcile only reads it. `[tunnels.cloudflared] domains` in `yard.toml` is the
+  user's, written only by `tunnels.domain_add` and `domain_remove` through `TomlFile`
+  (`array_push_unique`, `array_remove`). Each domain's certificate is cloudflared's, under
+  `~/.cloudflared/yard/<domain>/` (P5): Yard checks it exists and never reads, copies, moves or
+  deletes it.
 - User overrides are applied too: the watcher sees `nginx/overrides/` and
   `nginx/tunnel-overrides/`, and the `overrides.conf`
   of every instance nginx includes it for (MinIO's, in `minio.<tld>`'s block; `watch.rs`

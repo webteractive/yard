@@ -1,16 +1,48 @@
 //! cloudflared, the first tunnel provider (tunnels spec §7): how its unit runs.
 
 use super::Provider;
+use crate::jobs::JobCtx;
 use std::path::Path;
 use yard_core::brew::Brew;
 use yard_core::services::render::UnitCommand;
 use yard_core::shim::child_path;
-use yard_proto::TunnelKind;
+use yard_core::tunnel::cloudflared::{cert_dir, cert_path};
+use yard_proto::{ErrorCode, TunnelKind, YardError};
 
 /// The formula `brew install` names when cloudflared is missing.
 pub const FORMULA: &str = "cloudflared";
 
 pub struct Cloudflared;
+
+/// `TUNNEL_NOT_LOGGED_IN`: `domain` has no certificate under `home`.
+pub fn not_logged_in(domain: &str) -> YardError {
+    YardError::new(ErrorCode::TunnelNotLoggedIn, format!("cloudflared is not signed in for {domain}"))
+        .with_hint(format!("yard tunnels domain add {domain}"))
+}
+
+/// Signs cloudflared in for `domain` (P5): `tunnel login` with `HOME` at the domain's own
+/// directory, so the certificate it writes is that domain's. Nothing runs when the certificate is
+/// already there. Yard never reads the certificate; it only checks that it exists.
+pub async fn login(job: &JobCtx, brew: &Brew, home: &Path, domain: &str) -> Result<(), YardError> {
+    if cert_path(home, domain).exists() {
+        job.line(format!("Already signed in for {domain}."));
+        return Ok(());
+    }
+    let dir = cert_dir(home, domain);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| YardError::internal(format!("cannot create {}: {e}", dir.display())))?;
+    job.line(format!("In the browser, pick the zone {domain}."));
+    let ran = job
+        .run(&brew.cloudflared_bin(), &["tunnel", "login"], &[("HOME".into(), dir.display().to_string())])
+        .await;
+    match ran {
+        Err(e) if e.code == ErrorCode::JobCancelled => Err(e),
+        _ if cert_path(home, domain).exists() => Ok(()),
+        // The tail of what cloudflared printed, when it failed.
+        Err(failed) => Err(not_logged_in(domain).with_data(failed.data.unwrap_or_default())),
+        Ok(()) => Err(not_logged_in(domain)),
+    }
+}
 
 impl Provider for Cloudflared {
     /// `tunnel --config <yml>`, and `run` for a named tunnel; a quick one starts from the yml's

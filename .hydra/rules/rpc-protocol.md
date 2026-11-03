@@ -58,7 +58,10 @@ triggers:
   `TunnelInfo` as the result; a quick tunnel that does not connect is removed again
   (`TUNNEL_NOT_READY`, `data.tail`). `tunnels.remove` (`tunnel-remove`) answers
   `TunnelRemoved`. Quick tunnels live only in yardd's memory, end with it, and end when their
-  site is unlinked or unproxied (P8). `TunnelProvider`, `TunnelKind` and
+  site is unlinked or unproxied (P8). `tunnels.domains` lists `[tunnels.cloudflared] domains`
+  with `logged_in`; `tunnels.domain_add` (a `tunnel-login` job) runs `cloudflared tunnel login`
+  only when the domain has no certificate yet and records the domain only once it has one;
+  `tunnels.domain_remove` forgets a domain and keeps its certificate. `TunnelProvider`, `TunnelKind` and
   `TunnelState` each have an `Other` fallback the daemon never sends.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), for nginx's `auth_request` and the shims.
