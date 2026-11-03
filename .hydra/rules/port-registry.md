@@ -42,6 +42,11 @@ triggers:
   running, and a stale file is removed. yardd runs it for every instance in `services.toml` at
   startup, before the first reconcile (`services::stop_orphans`, 30 s grace). A unit with two ports registers both
   (`minio`, `minio-console`), and `reconcile::port_owner` maps each to its unit.
+- A tunnel (M5) takes two `auto` entries from the range, settled after sites resolve
+  (`tunnel::settle_ports`): `nginx-tunnel-<site>`, nginx's loopback listener the tunnel
+  connects to (`port_owner` maps it to `nginx`), and `tunnel-<site>`, cloudflared's metrics
+  port and the unit's health check. Both go when the tunnel does, or when it cannot run
+  (cloudflared missing, a named tunnel with no facts or no credentials file).
 - Every `PORT_IN_USE` names the holder with `holder::label` (`nginx-arm (pid 4534, Herd)`);
   a refused profile switch also lists them in `data.holders`.
 - `portscan::infos` is the one place a registered port gets a status and a holder;

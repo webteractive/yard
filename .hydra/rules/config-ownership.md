@@ -38,8 +38,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   - Yard never re-initializes a database's data: `yard doctor` fails `service-data:<i>` for a MySQL or
     PostgreSQL instance whose `data/` is missing or empty and names `yard service remove <i> && yard
     service add …`; it reads Redis's and MinIO's directories not at all.
-  - User-owned files (`nginx/overrides/<site>.conf`, `php/<v>/conf.d/99-overrides.ini`,
-    `services/<instance>/overrides.conf`)
+  - User-owned files (`nginx/overrides/<site>.conf`, `nginx/tunnel-overrides/<site>.conf`,
+    `php/<v>/conf.d/99-overrides.ini`, `services/<instance>/overrides.conf`)
     are created once with `ensure_user_file` (empty, or a comment saying whose they are) and never
     written again. A MySQL instance's `overrides.conf` starts with that comment and `[mysqld]`, since
     an `!include`d file needs its own group (`services::render::user_overrides`); a PostgreSQL
@@ -90,7 +90,13 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   (`nginx::NginxCommand::test`). On failure, roll back the whole write set and return
   `NGINX_CONFIG_INVALID` with nginx's output. An nginx that cannot run at all is a
   warning on reconcile and a refusal on `yard restart nginx`.
-- User overrides are applied too: the watcher sees `nginx/overrides/`, and the `overrides.conf`
+- A tunnel's `tunnels/<site>.yml` (M5) is generated (it names `sites.toml`, and `overrides_for`
+  maps it there); `tunnels/` is a managed directory, so an ended tunnel's yml is removed. Its
+  `nginx/tunnel-overrides/<site>.conf`, included only in that site's tunnel listener, is user-owned
+  and stays when the tunnel ends. `state/tunnels.json` (the named tunnels' facts) is Yard's state,
+  written 0600; reconcile only reads it.
+- User overrides are applied too: the watcher sees `nginx/overrides/` and
+  `nginx/tunnel-overrides/`, and the `overrides.conf`
   of every instance nginx includes it for (MinIO's, in `minio.<tld>`'s block; `watch.rs`
   `nginx_include_dirs`, re-read when `services.toml` changes, with one `nginx -t` after a watch is
   added), and calls `Reconciler::apply_overrides`, which runs `nginx -t` and reloads only if it

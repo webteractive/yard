@@ -9,7 +9,7 @@ use crate::privileged::PrivilegedSockets;
 use crate::reconcile::Reconciler;
 use crate::sleep::{SleepConfig, Sleeper};
 use crate::supervisor::{Supervisor, SupervisorConfig};
-use crate::{portscan, rpc, services, sleep, wake, watch};
+use crate::{portscan, rpc, services, sleep, tunnel, wake, watch};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
@@ -99,6 +99,8 @@ pub struct Context {
     pub app_dirs: Vec<PathBuf>,
     /// Which service instances sleep; the reconciler holds the same one.
     pub sleeper: Arc<Sleeper>,
+    /// The quick tunnels and what running tunnels said; the reconciler holds the same one.
+    pub tunnels: Arc<tunnel::Runtime>,
     /// The asks that may wait on a wake at once (`wake::WAKE_SLOTS`).
     pub wake_slots: Arc<tokio::sync::Semaphore>,
 }
@@ -134,6 +136,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
     let sleeper = Arc::new(Sleeper::new(opts.sleep.default_after));
+    let tunnels = Arc::new(tunnel::Runtime::default());
     let reconciler = Arc::new(
         Reconciler::new(
             opts.paths.clone(),
@@ -146,6 +149,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         .with_shim(opts.shim.clone())
         .with_services(opts.usual_ports.clone(), opts.app_dirs.clone())
         .with_sleeper(sleeper.clone())
+        .with_tunnels(tunnels.clone())
         .with_home(opts.home.clone()),
     );
     let jobs = Jobs::new(bus.clone());
@@ -161,6 +165,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         usual_ports: opts.usual_ports.clone(),
         app_dirs: opts.app_dirs.clone(),
         sleeper,
+        tunnels,
         wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });
 

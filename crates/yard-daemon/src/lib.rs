@@ -29,6 +29,7 @@ pub mod sources;
 pub mod state;
 pub mod supervisor;
 pub mod tls;
+pub mod tunnel;
 pub mod wake;
 pub mod watch;
 

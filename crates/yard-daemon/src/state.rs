@@ -2,6 +2,7 @@
 
 use crate::emailulator::Probe;
 use crate::supervisor::UnitSpec;
+use crate::tunnel::Planned;
 use std::collections::BTreeMap;
 use yard_core::Paths;
 use yard_core::brew::Brew;
@@ -33,6 +34,8 @@ pub struct Snapshot {
     pub left_out: BTreeMap<String, YardError>,
     /// What emailulator said at this reconcile; `None` when Yard found no binary (M4d).
     pub emailulator: Option<Probe>,
+    /// The tunnels this reconcile ran, by site (M5).
+    pub tunnels: BTreeMap<String, Planned>,
 }
 
 #[derive(Clone)]

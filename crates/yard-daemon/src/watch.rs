@@ -1,7 +1,7 @@
 //! FSEvents on the four TOML files and each linked project's `.yard`; any change
 //! reconciles. The project directories are read from `sites.toml` at start and again
 //! whenever it changes. An edit
-//! in `nginx/overrides/`, or of an instance's `overrides.conf` that nginx includes (MinIO's,
+//! in `nginx/overrides/` or `nginx/tunnel-overrides/`, or of an instance's `overrides.conf` that nginx includes (MinIO's,
 //! in `minio.<tld>`'s block), is tested with `nginx -t` and, if it passes, reloaded. Those
 //! instance directories are read from `services.toml` the same way. The other engines'
 //! `overrides.conf` are not watched: a restart of the instance applies them. Every
@@ -35,6 +35,7 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
         }
     };
     let overrides = canonical(&ctx.paths.nginx_dir().join("overrides"));
+    let tunnel_overrides = canonical(&ctx.paths.tunnel_overrides_dir());
     let tomls: BTreeSet<PathBuf> =
         [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml(), ctx.paths.services_toml()]
             .iter()
@@ -46,7 +47,7 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
     let managed_root = canonical(&ctx.paths.managed_sites_dir());
     let mut managed = managed_dirs(&ctx.paths);
     let mut includes = nginx_include_dirs(&ctx.paths);
-    let mut watch = vec![canonical(ctx.paths.root()), overrides.clone()];
+    let mut watch = vec![canonical(ctx.paths.root()), overrides.clone(), tunnel_overrides.clone()];
     watch.extend(projects.iter().cloned());
     watch.extend(managed.iter().cloned());
     watch.extend(includes.iter().cloned());
@@ -102,9 +103,11 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
                 || changed.iter().any(|p| {
                     tomls.contains(p) || is_project_file(p, &projects) || is_project_file(p, &managed)
                 });
-            let overridden = changed
-                .iter()
-                .any(|p| p.parent() == Some(overrides.as_path()) || is_nginx_include(p, &includes));
+            let overridden = changed.iter().any(|p| {
+                p.parent() == Some(overrides.as_path())
+                    || p.parent() == Some(tunnel_overrides.as_path())
+                    || is_nginx_include(p, &includes)
+            });
             if relevant {
                 match ctx.reconciler.reconcile().await {
                     Ok(report) => report.warnings.iter().for_each(|w| tracing::warn!("{w}")),

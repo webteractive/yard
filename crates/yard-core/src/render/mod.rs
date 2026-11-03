@@ -43,6 +43,10 @@ pub fn overrides_for(paths: &Paths, file: &Path) -> Option<PathBuf> {
         return Some(paths.yard_toml());
     }
     let dir = file.parent()?;
+    if dir == paths.tunnels_dir() {
+        // A tunnel's cloudflared config, from `[sites.<site>.tunnel]` or a quick tunnel.
+        return Some(paths.sites_toml());
+    }
     if dir == paths.nginx_services_dir() {
         let name = file.file_stem()?.to_str()?;
         if name == crate::emailulator::NAME {
@@ -644,6 +648,9 @@ mod tests {
         }
         // mail.<tld> is not an instance: its block ends with the override a site named mail would have.
         assert_eq!(overrides_for(&p, &p.nginx_service("emailulator")), Some(p.nginx_override("mail")));
+        // A tunnel's yml comes from its site's `[sites.<site>.tunnel]`, or from a quick tunnel.
+        assert_eq!(overrides_for(&p, &p.tunnel_yml("my.app")), Some(p.sites_toml()));
+        assert_eq!(overrides_for(&p, &p.tunnel_override("blog")), None);
         assert_eq!(overrides_for(&p, &p.service_overrides("redis")), None);
         assert_eq!(overrides_for(&p, &p.service_conf("redis", "other.conf")), None);
         assert_eq!(overrides_for(&p, &p.yard_toml()), None);

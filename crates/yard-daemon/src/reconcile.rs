@@ -13,6 +13,7 @@ use crate::sleep::{Sleeper, instances_for, write_sleeping};
 use crate::state::{Snapshot, State};
 use crate::supervisor::{Health, Reload, Supervisor, UnitSpec};
 use crate::tls;
+use crate::tunnel;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -31,7 +32,7 @@ use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry}
 use yard_core::render::RenderCtx;
 use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{
-    MailHost, default_index, mail_host, nginx_main, nginx_site, service_site, setup_page,
+    MailHost, TunnelListener, default_index, mail_host, nginx_main, nginx_site, service_site, setup_page,
 };
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::services::Engine;
@@ -80,6 +81,8 @@ pub struct Reconciler {
     app_dirs: Vec<PathBuf>,
     /// The instances asleep, which get no unit (M4e).
     sleeper: Arc<Sleeper>,
+    /// The quick tunnels and what running tunnels said (M5).
+    tunnels: Arc<tunnel::Runtime>,
     /// The user's home, where emailulator's installer puts it.
     home: PathBuf,
     /// The data root, read without the state lock to find the recorded emailulator.
@@ -121,6 +124,7 @@ impl Reconciler {
             usual_ports: None,
             app_dirs: Vec::new(),
             sleeper: Arc::new(Sleeper::default()),
+            tunnels: Arc::new(tunnel::Runtime::default()),
             home: PathBuf::new(),
         })
     }
@@ -145,6 +149,16 @@ impl Reconciler {
 
     pub fn sleeper(&self) -> &Arc<Sleeper> {
         &self.sleeper
+    }
+
+    /// The tunnel state yardd's `Context` shares.
+    pub fn with_tunnels(mut self, tunnels: Arc<tunnel::Runtime>) -> Self {
+        self.tunnels = tunnels;
+        self
+    }
+
+    pub fn tunnels(&self) -> &Arc<tunnel::Runtime> {
+        &self.tunnels
     }
 
     /// The user's home, where emailulator's installer puts it.
@@ -426,6 +440,17 @@ impl Reconciler {
             &state.paths,
         );
         report.warnings.extend(resolution.warnings.iter().cloned());
+        // Tunnels run only for sites that resolved, so their ports are settled here.
+        let tunnels = tunnel::settle_ports(
+            &sites_cfg,
+            &resolution.sites,
+            &self.tunnels,
+            &state.paths,
+            &state.brew,
+            &mut registry,
+            &is_free,
+            &mut report.warnings,
+        );
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.
         let paths = state.paths.clone();
@@ -475,7 +500,11 @@ impl Reconciler {
             let wake = matches!(site.kind, SiteKind::Php { .. })
                 && !site.needs_setup()
                 && instances_for(&services_cfg, &projects, &site.name).iter().any(|i| may_sleep(i));
-            rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site, wake, None));
+            let listener = tunnels.get(&site.name).map(|t| TunnelListener {
+                port: t.origin_port,
+                real_ip_header: tunnel::provider().real_ip_header(),
+            });
+            rendered.insert(paths.nginx_site(&site.name), nginx_site(&ctx, site, wake, listener.as_ref()));
             if site.needs_setup() {
                 rendered.insert(paths.nginx_setup_page(&site.name), setup_page(&ctx, site));
             }
@@ -522,11 +551,18 @@ impl Reconciler {
             };
             rendered.insert(paths.nginx_service(EMAILULATOR), mail_host(&ctx, &host));
         }
-        prepare_dirs(&paths, &resolution.sites, &inis, &services_cfg, serve_mail).map_err(io_error)?;
+        tunnel::render(&paths, &tunnels, &mut rendered);
+        prepare_dirs(&paths, &resolution.sites, &inis, &services_cfg, serve_mail, &tunnels)
+            .map_err(io_error)?;
 
         // 6. Write.
         let mut hashes = state.hashes.clone();
-        let mut managed = vec![paths.nginx_sites_dir(), paths.nginx_setup_dir(), paths.nginx_services_dir()];
+        let mut managed = vec![
+            paths.nginx_sites_dir(),
+            paths.nginx_setup_dir(),
+            paths.nginx_services_dir(),
+            paths.tunnels_dir(),
+        ];
         for dir in subdirs(&paths.root().join("php")) {
             managed.push(dir.join("conf.d"));
             managed.push(dir);
@@ -697,6 +733,10 @@ impl Reconciler {
             }
             desired.push(spec);
         }
+        let (tunnel_units, tunnel_restarts) =
+            tunnel::units(&paths, &state.brew, &self.home, &tunnels, &changed);
+        desired.extend(tunnel_units);
+        restart.extend(tunnel_restarts);
         if !existing.contains("nginx")
             && let Some(pid) = self.nginx.stop_orphan().await
         {
@@ -784,6 +824,7 @@ impl Reconciler {
             resolution,
             left_out,
             emailulator: state.emailulator.clone(),
+            tunnels,
         };
         *self.published.write().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         state.snapshot = Some(snapshot);
@@ -857,12 +898,14 @@ impl Reconciler {
     }
 }
 
-/// The supervised unit behind a registry entry: nginx owns both nginx ports, and MinIO's
-/// console port belongs to the `minio` unit that also holds its API port.
+/// The supervised unit behind a registry entry: nginx owns both nginx ports and each tunnel's
+/// listener (`nginx-tunnel-<site>`), and MinIO's console port belongs to the `minio` unit that
+/// also holds its API port.
 pub fn port_owner(entry: &str) -> &str {
     match entry {
         NGINX_HTTP | NGINX_HTTPS => "nginx",
         "minio-console" => "minio",
+        _ if entry.starts_with("nginx-tunnel-") => "nginx",
         _ => entry,
     }
 }
@@ -1046,6 +1089,7 @@ fn prepare_dirs(
     versions: &BTreeSet<PhpVersion>,
     services: &ServicesConfig,
     mail: bool,
+    tunnels: &BTreeMap<String, tunnel::Planned>,
 ) -> std::io::Result<()> {
     for dir in [
         paths.logs_dir(),
@@ -1054,11 +1098,19 @@ fn prepare_dirs(
         paths.nginx_setup_dir(),
         paths.nginx_services_dir(),
         paths.nginx_dir().join("overrides"),
+        paths.tunnels_dir(),
+        paths.tunnel_overrides_dir(),
     ] {
         std::fs::create_dir_all(dir)?;
     }
     for site in sites {
         generated::ensure_user_file(&paths.nginx_override(&site.name), USER_OWNED_NGINX)?;
+    }
+    for site in tunnels.keys() {
+        let header = format!(
+            "# USER-OWNED — Yard never writes this file. Included only in {site}'s tunnel listener.\n"
+        );
+        generated::ensure_user_file(&paths.tunnel_override(site), &header)?;
     }
     if mail {
         // mail.<tld>'s block includes the override a site named mail would have.

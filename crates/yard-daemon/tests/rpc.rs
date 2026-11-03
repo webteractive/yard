@@ -148,6 +148,21 @@ async fn override_edit_is_tested_and_applied() {
     d.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn tunnel_override_edit_is_tested() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    nginx_pid(&mut c).await;
+    let over = d.fx.paths.tunnel_override("blog");
+    std::fs::write(&over, "yard-test-broken;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, json!("NGINX_CONFIG_INVALID")).await, "NGINX_CONFIG_INVALID");
+    std::fs::write(&over, "client_max_body_size 2G;\n").unwrap();
+    assert_eq!(config_error_becomes(&mut c, Value::Null).await, Value::Null);
+    d.shutdown().await.unwrap();
+}
+
 /// The nginx unit's pid from `status`, once it is running.
 async fn nginx_pid(c: &mut Client) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
