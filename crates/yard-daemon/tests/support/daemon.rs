@@ -64,7 +64,7 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         // Never this machine's home: its emailulator and LaunchAgent are not a test's.
         home,
         tunnel_poll: Duration::from_millis(100),
-        tunnels: Default::default(),
+        tunnel_ready_wait: Duration::from_secs(2),
     }
 }
 
@@ -226,6 +226,16 @@ pub fn site_names(list: &Value) -> Vec<String> {
 /// Returns the progress lines and the job's error.
 #[allow(dead_code)]
 pub async fn run_job(c: &mut Client, method: &str, params: Value) -> (Vec<String>, Option<YardError>) {
+    let (lines, error, _) = run_job_result(c, method, params).await;
+    (lines, error)
+}
+
+/// As `run_job`, with the `result` its `job_finished` carried (`null` when none).
+pub async fn run_job_result(
+    c: &mut Client,
+    method: &str,
+    params: Value,
+) -> (Vec<String>, Option<YardError>, Value) {
     c.call("subscribe", json!({"topics": ["jobs"]})).await.unwrap();
     let started = c.call(method, params).await.unwrap();
     let id = started["job_id"].as_str().expect("a job_id").to_string();
@@ -239,7 +249,7 @@ pub async fn run_job(c: &mut Client, method: &str, params: Value) -> (Vec<String
             Some("job_progress") => lines.push(event["line"].as_str().unwrap_or_default().to_string()),
             Some("job_finished") => {
                 let error = serde_json::from_value(event["error"].clone()).unwrap();
-                return (lines, error);
+                return (lines, error, event["result"].clone());
             }
             _ => {}
         }

@@ -108,6 +108,8 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::SOURCES_UNTRUST => json(sources::change(ctx, parse(params)?, false)),
         methods::SERVICES_LIST => json(services::list(ctx).await),
         methods::TUNNELS_LIST => json(tunnels::list(ctx).await),
+        methods::TUNNELS_ADD => json(tunnels::add(ctx, parse(params)?).await),
+        methods::TUNNELS_REMOVE => json(tunnels::remove(ctx, parse(params)?).await),
         methods::SERVICES_ADD => json(services::add(ctx, parse(params)?).await),
         methods::SERVICES_REMOVE => json(services::remove(ctx, parse(params)?).await),
         methods::SERVICES_START => json(services::set_stopped(ctx, parse(params)?, false).await),
@@ -321,6 +323,8 @@ async fn unlink(ctx: &Context, p: NameParams, key: &str) -> Result<(), YardError
         file.remove(&["sites", &p.name]);
         Ok(())
     })?;
+    // A quick tunnel ends with its site (P8).
+    ctx.tunnels.remove_quick(&p.name);
     reconcile(ctx).await
 }
 

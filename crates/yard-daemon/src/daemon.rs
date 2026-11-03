@@ -56,9 +56,8 @@ pub struct DaemonOptions {
     pub home: PathBuf,
     /// How often each running tunnel's metrics server is asked whether it is ready (M5).
     pub tunnel_poll: Duration,
-    /// The quick tunnels yardd starts with: none in production, since they end with yardd;
-    /// a test marks one here before its first reconcile.
-    pub tunnels: Arc<tunnel::Runtime>,
+    /// How long `tunnels.add` waits for a tunnel to reach Cloudflare.
+    pub tunnel_ready_wait: Duration,
 }
 
 impl DaemonOptions {
@@ -80,7 +79,7 @@ impl DaemonOptions {
             sleep: SleepConfig::production(),
             home: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
             tunnel_poll: Duration::from_secs(2),
-            tunnels: Arc::default(),
+            tunnel_ready_wait: Duration::from_secs(30),
         }
     }
 }
@@ -109,6 +108,8 @@ pub struct Context {
     pub sleeper: Arc<Sleeper>,
     /// The quick tunnels and what running tunnels said; the reconciler holds the same one.
     pub tunnels: Arc<tunnel::Runtime>,
+    /// `DaemonOptions.tunnel_ready_wait`.
+    pub tunnel_ready_wait: Duration,
     /// The asks that may wait on a wake at once (`wake::WAKE_SLOTS`).
     pub wake_slots: Arc<tokio::sync::Semaphore>,
 }
@@ -144,7 +145,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));
     let sleeper = Arc::new(Sleeper::new(opts.sleep.default_after));
-    let tunnels = opts.tunnels.clone();
+    // Quick tunnels end with yardd: a new one starts with none.
+    let tunnels = Arc::new(tunnel::Runtime::default());
     let reconciler = Arc::new(
         Reconciler::new(
             opts.paths.clone(),
@@ -174,6 +176,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         app_dirs: opts.app_dirs.clone(),
         sleeper,
         tunnels,
+        tunnel_ready_wait: opts.tunnel_ready_wait,
         wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });
 

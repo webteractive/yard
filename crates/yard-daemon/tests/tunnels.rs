@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
-use support::daemon::{Client, Daemon, prepared};
+use support::daemon::{Client, Daemon, prepared, run_job_result};
 use support::{Fixture, fast, free_port, spawn_helper};
 use tempfile::TempDir;
 use yard_core::brew::Brew;
@@ -20,7 +20,7 @@ use yard_daemon::events::EventBus;
 use yard_daemon::privileged::PrivilegedSockets;
 use yard_daemon::reconcile::Reconciler;
 use yard_daemon::supervisor::Supervisor;
-use yard_proto::{PortMode, UnitInfo, UnitState};
+use yard_proto::{ErrorCode, PortMode, UnitInfo, UnitState, YardError};
 
 /// A `range` line for `ports.toml`: ten ports of its own, below macOS's ephemeral range, so
 /// parallel tests never hand two tunnels the same `auto` port.
@@ -256,16 +256,38 @@ async fn a_named_tunnel_with_facts_runs() {
     e.sup.shutdown().await;
 }
 
-/// A daemon with the fake cloudflared, `blog` linked and a quick tunnel on it from the start
-/// (Task 9 moves this to `tunnels.add`).
-async fn quick_daemon() -> Daemon {
+/// A started daemon with the fake cloudflared and `blog` linked, its `auto` ports from a range
+/// of its own.
+async fn tunnel_daemon() -> Daemon {
     let d = prepared("").await;
     d.fx.add_cloudflared();
     let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
     std::fs::write(d.fx.paths.ports_toml(), format!("{}{ports}", auto_range())).unwrap();
     d.project("blog");
-    d.opts.tunnels.add_quick("blog");
     d.start().await
+}
+
+/// `tunnels.add` for a quick tunnel: the job's lines, error and result.
+async fn add_quick(d: &Daemon, site: &str) -> (Vec<String>, Option<YardError>, Value) {
+    let mut c = d.client().await;
+    run_job_result(&mut c, "tunnels.add", json!({"site": site})).await
+}
+
+/// A daemon whose `blog` has a quick tunnel `tunnels.add` started.
+async fn quick_daemon() -> Daemon {
+    let d = tunnel_daemon().await;
+    let (_, error, _) = add_quick(&d, "blog").await;
+    assert_eq!(error, None);
+    d
+}
+
+fn tunnel_entries(d: &Daemon) -> Vec<String> {
+    let registry = Registry::load(&d.fx.paths).unwrap();
+    registry
+        .entries
+        .into_keys()
+        .filter(|k| k.starts_with("tunnel-") || k.starts_with("nginx-tunnel-"))
+        .collect()
 }
 
 /// `blog`'s entry in `tunnels.list` once `done` holds for it.
@@ -326,5 +348,109 @@ async fn quick_tunnel_survives_losing_the_edge() {
     let again = tunnel_where(&mut c, |t| t["state"] == "ready").await;
     assert_eq!(again["url"], ready["url"]);
     assert_eq!(unit_pid(&mut c, "tunnel-blog").await, pid);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn quick_tunnel_add_and_remove_by_rpc() {
+    let d = tunnel_daemon().await;
+    let (lines, error, result) = add_quick(&d, "blog").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "Starting a quick tunnel for blog…"), "{lines:?}");
+    assert_eq!(result["state"], "ready", "{result}");
+    let origin = result["origin_port"].as_u64().unwrap();
+    assert_eq!(result["url"], format!("https://quick-{origin}.trycloudflare.com"));
+    assert_eq!(tunnel_entries(&d).len(), 2);
+
+    let mut c = d.client().await;
+    let (_, error, removed) = run_job_result(&mut c, "tunnels.remove", json!({"site": "blog"})).await;
+    assert_eq!(error, None);
+    assert_eq!(removed, json!({"site": "blog", "deleted_tunnel": false, "dns_left": []}));
+    assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
+    assert_eq!(unit_pid(&mut c, "tunnel-blog").await, Value::Null);
+    assert!(tunnel_entries(&d).is_empty(), "{:?}", tunnel_entries(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_quick_tunnel_that_never_connects_leaves_nothing() {
+    let d = tunnel_daemon().await;
+    let cloudflared = Brew::new(d.fx.brew.path()).cloudflared_bin().parent().unwrap().to_path_buf();
+    std::fs::write(cloudflared.join("not-ready"), "").unwrap();
+    let (_, error, result) = add_quick(&d, "blog").await;
+    let error = error.expect("the job fails");
+    assert_eq!(error.code, ErrorCode::TunnelNotReady, "{error:?}");
+    assert_eq!(error.message, "tunnel-blog did not connect to Cloudflare within 2 s");
+    let log = d.fx.paths.logs_dir().join("tunnel-blog.log");
+    assert_eq!(error.hint.as_deref(), Some(format!("tail -n 50 {}", log.display()).as_str()));
+    assert!(error.data.as_ref().is_some_and(|d| d["tail"].is_array()), "{error:?}");
+    assert_eq!(result, Value::Null);
+    let mut c = d.client().await;
+    assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
+    assert!(tunnel_entries(&d).is_empty(), "{:?}", tunnel_entries(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn quick_tunnels_end_with_yardd() {
+    let mut d = quick_daemon().await;
+    d.stop().await.unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
+    assert!(tunnel_entries(&d).is_empty(), "{:?}", tunnel_entries(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn untunnel_without_a_tunnel_is_not_found() {
+    let d = tunnel_daemon().await;
+    let mut c = d.client().await;
+    let e = c.call("tunnels.remove", json!({"site": "blog"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::TunnelNotFound);
+    assert_eq!(e.hint.as_deref(), Some("yard tunnel blog"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_refuses_a_second_tunnel_and_an_unknown_provider() {
+    let d = quick_daemon().await;
+    let mut c = d.client().await;
+    let e = c.call("tunnels.add", json!({"site": "blog"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    assert_eq!(e.hint.as_deref(), Some("yard untunnel blog"));
+    let e = c.call("tunnels.add", json!({"site": "blog", "provider": "ngrok"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    assert_eq!(e.message, "no tunnel provider ngrok; the providers are: cloudflared");
+    let e = c.call("tunnels.add", json!({"site": "nope"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::SiteNotFound);
+    d.project("shop");
+    // Not installed: no keg at all (an empty keg is `brew reinstall`).
+    std::fs::remove_dir_all(d.fx.brew.path().join("opt/cloudflared")).unwrap();
+    // `shop` resolves once the watcher has reconciled its link.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let e = loop {
+        let e = c.call("tunnels.add", json!({"site": "shop"})).await.unwrap_err();
+        if e.code != ErrorCode::SiteNotFound || Instant::now() > deadline {
+            break e;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(e.code, ErrorCode::FormulaMissing, "{e:?}");
+    assert_eq!(e.hint.as_deref(), Some("brew install cloudflared"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unlink_ends_a_quick_tunnel() {
+    let d = quick_daemon().await;
+    let mut c = d.client().await;
+    c.call("sites.unlink", json!({"name": "blog"})).await.unwrap();
+    assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
+    assert!(tunnel_entries(&d).is_empty(), "{:?}", tunnel_entries(&d));
+    // Linking it again does not bring the tunnel back.
+    d.project("blog");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.call("tunnels.list", Value::Null).await.unwrap(), json!([]));
     d.shutdown().await.unwrap();
 }

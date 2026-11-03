@@ -52,7 +52,13 @@ triggers:
   sorted by site, and `tunnel_changed` (topic `tunnels`) goes out when a tunnel's state, url or
   last error changes. `tunnel::monitor` asks each running tunnel's metrics server `/ready` (and
   a quick one's `/quicktunnel` until it has a hostname) every `DaemonOptions.tunnel_poll` (2 s);
-  losing the edge is `connecting`, never a restart. `TunnelProvider`, `TunnelKind` and
+  losing the edge is `connecting`, never a restart. `tunnels.add` (a `tunnel-add` job) checks
+  the site, provider, an existing tunnel and cloudflared before it starts, then waits up to
+  `DaemonOptions.tunnel_ready_wait` (30 s) for the tunnel to be ready with a URL and sends its
+  `TunnelInfo` as the result; a quick tunnel that does not connect is removed again
+  (`TUNNEL_NOT_READY`, `data.tail`). `tunnels.remove` (`tunnel-remove`) answers
+  `TunnelRemoved`. Quick tunnels live only in yardd's memory, end with it, and end when their
+  site is unlinked or unproxied (P8). `TunnelProvider`, `TunnelKind` and
   `TunnelState` each have an `Other` fallback the daemon never sends.
 - `run/wake.sock` (M4e) is not JSON-RPC and has no `yard-proto` types: minimal HTTP/1.1, one
   route (`GET /wake/<site>?wait=<s>`, capped at 30), for nginx's `auth_request` and the shims.
