@@ -315,7 +315,7 @@ fn mode(args: &[String]) -> ExitCode {
         }
         Some("signals") => signals(arg(1).and_then(|p| p.parse().ok())),
         Some("stubborn") => stubborn(arg(1).and_then(|p| p.parse().ok())),
-        Some("listen-unix") => listen_unix(arg(1).map(PathBuf::from)),
+        Some("listen-unix") => listen_unix(arg(1).map(PathBuf::from), arg(2).map(PathBuf::from)),
         Some("exit") => {
             let code = arg(1).and_then(|c| c.parse::<u8>().ok()).unwrap_or(1);
             let after = arg(2).and_then(|ms| ms.parse().ok()).unwrap_or(0);
@@ -426,7 +426,7 @@ fn php_fpm(argv0: &Path, args: &[String]) -> ExitCode {
         Some(PathBuf::from(value.trim().trim_matches('"')))
     });
     delay_from(argv0, "fake-fpm-delay");
-    listen_unix(socket)
+    listen_unix(socket, None)
 }
 
 /// `brew` at `<prefix>/bin/brew`. It logs each call to `<prefix>/fake-brew.log` and fails
@@ -1083,7 +1083,9 @@ fn stubborn(port: Option<u16>) -> ExitCode {
     listen_tcp(port)
 }
 
-fn listen_unix(path: Option<PathBuf>) -> ExitCode {
+/// Listens on a Unix socket and drops each connection; with `count`, appends a line to that
+/// file per connection accepted, so a test can tell how often something connected.
+fn listen_unix(path: Option<PathBuf>, count: Option<PathBuf>) -> ExitCode {
     let Some(path) = path else { return fail("listen-unix needs a path".into()) };
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
@@ -1092,6 +1094,11 @@ fn listen_unix(path: Option<PathBuf>) -> ExitCode {
     };
     for stream in listener.incoming() {
         drop(stream);
+        if let Some(count) = &count
+            && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(count)
+        {
+            let _ = writeln!(f);
+        }
     }
     ExitCode::SUCCESS
 }

@@ -143,6 +143,55 @@ async fn a_starting_unit_is_running_soon_after_it_listens() {
     h.sup.shutdown().await;
 }
 
+/// A short socket path for a Unix-socket unit: macOS caps one at 104 bytes, which a temp dir
+/// under `$TMPDIR` can pass.
+fn short_socket_dir() -> tempfile::TempDir {
+    tempfile::Builder::new().prefix("yu").tempdir_in("/tmp").unwrap()
+}
+
+/// php-fpm's `ondemand` pool forks a worker for every connection and reaps it only after it
+/// sits idle, so a running pool's health check must not connect: a probe every few seconds
+/// kept every worker it ever forked alive (found 2026-11-05). Only the start is a connection.
+#[tokio::test]
+async fn a_running_unix_socket_unit_is_not_connected_to() {
+    let h = harness(fast());
+    let dir = short_socket_dir();
+    let sock = dir.path().join("pool.sock");
+    let count = dir.path().join("accepts");
+    let spec = process(
+        "pool",
+        FAKE,
+        &["listen-unix", sock.to_str().unwrap(), count.to_str().unwrap()],
+        Health::Unix(sock.clone()),
+    );
+    h.sup.apply(vec![spec]).await;
+    wait_for(&h.sup, "pool", running).await;
+
+    // `fast()` checks health every 20 ms: 20 checks.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let accepts = std::fs::read_to_string(&count).unwrap_or_default().lines().count();
+    assert!(accepts <= 1, "{accepts} connections to a running pool's socket");
+    assert!(info(&h.sup, "pool").is_some_and(|u| running(&u)));
+    h.sup.shutdown().await;
+}
+
+/// Not connecting still notices a pool that lost its socket, which nginx could not reach.
+#[tokio::test]
+async fn a_running_unix_socket_unit_whose_socket_is_gone_is_restarted() {
+    let h = harness(fast());
+    let dir = short_socket_dir();
+    let sock = dir.path().join("pool.sock");
+    let spec = process("pool", FAKE, &["listen-unix", sock.to_str().unwrap()], Health::Unix(sock.clone()));
+    h.sup.apply(vec![spec]).await;
+    wait_for(&h.sup, "pool", running).await;
+
+    std::fs::remove_file(&sock).unwrap();
+    let u = wait_for(&h.sup, "pool", |u| u.restarts >= 1 && running(u)).await;
+    assert!(sock.exists());
+    assert_eq!(u.restarts, 1);
+    h.sup.shutdown().await;
+}
+
 #[tokio::test]
 async fn crashing_unit_backs_off_then_fails_with_last_lines() {
     let h = harness(fast());

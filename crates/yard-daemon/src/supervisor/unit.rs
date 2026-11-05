@@ -193,7 +193,7 @@ impl Runner {
                     return Ended::Control(control);
                 }
                 () = tokio::time::sleep(interval) => {
-                    misses = if self.healthy().await { 0 } else { misses + 1 };
+                    misses = if self.still_healthy().await { 0 } else { misses + 1 };
                     if misses >= 2 {
                         process.stop(self.spec.stop, stop_timeout).await;
                         return Ended::Failure("failed two health checks in a row".into());
@@ -269,6 +269,20 @@ impl Runner {
             readers.push(forward(err, self.sink.clone()));
         }
         Ok(Process { child, readers })
+    }
+
+    /// The check for a unit already running. A Unix socket is only looked at, never connected
+    /// to: php-fpm's `ondemand` pool forks a worker per connection and reaps one only after it
+    /// sits idle, so a probe every `health_interval` kept every worker it ever forked alive. A
+    /// pool that dies is seen by `process.wait()`; one whose socket is gone fails here.
+    async fn still_healthy(&self) -> bool {
+        match &self.spec.health {
+            Health::Unix(path) => {
+                use std::os::unix::fs::FileTypeExt;
+                tokio::fs::symlink_metadata(path).await.is_ok_and(|m| m.file_type().is_socket())
+            }
+            Health::Tcp(_) => self.healthy().await,
+        }
     }
 
     async fn healthy(&self) -> bool {

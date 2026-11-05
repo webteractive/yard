@@ -20,7 +20,10 @@ use yard_proto::{ErrorCode, UnitInfo, UnitState, YardError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Health {
+    /// Connects to the port, while starting and while running.
     Tcp(u16),
+    /// Connects to the socket while starting; once running, only checks it still exists, since
+    /// each connection to a php-fpm `ondemand` pool keeps a worker alive (`Unit::still_healthy`).
     Unix(PathBuf),
 }
 

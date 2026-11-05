@@ -525,9 +525,12 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
 
 - Every managed process is a `Unit` with `start`, `stop`, `reload` (optional),
   `health`, and a log sink.
-- Health: socket connect (FPM, mysql socket) or TCP connect (registered port),
-  every 5 s, and every 200 ms (`start_poll`) while a starting unit has not passed yet, so a
-  woken service is up as soon as it listens (M4e). Known gap: in the privileged profile yardd holds nginx's listeners, so a
+- Health: socket connect (FPM) or TCP connect (registered port), every 5 s, and every
+  200 ms (`start_poll`) while a starting unit has not passed yet, so a woken service is up as
+  soon as it listens (M4e). A running FPM pool's socket is only checked to exist, never
+  connected to: its `ondemand` pool forks a worker per connection and reaps one only after
+  30 s idle, so a probe every 5 s kept every worker it ever forked alive, about 270 MB across
+  11 pools on the Mac mini (found 2026-11-06). A pool that dies is seen when its process exits. Known gap: in the privileged profile yardd holds nginx's listeners, so a
   connect succeeds into their backlog even with no nginx serving. An HTTP check closed
   it but flaked the suite (unexplained resets on the inherited sockets), so it waits
   for a check that does not depend on them.

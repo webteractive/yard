@@ -85,6 +85,8 @@ triggers:
   leaves a `TIME_WAIT` that only `conns::own_connection` keeps from counting. With `<prefix>/fake-fpm-delay` (ms)
   the fake `php-fpm` binds its socket only after the delay, a pool that takes a moment to start. With `<prefix>/fake-listen-delay` (ms) the fake `mysqld` and
   `redis-server` open their port only after the delay, a slow start for a wake to wait on.
+  `yard-fake-unit listen-unix <socket> [<count-file>]` appends a line to the count file per
+  connection it accepts, so a test can tell how often something connected.
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
   never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not
   to retry. Run timing suites several times before calling them done.
