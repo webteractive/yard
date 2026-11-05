@@ -5,6 +5,8 @@ mod bridge;
 #[expect(dead_code, reason = "reconnect_now and logs: the shell and the Logs screen (M6 Tasks 13 and 15)")]
 mod daemon;
 mod menubar;
+#[expect(dead_code, reason = "the shell and onboarding use it from M6 Task 13")]
+mod platform;
 #[cfg_attr(not(test), expect(dead_code, reason = "the screens run their actions through it from M6 Task 13"))]
 mod runner;
 mod state;
