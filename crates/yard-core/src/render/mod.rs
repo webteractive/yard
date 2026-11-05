@@ -536,6 +536,18 @@ mod tests {
         assert!(php::fpm_conf(&ctx(&p, &b), v("7.3")).contains("decorate_workers_output = no"));
     }
 
+    /// libpq's default `gssencmode=prefer` looks for Kerberos credentials on every connect,
+    /// which crashed php-fpm 8.5 workers inside CoreFoundation (a fork that never exec'd is not
+    /// safe to use it); found 2026-11-06. Workers get no environment but `env[]` (`clear_env`).
+    #[test]
+    fn every_pool_turns_off_libpqs_gss_encryption() {
+        let (p, b) = ctx_parts();
+        for ver in ["7.0", "7.3", "8.4", "8.5"] {
+            let conf = php::fpm_conf(&ctx(&p, &b), v(ver));
+            assert!(conf.contains("\nenv[PGGSSENCMODE] = disable\n"), "{ver}: {conf}");
+        }
+    }
+
     #[test]
     fn dnsmasq_conf_trial() {
         let (p, b) = ctx_parts();

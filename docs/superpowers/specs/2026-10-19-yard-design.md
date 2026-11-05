@@ -243,6 +243,13 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 
 - One pool per PHP version, socket at `run/php-<ver>.sock`.
 - `pm = ondemand`, `pm.max_children = 10`, `pm.process_idle_timeout = 30s`.
+- Workers get no environment but the pool's `env[]` (php-fpm's `clear_env`), and every pool
+  sets `env[PGGSSENCMODE] = disable`. libpq's default `gssencmode=prefer` looks for Kerberos
+  credentials on each connect, which runs CoreFoundation in a php-fpm child that forked without
+  exec'ing, where macOS does not make it safe: PHP 8.5's workers segfaulted on every PDO
+  PostgreSQL connect after one yardd restart on the Mac mini (2026-11-06), and the same
+  connect with `gssencmode=disable` worked. Yard's PostgreSQL never uses GSS; a DSN that sets
+  `gssencmode` still wins.
 - A pool is started only when at least one site resolves to that version, and
   stopped when none do.
 

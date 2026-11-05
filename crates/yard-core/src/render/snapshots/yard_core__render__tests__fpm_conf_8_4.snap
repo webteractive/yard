@@ -16,3 +16,6 @@ pm.max_children = 10
 pm.process_idle_timeout = 30s
 catch_workers_output = yes
 decorate_workers_output = no
+; libpq looks for Kerberos credentials on every connect unless told not to, which can
+; crash a worker inside CoreFoundation: a forked php-fpm child is not safe to use it.
+env[PGGSSENCMODE] = disable

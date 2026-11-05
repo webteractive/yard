@@ -44,7 +44,10 @@ pm = ondemand
 pm.max_children = 10
 pm.process_idle_timeout = 30s
 catch_workers_output = yes
-{decorate}",
+{decorate}; libpq looks for Kerberos credentials on every connect unless told not to, which can
+; crash a worker inside CoreFoundation: a forked php-fpm child is not safe to use it.
+env[PGGSSENCMODE] = disable
+",
         header = ini_header(&paths.php_overrides(v)),
         pid = ini_str(&paths.run_dir().join(format!("php-{v}.pid")).display().to_string()),
         socket = ini_str(&paths.fpm_socket(v).display().to_string()),
