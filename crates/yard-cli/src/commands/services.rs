@@ -8,10 +8,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::signal::unix::{SignalKind, signal};
 use yard_core::emailulator::NAME as EMAILULATOR;
-use yard_core::services::sleep::SleepAfter;
+use yard_core::present::{sleep_text, state_text};
 use yard_proto::methods::{
     self, EnvParams, ServiceAddParams, ServiceLogsParams, ServiceParams, ServicePortParams,
     ServiceRemoveParams, ServiceSleepParams,
@@ -43,47 +42,6 @@ pub fn account_parts(account: &Account) -> (String, String) {
 pub fn account_text(account: &Account) -> String {
     let (user, rest) = account_parts(account);
     format!("{user} {rest}")
-}
-
-pub fn state_name(state: &ServiceState) -> &'static str {
-    match state {
-        ServiceState::Running => "running",
-        ServiceState::Starting => "starting",
-        ServiceState::Stopped => "stopped",
-        ServiceState::Failed { .. } => "failed",
-        ServiceState::Other => "unknown",
-    }
-}
-
-/// The state as `yard services` and `yard info` show it: `sleeping 2h` for an instance that
-/// is asleep (M4e spec §9), `waking` while it starts again, else [`state_name`].
-pub fn state_text(info: &ServiceInfo, now: OffsetDateTime) -> String {
-    let since = info.sleeping_since.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
-    match (&info.state, since) {
-        (ServiceState::Stopped, Some(since)) => format!("sleeping {}", age(now - since)),
-        (ServiceState::Starting, Some(_)) => "waking".into(),
-        _ => state_name(&info.state).into(),
-    }
-}
-
-/// `45s`, `12m`, `2h` or `3d`: the largest whole unit.
-fn age(d: time::Duration) -> String {
-    let secs = d.whole_seconds().max(0);
-    match secs {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
-}
-
-/// The effective `sleep_after`: `15m`, `1h`, or `off`; `-` for an instance Yard does not run.
-pub fn sleep_text(info: &ServiceInfo) -> String {
-    if info.managed_by != ServiceManager::Yard {
-        // Yard never puts something it does not run to sleep.
-        return "-".to_string();
-    }
-    info.sleep_after_secs.map_or_else(|| "off".to_string(), |secs| SleepAfter::After(secs).to_string())
 }
 
 /// `mysql-8.4 failed: port 3307 is held by mysqld (pid 77034, DBngin)  (yard service port

@@ -11,5 +11,6 @@ publish = false
 [workspace.dependencies]
 yard-proto = { path = "crates/yard-proto" }
 yard-core = { path = "crates/yard-core" }
+yard-client = { path = "crates/yard-client" }
 yard-daemon = { path = "crates/yard-daemon" }
 yard-helper = { path = "crates/yard-helper" }

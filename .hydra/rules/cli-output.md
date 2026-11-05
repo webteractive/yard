@@ -104,7 +104,7 @@ triggers:
   `warning:` on stderr, not as a `# ` comment.
 - Sleeping services (M4e): `yard services` has a SLEEP column after STATE (the effective
   `sleep_after`, `15m` or `off`; `-` for a LaunchAgent row such as emailulator), and STATE
-  reads `sleeping <age>` (`45s`, `12m`, `2h`, `3d`, the largest whole unit) for a sleeping instance and `waking` while it starts again (`state_text`,
+  reads `sleeping <age>` (`45s`, `12m`, `2h`, `3d`, the largest whole unit) for a sleeping instance and `waking` while it starts again (`yard_core::present::state_text`, shared with Yard.app;
   shared with `yard info`, which adds `wakes on the next request, or: yard service start <i>`
   under its table). `yard status` gives each sleeping instance a row (`sleeping`, PID and
   RESTARTS `-`). `yard service sleep-after <i> <duration|off|default>` prints

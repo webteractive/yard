@@ -47,7 +47,7 @@ pub struct Ctx {
 
 impl Ctx {
     pub async fn client(&self) -> Result<Client, CliError> {
-        Client::connect(&self.paths).await
+        crate::client::connect(&self.paths).await
     }
 
     /// `value` as JSON with `--json`, else the human text.

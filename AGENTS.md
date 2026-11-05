@@ -459,6 +459,7 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
 - `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here.
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
+- `crates/yard-client` — the connection to yardd that the CLI and Yard.app share (M6).
 - `crates/yard-cli` — the `yard` binary.
 - `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` and `node`/`npm`/`npx` shims, one binary
   dispatching on `argv[0]`; it reads the TOMLs itself and runs without a daemon. `php` and

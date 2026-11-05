@@ -1,11 +1,11 @@
 //! `yard sites`, `link`/`unlink`, `proxy`/`unproxy`, `docroot`, `isolate` and
 //! `secure`/`unsecure`.
 
-use super::info::missing_node;
 use super::{Ctx, Outcome, cwd, init};
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use std::path::Path;
+use yard_core::present::missing_node;
 use yard_core::sites::host_label;
 use yard_proto::methods::{
     self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams, SiteParams,

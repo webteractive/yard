@@ -1,9 +1,10 @@
 //! `yard info`: what one site runs on (spec §7.4).
 
-use super::services::{account_parts, address, failure_line, state_text};
+use super::services::{account_parts, address, failure_line};
 use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
 use yard_core::node::install_hint;
+use yard_core::present::{missing_node, state_text};
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
 use yard_proto::{
     ExtInfo, Need, ProjectFileKind, ServiceState, SettingSource, SiteDetail, SiteKind, SiteNode, SiteSource,
@@ -75,11 +76,6 @@ fn node_row(node: &SiteNode) -> (String, Option<&'static str>) {
         (Some(spec), Some(v), None) => (format!("{v} ({spec})"), source),
         (Some(spec), None, None) => (format!("{spec}, not installed"), source),
     }
-}
-
-/// The Node spec a site asks for that nothing installed matches.
-pub(super) fn missing_node(node: Option<&SiteNode>) -> Option<&str> {
-    node.filter(|n| n.error.is_none() && n.version.is_none()).and_then(|n| n.spec.as_deref())
 }
 
 /// `path` with the home directory as `~`.

@@ -1,11 +1,11 @@
 //! `yard init`, and `settle`: installing what a project's `.yard` needs, after asking.
 //! `yard link` settles too, since linking a cloned project applies its file.
 
-use super::info::missing_node;
 use super::{Ctx, Outcome, confirm, cwd, finished, interactive, run_job, services, sources};
 use crate::client::{CliError, protocol_version};
 use serde_json::{Value, json};
 use yard_core::node::install_hint;
+use yard_core::present::missing_node;
 use yard_proto::methods::{self, ExtAddParams, InitParams, NodeInstallParams, PhpParams};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 

@@ -1429,9 +1429,20 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "yard-client",
  "yard-core",
  "yard-daemon",
  "yard-helper",
+ "yard-proto",
+]
+
+[[package]]
+name = "yard-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
  "yard-proto",
 ]
 
@@ -1445,6 +1456,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "time",
  "toml",
  "toml_edit",
  "yard-proto",
