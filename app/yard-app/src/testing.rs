@@ -146,3 +146,38 @@ pub fn job(id: &str) -> Value {
 pub fn finished(id: &str, error: Option<YardError>) -> Event {
     Event::JobFinished { job_id: id.into(), error, result: None }
 }
+
+/// An `AppEnv` over a `FakeDaemon`, connected, with no `yard` located.
+pub fn env(cx: &mut gpui::TestAppContext) -> (Arc<FakeDaemon>, crate::env::AppEnv) {
+    let fake = FakeDaemon::new();
+    fake.answer("status", status());
+    let env = cx.update(|cx| {
+        crate::env::AppEnv::new(fake.clone(), test_location(), Arc::new(crate::bridge::Bridge::new()), cx)
+    });
+    fake.push(connected(1));
+    cx.run_until_parked();
+    (fake, env)
+}
+
+pub fn test_location() -> yard_app_model::locate::Location {
+    yard_app_model::locate::Location {
+        root: std::path::PathBuf::from("/tmp/yard-test-root"),
+        root_is_default: false,
+        yard: None,
+        agent_installed: false,
+    }
+}
+
+pub fn services() -> Value {
+    json!([
+        {"name": "redis", "engine": "redis", "version": null, "formula": "redis", "ports": [{"name": "redis", "port": 6380}],
+         "state": "running", "stopped_by_user": false, "account": {"user": null, "password": null}, "used_by": ["blog"],
+         "sleep_after_secs": 900},
+        {"name": "mysql-8.4", "engine": "mysql", "version": "8.4", "formula": "mysql@8.4", "ports": [{"name": "mysql-8.4", "port": 3307}],
+         "state": {"failed": {"last_lines": ["boom"], "reason": {"code": "PORT_IN_USE", "message": "port 3307 is held by mysqld (pid 9)", "hint": "yard service port mysql-8.4 <port>"}}},
+         "stopped_by_user": false, "account": {"user": "root", "password": null}, "used_by": [], "sleep_after_secs": 900},
+        {"name": "emailulator", "engine": "emailulator", "version": "0.1.4", "formula": "", "ports": [{"name": "emailulator-smtp", "port": 2525}],
+         "state": "running", "stopped_by_user": false, "account": {"user": null, "password": null}, "used_by": [],
+         "managed_by": {"kind": "launch_agent", "label": "co.webteractive.emailulator", "pid": 5}}
+    ])
+}

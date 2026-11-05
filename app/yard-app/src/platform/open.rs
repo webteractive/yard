@@ -14,6 +14,7 @@ impl Opener {
     }
 
     /// Shows `path` in Finder.
+    #[expect(dead_code, reason = "opening a log or data folder (M6 Task 15)")]
     pub fn reveal(cx: &App, path: &Path) {
         cx.reveal_path(path);
     }

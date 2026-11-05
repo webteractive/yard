@@ -9,11 +9,6 @@ pub struct Bridge {
     pub runtime: Runtime,
 }
 
-/// The app's one bridge, kept as a GPUI global so its runtime lives as long as the app.
-pub struct AppBridge(pub std::sync::Arc<Bridge>);
-
-impl gpui::Global for AppBridge {}
-
 impl Bridge {
     /// Two worker threads named `yard-io`: the app's I/O is a few sockets and a child process.
     pub fn new() -> Bridge {
@@ -26,10 +21,6 @@ impl Bridge {
         Bridge { runtime }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the app's daemon adapter (M6 Task 10) runs calls through it")
-    )]
     pub fn spawn<F>(&self, f: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,

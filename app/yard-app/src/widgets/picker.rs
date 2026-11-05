@@ -29,11 +29,13 @@ impl Picker {
     }
 
     /// Disabled, saying why (`set in /p/.yard`).
+    #[expect(dead_code, reason = "the site detail's PHP picker (M6 Task 14)")]
     pub fn disabled_because(mut self, why: Option<SharedString>) -> Self {
         self.disabled = why;
         self
     }
 
+    #[expect(dead_code, reason = "the site detail's PHP picker (M6 Task 14)")]
     pub fn on_select(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self

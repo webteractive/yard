@@ -109,6 +109,8 @@ mod tests {
         cx.simulate_input("shopx");
         cx.simulate_keystrokes("backspace");
         assert_eq!(field.read_with(cx, |f, _| f.value().to_string()), "shop");
+        let a11y = field.read_with(cx, |f, _| f.a11y());
+        assert_eq!((a11y.role, a11y.label.as_ref()), (Role::TextInput, "Site name"));
         field.update(cx, |f, cx| f.set_value("blog", cx));
         assert_eq!(field.read_with(cx, |f, _| f.value().to_string()), "blog");
     }

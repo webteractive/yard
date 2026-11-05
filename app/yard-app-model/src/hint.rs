@@ -20,6 +20,8 @@ pub enum Screen {
     Logs(Option<String>),
     Doctor,
     Sources,
+    /// The jobs list; no hint leads here.
+    Activity,
 }
 
 /// A hint that is one quick call.

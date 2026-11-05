@@ -22,12 +22,14 @@ impl Toggle {
         Toggle { id: id.into(), label: label.into(), on, disabled: false, on_toggle: None }
     }
 
+    #[expect(dead_code, reason = "the site detail (M6 Task 14)")]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
     /// Called with the new value.
+    #[expect(dead_code, reason = "the site detail (M6 Task 14)")]
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self

@@ -27,6 +27,7 @@ pub trait Daemon: Send + Sync + 'static {
     fn reconnect_now(&self);
     fn can_follow_jobs(&self) -> bool;
     /// Log lines on a connection of their own; dropping the receiver closes it.
+    #[expect(dead_code, reason = "the Logs screen (M6 Task 15)")]
     fn logs(&self) -> BoxFuture<'static, Result<UnboundedReceiver<Event>, YardError>>;
 }
 

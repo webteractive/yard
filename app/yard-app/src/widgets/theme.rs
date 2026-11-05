@@ -13,7 +13,6 @@ pub struct Theme {
     pub on_accent: Hsla,
     pub danger: Hsla,
     pub warning: Hsla,
-    pub ok: Hsla,
 }
 
 impl Theme {
@@ -35,7 +34,6 @@ impl Theme {
             on_accent: rgb(0xffffff).into(),
             danger: rgb(0xc62828).into(),
             warning: rgb(0xa86400).into(),
-            ok: rgb(0x1f7a4d).into(),
         }
     }
 
@@ -50,7 +48,6 @@ impl Theme {
             on_accent: rgb(0x0b1f14).into(),
             danger: rgb(0xff6b6b).into(),
             warning: rgb(0xf0b44c).into(),
-            ok: rgb(0x3fb37a).into(),
         }
     }
 

@@ -127,7 +127,6 @@ impl AppState {
     }
 
     /// The window or menu became active: `status`, and what is on screen.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the main window (M6 Task 13)"))]
     pub fn became_active(&mut self, visible: &[ResourceKey], cx: &mut Context<Self>) {
         self.refresh(std::iter::once(ResourceKey::Status).chain(visible.iter().cloned()), cx);
     }

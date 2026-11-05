@@ -35,11 +35,13 @@ impl Form {
         }
     }
 
+    #[expect(dead_code, reason = "the sites and services forms (M6 Task 14)")]
     pub fn field(mut self, element: impl IntoElement) -> Self {
         self.fields.push(element.into_any_element());
         self
     }
 
+    #[expect(dead_code, reason = "the sites and services forms (M6 Task 14)")]
     pub fn submit(
         mut self,
         label: impl Into<SharedString>,
@@ -52,6 +54,7 @@ impl Form {
         self
     }
 
+    #[expect(dead_code, reason = "the sites and services forms (M6 Task 14)")]
     pub fn on_cancel(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(f));
         self
