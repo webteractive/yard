@@ -171,6 +171,14 @@ impl AppState {
                     keys.insert(ResourceKey::Status);
                     self.refresh(keys, cx);
                 }
+                // The connection a job ran on dropped: its end will never arrive on it, so it is
+                // Lost now rather than when (or if) yardd comes back.
+                if matches!(self.connection, ConnectionState::Connected(_))
+                    && matches!(state, ConnectionState::Disconnected(_) | ConnectionState::Incompatible(_))
+                {
+                    self.jobs.epoch_changed(self.epoch + 1, OffsetDateTime::now_utc());
+                    self.resolve_waiters();
+                }
                 self.connection = state;
             }
             Update::Event(event) => {

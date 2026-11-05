@@ -301,6 +301,21 @@ mod tests {
         assert_eq!(task.await, JobPhase::Failed(refused));
     }
 
+    /// The design's Lost: the connection dropped while the job ran. Waiting for a new connection
+    /// left it running forever while yardd stayed down (found in the final review).
+    #[gpui::test]
+    async fn a_job_running_when_yardd_goes_is_lost(cx: &mut TestAppContext) {
+        let (fake, runner) = setup(cx);
+        fake.answer("php.install", job("php-install-1"));
+        let task = install(&runner, cx, "8.3");
+        cx.run_until_parked();
+        fake.push(yard_client::session::Update::State(yard_client::session::ConnectionState::Disconnected(
+            YardError::new(ErrorCode::Internal, "yardd closed the connection"),
+        )));
+        cx.run_until_parked();
+        assert_eq!(task.await, JobPhase::Lost);
+    }
+
     #[gpui::test]
     async fn cancel_of_a_finished_job_is_ignored(cx: &mut TestAppContext) {
         let (fake, runner) = setup(cx);
