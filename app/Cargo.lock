@@ -6555,6 +6555,7 @@ dependencies = [
  "time",
  "tokio",
  "tray-icon",
+ "unicode-segmentation",
  "yard-app-model",
  "yard-client",
  "yard-core",

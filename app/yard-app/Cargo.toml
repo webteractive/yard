@@ -28,6 +28,7 @@ serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
 tray-icon.workspace = true
+unicode-segmentation = "1.13.3"
 yard-app-model.workspace = true
 yard-client.workspace = true
 yard-core.workspace = true

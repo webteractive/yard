@@ -11,6 +11,8 @@ mod platform;
 mod runner;
 mod state;
 mod testing;
+#[expect(dead_code, reason = "the screens use them from M6 Task 13")]
+mod widgets;
 
 use gpui::{
     ActivationPolicy, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render,
