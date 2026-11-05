@@ -120,8 +120,16 @@ mod tests {
         assert!(is_free(p, Proto::Tcp));
     }
 
-    /// A port below 1024 that tests may bind; never one Yard or Herd serves on.
+    /// A port below 1024 that no test binds, so it is free whatever else runs.
     const LOW: u16 = 999;
+
+    /// Binds the wildcard address on the first port below 1024 (and below `LOW`) it can. A fixed
+    /// port flaked: a second test process binding it made `LOW` look taken.
+    fn bind_low() -> (u16, TcpListener) {
+        (900..990)
+            .find_map(|p| TcpListener::bind(("0.0.0.0", p)).ok().map(|l| (p, l)))
+            .expect("a free port in 900..990")
+    }
 
     #[test]
     fn privileged_port_without_a_listener_is_free() {
@@ -137,8 +145,8 @@ mod tests {
     fn privileged_port_with_a_listener_is_busy() {
         let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         // macOS lets any user bind the wildcard address below 1024.
-        let _l = TcpListener::bind(("0.0.0.0", LOW)).unwrap();
-        assert!(!is_free(LOW, Proto::Tcp));
+        let (port, _l) = bind_low();
+        assert!(!is_free(port, Proto::Tcp));
     }
 
     #[test]

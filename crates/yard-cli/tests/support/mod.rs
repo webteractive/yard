@@ -163,7 +163,17 @@ pub fn stderr(out: &std::process::Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// An OS-assigned port, released at once.
+/// A port that is free now, from 20000-29999: below macOS's ephemeral range, so no process's
+/// outbound connection can take it before the daemon under test binds it, and clear of the
+/// registry's default 33000-33999. Each process starts at its own offset and never repeats one.
 pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let offset = std::process::id() % 100 * 100;
+    loop {
+        let port = (20000 + (offset + NEXT.fetch_add(1, Ordering::Relaxed)) % 10000) as u16;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }

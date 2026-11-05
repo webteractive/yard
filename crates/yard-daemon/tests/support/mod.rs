@@ -187,10 +187,6 @@ pub fn ports_toml(http: u16, https: u16, dns: u16) -> String {
     )
 }
 
-/// An OS-assigned port, released at once, and never handed to another test in this
-/// binary. macOS allocates ephemeral ports in sequence, but every health check and probe
-/// connection takes one too, so the sequence wraps within seconds and `:0` would give a
-/// second test a port the first has not bound yet.
 /// A `range` line for `ports.toml`: ten ports of its own, below macOS's ephemeral range, so
 /// parallel tests never hand two tunnels the same `auto` port.
 pub fn auto_range() -> String {
@@ -200,11 +196,19 @@ pub fn auto_range() -> String {
     format!("range = \"{start}-{}\"\n", start + 9)
 }
 
+/// A port that is free now and never handed to another test in this binary, taken from
+/// 20000-29999: below macOS's ephemeral range (49152 on), so no process's outbound connection can
+/// take it before the test's unit binds it (an OS-assigned `:0` port flaked nginx with
+/// `PORT_IN_USE` this way), and clear of the registry's default 33000-33999 and `auto_range`.
+/// Each process starts at its own offset.
 pub fn free_port() -> u16 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let offset = std::process::id() % 100 * 100;
     let mut given = given();
     loop {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        if given.insert(port) {
+        let port = (20000 + (offset + NEXT.fetch_add(1, Ordering::Relaxed)) % 10000) as u16;
+        if given.insert(port) && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
     }
@@ -212,7 +216,7 @@ pub fn free_port() -> u16 {
 
 /// A listener a test holds, never on a port `free_port` gave out: that port is free only
 /// until its unit binds it, and a listener there would answer the unit's health checks.
-/// `free_port` cannot hand out a held port either, since the OS skips ports in use.
+/// It comes from the OS's ephemeral range, which `free_port` never hands out.
 pub fn held_listener() -> std::net::TcpListener {
     let given = given();
     loop {

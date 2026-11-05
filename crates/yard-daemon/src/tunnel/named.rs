@@ -70,7 +70,7 @@ pub async fn add(
         (Some(_), None) => {
             return Err(YardError::new(
                 ErrorCode::TunnelNotFound,
-                format!("no Cloudflare tunnel is named {name}"),
+                format!("no Cloudflare tunnel has the name or id {name}"),
             )
             .with_hint("cloudflared tunnel list"));
         }

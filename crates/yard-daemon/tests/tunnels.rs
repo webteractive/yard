@@ -741,6 +741,27 @@ async fn adopting_with_tunnel_never_deletes() {
 }
 
 #[tokio::test]
+async fn tunnel_takes_a_uuid_as_well_as_a_name() {
+    let d = named_daemon().await;
+    let id = "6ff42ae2-765d-4adf-8112-31c55c1551ef";
+    std::fs::write(
+        cloudflared_dir(&d).join("tunnels.json"),
+        format!(r#"[{{"id":"{id}","name":"blog-shared"}}]"#),
+    )
+    .unwrap();
+    let credentials = default_credentials(&d.opts.home, id);
+    std::fs::create_dir_all(credentials.parent().unwrap()).unwrap();
+    std::fs::write(&credentials, "{}").unwrap();
+    let (lines, error, _) =
+        add_named(&d, json!({"site": "blog", "host": "blog.example.com", "tunnel": id})).await;
+    assert_eq!(error, None, "{lines:?}");
+    let f = facts(&d).named["blog"].clone();
+    assert_eq!((f.id.as_str(), f.name.as_str(), f.created_by_yard), (id, "blog-shared", false));
+    assert!(managed_calls(&d).contains(&format!("list --id {id} -o json")), "{:?}", managed_calls(&d));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn an_existing_record_is_dns_exists_and_overwrite_passes_f() {
     let d = named_daemon().await;
     std::fs::write(cloudflared_dir(&d).join("dns-records"), "blog.example.com\n").unwrap();

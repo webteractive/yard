@@ -792,3 +792,16 @@ async fn leftover_temp_files_in_certs_are_removed() {
     assert_eq!(left, ["blog.key", "blog.pem"]);
     e.sup.shutdown().await;
 }
+
+#[test]
+fn free_ports_are_never_ones_the_os_gives_connections() {
+    // Any process's outbound connection can take an ephemeral port between a test choosing it and
+    // its unit binding it; that flaked nginx with PORT_IN_USE held by an invisible process.
+    let out =
+        std::process::Command::new("sysctl").args(["-n", "net.inet.ip.portrange.first"]).output().unwrap();
+    let first: u16 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    for _ in 0..50 {
+        let port = free_port();
+        assert!(port < first, "{port} is in the ephemeral range from {first}");
+    }
+}

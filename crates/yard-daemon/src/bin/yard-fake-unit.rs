@@ -104,9 +104,14 @@ fn cloudflared(argv0: &Path, args: &[String]) -> ExitCode {
             eprintln!(
                 "2026-11-03T00:00:00Z INF Cannot determine default configuration path. No file [config.yml config.yaml] in [~/.cloudflared ~/.cloudflare-warp ~/cloudflare-warp /etc/cloudflared /usr/local/etc/cloudflared]"
             );
-            let name = words.iter().position(|w| *w == "--name").and_then(|i| words.get(i + 1)).copied();
+            // `--name N` or `--id I`, as the real one filters.
+            let flag = |f: &str| words.iter().position(|w| *w == f).and_then(|i| words.get(i + 1)).copied();
+            let (key, wanted) = match flag("--id") {
+                Some(id) => ("id", Some(id)),
+                None => ("name", flag("--name")),
+            };
             let found: Vec<_> =
-                tunnels().into_iter().filter(|t| Some(t["name"].as_str().unwrap_or("")) == name).collect();
+                tunnels().into_iter().filter(|t| Some(t[key].as_str().unwrap_or("")) == wanted).collect();
             println!("{}", serde_json::Value::Array(found));
             ExitCode::SUCCESS
         }

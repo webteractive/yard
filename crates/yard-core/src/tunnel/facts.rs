@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use yard_proto::YardError;
 
 /// Site names at the top level, beside `dns_left`, as spec §6 shows.
@@ -52,15 +53,19 @@ impl Facts {
             .map_err(|e| YardError::internal(format!("{} is not valid: {e}", path.display())))
     }
 
-    /// Written to a temporary file created 0600, then renamed over the old one.
+    /// Written to a temporary file created 0600, then renamed over the old one. The temporary
+    /// file is this save's own, so two saves at once (a tunnel job and doctor) never write into
+    /// each other's; the last rename wins.
     pub fn save(&self, path: &Path) -> Result<(), YardError> {
+        static SAVES: AtomicU64 = AtomicU64::new(0);
+        let mut tmp = path.as_os_str().to_os_string();
+        tmp.push(format!(".{}-{}.yard-tmp", std::process::id(), SAVES.fetch_add(1, Ordering::Relaxed)));
+        let tmp = PathBuf::from(tmp);
         let write = || -> io::Result<()> {
             use std::os::unix::fs::OpenOptionsExt;
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            let mut tmp = path.as_os_str().to_os_string();
-            tmp.push(".yard-tmp");
             let text = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
             let mut file =
                 std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
@@ -68,7 +73,10 @@ impl Facts {
             file.write_all(b"\n")?;
             std::fs::rename(&tmp, path)
         };
-        write().map_err(|e| YardError::internal(format!("cannot write {}: {e}", path.display())))
+        write().map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            YardError::internal(format!("cannot write {}: {e}", path.display()))
+        })
     }
 }
 
@@ -106,5 +114,31 @@ mod tests {
         assert_eq!(Facts::load(&path).unwrap(), f);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn concurrent_saves_never_share_a_temporary_file() {
+        // A tunnel job and doctor's dropping of gone records can save at once.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tunnels.json");
+        let writers: Vec<_> = (0..8)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut f = Facts::default();
+                    f.dns_left.push(LeftRecord {
+                        host: format!("h{n}.example.com").repeat(50),
+                        target: target("x"),
+                        since: "2026-11-05".into(),
+                    });
+                    (0..200).map(|_| f.save(&path)).filter(Result::is_err).count()
+                })
+            })
+            .collect();
+        let failed: usize = writers.into_iter().map(|w| w.join().unwrap()).sum();
+        assert_eq!(failed, 0, "saves failed");
+        assert_eq!(Facts::load(&path).unwrap().dns_left.len(), 1);
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("tunnels.json")], "no temporary file is left");
     }
 }

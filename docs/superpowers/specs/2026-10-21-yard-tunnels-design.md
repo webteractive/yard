@@ -486,7 +486,7 @@ Adding (`tunnels.add` with a host):
 1. Refuse early when the host is under no domain set up (`TUNNEL_DOMAIN_NOT_SET_UP`), or
    when that domain's certificate does not exist (existence check only):
    `TUNNEL_NOT_LOGGED_IN`, hint `yard tunnels domain add <domain>`.
-2. `cloudflared tunnel list --name <name> -o json`. With no `--tunnel`, an existing tunnel
+2. `cloudflared tunnel list --name <name> -o json` (`--id <uuid>` when `--tunnel` is a UUID). With no `--tunnel`, an existing tunnel
    named `yard-<site>` that `state/tunnels.json` does not record as Yard's is refused:
    `TUNNEL_EXISTS`, hint `yard tunnel <site> --host <host> --tunnel yard-<site>` to adopt it.
    With `--tunnel`, a missing one is `TUNNEL_NOT_FOUND`.
@@ -729,6 +729,7 @@ records a tunnel or a left DNS record:
 | `cloudflared` | brew's cloudflared is at its keg | fail: `brew install cloudflared` |
 | `tunnel-login` | each domain in `yard.toml` has its certificate (stat only) | warn per missing one: `yard tunnels domain add <domain>` (running needs no login; changing does) |
 | `tunnel:<site>` | unit ready, `/ready` 200 | fail with the unit's last error when failed or backing off (`yard restart tunnel-<site>`); warn while `connecting` (`tail -n 50 <root>/logs/tunnel-<site>.log`, P9) |
+| `tunnel-state` | — | fail when `state/tunnels.json` cannot be read or parsed: "fix the JSON in <path>" (it is not read as no tunnels; tunnel jobs refuse it too) |
 | `tunnel-credentials:<site>` | credentials file exists (stat only) | fail: `TUNNEL_CREDENTIALS_MISSING` hint |
 | `tunnel-leftover:<name>` | — | warn per tunnel Yard made whose site has no `[tunnel]` (its delete failed): `yard untunnel <site>`, which retries the delete from the facts |
 | `tunnel-dns:<host>` | — | warn per `dns_left` record still resolving (or not answerable): "the DNS record <host> → <target> is still there", hint "delete the CNAME <host> in the Cloudflare dashboard"; one that no longer resolves is dropped from `state/tunnels.json` by yardd's doctor (the CLI's doctor while yardd is down never writes it) |

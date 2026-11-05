@@ -51,6 +51,13 @@ pub struct Listed {
     pub name: String,
 }
 
+/// A tunnel id as cloudflared prints it: 8-4-4-4-12 hex digits.
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices()
+            .all(|(i, c)| if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() })
+}
+
 /// cloudflared's management commands for one domain's certificate (P5), run in a job so their
 /// output streams and a cancel stops them.
 pub struct Manage<'a> {
@@ -73,9 +80,10 @@ impl Manage<'_> {
         args
     }
 
-    /// The tunnel named `name` in the account, if any.
+    /// The tunnel in the account named `name`, or with that id when `name` is a UUID, if any.
     pub async fn find(&self, name: &str) -> Result<Option<Listed>, YardError> {
-        let args = self.args(&["list", "--name", name, "-o", "json"]);
+        let by = if is_uuid(name) { "--id" } else { "--name" };
+        let args = self.args(&["list", by, name, "-o", "json"]);
         // stdout alone: cloudflared logs to stderr, with brackets of its own.
         let (ok, output) = self.job.capture_stdout(&self.program, &args, &self.env()).await?;
         let (text, lines) = (output.stdout.join("\n"), output.lines);
@@ -84,7 +92,7 @@ impl Manage<'_> {
             _ => {
                 return Err(YardError::new(
                     ErrorCode::JobFailed,
-                    format!("cloudflared tunnel list --name {name} failed"),
+                    format!("cloudflared tunnel list {by} {name} failed"),
                 )
                 .with_data(serde_json::json!({ "tail": lines })));
             }
@@ -92,7 +100,7 @@ impl Manage<'_> {
         let listed: Vec<Listed> = serde_json::from_str(json).map_err(|e| {
             YardError::new(ErrorCode::JobFailed, format!("cannot read cloudflared's tunnel list: {e}"))
         })?;
-        Ok(listed.into_iter().find(|t| t.name == name))
+        Ok(listed.into_iter().find(|t| t.name == name || t.id == name))
     }
 
     pub async fn create(&self, name: &str, credentials: &Path) -> Result<(), YardError> {

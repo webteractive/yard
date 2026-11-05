@@ -237,8 +237,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Build & test
 
-- `cargo test --workspace` — full suite. Tests use a temp `YARD_ROOT` and ports
-  from the OS, and never touch Herd, `/etc/resolver` or ports 53/80/443/8080/8443/53535.
+- `cargo test --workspace` — full suite. Tests use a temp `YARD_ROOT` and free ports in
+  20000-29999 (below macOS's ephemeral range), and never touch Herd, `/etc/resolver` or ports 53/80/443/8080/8443/53535.
   If test daemons time out at startup, `target/debug/deps` has grown too big for FSEvents:
   run `cargo clean --profile dev` (never plain `cargo clean`: the LaunchAgent runs `target/release/yardd`).
 - `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check` — CI enforces both.

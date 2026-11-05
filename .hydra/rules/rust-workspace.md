@@ -27,7 +27,8 @@ triggers:
   nginx in the privileged profile) clears `FD_CLOEXEC` on exactly those, after the hook.
 - No `.unwrap()` / `.expect()` on daemon or helper runtime paths. Errors become a
   `YardError` with a hint. Tests may unwrap.
-- Tests use a temp `YARD_ROOT`, OS-assigned free ports and `yard-fake-unit` (via
+- Tests use a temp `YARD_ROOT`, free ports from `support::free_port()` (20000-29999, below macOS's
+  ephemeral range, so no process's outbound connection takes one before its unit binds it) and `yard-fake-unit` (via
   `argv[0]` it stands in for nginx, dnsmasq and php-fpm, and for the service engines
   (`mysqld`, `postgres`, `initdb`, `redis-server`, `minio`), and reads the configs Yard
   rendered). Its nginx `-t` fails on `yard-test-broken` in any `.conf` under its prefix or in a single file
@@ -47,7 +48,7 @@ triggers:
   7.0.10). Service formulae come from `fake-formulae.json` (`brew info --json=v2` objects)
   for `search`, `info --json=v2` (one or several names: it fails when any is unknown, as brew does) and `install`.
 - The fake `cloudflared` (`Fixture::add_cloudflared`, at brew's keg path) keeps its state beside
-  itself: `calls` (one line per call), `tunnels.json` (`create`, `list`, `delete`), `dns-records`
+  itself: `calls` (one line per call), `tunnels.json` (`create`, `list` by `--name` or `--id`, `delete`), `dns-records`
   and `foreign-zones` (`route dns`), and the switches `not-ready` (`/ready` answers 503),
   `start-fails`, `login-fails` and `delete-fails`. A run serves `/ready` and `/quicktunnel`
   (`quick-<origin port>.trycloudflare.com`) on the yml's `metrics` address from the start, unlike

@@ -320,11 +320,27 @@ async fn tunnel_checks(input: &DoctorInput<'_>, yard: Option<&YardConfig>, sites
         .flat_map(|cfg| cfg.sites.iter())
         .filter_map(|(site, entry)| entry.tunnel.as_ref().map(|t| (site.clone(), t.host.get_ref().clone())))
         .collect();
-    let facts = Facts::load(&paths.tunnels_state()).unwrap_or_default();
-    if named.is_empty() && input.tunnels.is_empty() && facts.named.is_empty() && facts.dns_left.is_empty() {
+    // A broken file is said, not read as no tunnels: tunnel jobs refuse it too.
+    let (facts, broken) = match Facts::load(&paths.tunnels_state()) {
+        Ok(facts) => (facts, None),
+        Err(e) => (Facts::default(), Some(e)),
+    };
+    if broken.is_none()
+        && named.is_empty()
+        && input.tunnels.is_empty()
+        && facts.named.is_empty()
+        && facts.dns_left.is_empty()
+    {
         return vec![];
     }
     let mut checks = vec![];
+    if let Some(e) = broken {
+        checks.push(fail(
+            "tunnel-state",
+            e.message,
+            format!("fix the JSON in {}", paths.tunnels_state().display()),
+        ));
+    }
     checks.push(if input.brew.cloudflared_bin().exists() {
         ok("cloudflared", "cloudflared is installed")
     } else {

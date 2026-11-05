@@ -1725,4 +1725,20 @@ mod tunnels {
         assert_eq!(check.hint.as_deref(), Some("yard untunnel old"));
         d.shutdown().await.unwrap();
     }
+
+    #[tokio::test]
+    async fn doctor_fails_a_corrupt_tunnels_json() {
+        let d = tunnel_daemon().await;
+        let file = d.fx.paths.tunnels_state();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{ not json").unwrap();
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let checks = checks(&mut c).await;
+        let check = find(&checks, "tunnel-state").expect("a check for the broken file");
+        assert_eq!(status(&checks, "tunnel-state").as_deref(), Some("fail"));
+        assert!(check.message.contains("is not valid"), "{check:?}");
+        assert_eq!(check.hint.clone().unwrap_or_default(), format!("fix the JSON in {}", file.display()));
+        d.shutdown().await.unwrap();
+    }
 }
