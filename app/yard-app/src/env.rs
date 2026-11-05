@@ -22,14 +22,45 @@ use yard_proto::YardError;
 /// A quick call's work, boxed so the three kinds share a type.
 type Work = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), YardError>>>>;
 
+/// A sheet over the main window, with the fields it owns while it is open.
+#[derive(Clone)]
+pub enum Sheet {
+    Link {
+        folder: std::path::PathBuf,
+        name: Entity<crate::widgets::text_field::TextField>,
+    },
+    Proxy {
+        name: Entity<crate::widgets::text_field::TextField>,
+        url: Entity<crate::widgets::text_field::TextField>,
+    },
+    Settle(String),
+    AddService {
+        engine: usize,
+        line: Entity<crate::widgets::text_field::TextField>,
+        port: Entity<crate::widgets::text_field::TextField>,
+        /// The lines yardd offered after refusing one (`SERVICE_VERSION_UNSUPPORTED`).
+        lines: Vec<String>,
+    },
+    Port {
+        name: String,
+        port: Entity<crate::widgets::text_field::TextField>,
+    },
+    Sleep {
+        name: String,
+        after: Entity<crate::widgets::text_field::TextField>,
+    },
+}
+
 /// Where the main window is and what it should open on.
-#[derive(Debug)]
 pub struct Nav {
     pub screen: Screen,
     /// `(owner, is_service)`: a port field to open.
     pub edit_port: Option<(String, bool)>,
     /// A site whose settle form to open; `Some(None)` for the selected site.
     pub settle: Option<Option<String>>,
+    pub sheet: Option<Sheet>,
+    /// The service whose log the Services screen shows.
+    pub service_log: Option<(String, Entity<crate::services::logs::LogTail>)>,
 }
 
 #[derive(Clone)]
@@ -50,7 +81,13 @@ impl AppEnv {
     pub fn new(daemon: Arc<dyn Daemon>, location: Location, bridge: Arc<Bridge>, cx: &mut App) -> AppEnv {
         let state = AppState::new(daemon.clone(), Duration::from_millis(150), cx);
         let runner = ActionRunner::new(daemon.clone(), state.clone(), cx);
-        let nav = cx.new(|_| Nav { screen: Screen::Overview, edit_port: None, settle: None });
+        let nav = cx.new(|_| Nav {
+            screen: Screen::Overview,
+            edit_port: None,
+            settle: None,
+            sheet: None,
+            service_log: None,
+        });
         let settings = Rc::new(Settings::default());
         let cli = Rc::new(CliRunner::new(
             location.yard.clone(),
@@ -188,7 +225,8 @@ impl AppEnv {
                 crate::window::main::open(self, screen, cx)
             }
             HintAction::OpenFile(file) => {
-                if let Err(e) = Opener::open_with(&file, self.settings.editor_app().as_deref()) {
+                // A hint's file opens only as text in an editor, never with its default handler.
+                if let Err(e) = Opener::open_text(&file, self.settings.editor_app().as_deref()) {
                     self.runner.update(cx, |r, _| r.errors.record(ActionId("open-file".into()), e));
                 }
             }

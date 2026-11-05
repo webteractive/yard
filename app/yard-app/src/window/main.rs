@@ -151,8 +151,10 @@ impl Render for MainWindow {
         let t = Theme::of(window);
         let env = self.env.clone();
         let screen = env.nav.read(cx).screen.clone();
+        let sheet = sheet(&env, window, cx);
         div()
             .size_full()
+            .relative()
             .flex()
             .bg(t.background)
             .text_color(t.text)
@@ -167,7 +169,41 @@ impl Render for MainWindow {
                         .child(content(&env, &screen, window, cx)),
                 ),
             )
+            .children(sheet)
     }
+}
+
+/// The open sheet, drawn over the window. A port or settle request from a hint opens its sheet.
+fn sheet(env: &AppEnv, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+    if let Some((owner, true)) = env.nav.read(cx).edit_port.clone() {
+        let port = cx.new(|cx| {
+            crate::widgets::text_field::TextField::new(
+                format!("sheet:port:{owner}"),
+                format!("Port for {owner}"),
+                "a free port",
+                cx,
+            )
+        });
+        env.nav.update(cx, |n, _| {
+            n.edit_port = None;
+            n.sheet = Some(crate::env::Sheet::Port { name: owner, port });
+        });
+    }
+    if let Some(site) = env.nav.read(cx).settle.clone() {
+        let target = site.or_else(|| match &env.nav.read(cx).screen {
+            Screen::Sites(s) => s.clone(),
+            _ => None,
+        });
+        env.nav.update(cx, |n, _| {
+            n.settle = None;
+            if let Some(t) = target {
+                n.sheet = Some(crate::env::Sheet::Settle(t));
+            }
+        });
+    }
+    let open = env.nav.read(cx).sheet.clone()?;
+    crate::sites::forms::sheet(env, &open, window, cx)
+        .or_else(|| crate::services::forms::sheet(env, &open, window, cx))
 }
 
 fn badge(env: &AppEnv, screen: &Screen, cx: &App) -> Option<usize> {
@@ -269,6 +305,8 @@ fn content(env: &AppEnv, screen: &Screen, window: &mut Window, cx: &mut App) -> 
     match screen {
         Screen::Overview => crate::overview::overview(env, window, cx),
         Screen::Activity => crate::activity::activity(env, window, cx),
+        Screen::Sites(_) => crate::sites::sites(env, window, cx),
+        Screen::Services(_) => crate::services::services(env, window, cx),
         other => div().text_color(Theme::of(window).muted).child(format!("{other:?}")).into_any_element(),
     }
 }

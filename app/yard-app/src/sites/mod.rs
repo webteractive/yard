@@ -1,0 +1,137 @@
+//! Sites (M6 design §8.2): the list, a site's detail, linking a folder or adding a proxy.
+
+pub mod detail;
+pub mod forms;
+
+use crate::env::{AppEnv, Sheet};
+use crate::runner::ActionId;
+use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::error_view::ErrorView;
+use crate::widgets::table::{Row, Table};
+use crate::widgets::text_field::TextField;
+use gpui::{
+    AnyElement, App, AppContext, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Window,
+    div, px,
+};
+use yard_app_model::hint::{HintAction, Screen};
+use yard_proto::SiteKind;
+
+fn link_folder(env: &AppEnv, cx: &mut App) {
+    let picked = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Link".into()),
+    });
+    let env = env.clone();
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = picked.await else { return };
+        let Some(folder) = paths.into_iter().next() else { return };
+        let default = folder.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        cx.update(|cx| {
+            let name = cx.new(|cx| {
+                let mut f = TextField::new("sheet:link:name", "Site name", "the folder's name", cx);
+                f.set_value(default, cx);
+                f
+            });
+            env.nav.update(cx, |n, cx| {
+                n.sheet = Some(Sheet::Link { folder, name });
+                cx.notify();
+            });
+        });
+    })
+    .detach();
+}
+
+pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
+    let selected = match &env.nav.read(cx).screen {
+        Screen::Sites(s) => s.clone(),
+        _ => None,
+    };
+    let sites = env.state.read(cx).sites.value.clone().unwrap_or_default();
+    let rows = sites.iter().map(|s| {
+        let target = match &s.kind {
+            SiteKind::Php { php, .. } => format!("PHP {php}"),
+            SiteKind::Proxy { target } => target.clone(),
+            SiteKind::Other => "-".into(),
+        };
+        let status = if s.project_error.is_some() {
+            "error"
+        } else if s.needs_setup() {
+            "needs setup"
+        } else {
+            "serving"
+        };
+        Row::new(
+            s.name.clone(),
+            vec![
+                s.name.clone().into(),
+                s.url.clone().into(),
+                target.into(),
+                (if s.secure { "on" } else { "off" }).into(),
+                status.into(),
+            ],
+        )
+    });
+    let select = env.clone();
+    let table = Table::new(
+        "sites",
+        ["Name", "URL", "PHP or target", "HTTPS", "Status"].iter().map(|c| SharedString::from(*c)).collect(),
+        rows.collect(),
+    )
+    .selected(selected.clone().map(Into::into))
+    .on_select(move |key, _, cx| {
+        crate::window::main::open(&select, Screen::Sites(Some(key.to_string())), cx)
+    });
+    let (link, proxy) = (env.clone(), env.clone());
+    let header = div().flex().justify_between().items_center().child(div().text_xl().child("Sites")).child(
+        div()
+            .flex()
+            .gap(px(6.))
+            .child(
+                Button::new("site:link", "Link a folder…")
+                    .style(ButtonStyle::Primary)
+                    .on_click(move |_, _, cx| link_folder(&link, cx)),
+            )
+            .child(Button::new("site:proxy", "Add a proxy…").on_click(move |_, _, cx| {
+                let name = cx.new(|cx| TextField::new("sheet:proxy:name", "Name", "api", cx));
+                let url =
+                    cx.new(|cx| TextField::new("sheet:proxy:url", "Target URL", "http://127.0.0.1:3000", cx));
+                proxy.nav.update(cx, |n, cx| {
+                    n.sheet = Some(Sheet::Proxy { name, url });
+                    cx.notify();
+                });
+            })),
+    );
+    let runner = env.runner.read(cx);
+    let mut ids: Vec<String> = vec!["site:link".into(), "site:proxy".into()];
+    if let Some(n) = &selected {
+        ids.extend(
+            ["php", "secure", "docroot", "init", "env", "unlink"].iter().map(|v| format!("site:{n}:{v}")),
+        );
+    }
+    let errors: Vec<_> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let e = runner.errors.get(&ActionId(id.clone()))?.clone();
+            let env = env.clone();
+            Some(
+                ErrorView::new(format!("{id}:error"), &e, HintAction::parse(e.hint.as_deref().unwrap_or("")))
+                    .on_action(move |a, _, cx| env.perform(a, cx)),
+            )
+        })
+        .collect();
+    let detail = selected.map(|n| detail::detail(env, &n, window, cx));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(header)
+        .children(errors)
+        .child(table)
+        .children(detail)
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests;

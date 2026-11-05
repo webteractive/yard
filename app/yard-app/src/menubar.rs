@@ -392,7 +392,10 @@ mod tests {
         let t = titles(&model);
         assert_eq!(t[0], "Yard 0.1.0 · standard · .yard", "{t:#?}");
         assert!(t.iter().any(|x| x == "! nginx failed"), "{t:#?}");
-        assert!(t.iter().any(|x| x == "! mysql-8.4 failed to start: port 3307 is held by mysqld (pid 9)"), "{t:#?}");
+        assert!(
+            t.iter().any(|x| x == "! mysql-8.4 failed to start: port 3307 is held by mysqld (pid 9)"),
+            "{t:#?}"
+        );
         assert!(t.iter().any(|x| x == "Install PHP (started elsewhere) — ==> Pouring php@8.3"), "{t:#?}");
         assert!(t.iter().any(|x| x == "Cancel Install PHP (started elsewhere)"), "{t:#?}");
         assert!(t.iter().any(|x| x == "blog"), "{t:#?}");

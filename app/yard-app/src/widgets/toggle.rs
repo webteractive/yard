@@ -13,23 +13,15 @@ pub struct Toggle {
     id: SharedString,
     label: SharedString,
     on: bool,
-    disabled: bool,
     on_toggle: Option<super::Callback<bool>>,
 }
 
 impl Toggle {
     pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>, on: bool) -> Toggle {
-        Toggle { id: id.into(), label: label.into(), on, disabled: false, on_toggle: None }
-    }
-
-    #[expect(dead_code, reason = "the site detail (M6 Task 14)")]
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
+        Toggle { id: id.into(), label: label.into(), on, on_toggle: None }
     }
 
     /// Called with the new value.
-    #[expect(dead_code, reason = "the site detail (M6 Task 14)")]
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self
@@ -44,7 +36,7 @@ impl RenderOnce for Toggle {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let t = Theme::of(window);
         let on = self.on;
-        let handler = self.on_toggle.filter(|_| !self.disabled);
+        let handler = self.on_toggle;
         div()
             .id(ElementId::Name(self.id.clone()))
             .role(Role::Switch)
@@ -53,7 +45,6 @@ impl RenderOnce for Toggle {
             .flex()
             .items_center()
             .gap(px(6.))
-            .when(self.disabled, |d| d.opacity(0.5))
             .when_some(handler, |d, h| d.cursor_pointer().on_click(move |_, w, cx| h(!on, w, cx)))
             .child(
                 div()

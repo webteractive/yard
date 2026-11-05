@@ -41,13 +41,11 @@ impl Table {
         Table { id: id.into(), columns, rows, selected: None, on_select: None }
     }
 
-    #[expect(dead_code, reason = "the sites list (M6 Task 14)")]
     pub fn selected(mut self, key: Option<SharedString>) -> Self {
         self.selected = key;
         self
     }
 
-    #[expect(dead_code, reason = "the sites list (M6 Task 14)")]
     pub fn on_select(mut self, f: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         self
