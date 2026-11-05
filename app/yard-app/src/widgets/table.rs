@@ -56,6 +56,7 @@ impl Table {
     }
 
     /// `(key, element id)` of each row.
+    #[cfg(test)]
     pub fn row_ids(&self) -> Vec<(SharedString, SharedString)> {
         self.rows.iter().map(|r| (r.key.clone(), self.row_id(&r.key))).collect()
     }
@@ -79,14 +80,14 @@ impl RenderOnce for Table {
             .text_color(t.muted)
             .children(self.columns.iter().map(|c| div().flex_1().child(c.clone())));
         let mut rows = vec![];
-        for row in self.rows.into_iter() {
-            let row_id = format!("{}:row:{}", self.id, row.key);
+        let ids: Vec<SharedString> = self.rows.iter().map(|r| self.row_id(&r.key)).collect();
+        for (row, row_id) in self.rows.into_iter().zip(ids) {
             let selected = self.selected.as_ref() == Some(&row.key);
             let handler = self.on_select.clone();
             let key = row.key.clone();
             rows.push(
                 div()
-                    .id(ElementId::Name(row_id.into()))
+                    .id(ElementId::Name(row_id))
                     .role(Role::Row)
                     .aria_label(row.cells.first().cloned().unwrap_or_default())
                     .aria_selected(selected)

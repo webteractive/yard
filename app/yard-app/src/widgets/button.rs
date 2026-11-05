@@ -66,10 +66,11 @@ impl RenderOnce for Button {
             ButtonStyle::Normal => (t.surface, t.text),
         };
         let handler = self.on_click.clone();
+        let a11y = self.a11y();
         div()
-            .id(ElementId::Name(self.id.clone()))
-            .role(Role::Button)
-            .aria_label(self.label.clone())
+            .id(ElementId::Name(a11y.id))
+            .role(a11y.role)
+            .aria_label(a11y.label)
             .px(px(10.))
             .py(px(4.))
             .rounded(px(6.))

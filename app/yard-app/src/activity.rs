@@ -23,7 +23,8 @@ fn newest_first(env: &AppEnv, cx: &App) -> Vec<JobRecord> {
     env.state.read(cx).jobs.jobs().iter().rev().cloned().collect()
 }
 
-/// `<title> — <phase>` per job, newest first.
+/// `<title> — <phase>` per job, newest first, as the tests read the screen.
+#[cfg(test)]
 pub fn rows(env: &AppEnv, cx: &App) -> Vec<String> {
     newest_first(env, cx).iter().map(|j| format!("{} — {}", j.title, phase_text(&j.phase))).collect()
 }

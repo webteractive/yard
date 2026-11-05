@@ -1,13 +1,12 @@
 //! Yard.app: a menu bar app and window for yardd (M6). With `--root <path>`, a window shows the
 //! version of the yardd serving that data root, or why it cannot be reached.
 
-#![cfg_attr(not(test), expect(dead_code, reason = "the screens of M6 Tasks 14 to 16 use the rest"))]
-
 mod activity;
 mod bridge;
 mod daemon;
 mod env;
 mod menubar;
+mod onboarding;
 mod overview;
 mod platform;
 mod runner;
@@ -53,6 +52,7 @@ fn main() {
         if let Err(e) = menubar::install(&env, cx) {
             eprintln!("Yard.app: no menu bar item: {e}");
         }
+        onboarding::open_if_needed(&env, cx);
         // Started for a scratch root: open the window, as a developer running it wants.
         if root.is_some() {
             window::main::open(&env, yard_app_model::hint::Screen::Overview, cx);

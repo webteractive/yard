@@ -115,11 +115,6 @@ impl AppState {
         })
     }
 
-    #[expect(dead_code, reason = "the screens reach yardd through AppState (M6 Tasks 13-16)")]
-    pub fn daemon(&self) -> Arc<dyn Daemon> {
-        self.daemon.clone()
-    }
-
     pub fn refresh(&mut self, keys: impl IntoIterator<Item = ResourceKey>, cx: &mut Context<Self>) {
         self.queue.invalidate(keys);
         self.schedule(cx);

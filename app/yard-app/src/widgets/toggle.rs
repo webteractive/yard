@@ -36,11 +36,12 @@ impl RenderOnce for Toggle {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let t = Theme::of(window);
         let on = self.on;
+        let a11y = self.a11y();
         let handler = self.on_toggle;
         div()
-            .id(ElementId::Name(self.id.clone()))
-            .role(Role::Switch)
-            .aria_label(self.label.clone())
+            .id(ElementId::Name(a11y.id))
+            .role(a11y.role)
+            .aria_label(a11y.label)
             .aria_toggled(if on { Toggled::True } else { Toggled::False })
             .flex()
             .items_center()

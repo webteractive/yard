@@ -8,7 +8,6 @@ const YARD_PATH: &str = "YardCLIPath";
 const EDITOR_APP: &str = "EditorApp";
 const TERMINAL_APP: &str = "TerminalApp";
 const RECENT_SITES: &str = "RecentSites";
-#[expect(dead_code, reason = "onboarding (M6 Task 16)")]
 const DID_ONBOARD: &str = "DidOnboard";
 
 /// The app's own settings, in its `NSUserDefaults` domain (`dev.more.yard.app`); nothing of
@@ -80,12 +79,10 @@ impl Settings {
         unsafe { self.defaults.setObject_forKey(Some(&array), &NSString::from_str(RECENT_SITES)) };
     }
 
-    #[expect(dead_code, reason = "onboarding (M6 Task 16)")]
     pub fn did_onboard(&self) -> bool {
         self.defaults.boolForKey(&NSString::from_str(DID_ONBOARD))
     }
 
-    #[expect(dead_code, reason = "onboarding (M6 Task 16)")]
     pub fn set_did_onboard(&self) {
         self.defaults.setBool_forKey(true, &NSString::from_str(DID_ONBOARD));
     }

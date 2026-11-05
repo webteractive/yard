@@ -16,7 +16,7 @@ use gpui::{
 use yard_app_model::hint::{HintAction, Screen};
 use yard_proto::SiteKind;
 
-fn link_folder(env: &AppEnv, cx: &mut App) {
+pub fn link_folder(env: &AppEnv, cx: &mut App) {
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: false,
         directories: true,

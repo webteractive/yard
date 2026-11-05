@@ -25,6 +25,8 @@ impl Global for MainHandle {}
 
 pub struct MainWindow {
     env: AppEnv,
+    /// A question from the runner is on screen.
+    asking: bool,
 }
 
 impl MainWindow {
@@ -32,7 +34,7 @@ impl MainWindow {
         cx.observe(&env.state, |_, _, cx| cx.notify()).detach();
         cx.observe(&env.runner, |_, _, cx| cx.notify()).detach();
         cx.observe(&env.nav, |_, _, cx| cx.notify()).detach();
-        MainWindow { env }
+        MainWindow { env, asking: false }
     }
 }
 
@@ -150,10 +152,40 @@ pub fn xdebug(env: &AppEnv, v: &str, on: bool, cx: &mut App) {
     });
 }
 
+impl MainWindow {
+    /// Shows the runner's question (brew's trust) as a native alert and passes the answer back.
+    fn ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.env.runner.read(cx).prompt.clone().filter(|_| !self.asking) else { return };
+        let (title, detail, buttons) = match &prompt {
+            crate::runner::Prompt::Trust { formula, tap } => (
+                format!("Trust {formula}?"),
+                format!(
+                    "Homebrew installs it only once you trust it or the {tap} tap. Yard never trusts anything on its own."
+                ),
+                vec!["Trust".to_string(), "Don't trust".to_string()],
+            ),
+            crate::runner::Prompt::Confirm { title, message, buttons, .. } => {
+                (title.clone(), message.clone(), buttons.clone())
+            }
+        };
+        self.asking = true;
+        let labels: Vec<&str> = buttons.iter().map(String::as_str).collect();
+        let answer = window.prompt(gpui::PromptLevel::Info, &title, Some(&detail), &labels, cx);
+        let runner = self.env.runner.clone();
+        cx.spawn(async move |this, cx| {
+            let choice = answer.await.unwrap_or(1);
+            runner.update(cx, |r, cx| r.answer(prompt, choice, cx));
+            let _ = this.update(cx, |w, _| w.asking = false);
+        })
+        .detach();
+    }
+}
+
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::of(window);
         let env = self.env.clone();
+        self.ask(window, cx);
         let screen = env.nav.read(cx).screen.clone();
         let sheet = sheet(&env, window, cx);
         div()

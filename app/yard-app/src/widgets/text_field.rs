@@ -631,10 +631,11 @@ impl Element for TextElement {
 impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = super::theme::Theme::of(window);
+        let a11y = self.a11y();
         div()
-            .id(self.id.clone())
-            .role(Role::TextInput)
-            .aria_label(self.label.clone())
+            .id(a11y.id)
+            .role(a11y.role)
+            .aria_label(a11y.label)
             .aria_value(self.content.clone())
             .flex()
             .key_context("TextField")

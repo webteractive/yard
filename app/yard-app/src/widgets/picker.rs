@@ -53,10 +53,11 @@ impl RenderOnce for Picker {
         let current = self.selected.and_then(|i| self.options.get(i)).cloned().unwrap_or_else(|| "—".into());
         let disabled = self.disabled.clone();
         let toggle = open.clone();
+        let a11y = self.a11y();
         let mut root = div()
-            .id(ElementId::Name(self.id.clone()))
-            .role(Role::ComboBox)
-            .aria_label(self.label.clone())
+            .id(ElementId::Name(a11y.id))
+            .role(a11y.role)
+            .aria_label(a11y.label)
             .aria_value(current.clone())
             .aria_expanded(is_open)
             .flex()

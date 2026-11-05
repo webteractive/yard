@@ -18,6 +18,7 @@ use yard_proto::methods::{EnvParams, ServiceParams, ServiceRemoveParams};
 use yard_proto::{ErrorCode, ServiceInfo, ServiceManager, ServiceState, YardError, engine_display};
 
 /// Each row's cells as shown: instance, engine and line, state, ports, sleep, managed by, used by.
+#[cfg(test)]
 pub fn row_texts(env: &AppEnv, cx: &App) -> Vec<Vec<String>> {
     let now = OffsetDateTime::now_utc();
     env.state.read(cx).services.value.iter().flatten().map(|s| cells(s, now)).collect()

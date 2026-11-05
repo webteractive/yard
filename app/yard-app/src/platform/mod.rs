@@ -6,4 +6,5 @@ pub mod cli;
 pub mod locator;
 pub mod open;
 pub mod settings;
+pub mod setup_probe;
 pub mod terminal;

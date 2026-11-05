@@ -35,10 +35,11 @@ impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let t = Theme::of(window);
         let checked = self.checked;
+        let a11y = self.a11y();
         div()
-            .id(ElementId::Name(self.id.clone()))
-            .role(Role::CheckBox)
-            .aria_label(self.label.clone())
+            .id(ElementId::Name(a11y.id))
+            .role(a11y.role)
+            .aria_label(a11y.label)
             .aria_toggled(if checked { Toggled::True } else { Toggled::False })
             .flex()
             .items_center()

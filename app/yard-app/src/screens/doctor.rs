@@ -7,7 +7,7 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::theme::Theme;
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_app_model::hint::HintAction;
-use yard_proto::{Check, CheckStatus, DoctorReport};
+use yard_proto::{Check, CheckStatus};
 
 /// What a hint becomes on a check: Terminal and Copy for the commands handed to Terminal, Copy
 /// alone for anything the app will not run, else the hint itself and Copy.
@@ -21,10 +21,12 @@ fn buttons(hint: Option<&str>) -> Vec<&'static str> {
 }
 
 /// A check as the screen lists it: its message and the buttons its hint becomes.
+#[cfg(test)]
 pub type Line = (String, Vec<&'static str>);
 
-/// `(group, lines)`: failing, then warnings, then ok, leaving out empty groups.
-pub fn groups(report: &DoctorReport) -> Vec<(&'static str, Vec<Line>)> {
+/// `(group, lines)`: failing, then warnings, then ok, leaving out empty groups, as the tests read it.
+#[cfg(test)]
+pub fn groups(report: &yard_proto::DoctorReport) -> Vec<(&'static str, Vec<Line>)> {
     let of = |status: CheckStatus| -> Vec<&Check> {
         report.checks.iter().filter(|c| c.status == status).collect()
     };
