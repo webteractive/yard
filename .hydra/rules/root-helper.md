@@ -48,7 +48,7 @@ triggers:
   names each removed file and the next step: `yard restart nginx` when yardd is
   running, `yard start` otherwise.
 - Resolver files carry `# Managed by Yard` on line 1. Never overwrite or delete a
-  resolver file without that marker: `/etc/resolver/test` on this machine is Herd's.
+  resolver file without that marker: `/etc/resolver/test` is Herd's wherever Herd runs.
 - Threat model: the helper protects against *other* local users and malformed input.
   It does not protect against the owning user, who is an admin and can already write
   the nginx config and the brew prefix that root executes. Do not add complexity

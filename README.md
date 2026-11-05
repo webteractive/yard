@@ -46,7 +46,8 @@ nginx to 80/443 through the helper, once nothing else holds them.
 ## Prerequisites
 
 - An Apple Silicon Mac with Homebrew at `/opt/homebrew`.
-- Rust 1.92 (`rust-toolchain.toml` pins it).
+- Rust 1.92 from rustup (`rust-toolchain.toml` pins it). Homebrew's `rust` formula ignores
+  the pin, so use rustup instead of it.
 - nginx, dnsmasq and PHP from Homebrew; Yard runs them itself. `yard tunnel` also needs
   `brew install cloudflared`.
 
@@ -78,7 +79,8 @@ exit, and removes the two files that nginx left owned by root (`logs/nginx-error
 `run/nginx.pid`). It names each file it removed and the next step: `yard start`, or
 `yard restart nginx` when yardd is already running.
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
-proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged.
+proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged (or
+still absent without Herd).
 `scripts/e2e-m2.sh` checks multi-PHP and extensions, `scripts/e2e-m3.sh` HTTPS, `scripts/e2e-m4a.sh`
 the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git status` stays clean),
 `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO

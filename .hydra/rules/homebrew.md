@@ -23,7 +23,7 @@ triggers:
 
 - Never run `brew services`, and never edit or create files under the brew prefix
   (`/opt/homebrew`). `yardd` launches every binary itself, with Yard's config.
-- Installing anything with brew changes the maintainer's machine. Ask before running
+- Installing anything with brew changes the maintainer's machine, whichever Mac it is. Ask before running
   `brew install`/`reinstall`/`uninstall` outside a `yard` command he invoked.
 - PHP formulas: `shivammathur/php/php@<ver>` for 7.0–8.4. In this tap **8.5 is the
   plain `php` formula** (alias `php@8.5`, keg `opt/php`). Resolve a version as
@@ -126,5 +126,5 @@ triggers:
   missing binary is `FORMULA_MISSING`, hint `brew install cloudflared` (homebrew/core, no trust
   gate). Yard never reads, copies or moves its certificates or credentials files; it only
   checks they exist (tunnels spec P5, P7).
-- A keg directory with no binary in it (dnsmasq on this machine until 2026-10-20)
+- A keg directory with no binary in it (dnsmasq on the maintainer's main Mac until 2026-10-20)
   gets the hint `brew reinstall <formula>`, not `brew install`.

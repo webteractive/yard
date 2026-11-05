@@ -3,7 +3,7 @@ paths:
   - "scripts/e2e*"
   - "crates/yard-core/src/ports/**"
 triggers:
-  - running yard against the real data root on this machine
+  - running yard against the real data root on a real machine
   - binding ports or touching /etc/resolver
   - switching port profiles or the TLD
   - reading Herd's configuration
@@ -11,12 +11,13 @@ triggers:
 
 # Herd keeps working
 
-- Herd is installed and serving ~30 sites. Its nginx holds 127.0.0.1:80/443 and its
-  resolver is `/etc/resolver/test`. Nothing Yard does may break that:
-  there is no `yard takeover` (dropped 2026-10-20).
+- Where Herd is installed (the maintainer's main Mac, ~30 sites) its nginx holds 127.0.0.1:80/443 and
+  its resolver is `/etc/resolver/test`. Nothing Yard does may break that: there is no
+  `yard takeover` (dropped 2026-10-20). Check before assuming either way: a Mac without Herd
+  (the Mac mini) has no `/etc/resolver/test` and nothing on 80/443 (AGENTS.md, Machines).
 - The default profile is **standard**: nginx-http 8080, nginx-https 8443, dnsmasq
   53535, and the TLD stays `yard` (profiles never set it). Do not change the default,
-  and do not run `yard ports profile privileged` on this machine except to check that
+  and do not run `yard ports profile privileged` on a Mac with Herd except to check that
   it is refused with Herd named as the holder (Herd answers on 80).
 - The TLD is refused separately: a reconcile that moves to a TLD whose
   `/etc/resolver/<tld>` lacks Yard's marker fails with `RESOLVER_FOREIGN` and keeps
@@ -27,4 +28,5 @@ triggers:
   only ever the user's own step.
 - Tests never bind 53, 80, 443, 8080, 8443 or 53535. They ask the OS for a free port.
 - A real-machine run (`scripts/e2e-m1.sh`) checksums `/etc/resolver/test` before and
-  after, and checks that `http://<site>.test/` is still answered by Herd.
+  after (it must stay absent on a Mac without Herd) and, where Herd is installed, checks
+  that `http://<site>.test/` is still answered by Herd.

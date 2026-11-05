@@ -13,6 +13,8 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
 
 ## Status
 
+"This machine" below is the maintainer's main Mac (see Machines).
+
 - Design approved and committed: `docs/superpowers/specs/2026-10-19-yard-design.md`
   is the source of truth. Read it before changing behaviour, and update it in
   the same change when a decision moves.
@@ -167,73 +169,149 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   and Node older than 16 (his oldest project is PHP 7.3 and Node 16) to make 7.0–8.5 solid
   instead, and left MariaDB as a later engine.
 
-## Environment findings (checked 2026-10-19 on the maintainer's arm64 Mac)
+## Machines
 
-- Toolchain: rustc/cargo 1.92.0 in `~/.cargo/bin`, Swift 6.3.3, Homebrew at `/opt/homebrew`.
-- Brew has the `shivammathur/php` and `shivammathur/extensions` taps, plus
-  `mysql-client` and `phpredis@7.4`. For M1 (2026-10-20) the maintainer approved
-  `brew install nginx`, `brew reinstall dnsmasq` (its keg had been empty) and
-  `brew install shivammathur/php/php@8.4`; no other brew PHP is installed. The
-  helper is installed and yardd's LaunchAgent runs on the real data root.
+Yard is developed on more than one Mac. What Yard needs is the same on each; what is
+installed, which ports are held and whether Herd runs are not. Read the machine you are on
+before relying on any of that (`scutil --get ComputerName`, `yard doctor`, `brew list
+--versions`, `lsof -nP -iTCP -sTCP:LISTEN`), and never carry Herd, DBngin, an installed PHP or
+a port's holder over from another machine's notes below. "This machine" in Status, in the
+spec's milestone notes and in older rules means the maintainer's main Mac, where M1–M5 were verified.
+
+### Setting up a Mac
+
+1. An Apple Silicon Mac with Homebrew at `/opt/homebrew` and the `shivammathur/php` and
+   `shivammathur/extensions` taps (`brew tap shivammathur/php`, `brew tap
+   shivammathur/extensions`). Swift and Xcode only matter from M6.
+2. Rust from rustup, never brew's `rust` formula, which ignores `rust-toolchain.toml` (1.92;
+   CI's clippy runs on it, and a newer rustc lints differently). Install rustup with the
+   official installer (`sh.rustup.rs`, `--no-modify-path` when the shell already sources
+   `~/.cargo/env`), then `rustup toolchain install 1.92 --component clippy,rustfmt`, and
+   `brew uninstall rust` if it is there. `rustc --version` in the repo must print 1.92.
+3. `brew install nginx dnsmasq shivammathur/php/php@8.4`, plus `fnm` (Node), `cloudflared`
+   (tunnels), and `jq` and `shellcheck` for the e2e scripts. Ask the maintainer before each install
+   (homebrew rule). Never start them with `brew services`.
+4. `cargo build --release`. The maintainer runs `sudo ./target/release/yard helper install` in a real
+   terminal: an agent's shell, `!` included, has no tty for sudo's password.
+5. Put `yard` on PATH as a symlink, `ln -sf "$PWD/target/release/yard" ~/.local/bin/yard` (any
+   directory on PATH): `yard` follows the link to find `yardd` beside the real binary, so a
+   rebuild needs no relink. Then `yard start` and `yard doctor`, which must say every check is ok.
+6. Check serving end to end: in a scratch dir with an `index.php`, `yard link <name>`, then
+   `curl http://<name>.yard:8080/`; afterwards `yard unlink <name>` and delete
+   `~/.yard/nginx/overrides/<name>.conf`.
+7. Add a subsection for the machine below with what you found.
+
+Every `scripts/e2e-*.sh` checksums Herd's `/etc/resolver/test` before and after; on a Mac
+without Herd the file must stay absent. `e2e-m1.sh` curls a Herd site and expects the
+privileged profile to be refused naming Herd only where Herd is installed (`Herd.app` or its
+resolver); without it, it skips the Herd site and tries the profile only while something
+holds 80 or 443, since with both free the switch would go through.
+
+### Findings that hold on any Mac
+
 - In the `shivammathur/php` tap, PHP 8.5 is the plain `php` formula (with alias
   `php@8.5`, keg `opt/php`); every other version is `php@<ver>`. The tap also
   carries 5.6 and pre-release 8.6/8.7, which Yard does not support.
+- Brew's extension formulas keep the `.so` in their own keg (`redis@7.1` installs keg
+  `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`.
+  `e2e-m2.sh` removes the ones its adds leave, and `yard doctor` warns `brew-ini:<v>/<file>`.
+  An old ini naming `redis@<v>`, which brew renamed `phpredis@<v>`, stops redis loading in
+  that PHP until brew's current `20-redis.ini.default` replaces it (doctor's own hint).
+- The extensions tap's `formula_renames.json` maps `redis@8.4` to `phpredis@8.4`, which
+  `brew search` cannot see (it matches real formula names only) but `brew info` resolves, so
+  the trust gate looks in the tap's files instead of asking `brew search`.
+- Since Homebrew 6.0 brew loads a formula from a non-official tap only when the formula or
+  its tap is trusted; brew's own store holds that, `brew trust --json=v1` reads it and
+  `brew trust`/`brew untrust` change it (Yard never touches `trust.json`). `yard service add
+  minio` is refused with `FORMULA_UNTRUSTED` until `minio/stable` is trusted.
+- `brew search --formula "/^<base>(@|$)/"` found (2026-10-24) `mysql`, `mysql@8.0`, `mysql@8.4`,
+  `mysql@9.7`, `postgresql@12` to `@18`, `redis`, `redis@6.2`, `redis@8.2` and `minio`.
+  `postgresql@12` and `@13` are disabled, so they are not offered as lines; `@14` is deprecated
+  with a disable date of 2026-11-12, so it is a line until then, with a job line naming the date.
+- Under launchd yardd has no locale, and postgres on macOS then exits at startup
+  ("postmaster became multithreaded during startup"), so Yard runs `postgres` and `initdb`
+  with `LC_ALL=en_US.UTF-8`.
+- A `~/.nvmrc` applies to every linked site with a `package.json` in its root; one whose
+  `package.json` sits deeper has no Node. Brew's `python3` (3.12 and later) has no
+  `distutils`, so Node 16's node-gyp needs `npm_config_python=/usr/bin/python3` (Apple's 3.9)
+  to build a native module.
+- A MySQL 8.0 instance lets PHP 7.0 log in only once `default_authentication_plugin` is set
+  (M4b spec §16), which Yard does.
+- Ports held by DBngin (3306, 6379) or Postgres.app (5432) push new instances to the next free
+  port; read them from `yard services`, never assume them.
+- Brew's dnsmasq caveat says `/etc/resolver/<domain>` overrides fail with `127.0.0.1` on a port
+  other than 53. It does not hold: `.yard` names resolve through dnsmasq on 53535 on both Macs.
+
+### the maintainer's main Mac (Herd; M1–M5 verified here)
+
+- Toolchain (2026-10-19): rustc/cargo 1.92.0 in `~/.cargo/bin`, Swift 6.3.3, Homebrew at
+  `/opt/homebrew` (7.0.10 on 2026-10-23).
 - Herd is installed and running. Its nginx (`nginx-arm`) listens on
   127.0.0.1:80 and :443, and `/etc/resolver/test` (Herd's) points at
   127.0.0.1. Herd's Valet config is
   `~/Library/Application Support/Herd/config/valet/`. Its `config.json` has
   `tld = "test"` and parked paths `…/valet/Sites`, `~/Herd/` and `~/AI`, and
-  `Nginx/` holds per-site configs for secured sites.
-- For M2 (2026-10-20) the maintainer approved `brew install shivammathur/php/php@7.1`, which
-  stays installed; the e2e adds and removes `redis@7.1` and `xdebug@8.4`. Brew's
-  extension formulas keep the `.so` in their own keg (`redis@7.1` installs keg
-  `phpredis@7.1`) and `brew uninstall` leaves their ini in `etc/php/<v>/conf.d`. On
-  2026-11-02 four such inis from e2e runs (xdebug for 8.4; redis, igbinary and msgpack for 7.1)
-  were removed by hand (maintainer approved), `e2e-m2.sh` now removes the ones its adds leave, and
-  `yard doctor` warns `brew-ini:<v>/<file>`. PHP 7.4's `20-redis.ini` (the maintainer's, from 2025) named
-  `redis@7.4`, which brew renamed `phpredis@7.4`, so redis did not load in 7.4 until brew's
-  current `20-redis.ini.default` replaced it the same day (maintainer approved, doctor's own hint).
-- On 2026-10-22 brew also had `php@7.3` and `php@7.4` installed (and the plain `php`
-  formula).
-- On 2026-11-01 the maintainer approved installing PHP 7.0 (`yard php install 7.0`, brew's 7.0.33), which
-  stays installed. A scratch site on it logged in to `mysql-8.4` through PDO and mysqli.
-- The same day the maintainer approved installing 7.2, 8.0, 8.1, 8.2 and 8.3, so every supported PHP
-  (7.0–8.5) is installed here. A scratch site per version, each asking for `mysql-8.4`, served
-  its page and logged in through PDO and mysqli. `scripts/e2e-m4a.sh` needs one supported PHP
-  left uninstalled for its setup-page step, so it stops at its precheck here until one is removed.
-- Also on 2026-11-01 the maintainer approved checking MySQL 8.0: `yard service add mysql --version 8.0`
-  installed brew's `mysql@8.0` (8.0.46, deprecated; the keg stays, unlinked beside `mysql@8.4`).
-  A scratch `mysql-8.0` let PHP 7.0 log in only once `default_authentication_plugin` was set
-  (M4b spec §16); then every PHP from 7.0 to 8.5 did, and the instance was removed.
-- Herd's PHP-FPM sockets are `herd74` to `herd85`. About 30 sites live in `~/Herd`.
-- For M4b (checked 2026-10-23 and 2026-10-24): Homebrew is 7.0.10. Since 6.0 it loads a
-  formula from a non-official tap only when the formula or its tap is trusted; brew's own
-  store holds that, `brew trust --json=v1` reads it and `brew trust`/`brew untrust` change
-  it (Yard never touches `trust.json`). `minio/stable` is tapped and trusted on this machine,
-  so `yard service add minio` is not refused with `FORMULA_UNTRUSTED` here.
-- `brew search --formula "/^<base>(@|$)/"` finds `mysql`, `mysql@8.0`, `mysql@8.4`, `mysql@9.7`,
-  `postgresql@12` to `@18`, `redis`, `redis@6.2`, `redis@8.2` and `minio`. `postgresql@12` and
-  `@13` are disabled, so they are not offered as lines; `@14` is deprecated with a disable date
-  of 2026-11-12, so it is a line until then, with a job line naming the date.
-- DBngin holds 3306 (MySQL) and 6379 (Redis) and Postgres.app holds 5432 here, so new
-  instances land on the next free ports, 3307, 5433 and 6380 (read them from
-  `yard services`, never assume them). `scripts/e2e-m4b.sh` records those three listeners and
-  fails if one changes.
-- The extensions tap's `formula_renames.json` maps `redis@8.4` to `phpredis@8.4`, which
-  `brew search` cannot see (it matches real formula names only) but `brew info` resolves, so
-  the trust gate looks in the tap's files instead of asking `brew search`.
-- For the M4b e2e (2026-10-24) the maintainer approved `brew install mysql@8.4 postgresql@17 redis`
-  (with `abseil` and `protobuf`); they stay installed. `minio/stable/minio` was already
-  installed. Under launchd yardd has no locale, and postgres on macOS then exits at startup
-  ("postmaster became multithreaded during startup"), so Yard runs `postgres` and `initdb`
-  with `LC_ALL=en_US.UTF-8`.
-- For M4c (2026-10-26) the maintainer approved `brew install fnm` (1.39.0), which stays installed.
-  `~/.yard/node` holds fnm's `aliases/`, `node-versions/` and Yard's `lts.toml`; the e2e
-  removes the versions it installs. This machine has a `~/.nvmrc` pinning 22, so a linked
-  site with a `package.json` in its root (eepower, yard-site) runs and reports Node 22 from
-  it, and one without (control, whose `package.json` is in `site/`) has no Node. brew's
-  `python3` is 3.15, which has no `distutils`, so Node 16's node-gyp needs
-  `npm_config_python=/usr/bin/python3` (Apple's 3.9) to build a native module.
+  `Nginx/` holds per-site configs for secured sites. Herd's PHP-FPM sockets are `herd74` to
+  `herd85`. About 30 sites live in `~/Herd`. A bare `php` there is Herd's.
+- Brew had `mysql-client` and `phpredis@7.4`. For M1 (2026-10-20) the maintainer approved
+  `brew install nginx`, `brew reinstall dnsmasq` (its keg had been empty) and
+  `brew install shivammathur/php/php@8.4`. The helper is installed and yardd's LaunchAgent
+  runs on the real data root, which was moved by hand from
+  `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25. The maintainer ran `yard trust`
+  on 2026-10-21.
+- Every supported PHP (7.0–8.5) is installed: 7.1 for M2 (2026-10-20), 7.3, 7.4 and the plain
+  `php` by 2026-10-22, and 7.0 (brew's 7.0.33), 7.2 and 8.0–8.3 on 2026-11-01. A scratch site
+  per version, each asking for `mysql-8.4`, served its page and logged in through PDO and
+  mysqli. `scripts/e2e-m4a.sh` needs one supported PHP left uninstalled for its setup-page
+  step, so it stops at its precheck here until one is removed.
+- On 2026-11-02 four inis left by e2e runs (xdebug for 8.4; redis, igbinary and msgpack for
+  7.1) were removed by hand, and PHP 7.4's `20-redis.ini` (the maintainer's, from 2025, naming
+  `redis@7.4`) was replaced by brew's current `.default` (maintainer approved both).
+- Services: `brew install mysql@8.4 postgresql@17 redis` (with `abseil` and `protobuf`) for the
+  M4b e2e (2026-10-24), and `mysql@8.0` (8.0.46, deprecated; the keg stays, unlinked beside
+  `mysql@8.4`) on 2026-11-01. `minio/stable` is tapped and trusted, with `minio` installed.
+  the maintainer's own `mysql-8.4` instance is there; e2e scripts never touch it.
+- DBngin holds 3306 (MySQL) and 6379 (Redis) and Postgres.app holds 5432, so new instances land
+  on 3307, 5433 and 6380. `scripts/e2e-m4b.sh` and `e2e-m4e.sh` record those three listeners
+  and fail if one changes.
+- `brew install fnm` (1.39.0) for M4c (2026-10-26). `~/.yard/node` holds fnm's `aliases/`,
+  `node-versions/` and Yard's `lts.toml`. A `~/.nvmrc` pins 22, so eepower and yard-site run
+  Node 22 and control (`package.json` in `site/`) has none. Brew's `python3` is 3.15.
+- The emailulator LaunchAgent (`com.webteractive.emailulator`) is installed, which
+  `e2e-m4d.sh` needs.
+
+### Mac mini (`mac-mini`, set up 2026-11-05)
+
+- No Herd: no `Herd.app`, no `~/Library/Application Support/Herd`, no `/etc/resolver/test`,
+  and nothing on 80 or 443. `~/Herd` exists with 7 project directories but nothing serves it,
+  so the e2e scripts skip their Herd-only steps here (see above). The shell's PATH still lists
+  Herd's `bin`, which does not exist.
+- DBngin is installed and running: MySQL on 3306 and Redis on 6379. No Postgres.app; 5432 is free.
+- Homebrew 7.0.12, Swift 6.3.3, Xcode 26.6. Rust came from brew's `rust` (1.98) until
+  2026-11-05, when it was replaced by rustup with 1.92 as the default (brew's autoremove also
+  took `llvm@22` and `pkgconf` with it).
+- Brew had the two shivammathur taps, `cloudflared`, `jq`, `shellcheck`, `minio/stable` tapped
+  and `phpredis@7.4` with no `php@7.4`. On 2026-11-05 the maintainer approved `brew install nginx dnsmasq
+  shivammathur/php/php@8.4 fnm` (nginx 1.31.8, dnsmasq 2.93, PHP 8.4.27, fnm 1.39.0). 8.4 is
+  the only brew PHP until, later that day, the maintainer approved `brew install shivammathur/php/php@7.1
+  mysql@8.4 mysql@8.0 postgresql@17 redis` (PHP 7.1.33, MySQL 8.4.13 and 8.0.46, PostgreSQL
+  17.11, Redis 8.10.3; `minio` was already installed and `minio/stable` is trusted), so every
+  e2e has its kegs. Brew's own post-install initialized `/opt/homebrew/var/mysql`, which Yard
+  never uses.
+- The maintainer installed the helper the same day; `yard start` installed the LaunchAgent on `~/.yard`,
+  `yard doctor` passed every check, a scratch site served PHP 8.4.27 at `http://<name>.yard:8080/`,
+  and `yard` is a symlink at `~/.local/bin/yard`. No `yard trust` yet, no service instances,
+  and no `~/.nvmrc` (`~/.nvm` exists). Brew's `python3` is 3.14.
+- emailulator 0.1.4 was installed with its own installer into `~/.local/bin` the same
+  day, its agent on SMTP 127.0.0.1:2525 and web 127.0.0.1:8026, because
+  brew's `mailpit` (a running brew service, the maintainer's) holds 1025 and 8025. Its LaunchAgent label is
+  `co.webteractive.emailulator`, not the `com.` that `yard_core::emailulator::LABEL` (unused) and
+  the M4d docs name; Yard reads the label from `service status --json`, so nothing breaks.
+- Every `scripts/e2e-*.sh` passed here on 2026-11-05 (maintainer approved the runs), after two fixes:
+  the scripts skip their Herd-only steps without Herd, and a reconcile waits for a PHP pool it
+  started before reloading nginx. The first runs of `e2e-m4d.sh` and `e2e-m5.sh` had found the
+  second: with no other site keeping the 8.4 pool up, their first request after `yard link` was a
+  502. `e2e-m4e.sh`: cold starts 0.27–0.66 s, a wake ask 0.17 ms at p50.
 
 ## Build & test
 
@@ -253,7 +331,7 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Its
   cleanup removes the inis in brew's `conf.d` that its adds left for a removed extension, and it
   fails if one is left. Run PHP only as
-  `"$HOME/.yard/bin/php"`; a bare `php` here is Herd's.
+  `"$HOME/.yard/bin/php"`; a bare `php` can be Herd's.
 - `scripts/e2e-m3.sh` — real-machine M3 check after `e2e-m1.sh`: secures a scratch site and
   curls it over HTTPS with `--cacert`, so it needs no keychain trust; ask the maintainer first. Tests
   never run the real `security` or touch a keychain: `DaemonOptions.security`, the
@@ -290,7 +368,7 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   fails if a listing of `~/.nvm/versions/node` or Herd's `config/nvm` changed.
   `shellcheck scripts/e2e-m4c.sh` stays clean.
 - `scripts/e2e-m4d.sh` — real-machine M4d check after `e2e-m1.sh`, against the emailulator
-  LaunchAgent already on this machine (`com.webteractive.emailulator`); it never installs,
+  LaunchAgent already on the machine (`com.webteractive.emailulator`); it never installs,
   uninstalls, starts or stops it, and stops before changing anything when no agent answers.
   `yard doctor --json` names the agent, `yard ports --json` has `emailulator-smtp` `external`
   on its SMTP port, `mail.yard:8080` answers 200 while the agent's own port answers 403 to
@@ -327,10 +405,11 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
   resolver changed or `~/.cloudflared` was created; ask the maintainer first.
   `shellcheck scripts/e2e-m5.sh` stays clean.
 
-## Verifying a change on this machine
+## Verifying a change on a real machine
 
 The helper is bound to the real data root (`~/.yard`), so a
-change to serving, the helper or reconcile is only observable there, through `yard`.
+change to serving, the helper or reconcile is only observable there, through `yard`. On a
+Mac that is not set up yet, follow Machines → Setting up a Mac first.
 
 - `cargo build --release`, then `./target/release/yard stop && ./target/release/yard start`;
   `yard --version` must show the new commit for yardd. A changed helper needs the maintainer to run
@@ -343,8 +422,9 @@ change to serving, the helper or reconcile is only observable there, through `ya
   edit within about 2 s, and the docroot scan every 30 s.
 - For a scratch site, `yard link <name>` run inside a scratch dir and `yard unlink <name>`
   afterwards, then delete the `nginx/overrides/<name>.conf` Yard created for it.
-- Never create directories in `~/Herd` (Herd parks it), and never touch Herd's files.
-- Never touch DBngin or Postgres.app, and use a service's own client by absolute keg path
+- Never create directories in `~/Herd` (Herd parks it where it runs), and never touch Herd's
+  files.
+- Never touch DBngin or Postgres.app, wherever they are installed, and use a service's own client by absolute keg path
   (`$(brew --prefix)/opt/mysql@8.4/bin/mysql`): a bare `mysql` or `psql` can be theirs.
   Remove only the service instances you added (`yard service remove <i> --yes`).
 
@@ -393,7 +473,7 @@ Rule files are in `.hydra/rules`.
 | --- | --- | --- |
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
 | adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` | config-ownership.md |
-| running yard against the real data root on this machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
+| running yard against the real data root on a real machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
 | installing or locating a PHP version, extension, nginx or dnsmasq · launching a brew-installed binary · gating an install on brew's trust, or trusting a tap or formula · installing Node or running fnm · running cloudflared | `crates/yard-core/src/brew.rs` · `crates/yard-core/src/php.rs` · `crates/yard-core/src/render/php.rs` · `crates/yard-core/src/sources.rs` · `crates/yard-daemon/src/sources.rs` · `crates/yard-daemon/src/rpc/sources.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` · `crates/yard-daemon/src/tunnel/**` · `brew ` | homebrew.md |
 | a unit needs a TCP or UDP port · adding a service or proxy that listens on or targets a port | `crates/yard-core/src/ports/**` · `crates/yard-daemon/src/probe.rs` · `crates/yard-daemon/src/holder.rs` · `crates/yard-daemon/src/portscan.rs` | port-registry.md |
 | adding or changing a privileged operation · installing or uninstalling the root helper | `crates/yard-helper/**` · `crates/yard-daemon/src/helper_client.rs` · `sudo ` · `launchctl` | root-helper.md |
