@@ -6,10 +6,16 @@ use crate::cli::ConfigAction;
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use yard_proto::PhpInfo;
-use yard_proto::methods::{self, PhpConfigParams, PhpParams};
+use yard_proto::methods::{self, PhpConfigParams, PhpListParams, PhpParams};
 
-pub async fn list(ctx: &Ctx) -> Outcome {
-    let versions: Vec<PhpInfo> = ctx.client().await?.call(methods::PHP_LIST, Value::Null).await?;
+pub async fn list(ctx: &Ctx, available: bool) -> Outcome {
+    // Without the flag the params stay null, which every yardd answers.
+    let params = if available {
+        serde_json::to_value(PhpListParams { available }).unwrap_or_default()
+    } else {
+        Value::Null
+    };
+    let versions: Vec<PhpInfo> = ctx.client().await?.call(methods::PHP_LIST, params).await?;
     ctx.emit(&versions, || {
         let rows: Vec<Vec<String>> = versions.iter().map(row).collect();
         let mut out = table(&["VERSION", "DEFAULT", "SITES", "POOL"], &rows);

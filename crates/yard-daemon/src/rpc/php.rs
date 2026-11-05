@@ -15,7 +15,7 @@ use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::php::{SUPPORTED, formula};
 use yard_core::{Paths, PhpVersion};
 use yard_core::{generated, ini};
-use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpParams};
+use yard_proto::methods::{IsolateParams, PhpConfigParams, PhpListParams, PhpParams};
 use yard_proto::{ErrorCode, JobStarted, PhpInfo, SiteInfo, SiteKind, YardError};
 
 fn installed(brew: &Brew) -> Vec<PhpVersion> {
@@ -27,15 +27,19 @@ fn not_installed(v: PhpVersion) -> YardError {
         .with_hint(format!("yard php install {v}"))
 }
 
-pub(super) async fn list(ctx: &Context) -> Result<Vec<PhpInfo>, YardError> {
+/// The installed versions and the default; with `available`, every supported version too, the
+/// ones not installed with `installed: false` (protocol 2.11).
+pub(super) async fn list(ctx: &Context, p: PhpListParams) -> Result<Vec<PhpInfo>, YardError> {
     let snap = snapshot(ctx).await?;
     let units = ctx.supervisor().list();
     let mut versions = installed(&ctx.brew);
     let default = snap.yard.default_php;
-    if !versions.contains(&default) {
-        versions.push(default);
-        versions.sort();
+    versions.push(default);
+    if p.available {
+        versions.extend(SUPPORTED);
     }
+    versions.sort();
+    versions.dedup();
     let installed = installed(&ctx.brew);
     Ok(versions
         .into_iter()

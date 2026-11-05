@@ -110,7 +110,8 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Ports { action: None } => ports::list(&ctx).await,
         Command::Ports { action: Some(PortsAction::Check) } => ports::check(&ctx).await,
         Command::Ports { action: Some(action) } => ports::change(&ctx, action).await,
-        Command::Php { action: None | Some(PhpAction::List) } => php::list(&ctx).await,
+        Command::Php { action: None } => php::list(&ctx, false).await,
+        Command::Php { action: Some(PhpAction::List { available }) } => php::list(&ctx, available).await,
         Command::Php { action: Some(PhpAction::Install { version }) } => php::install(&ctx, version).await,
         Command::Php { action: Some(PhpAction::Uninstall { version }) } => {
             php::uninstall(&ctx, version).await

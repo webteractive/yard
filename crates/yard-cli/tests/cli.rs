@@ -319,6 +319,20 @@ fn php_list_table_snapshot() {
     assert_eq!(stdout(&bare), stdout(&out), "yard php lists too");
 }
 
+#[test]
+fn php_list_available_sends_the_flag() {
+    let mut list = php_list();
+    list.as_array_mut().unwrap().insert(
+        0,
+        json!({"version": "7.0", "default": false, "installed": false, "sites": [], "pool": null}),
+    );
+    let d = MockDaemon::start(&[("php.list", Ok(list))]);
+    let out = d.yard().args(["php", "list", "--available"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("php.list"), vec![json!({"available": true})]);
+    assert!(stdout(&out).contains("not installed → yard php install 7.0"), "{}", stdout(&out));
+}
+
 fn job_events(id: &str, error: Value) -> Vec<Value> {
     vec![
         json!({"type": "job_progress", "job_id": id, "line": "==> Downloading php@7.1"}),

@@ -368,7 +368,11 @@ pub enum PortsAction {
 #[derive(Debug, Subcommand)]
 pub enum PhpAction {
     /// The installed versions, the default, the sites on each and its pool.
-    List,
+    List {
+        /// Also list the supported versions that are not installed.
+        #[arg(long)]
+        available: bool,
+    },
     /// Install a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels.
     Install { version: String },
     /// Remove a PHP version with brew; refused while it is the default, a site is

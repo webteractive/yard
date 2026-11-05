@@ -233,6 +233,14 @@ pub struct RangeParams {
     pub range: String,
 }
 
+/// `php.list` (protocol 2.11); `null` is the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PhpListParams {
+    /// Also list every supported version that is not installed, with `installed: false`.
+    #[serde(default)]
+    pub available: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileParams {
     /// Read strictly: `Profile::Other` is for a client reading a newer yardd, not an input.

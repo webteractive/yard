@@ -19,6 +19,41 @@ fn brew_log(d: &Daemon) -> String {
     std::fs::read_to_string(d.fx.brew.path().join("fake-brew.log")).unwrap_or_default()
 }
 
+/// The app offers every supported version, not only what brew has (M6 design §13).
+#[tokio::test]
+async fn php_list_available_adds_every_supported_version() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let list = c.call("php.list", json!({"available": true})).await.unwrap();
+    let rows = list.as_array().unwrap();
+    let names: Vec<&str> = rows.iter().map(|r| r["version"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        ["7.0", "7.1", "7.2", "7.3", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"],
+        "{list}"
+    );
+    let row = |v: &str| rows.iter().find(|r| r["version"] == v).unwrap().clone();
+    assert_eq!(row("8.4")["installed"], true, "{list}");
+    assert_eq!(row("8.4")["default"], true, "{list}");
+    let missing = row("7.0");
+    assert_eq!(missing["installed"], false, "{list}");
+    assert_eq!(missing["default"], false, "{list}");
+    assert_eq!(missing["sites"], json!([]), "{list}");
+    assert_eq!(missing["pool"], Value::Null, "{list}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn php_list_with_null_params_is_unchanged() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let list = c.call("php.list", Value::Null).await.unwrap();
+    assert_eq!(versions(&list), [("8.4".to_string(), true)], "{list}");
+    let empty = c.call("php.list", json!({})).await.unwrap();
+    assert_eq!(empty, list);
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn install_creates_the_keg_and_list_shows_it() {
     let d = prepared("").await.start().await;

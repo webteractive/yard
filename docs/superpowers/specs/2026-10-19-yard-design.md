@@ -220,6 +220,9 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   the version must be installed.
 - `yard php list` shows each installed version (and the default if it is not
   installed), whether it is the default, the sites on it and its pool's state.
+  `--available` (`php.list { available: true }`, protocol 2.11) also lists every supported
+  version that is not installed, its pool cell `not installed → yard php install <ver>`; with
+  no params the answer is unchanged, so an older yardd still answers the plain list.
 - FPM is launched by `yardd`, never by brew:
   ```
   <brew prefix>/opt/php@<ver>/sbin/php-fpm --nodaemonize \
@@ -584,7 +587,7 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
 - JSON-RPC 2.0 over `yardd.sock` (mode 0600, owned by the user).
 - Request/response methods (non-exhaustive, same surface as the CLI):
   `status`, `doctor`, `sites.list|link|unlink|proxy|isolate|secure|unsecure|docroot|init`,
-  `php.list|install|uninstall|default|config.get|config.set|config.unset`,
+  `php.list` (`{ available }` from 2.11)`|install|uninstall|default|config.get|config.set|config.unset`,
   `ext.list|add|remove|enable|disable`, `xdebug.set`,
   `ports.list|check|set|pin|unpin|range|profile`,
   `services.list|add|remove|start|stop|restart|logs|port|sleep.set`, `sites.info`,

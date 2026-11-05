@@ -19,6 +19,8 @@ triggers:
 - A command that shows yardd's last good state while a TOML on disk does not parse says
   so on stderr (`yard ports`: `warning: <file> does not parse, so this is the last good
   registry: …`). `ports check` reads `ports.toml` itself and fails on it instead.
+- A flag that asks yardd for more sends params only when set (`php list --available` sends
+  `{"available": true}`, else `null`), so an older yardd still answers the plain command.
 - Tests run `yard --root <tmp>` against `tests/support::MockDaemon`, never a real yardd,
   and never `yard start`/`stop` or `helper install` (they change launchd).
 - `--version` is ours, not clap's (`disable_version_flag`), because it asks yardd too.
