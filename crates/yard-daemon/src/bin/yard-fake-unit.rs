@@ -21,7 +21,7 @@ fn main() -> ExitCode {
     match name {
         Some("nginx") => nginx(&args),
         Some("dnsmasq") => dnsmasq(&args),
-        Some("php-fpm") => php_fpm(&args),
+        Some("php-fpm") => php_fpm(Path::new(&argv0), &args),
         Some("brew") => brew(Path::new(&argv0), &args),
         Some("fnm") => fnm(Path::new(&argv0), &args),
         Some("php") => php(&args),
@@ -407,10 +407,11 @@ fn dnsmasq(args: &[String]) -> ExitCode {
     listen_tcp(text.lines().find_map(|l| l.trim().strip_prefix("port=")?.parse().ok()))
 }
 
-/// `-y <fpm.conf>`; listens on its `listen = "<path>"` unix socket.
+/// `-y <fpm.conf>`; listens on its `listen = "<path>"` unix socket, after the milliseconds in
+/// `<prefix>/fake-fpm-delay` when that file exists, as a real master takes a moment to start.
 /// Like php-fpm's master, it survives SIGUSR2 (a graceful reload) and logs
 /// `fake php-fpm reloaded` to stderr for each one.
-fn php_fpm(args: &[String]) -> ExitCode {
+fn php_fpm(argv0: &Path, args: &[String]) -> ExitCode {
     extern "C" fn reloaded(_: libc::c_int) {
         let line = b"fake php-fpm reloaded\n";
         // SAFETY: write(2) is async-signal-safe; the buffer is static.
@@ -424,6 +425,7 @@ fn php_fpm(args: &[String]) -> ExitCode {
         let value = l.trim().strip_prefix("listen")?.trim_start().strip_prefix('=')?;
         Some(PathBuf::from(value.trim().trim_matches('"')))
     });
+    delay_from(argv0, "fake-fpm-delay");
     listen_unix(socket)
 }
 

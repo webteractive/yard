@@ -86,6 +86,27 @@ async fn link_and_unlink_round_trip() {
     d.shutdown().await.unwrap();
 }
 
+/// A link that starts a PHP version's pool answers only once the pool listens, so the
+/// site's first request reaches PHP instead of a 502 from nginx (found on a Mac where no
+/// other site kept that pool running).
+#[tokio::test]
+async fn link_answers_once_a_pool_it_started_listens() {
+    let d = prepared("").await;
+    std::fs::write(d.fx.brew.path().join("fake-fpm-delay"), "500").unwrap();
+    let d = d.start().await;
+    let socket = d.fx.paths.fpm_socket(yard_core::PhpVersion::DEFAULT);
+    assert!(!socket.exists(), "no site uses PHP yet, so no pool should listen");
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join("public")).unwrap();
+    let mut c = d.client().await;
+
+    c.call("sites.link", json!({"name": "proj", "path": project.path().display().to_string()}))
+        .await
+        .unwrap();
+    assert!(socket.exists(), "sites.link answered before {} listened", socket.display());
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn linking_in_sites_toml_emits_site_added() {
     let d = prepared("").await.start().await;

@@ -93,6 +93,11 @@ pub struct Reconciler {
 
 const HERD_APP: &str = "/Applications/Herd.app";
 
+/// How long a reconcile waits for a PHP pool it started to listen before nginx sends it the
+/// pool's sites, and how often it looks. php-fpm listens within half a second.
+const POOL_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const POOL_READY_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
 /// `<resolver_dir>/<tld>` when it exists without Yard's marker, i.e. belongs to someone else.
 pub(crate) fn foreign_resolver(resolver_dir: &Path, tld: &str) -> Option<PathBuf> {
     let file = resolver_dir.join(tld);
@@ -761,6 +766,11 @@ impl Reconciler {
         state.slept = slept;
         let started = self.supervisor.apply(desired).await;
         self.supervisor.sockets().release_except(&inherit);
+        // nginx sends a new pool's sites to its socket as soon as it reloads, and its call
+        // returns: a request in between is a 502. So a pool this pass started listens first.
+        let pools: Vec<String> =
+            versions.iter().map(|v| fpm_unit(*v)).filter(|n| started.contains(n)).collect();
+        await_pools(&self.supervisor, &pools, &mut report).await;
         for name in restart.iter().filter(|n| existing.contains(*n) && !started.contains(*n)) {
             if let Err(e) = self.supervisor.restart(name).await {
                 report.warnings.push(format!("restarting {name}: {}", describe(&e)));
@@ -988,6 +998,40 @@ fn secure_service_hosts(
     let console = serves_console(services, sites).then(|| ("minio", format!("minio.{tld}")));
     let mail = (mail && serves_mail(sites)).then(|| (EMAILULATOR, format!("{MAIL_HOST_LABEL}.{tld}")));
     console.into_iter().chain(mail).collect()
+}
+
+/// Waits, up to `POOL_READY_WAIT`, until each of `pools` has left `Starting` (its health check,
+/// a connect to its socket, passed, or it failed and will say so in `yard status`). A pool
+/// still starting then is a warning: its sites answer 502 until it listens.
+async fn await_pools(supervisor: &Supervisor, pools: &[String], report: &mut ReconcileReport) {
+    if pools.is_empty() {
+        return;
+    }
+    let deadline = tokio::time::Instant::now() + POOL_READY_WAIT;
+    loop {
+        let units = supervisor.list();
+        let starting: Vec<&String> = pools
+            .iter()
+            .filter(|p| {
+                units
+                    .iter()
+                    .any(|u| u.name == **p && matches!(u.state, UnitState::Stopped | UnitState::Starting))
+            })
+            .collect();
+        if starting.is_empty() {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            for pool in starting {
+                report.warnings.push(format!(
+                    "{pool} did not listen within {} s; its sites answer 502 until it does",
+                    POOL_READY_WAIT.as_secs()
+                ));
+            }
+            return;
+        }
+        tokio::time::sleep(POOL_READY_POLL).await;
+    }
 }
 
 /// The reconcile warning for an instance left out for `why` (`services::missing_program`):

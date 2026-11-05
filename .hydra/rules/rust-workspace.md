@@ -82,7 +82,8 @@ triggers:
   closing with it unread resets the connection, which leaves no `TIME_WAIT` for the idle
   count to see (M4e spec §7). Real redis, postgres and minio send nothing first; with
   `<prefix>/fake-no-greeting` the fakes do the same, so a health check's connect-and-close
-  leaves a `TIME_WAIT` that only `conns::own_connection` keeps from counting. With `<prefix>/fake-listen-delay` (ms) the fake `mysqld` and
+  leaves a `TIME_WAIT` that only `conns::own_connection` keeps from counting. With `<prefix>/fake-fpm-delay` (ms)
+  the fake `php-fpm` binds its socket only after the delay, a pool that takes a moment to start. With `<prefix>/fake-listen-delay` (ms) the fake `mysqld` and
   `redis-server` open their port only after the delay, a slow start for a wake to wait on.
 - Timing tests use scaled-down `SupervisorConfig` / `PolicyConfig` (`support::fast()`),
   never real 5 s intervals. A test that passes on one run and fails on the next is a bug to fix, not

@@ -544,6 +544,10 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
 - **Reconcile loop:** on startup and on any state change, `yardd` reads the TOML
   files, renders all configs in memory, diffs against disk, writes changed
   files, and restarts or reloads only affected units. Reconcile is idempotent.
+  A PHP pool the reconcile starts must pass its health check (its socket answers) before
+  nginx reloads, waiting at most 5 s and warning after that, so the call that linked or
+  isolated a site returns only once its first request can reach PHP, not a 502 (found
+  2026-11-05 on a Mac where no other site kept the pool running).
   A failed reconcile keeps the last good state serving; its error is kept and
   shown by `status` (`config_error`) and `doctor` until a reconcile succeeds.
   A linked project whose docroot (e.g. `public/`) appears later is picked up by
@@ -875,7 +879,8 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   `https://<site>.yard:8443` and assert `PHP_VERSION`; add and verify an
   extension. M1 runs a first cut over HTTP until M3 (`scripts/e2e-m1.sh`: `standard`
   profile on :8080, a linked PHP 8.4 app and a proxy, Herd's resolver unchanged,
-  and the 80/443 profile refused with Herd named). `scripts/e2e-m2.sh` adds M2 over HTTP:
+  and the 80/443 profile refused with Herd named; without Herd, the Herd steps are skipped and
+  its resolver must stay absent). `scripts/e2e-m2.sh` adds M2 over HTTP:
   PHP 7.1 beside 8.4, a site isolated to 7.1, redis and xdebug added and checked with
   `php -m` through the shim, every `php` and `php-fpm` brew's (never Herd's), and
   `yard xdebug off`. `scripts/e2e-m3.sh` adds HTTPS: a secured site answers on
