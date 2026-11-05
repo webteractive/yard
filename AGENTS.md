@@ -312,6 +312,25 @@ holds 80 or 443, since with both free the switch would go through.
   started before reloading nginx. The first runs of `e2e-m4d.sh` and `e2e-m5.sh` had found the
   second: with no other site keeping the 8.4 pool up, their first request after `yard link` was a
   502. `e2e-m4e.sh`: cold starts 0.27–0.66 s, a wake ask 0.17 ms at p50.
+- On 2026-11-06 the maintainer approved a PHP matrix: `~/yard-matrix` holds eleven projects, `php70` to
+  `php85`, each with a `.yard` naming its PHP, `extensions = ["redis"]` and MySQL (8.0 for 7.x,
+  8.4 for 8.x), PostgreSQL 17, Redis, MinIO and emailulator, and a page that checks each one
+  (`?txt` prints plain text, `?nomail` skips the SMTP send), plus `matrix.yard`, which frames all
+  eleven. `yard link --yes` installed every supported PHP (the plain `php` for 8.5) and a
+  `phpredis@<v>` for each, so `e2e-m4a.sh` now stops at its precheck here, and added the instances
+  `mysql-8.0` (3308), `mysql-8.4` (3307), `postgres-17` (5433), `redis` (6380) and `minio`
+  (9000). They are Yard's test fixtures; leave them unless the maintainer says otherwise. All eleven pages
+  passed in the browser, and sleeping and waking were checked by page, by eleven pages at once
+  (about 0.5 s cold) and by the `php` shim. The run found and fixed three bugs: running PHP pools'
+  health probes kept every FPM worker alive, `php install 8.5` failed on brew's link step (brew
+  had linked the keg-only `php@8.4` when it was the only PHP), and PHP 8.5's workers crashed in
+  libpq's Kerberos lookup (now `PGGSSENCMODE=disable`). Idle after the fix, the eleven FPM
+  masters hold 267 MB, nginx about 35 MB and yardd about 15 MB; the five instances add about
+  1.1 GB while awake (each MySQL 375–495 MB, MinIO about 250 MB).
+- Steam listens on `*:27036`, inside the tests' 20000–29999 range; `support::free_port` skips it.
+- `~/.local/bin/node`, `npm` and `npx` are symlinks to Hermes's own Node 22 (`~/.hermes/node`), so a
+  bare `npm install -g` lands there, off PATH. `playwright-cli` is installed with brew's npm
+  (`/opt/homebrew/bin/playwright-cli`).
 
 ## Build & test
 
