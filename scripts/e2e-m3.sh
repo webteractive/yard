@@ -17,7 +17,8 @@ site=hello-tls
 
 fail() { echo "FAIL $*" >&2; exit 1; }
 pass() { echo "ok   $*"; }
-sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+# The file's checksum, or "absent": on a Mac without Herd its resolver must stay absent.
+sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absent; fi; }
 
 # The output of curl "$@" once it matches the glob in $want. nginx applies a reload a
 # moment after the command that caused it returns, so the first answer can still come

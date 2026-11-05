@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# M1 end-to-end check on a real Mac, in the standard profile, beside a running Herd.
+# M1 end-to-end check on a real Mac, in the standard profile, beside Herd where it runs.
 #
 # Needs nginx, dnsmasq and php@8.4 from brew, `sudo yard helper install` and
 # `yard start`. It uses the real data root, links a temp project, proxies to a
 # throwaway server, and removes both again with their override stubs. Herd's resolver
-# must come out unchanged.
+# must come out unchanged (still absent on a Mac without Herd). The steps that need Herd
+# running, a Herd site answering and the privileged profile refused naming Herd, are skipped
+# without it.
 set -euo pipefail
 unset YARD_ROOT
 
@@ -12,10 +14,13 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 yard="${YARD:-$repo/target/release/yard}"
 fixtures="$repo/tests/fixtures/e2e"
 herd_resolver=/etc/resolver/test
+herd=no
+[[ -d /Applications/Herd.app || -e $herd_resolver ]] && herd=yes
 
 fail() { echo "FAIL $*" >&2; exit 1; }
 pass() { echo "ok   $*"; }
-sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+# The file's checksum, or "absent": on a Mac without Herd its resolver must stay absent.
+sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absent; fi; }
 
 # The body of $1 once it matches the glob $2. nginx applies a reload a moment after the
 # command that caused it returns, so the first answer can still come from the old config.
@@ -68,10 +73,14 @@ proxied="$(answer http://hello-proxy.yard:8080/ "*proxied*")"
 [[ $proxied == *proxied* ]] || fail "http://hello-proxy.yard:8080/ answered '${proxied:0:200}'"
 pass "http://hello-proxy.yard:8080/ reaches the proxied app"
 
-herd_site="$(find "$HOME/Herd" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | head -1 | xargs basename)"
-code="$(curl -s -o /dev/null -w '%{http_code}' "http://$herd_site.test/" || true)"
-[[ $code != 000 ]] || fail "Herd did not answer http://$herd_site.test/"
-pass "Herd still answers http://$herd_site.test/ (HTTP $code)"
+if [[ $herd == yes ]]; then
+  herd_site="$(find "$HOME/Herd" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | head -1 | xargs basename)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://$herd_site.test/" || true)"
+  [[ $code != 000 ]] || fail "Herd did not answer http://$herd_site.test/"
+  pass "Herd still answers http://$herd_site.test/ (HTTP $code)"
+else
+  pass "skip: Herd is not installed, so no Herd site to check"
+fi
 
 # 5. nginx runs as the user, not root (M1.1).
 nginx_pid="$("$yard" status --json | python3 -c 'import json, sys; print(next(u["pid"] for u in json.load(sys.stdin)["units"] if u["name"] == "nginx"))')"
@@ -79,14 +88,19 @@ nginx_user="$(ps -o user= -p "$nginx_pid" | tr -d ' ')"
 [[ $nginx_user == "$USER" ]] || fail "nginx (pid $nginx_pid) runs as '$nginx_user', expected $USER"
 pass "nginx (pid $nginx_pid) runs as $USER"
 
-# 6. Switching to the privileged profile is refused while Herd answers on 80/443, naming Herd.
-set +e
-refusal="$("$yard" ports profile privileged 2>&1 >/dev/null)"
-status=$?
-set -e
-[[ $status == 1 ]] || fail "yard ports profile privileged exited $status, expected 1"
-[[ $refusal == *Herd* ]] || fail "the refusal does not name Herd: $refusal"
-pass "yard ports profile privileged is refused: $refusal"
+# 6. Switching to the privileged profile is refused while something holds 80 or 443, naming
+# Herd when it is Herd. With both free the switch would go through, so it is not tried.
+if [[ $herd == yes ]] || lsof -nP -iTCP:80 -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1; then
+  set +e
+  refusal="$("$yard" ports profile privileged 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  [[ $status == 1 ]] || fail "yard ports profile privileged exited $status, expected 1"
+  [[ $herd == no || $refusal == *Herd* ]] || fail "the refusal does not name Herd: $refusal"
+  pass "yard ports profile privileged is refused: $refusal"
+else
+  pass "skip: nothing holds 80 or 443, so the privileged profile is not tried"
+fi
 
 # 7. Doctor has no failing check.
 report="$work/doctor.json"

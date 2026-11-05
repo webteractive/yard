@@ -44,7 +44,8 @@ page_limit=10
 
 fail() { echo "FAIL $*" >&2; exit 1; }
 pass() { echo "ok   $*"; }
-sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+# The file's checksum, or "absent": on a Mac without Herd its resolver must stay absent.
+sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absent; fi; }
 
 # What listens on each port DBngin, Postgres.app or another database may hold: pid and
 # command, one line per port, in a stable order.

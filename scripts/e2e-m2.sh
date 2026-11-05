@@ -22,7 +22,8 @@ fail() { echo "FAIL $*" >&2; exit 1; }
 pass() { echo "ok   $*"; }
 # Runs a command quietly, but shows its output when it fails.
 quiet() { local out; out="$("$@" 2>&1)" || { printf '%s\n' "$out" >&2; fail "$*"; }; }
-sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+# The file's checksum, or "absent": on a Mac without Herd its resolver must stay absent.
+sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absent; fi; }
 
 # The body of $1 once it matches the glob $2 (nginx reloads a moment after a command).
 answer() {
