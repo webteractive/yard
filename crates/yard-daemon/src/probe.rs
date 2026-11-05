@@ -71,6 +71,18 @@ mod tests {
     use std::io::Read;
     use std::net::{Shutdown, TcpListener, UdpSocket};
 
+    /// A port below macOS's ephemeral range that nothing listens on. A test that asserts a port it
+    /// released is free must not take it from the ephemeral range: any process's next outbound
+    /// connection can be given that port in between, and then it is not free (found 2026-11-06,
+    /// when time_wait_port_is_free failed once in a full run).
+    fn quiet_port() -> u16 {
+        let start = 29_000 + (std::process::id() % 500) as u16;
+        (start..29_999)
+            .chain(29_000..start)
+            .find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
+            .expect("a free port in 29000-29999")
+    }
+
     #[test]
     fn bound_port_is_not_free() {
         let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -83,7 +95,7 @@ mod tests {
     #[test]
     fn released_port_is_free() {
         let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
-        let p = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let p = quiet_port();
         assert!(is_free(p, Proto::Tcp));
         assert!(!is_listening(p));
     }
@@ -93,7 +105,7 @@ mod tests {
         let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         // Take the port from TCP so its TCP side is known free: macOS hands out ephemeral
         // ports in sequence, so a UDP :0 can land on a port another test holds over TCP.
-        let p = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let p = quiet_port();
         let _u = UdpSocket::bind(("127.0.0.1", p)).unwrap();
         assert!(!is_free(p, Proto::TcpUdp));
         assert!(is_free(p, Proto::Tcp));
@@ -110,7 +122,7 @@ mod tests {
     fn time_wait_port_is_free() {
         let _ports = crate::PORT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         // nginx closes keep-alive connections first, which leaves TIME_WAIT on its own port.
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let l = TcpListener::bind(("127.0.0.1", quiet_port())).unwrap();
         let p = l.local_addr().unwrap().port();
         let mut client = TcpStream::connect(("127.0.0.1", p)).unwrap();
         let (server, _) = l.accept().unwrap();
