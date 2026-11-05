@@ -2,14 +2,14 @@
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
-# Yard — a Rust + Swift replacement for Laravel Herd (macOS)
+# Yard — a Rust replacement for Laravel Herd (macOS)
 
 Yard serves local PHP sites on macOS. A Rust daemon (`yardd`, a user
 LaunchAgent) supervises php-fpm pools, dnsmasq and services. A tiny root helper
 (`yard-helper`, a LaunchDaemon) manages `/etc/resolver` and CA trust through a
 fixed verb set. nginx runs as the user, as a yardd unit; root only opens 80/443
 (`ports.bind`) when the user opts in to the privileged profile. The `yard` CLI and,
-from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
+from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
 
 ## Status
 
@@ -115,7 +115,9 @@ from M6, a SwiftUI `Yard.app` are pure JSON-RPC clients of the daemon.
    arbitrary extensions, config the user owns and Yard never overwrites, and no
    paywall on services or Node.
 3. Ship to the team, later the public: signed, notarized, auto-updating.
-4. Learn Rust and Swift. Code quality and clear boundaries matter, not just "it works".
+4. Learn Rust. Code quality and clear boundaries matter, not just "it works". Yard.app is Rust
+   with GPUI too, so the whole project is one language (maintainer, 2026-11-06; until then the goal
+   was Rust and Swift, with a SwiftUI app).
 
 ## Key decisions
 
@@ -182,7 +184,8 @@ spec's milestone notes and in older rules means the maintainer's main Mac, where
 
 1. An Apple Silicon Mac with Homebrew at `/opt/homebrew` and the `shivammathur/php` and
    `shivammathur/extensions` taps (`brew tap shivammathur/php`, `brew tap
-   shivammathur/extensions`). Swift and Xcode only matter from M6.
+   shivammathur/extensions`). Xcode 26 (the macOS 26 SDK and its Metal toolchain) only matters
+   from M6, for Yard.app's GPUI build.
 2. Rust from rustup, never brew's `rust` formula, which ignores `rust-toolchain.toml` (1.92;
    CI's clippy runs on it, and a newer rustc lints differently). Install rustup with the
    official installer (`sh.rustup.rs`, `--no-modify-path` when the shell already sources
@@ -449,7 +452,7 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
 
 ## Layout (planned, spec §3.2)
 
-- `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and the Swift app via schema from M6).
+- `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and from M6 Yard.app, which uses the types directly).
 - `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here.
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
@@ -458,7 +461,8 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
   dispatching on `argv[0]`; it reads the TOMLs itself and runs without a daemon. `php` and
   `composer` ask yardd's `run/wake.sock` to wake a site's sleeping services first, when
   `run/sleeping` lists the site (M4e).
-- `app/` — Yard.app (M6).
+- `app/` — Yard.app (M6, Rust and GPUI): planned in the M6 design (a draft) as a second Cargo
+  workspace with its own toolchain, lockfile and `deny.toml`; not built.
 
 ## Conventions
 

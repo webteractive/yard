@@ -19,8 +19,9 @@ triggers:
   Codes are stable SCREAMING_SNAKE strings and are never renamed. A new failure mode
   gets a new code, and its `hint` is the exact command that fixes it.
 - Types are defined once in `yard-proto` and used unchanged by the CLI's `--json`
-  output. From M6 the Swift models are generated from their JSON Schema, so a field
-  rename is a breaking change for the app too.
+  output. From M6 Yard.app uses them directly too (it is Rust, the maintainer 2026-11-06), so a field
+  rename breaks an app from an older build; an app and a yardd from different builds still
+  meet, which is why extendable enums carry fallbacks.
 - An enum a newer daemon may extend in a minor version carries a `#[serde(other)]` variant
   the daemon never sends (`SettingSource::Other`, shown as `elsewhere`), so an older client
   still reads the answer instead of failing on an unknown variant. `#[serde(other)]` only

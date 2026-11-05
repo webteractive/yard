@@ -6,7 +6,8 @@ opt-in (§3.1, §5.2, §5.5, §7, M1.1)
 
 Yard is a local PHP development environment for macOS that replaces Laravel Herd.
 The CLI and all logic are written in Rust; the desktop app (menu bar + window) is
-written in Swift/SwiftUI and is a pure client of the Rust daemon.
+written in Rust with GPUI (maintainer, 2026-11-06; until then SwiftUI) and is a pure client of the
+Rust daemon.
 
 ## 1. Goals
 
@@ -18,8 +19,8 @@ written in Swift/SwiftUI and is a pure client of the Rust daemon.
    - Config is not owned by the user / gets overwritten.
    - Services, Node management and similar features are behind a paywall.
 3. **Ship to the team, later the public** — signed, notarized, auto-updating.
-4. **Learning project** for Rust and Swift; code quality and clear boundaries
-   matter, not just "it works".
+4. **Learning project** for Rust (Swift until 2026-11-06, when the maintainer made Yard.app Rust and
+   GPUI too); code quality and clear boundaries matter, not just "it works".
 
 ### Success criteria
 
@@ -132,7 +133,7 @@ yard/
     yard-helper/             # root helper binary
     yard-cli/                # yard binary
     yard-shim/               # php/composer/pecl/phpize/php-config and node/npm/npx shims (one multicall binary)
-  app/                       # Swift package/Xcode project for Yard.app
+  app/                       # Yard.app (M6, GPUI): planned as a second Cargo workspace, M6 design §4
   docs/
 ```
 
@@ -610,9 +611,9 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
   `job_progress`, `job_finished`, `log_line`, `port_conflict`, `tunnel_changed` (M5, when a
   tunnel's state, URL or last error changes). From protocol 2.10 `job_finished` carries an
   optional `result`, the job's answer on success (`tunnels.add` sends its `TunnelInfo`).
-- Types are defined once in `yard-proto` (serde). `cargo xtask schema` emits
-  JSON Schema; the Swift `Codable` models are generated from it and checked in
-  CI for drift.
+- Types are defined once in `yard-proto` (serde) and used unchanged by the CLI and, from M6,
+  Yard.app. A daemon and an app from different builds still meet, so every enum a newer yardd
+  may extend carries a fallback variant it never sends (M6 design §6).
 - Protocol version is exchanged on connect; mismatched major versions are
   refused with a clear upgrade message.
 - `wake.sock` (§3.1) is not part of this API: it is not JSON-RPC and has no types in
@@ -858,11 +859,13 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 
 ## 9. Yard.app
 
-- SwiftUI, macOS 14+, Swift 6 strict concurrency.
-- **Menu bar** (`MenuBarExtra`): health indicator, quick toggles for services
+- Rust with GPUI (Zed's UI framework), macOS 14+ (maintainer, 2026-11-06). The M6 design
+  (`2026-11-05-yard-m6-app-design.md`, a draft) settles the toolkit's details: where GPUI comes
+  from, the app's toolchain, and whether the menu bar is a native `NSMenu` or a GPUI window.
+- **Menu bar**: health indicator, quick toggles for services
   and Xdebug, recent sites (open in browser), badges for failed units and port
   conflicts.
-- **Main window** (`NavigationSplitView`):
+- **Main window** (a sidebar and a detail pane):
   - Sites: search, per-site PHP picker, secure toggle, open in browser /
     editor / Terminal, "Edit overrides" (opens the override file).
   - PHP: installed versions, install with progress, extensions per version,
@@ -871,9 +874,8 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   - Ports: registry table with resolve actions on conflicts.
   - Logs: unified filterable stream.
   - Doctor: checks with fix buttons.
-- **Client:** one `YardClient` actor speaks JSON-RPC over the socket; models are
-  generated from `yard-proto` schema. `@Observable` stores update from event
-  subscriptions — no polling.
+- **Client:** the app speaks JSON-RPC over the socket with `yard-proto`'s own types, through a
+  client shared with the CLI; its state updates from event subscriptions — no polling.
 - **Onboarding:** check Homebrew → install CLI symlink and `yardd` LaunchAgent →
   register helper via `SMAppService` → offer
   the `privileged` profile (80/443) when nothing else holds those ports.
@@ -918,8 +920,8 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   `emailulator-smtp` `external` on its SMTP port, `mail.<tld>` answers 200 while the agent's
   own port answers 403 to that `Host` (the rewrite is what makes it work), and a scratch
   project whose `.yard` says `emailulator = true` serves and prints the agent's `MAIL_PORT`.
-- **Swift:** `YardClient` against a mock socket server; store tests driven by
-  event streams; schema drift check in CI.
+- **Yard.app:** its client against a fake socket server and a real yardd; state tests driven by
+  event streams; GPUI's own test harness for render smoke tests (M6 design).
 
 ## 11. Distribution
 
