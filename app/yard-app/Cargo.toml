@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "yard-app"
 path = "src/main.rs"
@@ -32,3 +35,4 @@ yard-proto.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3.27.0"

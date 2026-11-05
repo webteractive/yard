@@ -2,15 +2,21 @@
 //! version of the yardd serving that data root, or why it cannot be reached.
 
 mod bridge;
+#[expect(dead_code, reason = "reconnect_now and logs: the shell and the Logs screen (M6 Tasks 13 and 15)")]
+mod daemon;
 mod menubar;
+#[cfg_attr(not(test), expect(dead_code, reason = "the screens run their actions through it from M6 Task 13"))]
+mod runner;
+mod state;
+mod testing;
 
 use gpui::{
-    ActivationPolicy, App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, SharedString,
-    Styled, Window, WindowBounds, WindowOptions, div, px, size,
+    ActivationPolicy, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled, Window, WindowBounds, WindowOptions, div, px, size,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
-use yard_client::session::{ConnectionState, Session, SessionConfig, Update};
+use yard_client::session::{ConnectionState, SessionConfig};
 
 /// What `hello` says this client is.
 pub fn client_name() -> String {
@@ -45,47 +51,44 @@ fn main() {
     });
 }
 
-/// The daemon a data root's yardd reports, or why it is not answering.
+/// The daemon a data root's yardd reports, or why it is not answering, read from `AppState`.
 struct VersionView {
-    text: SharedString,
-    _session: Session,
+    state: Entity<state::AppState>,
 }
 
 impl VersionView {
-    fn new(root: &std::path::Path, bridge: &bridge::Bridge, cx: &mut Context<Self>) -> Self {
-        let _guard = bridge.runtime.enter();
+    fn new(root: &std::path::Path, bridge: &Arc<bridge::Bridge>, cx: &mut Context<Self>) -> Self {
         let config = SessionConfig::new(root.join("yardd.sock"), client_name());
-        let (session, mut updates) = Session::start(config);
-        cx.spawn(async move |this, cx| {
-            while let Some(update) = updates.recv().await {
-                let Update::State(state) = update else { continue };
-                let text = match state {
-                    ConnectionState::Connecting => "connecting to yardd…".to_string(),
-                    ConnectionState::Connected(info) => {
-                        format!("yardd {} ({})", info.hello.daemon_version, info.hello.commit)
-                    }
-                    ConnectionState::Disconnected(e) | ConnectionState::Incompatible(e) => e.message,
-                };
-                // The window's text, also on stderr, so a session can be followed without a screen.
-                eprintln!("Yard.app: {text}");
-                if this
-                    .update(cx, |this, cx| {
-                        this.text = text.into();
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
+        let daemon = daemon::SessionDaemon::start(config, bridge.clone());
+        let state = state::AppState::new(daemon, std::time::Duration::from_millis(150), cx);
+        cx.observe(&state, |this: &mut VersionView, _, cx| {
+            // The window's text, also on stderr, so a session can be followed without a screen.
+            eprintln!("Yard.app: {}", this.text(cx));
+            cx.notify();
         })
         .detach();
-        VersionView { text: "connecting to yardd…".into(), _session: session }
+        VersionView { state }
+    }
+
+    fn text(&self, cx: &App) -> String {
+        match &self.state.read(cx).connection {
+            ConnectionState::Connecting => "connecting to yardd…".to_string(),
+            ConnectionState::Connected(info) => {
+                format!("yardd {} ({})", info.hello.daemon_version, info.hello.commit)
+            }
+            ConnectionState::Disconnected(e) | ConnectionState::Incompatible(e) => e.message.clone(),
+        }
     }
 }
 
 impl Render for VersionView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().flex().items_center().justify_center().text_lg().child(self.text.clone())
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_lg()
+            .child(SharedString::from(self.text(cx)))
     }
 }

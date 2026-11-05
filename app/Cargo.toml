@@ -10,6 +10,12 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[workspace.lints.clippy]
+# GPUI's tree turns on serde_json's preserve_order, so Value's objects are IndexMaps and
+# yard-proto's YardError, the wire error passed through unchanged, grows past this lint's 128 bytes
+# here (it does not at the root).
+result_large_err = "allow"
+
 [workspace.dependencies]
 yard-proto = { path = "../crates/yard-proto" }
 yard-core = { path = "../crates/yard-core" }
