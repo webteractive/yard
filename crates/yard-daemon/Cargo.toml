@@ -24,5 +24,6 @@ yard-core.workspace = true
 yard-proto.workspace = true
 
 [dev-dependencies]
+yard-client.workspace = true
 tempfile = "3.27.0"
 yard-helper.workspace = true

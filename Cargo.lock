@@ -1480,6 +1480,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x509-parser",
+ "yard-client",
  "yard-core",
  "yard-helper",
  "yard-proto",

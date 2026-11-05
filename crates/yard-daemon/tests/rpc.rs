@@ -129,6 +129,41 @@ async fn reconciled_follows_a_hand_edit() {
     d.shutdown().await.unwrap();
 }
 
+/// Yard.app's session against a real yardd: it connects, calls, and hears a hand edit as
+/// `reconciled` (M6 Task 6).
+#[tokio::test]
+async fn a_session_follows_a_real_yardd() {
+    use yard_client::session::{ConnectionState, Session, SessionConfig, Update};
+    let d = prepared("").await.start().await;
+    let config = SessionConfig::new(d.fx.paths.daemon_socket(), "Yard.app test".into());
+    let (session, mut updates) = Session::start(config);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, updates.recv()).await.expect("connected within 5 s") {
+            Some(Update::State(ConnectionState::Connected(info))) => {
+                assert_eq!(info.epoch, 1);
+                assert!(!info.stale, "{info:?}");
+                break;
+            }
+            Some(Update::State(ConnectionState::Connecting)) | Some(Update::Event(_)) => continue,
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(session.call(yard_client::api::SITES_LIST, ()).await.unwrap().is_empty());
+    d.project("scratch");
+    let reconciled = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(u) = updates.recv().await {
+            if matches!(u, Update::Event(yard_proto::Event::Reconciled { .. })) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(reconciled, Ok(true));
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn linking_in_sites_toml_emits_site_added() {
     let d = prepared("").await.start().await;

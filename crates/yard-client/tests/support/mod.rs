@@ -84,6 +84,11 @@ impl FakeYardd {
         self.state.lock().unwrap().refuse_hello = Some(error);
     }
 
+    /// Undoes `refuse_hello`.
+    pub fn allow_hello(&self) {
+        self.state.lock().unwrap().refuse_hello = None;
+    }
+
     /// Holds each answer until the next request arrives, then sends that one's answer first.
     pub fn answer_out_of_order(&self) {
         self.state.lock().unwrap().out_of_order = true;
