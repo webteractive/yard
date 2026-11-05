@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Yard.app is its own workspace, on its own toolchain (app/Cargo.toml).
+exclude = ["app"]
 
 [workspace.package]
 version = "0.1.0"

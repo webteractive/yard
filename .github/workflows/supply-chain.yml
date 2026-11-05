@@ -1,6 +1,6 @@
 name: Supply chain
 
-# Policy lives in deny.toml at the repo root. Run the same checks locally with
+# Policy lives in deny.toml at the repo root, and app/deny.toml for Yard.app's workspace. Run the same checks locally with
 # `cargo deny check` before pushing a lockfile change.
 
 on:
@@ -51,4 +51,33 @@ jobs:
       - name: cargo deny
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
+          command: check advisories
+
+  # Yard.app's workspace (app/) has its own lockfile and policy (app/deny.toml).
+  app-gates:
+    name: App bans, licenses, sources
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: app/Cargo.toml
+          command: check bans licenses sources
+
+  app-advisories:
+    name: App advisories
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: app/Cargo.toml
           command: check advisories

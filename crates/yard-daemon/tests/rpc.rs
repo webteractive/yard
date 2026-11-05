@@ -164,6 +164,35 @@ async fn a_session_follows_a_real_yardd() {
     d.shutdown().await.unwrap();
 }
 
+/// When yardd goes, the session says so (found 2026-11-06: Yard.app kept showing a yardd that
+/// had exited).
+#[tokio::test]
+async fn a_session_notices_yardd_going() {
+    use yard_client::session::{ConnectionState, Session, SessionConfig, Update};
+    let d = prepared("").await.start().await;
+    let config = SessionConfig::new(d.fx.paths.daemon_socket(), "Yard.app test".into());
+    let (_session, mut updates) = Session::start(config);
+    let state = |u: Option<Update>| match u {
+        Some(Update::State(s)) => Some(s),
+        _ => None,
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !matches!(
+        state(tokio::time::timeout_at(deadline, updates.recv()).await.unwrap()),
+        Some(ConnectionState::Connected(_))
+    ) {}
+    d.shutdown().await.unwrap();
+    let gone = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(ConnectionState::Disconnected(e)) = state(updates.recv().await) {
+                return e;
+            }
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "no Disconnected within 5 s of yardd shutting down");
+}
+
 #[tokio::test]
 async fn linking_in_sites_toml_emits_site_added() {
     let d = prepared("").await.start().await;

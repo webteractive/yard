@@ -1,0 +1,30 @@
+# Yard.app: a second workspace, on Zed's toolchain (rust-toolchain.toml), with its own lockfile
+# and deny policy, so the daemon's crates stay on 1.92 and their policy never sees GPUI's tree
+# (M6 design §4.1). It uses yard-proto, yard-core and yard-client from the root by path.
+[workspace]
+resolver = "3"
+members = ["yard-app-model", "yard-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+yard-proto = { path = "../crates/yard-proto" }
+yard-core = { path = "../crates/yard-core" }
+yard-client = { path = "../crates/yard-client" }
+yard-app-model = { path = "yard-app-model" }
+# Pinned to Zed v1.27.0's commit: crates.io's gpui is a year old (M6 design §4.2). Bump on purpose.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "c84af5b99cbc366d675064e52b23664a015b6e35" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "c84af5b99cbc366d675064e52b23664a015b6e35", features = ["font-kit"] }
+tray-icon = "=0.26.1"
+muda = "=0.21.2"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros", "process", "fs"] }
+futures = "0.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+time = { version = "0.3.55", features = ["parsing", "formatting", "macros"] }

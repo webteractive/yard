@@ -35,3 +35,37 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+  # Yard.app (M6): a second workspace on Zed's toolchain (app/rust-toolchain.toml). macos-26 has
+  # Xcode 26 and the macOS 26 SDK GPUI needs; runtime-shaders keeps CI off the Metal compiler.
+  app:
+    name: app fmt, clippy, test
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            app/target
+          key: app-${{ runner.os }}-${{ hashFiles('app/Cargo.lock', 'app/rust-toolchain.toml') }}
+
+      - name: Toolchain
+        run: rustup show active-toolchain
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked --features yard-app/runtime-shaders -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked --features yard-app/runtime-shaders

@@ -1,0 +1,4 @@
+# Zed builds GPUI at the pinned commit with this toolchain; the root workspace stays on 1.92.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

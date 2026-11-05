@@ -1,0 +1,91 @@
+# Yard.app's supply-chain policy: the root deny.toml, plus what GPUI's tree needs (M6 design
+# §18 Q4). The root policy is unchanged; GPUI never enters the daemon's lockfile.
+# cargo-deny policy: supply-chain and license gate.
+#
+#   cargo deny check            # everything
+#   cargo deny check bans       # just the malicious-crate tripwire (offline, fast)
+#   cargo deny check advisories # RustSec vulnerabilities + yanked crates
+
+[graph]
+# Check every target and feature, so a dependency cannot hide behind cfg gating.
+all-features = true
+
+[advisories]
+# Advisories to ignore, each with a reason; an entry here is a decision to ship a known issue.
+# Every entry is an "unmaintained" notice, none a vulnerability, in GPUI's tree at the pinned Zed
+# revision (M6 design §4.2), where the only fix is a GPUI bump. Revisit each when it moves.
+ignore = [
+    # Built on macOS: GPUI's text shaping and its macros.
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz, via gpui_macos's text system; unmaintained, no known vulnerability" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via gpui_macos's text system; unmaintained, no known vulnerability" },
+    { id = "RUSTSEC-2024-0436", reason = "paste, a proc macro gpui uses at build time; unmaintained, no known vulnerability" },
+    # Locked for Linux only (D-Bus and a Linux build macro); never built for Yard.app.
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names, Linux D-Bus in GPUI's tree; not built on macOS" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, Linux D-Bus in GPUI's tree; not built on macOS" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant, Linux D-Bus in GPUI's tree; not built on macOS" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, a Linux-only build macro in GPUI's tree; not built on macOS" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    # notify (file watching) is a CC0 public-domain dedication.
+    "CC0-1.0",
+    # inotify, notify's Linux backend; checked because every target is.
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    # target-lexicon, a build dependency in GPUI's tree.
+    "Apache-2.0 WITH LLVM-exception",
+    # GPUI's tree (M6 design §18 Q4); the crates that need each are listed in the M6 design §4.4.
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    "Zlib",
+]
+# Yard's own crates are publish = false and carry no license field.
+private = { ignore = true }
+
+[bans]
+# Duplicate versions are bloat, not a security problem: report, do not fail.
+multiple-versions = "warn"
+# A wildcard version accepts whatever crates.io serves next. That is precisely
+# how a hijacked-account release reaches a build with no diff to review. Yard's
+# internal path dependencies are exempt because every crate is publish = false.
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # 2026 arrayref / proc-macro1 build-time RAT.
+    # https://safedep.io/arrayref-proc-macro1-rust-build-time-malware/
+    # The `droundy` account was compromised; arrayref 0.3.10 added an *unused*
+    # dependency on proc-macro1, whose build script downloaded and detached a
+    # second-stage binary (C2 23.254.165.112) during `cargo build`. Cargo
+    # compiles unused deps, so importing nothing was no defence.
+    { crate = "arrayref@=0.3.10", reason = "compromised release; use 0.3.9 or >=0.3.11" },
+    { crate = "internment@=0.8.7", reason = "compromised release from the same account" },
+    { crate = "append-only-vec@=0.1.9", reason = "compromised release from the same account" },
+    { crate = "proc-macro1", reason = "typosquat of proc-macro2; build script drops a RAT" },
+    { crate = "proc-macro-en", reason = "payload-delivery crate from the same campaign" },
+    { crate = "aovine", reason = "payload-delivery crate from the same campaign" },
+    { crate = "arone", reason = "payload-delivery crate from the same campaign" },
+    { crate = "aronenao", reason = "payload-delivery crate from the same campaign" },
+    { crate = "tinymember", reason = "payload-delivery crate from the same campaign" },
+]
+
+[sources]
+# Every crate must come from crates.io or a repository allowed below. An unvetted registry or a
+# git dependency pointing somewhere new is the other common route a poisoned crate takes in.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# GPUI is pinned by git revision (M6 design §4.2); these are the repositories its tree pulls
+# from at that revision. Only zed and font-kit are built on macOS; the rest are locked for other
+# platforms. (scap, in the design's list, is locked but never part of the graph.)
+allow-git = [
+    "https://github.com/zed-industries/zed",
+    "https://github.com/zed-industries/font-kit",
+    "https://github.com/zed-industries/oo7",
+    "https://github.com/zed-industries/wasm_thread",
+    "https://github.com/gfx-rs/wgpu",
+]

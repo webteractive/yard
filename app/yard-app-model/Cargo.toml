@@ -1,0 +1,13 @@
+[package]
+name = "yard-app-model"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Decisions without a UI: no GPUI, no tokio, no files, no processes, no clock (M6 design §4.2).
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+yard-core.workspace = true
+yard-proto.workspace = true
