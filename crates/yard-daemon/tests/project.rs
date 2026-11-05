@@ -235,6 +235,35 @@ async fn setup_page_goes_once_met() {
     d.shutdown().await.unwrap();
 }
 
+/// brew pours `php` (8.5) and then fails to link it while a `php@<v>` keg owns `bin/php`, and
+/// exits 1. Yard runs PHP from the keg, never brew's links, so the install has worked (found
+/// 2026-11-06 on the Mac mini, where 8.4 was linked).
+#[tokio::test]
+async fn php_install_succeeds_when_only_brews_link_step_fails() {
+    let d = prepared("").await;
+    let d = d.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-brew-link-fail"), "shivammathur/php/php@7.3\n").unwrap();
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "php.install", json!({"php": "7.3"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("link")), "the job says brew did not link it: {lines:?}");
+    let php = c.call("php.list", Value::Null).await.unwrap();
+    assert!(php.as_array().unwrap().iter().any(|p| p["version"] == "7.3" && p["installed"] == true), "{php}");
+    d.shutdown().await.unwrap();
+}
+
+/// A failed install that left no keg is still a failure.
+#[tokio::test]
+async fn php_install_fails_when_brew_poured_nothing() {
+    let d = prepared("").await;
+    let d = d.start().await;
+    std::fs::write(d.fx.brew.path().join("fake-brew-fail"), "shivammathur/php/php@7.3\n").unwrap();
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "php.install", json!({"php": "7.3"})).await;
+    assert!(error.is_some(), "{lines:?}");
+    d.shutdown().await.unwrap();
+}
+
 async fn php_within(c: &mut Client, name: &str, want: &str, within: Duration) -> Value {
     let deadline = std::time::Instant::now() + within;
     loop {

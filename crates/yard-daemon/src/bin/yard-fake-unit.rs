@@ -430,7 +430,8 @@ fn php_fpm(argv0: &Path, args: &[String]) -> ExitCode {
 }
 
 /// `brew` at `<prefix>/bin/brew`. It logs each call to `<prefix>/fake-brew.log` and fails
-/// when an argument equals `<prefix>/fake-brew-fail`. `install`/`uninstall` of
+/// when an argument equals `<prefix>/fake-brew-fail`; an install of the formula in
+/// `<prefix>/fake-brew-link-fail` pours its keg and then fails as brew's link step does. `install`/`uninstall` of
 /// `shivammathur/php/php@<v>` create or remove a keg whose binaries are this fake;
 /// extension formulas exist when listed in `<prefix>/fake-ext-formulas`; installing one
 /// puts its `.so` in its keg and writes the ini brew's formula would, and uninstalling it
@@ -543,7 +544,15 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     } else {
         Ok(())
     };
+    // `<prefix>/fake-brew-link-fail` names a formula whose install pours its keg and then fails
+    // at brew's link step, as `php` (8.5) does while a `php@<v>` keg owns `bin/php`.
+    let link_fails = std::fs::read_to_string(prefix.join("fake-brew-link-fail")).unwrap_or_default();
     match result {
+        Ok(()) if verb == "install" && !link_fails.trim().is_empty() && formula == link_fails.trim() => {
+            eprintln!("Error: The `brew link` step did not complete successfully");
+            eprintln!("The formula built, but is not symlinked into {}", prefix.display());
+            ExitCode::from(1)
+        }
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(format!("fake brew {line}: {e}")),
     }

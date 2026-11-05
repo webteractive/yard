@@ -62,13 +62,20 @@ pub(super) async fn install(ctx: &Context, p: PhpParams) -> Result<JobStarted, Y
     if !already {
         require_trusted(&ctx.brew, &formula(v)).await?;
     }
-    let brew = ctx.brew.brew_bin();
+    let (brew, kegs) = (ctx.brew.brew_bin(), ctx.brew.clone());
     let reconciler = ctx.reconciler.clone();
     Ok(ctx.jobs.start("php-install", move |job: JobCtx| async move {
         if already {
             job.line(format!("PHP {v} is already installed"));
-        } else {
-            job.run(&brew, &["install", &formula(v)], &Brew::job_env()).await?;
+        } else if let Err(e) = job.run(&brew, &["install", &formula(v)], &Brew::job_env()).await {
+            // brew exits 1 when it pours a keg but cannot link it, as `php` (8.5) does while a
+            // `php@<v>` keg owns `bin/php`. Yard runs PHP from the keg, never brew's links.
+            if e.code == ErrorCode::JobCancelled || !installed(&kegs).contains(&v) {
+                return Err(e);
+            }
+            job.line(format!(
+                "brew installed PHP {v} but could not link it into its bin; Yard runs it from its keg, so that is fine"
+            ));
         }
         reconciler.reconcile().await.map(|_| ())
     }))

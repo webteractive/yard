@@ -47,6 +47,8 @@ triggers:
   prints; `brew trust|untrust` edit it); `fake-brew-version` sets `--version` (default
   7.0.10). Service formulae come from `fake-formulae.json` (`brew info --json=v2` objects)
   for `search`, `info --json=v2` (one or several names: it fails when any is unknown, as brew does) and `install`.
+  An install of the formula named in `fake-brew-link-fail` pours its keg and then exits 1 as brew's
+  link step does.
 - The fake `cloudflared` (`Fixture::add_cloudflared`, at brew's keg path) keeps its state beside
   itself: `calls` (one line per call), `tunnels.json` (`create`, `list` by `--name` or `--id`, `delete`), `dns-records`
   and `foreign-zones` (`route dns`), and the switches `not-ready` (`/ready` answers 503),

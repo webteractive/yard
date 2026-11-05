@@ -203,6 +203,11 @@ each generated file; `yard doctor` reports generated files that were hand-edited
 - `yard php install <ver>` → `brew install shivammathur/php/php@<ver>`, streamed
   as a job (§6.2). Installed versions are read from brew's kegs, not registered in
   `yard.toml` (decided 2026-10-20), so a version installed with brew directly counts too.
+  brew exits 1 when it pours a keg but cannot link it, which `php` (8.5) does while a
+  `php@<v>` keg owns `bin/php` (brew links a keg-only `php@<v>` when no `php` is installed).
+  Yard runs PHP from its keg and never needs that link, so the job succeeds with a line
+  saying so when the keg is there afterwards; a cancelled job stays cancelled (found
+  2026-11-06 on the Mac mini).
 - `yard php uninstall <ver>` → `brew uninstall`, as a job. It is refused with
   `PHP_IN_USE`, before brew runs, while the version is the default, any site is
   isolated to it or names it in its `.yard` (hint: the edit to make in that file), or

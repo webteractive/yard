@@ -29,6 +29,10 @@ triggers:
   plain `php` formula** (alias `php@8.5`, keg `opt/php`). Resolve a version as
   `opt/php@<ver>` first, else `opt/php` only when its Cellar version has the same
   major.minor. The tap also ships 5.6 and pre-release 8.6/8.7; Yard supports 7.0–8.5 only.
+- `brew install` exits 1 when it pours a keg but cannot link it: `php` (8.5) does while a
+  keg-only `php@<v>` is linked (brew links one when no `php` is installed). The `php.install`
+  job then succeeds if the keg is there, since Yard never uses brew's links; a cancel stays a
+  cancel.
 - Fixed paths: `opt/nginx/bin/nginx`, `opt/dnsmasq/sbin/dnsmasq`,
   `opt/php@<v>/sbin/php-fpm`, `etc/php/<v>/conf.d`, `etc/nginx/{mime.types,fastcgi_params}`.
 - php-fpm runs as `php-fpm --nodaemonize -y <yard>/php/<v>/fpm.conf -c <yard>/php/<v>/php.ini`
