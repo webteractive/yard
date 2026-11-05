@@ -330,6 +330,9 @@ holds 80 or 443, since with both free the switch would go through.
   libpq's Kerberos lookup (now `PGGSSENCMODE=disable`). Idle after the fix, the eleven FPM
   masters hold 267 MB, nginx about 35 MB and yardd about 15 MB; the five instances add about
   1.1 GB while awake (each MySQL 375–495 MB, MinIO about 250 MB).
+- `brew install cargo-deny cargo-audit` (0.20.2, 0.22.2) on 2026-11-06, the maintainer having left it to
+  Claude; `cargo deny check` passes. Their formulas need brew's `rust` only to build, so it stays
+  absent.
 - Steam listens on `*:27036`, inside the tests' 20000–29999 range; `support::free_port` skips it.
 - `~/.local/bin/node`, `npm` and `npx` are symlinks to Hermes's own Node 22 (`~/.hermes/node`), so a
   bare `npm install -g` lands there, off PATH. `playwright-cli` is installed with brew's npm
