@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use support::{FAKE, fast, free_port, held_listener};
+use support::{FAKE, fast, free_port, held_listener, port_is_free};
 use tokio::sync::broadcast::Receiver;
 use yard_daemon::events::EventBus;
 use yard_daemon::helper_client::HelperClient;
@@ -277,6 +277,15 @@ async fn shutdown_stops_children() {
     h.sup.shutdown().await;
     assert!(pids.iter().all(|p| !alive(*p)), "{pids:?}");
     assert!(h.sup.list().iter().all(|u| u.state == UnitState::Stopped && u.pid.is_none()));
+}
+
+/// Another program's wildcard listener (Steam holds *:27036 on the Mac mini) does not stop a
+/// loopback bind with SO_REUSEADDR, which Rust's TcpListener sets, yet it answers a connect to
+/// 127.0.0.1: a health check against that port passed with nothing of the test's running.
+#[test]
+fn a_port_another_program_holds_on_every_address_is_not_free() {
+    let wildcard = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    assert!(!port_is_free(wildcard.local_addr().unwrap().port()));
 }
 
 #[test]

@@ -28,7 +28,9 @@ triggers:
 - No `.unwrap()` / `.expect()` on daemon or helper runtime paths. Errors become a
   `YardError` with a hint. Tests may unwrap.
 - Tests use a temp `YARD_ROOT`, free ports from `support::free_port()` (20000-29999, below macOS's
-  ephemeral range, so no process's outbound connection takes one before its unit binds it) and `yard-fake-unit` (via
+  ephemeral range, so no process's outbound connection takes one before its unit binds it; a port is free
+  only when both a loopback and a wildcard bind succeed, since another program's wildcard listener,
+  such as Steam's on 27036, answers on loopback) and `yard-fake-unit` (via
   `argv[0]` it stands in for nginx, dnsmasq and php-fpm, and for the service engines
   (`mysqld`, `postgres`, `initdb`, `redis-server`, `minio`), and reads the configs Yard
   rendered). Its nginx `-t` fails on `yard-test-broken` in any `.conf` under its prefix or in a single file

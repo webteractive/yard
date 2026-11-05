@@ -208,10 +208,18 @@ pub fn free_port() -> u16 {
     let mut given = given();
     loop {
         let port = (20000 + (offset + NEXT.fetch_add(1, Ordering::Relaxed)) % 10000) as u16;
-        if given.insert(port) && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        if given.insert(port) && port_is_free(port) {
             return port;
         }
     }
+}
+
+/// Whether a unit could listen on `port` with nothing else answering there. A loopback bind
+/// alone is not enough: Rust sets SO_REUSEADDR, which lets it succeed beside another
+/// program's wildcard listener, and that listener answers a connect to 127.0.0.1.
+pub fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+        && std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 /// A listener a test holds, never on a port `free_port` gave out: that port is free only
