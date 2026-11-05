@@ -14,7 +14,7 @@ new.
 
 Decisions marked **(maintainer)** are the maintainer's. Decisions marked **(builder's call)** were made while
 writing this, not by the maintainer; each can be reversed without changing anything else here unless it says
-otherwise. The questions only the maintainer can answer are in §18, and the places where the main spec and
+otherwise. The questions §18 put to the maintainer were decided at his request on 2026-11-06, and the places where the main spec and
 the code disagree with building M6 as the spec describes it are in §19.
 
 ## 1. Intent
@@ -56,7 +56,7 @@ GPUI layer on top.
 
 - Signing, notarization, a DMG, auto-update (appdater or Sparkle), a brew tap: M7 (main spec §11).
 - Registering the helper or yardd with `SMAppService`, launch at login, and carrying `yard`,
-  `yardd`, `yard-helper` and `yard-shim` inside the bundle: M7, pending §18 Q1 and Q6.
+  `yardd`, `yard-helper` and `yard-shim` inside the bundle: M7 (§18 Q1 and Q6).
 - System notifications for finished jobs (an in-app record is kept; see §9). GPUI has
   `App::show_system_notification`, but the user notification center needs a signed bundle, so this
   is cheap in M7, not before.
@@ -981,47 +981,49 @@ toolchain); the root-helper rule (the `SMAppService` line); the cli-output rule 
 writes, the hint allowlist, roles and labels on every widget, how to bump GPUI, never a Zed GPL
 crate), if the maintainer wants the app's conventions as a rule like the other areas.
 
-## 18. Open questions for the maintainer
+## 18. Questions, decided
 
-Most important first. Each has a recommended answer; the plan assumes it. The Rust + GPUI choice
-itself is decided **(maintainer, 2026-11-06)** and is not a question.
+Most important first. The Rust + GPUI choice itself is decided **(maintainer, 2026-11-06)**. On
+2026-11-06 the maintainer asked Claude to decide the rest ("decide what's best"), and each was decided as
+recommended below, the smaller ones included **(Claude, at the maintainer's request, 2026-11-06)**. The maintainer can
+still reverse any of them; the plan follows these answers. Approving the plan stays the maintainer's.
 
 1. **The root helper in M6.** The main spec says the app registers the helper with `SMAppService`
    from M6. That needs a Developer ID–signed app (M7), the user's approval in System Settings, and
    a plist fixed inside the bundle, while today's helper plist carries the owner's uid, user, data
    root and brew prefix as install-time arguments, which is the helper's whole trust model
-   (root-helper rule). **Recommended:** M6 keeps `sudo yard helper install`, handed to Terminal from
+   (root-helper rule). **Decided:** M6 keeps `sudo yard helper install`, handed to Terminal from
    onboarding (§8.4, §10.3); `SMAppService` moves to M7 with its own small design of how the helper
    learns its owner.
 2. **Where GPUI comes from.** crates.io `gpui` 0.2.2 is Zed's but a year old (no AccessKit); the
    `gpui-unofficial` mirror is current but republished by a third party with rewritten
-   dependencies; forks diverge. **Recommended:** a git dependency on `zed-industries/zed` pinned by
+   dependencies; forks diverge. **Decided:** a git dependency on `zed-industries/zed` pinned by
    `rev` to a stable release tag's commit (`v1.27.0`, `c84af5b9…`), bumped deliberately, moving to
    crates.io once Zed's automated GPUI releases land (§4.2).
 3. **A second workspace and toolchain for the app.** GPUI at that revision is built by Zed with
-   Rust 1.98.1; the root pins 1.92. **Recommended:** `app/` as its own Cargo workspace with its own
+   Rust 1.98.1; the root pins 1.92. **Decided:** `app/` as its own Cargo workspace with its own
    `rust-toolchain.toml` (1.98.1), lockfile and deny policy, using `yard-proto`, `yard-core` and
    `yard-client` by path; the daemon's toolchain and supply-chain policy do not move (§4.1). The
    alternative is bumping everything to 1.98.1 in one workspace.
 4. **The app's supply-chain policy.** GPUI's tree needs `BSD-2-Clause`, `BSD-3-Clause`, `Zlib` and
-   `MPL-2.0` on the licence list and six git repositories on `allow-git` (§4.4). **Recommended:**
+   `MPL-2.0` on the licence list and six git repositories on `allow-git` (§4.4). **Decided:**
    allow them in `app/deny.toml` only; the root `deny.toml` stays as it is.
-5. **The menu bar.** **Recommended:** a native status item and `NSMenu` through `tray-icon` and
+5. **The menu bar.** **Decided:** a native status item and `NSMenu` through `tray-icon` and
    `muda`: accessible and native for free, at the cost of the draft's in-menu spinner, search field
    and switches, which become live text lines, a Sites submenu and checkmark items (§8.1). The
    alternative is a GPUI popover window under a status item made with `objc2`.
-6. **Which binaries the app uses in M6.** **Recommended:** none of its own: it uses the `yard`
+6. **Which binaries the app uses in M6.** **Decided:** none of its own: it uses the `yard`
    beside the yardd the LaunchAgent runs (`target/release` on both Macs), with a Settings override
    (§5.8). Carrying them in `Contents/Helpers/` and a `yard` symlink on PATH wait for M7, since
    they move the LaunchAgent and the shims' link target.
-7. **Protocol 2.11 in M6.** **Recommended:** yes to the `reconciled` event and `php.list {
+7. **Protocol 2.11 in M6.** **Decided:** yes to the `reconciled` event and `php.list {
    available }` with `yard php list --available` (§13). Without the first the app goes stale
    after any CLI change; without the second it copies yard-core's list of supported versions.
-8. **Menu bar app or Dock app.** **Recommended:** a menu bar app (`LSUIElement`), which shows a
+8. **Menu bar app or Dock app.** **Decided:** a menu bar app (`LSUIElement`), which shows a
    Dock icon only while the main or onboarding window is open; quitting the app leaves yardd
    running.
 
-Smaller ones, with what the plan assumes: no system notifications in M6 (assumed: none); the Logs
+Smaller ones, decided as the plan assumes them: no system notifications in M6 (assumed: none); the Logs
 section shows live lines only (assumed: yes); one plan for M6 rather than two (assumed: one plan,
 in three parts: the root workspace, the app's model and platform, the screens); macOS 14 as the
 floor (assumed: 14; GPUI allows 12).

@@ -56,8 +56,9 @@ triggers:
 - Install path (M1–M3): `sudo yard helper install` copies the binary to
   `/Library/PrivilegedHelperTools/dev.more.yard.helper` and writes
   `/Library/LaunchDaemons/dev.more.yard.helper.plist`, both root:wheel.
-  `uninstall` removes the plist, the binary and Yard's resolver files. From M6 Yard.app
-  registers the same helper with `SMAppService`.
+  `uninstall` removes the plist, the binary and Yard's resolver files. In M6 Yard.app hands
+  `sudo yard helper install` to Terminal; from M7 it registers the same helper with
+  `SMAppService`.
 - Agents cannot type a sudo password. Ask the maintainer to run privileged commands with
   sudo in a real terminal (the `!` prefix has no tty for the password). Tests run the helper in-process as the current user, with a temp
   `resolver_dir` and free ports standing in for 80 and 443

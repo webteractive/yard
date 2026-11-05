@@ -111,8 +111,8 @@ Rust daemon.
   such as `/tmp` aside).
 - The helper is installed by `sudo yard helper install` (binary to
   `/Library/PrivilegedHelperTools/`, plist to `/Library/LaunchDaemons/`), which is
-  the only path while there is no app (M1–M5). Yard.app registers the same
-  helper through `SMAppService` from M6. Upgrading from M1, whose helper ran
+  the only path until M7: Yard.app in M6 hands that command to Terminal, and registers the
+  same helper through `SMAppService` from M7, which needs a signed app (M6 design §18 Q1). Upgrading from M1, whose helper ran
   nginx as root, the install first asks the old helper to stop that nginx and
   then removes the two files it left owned by root (`logs/nginx-error.log`,
   `run/nginx.pid`); it removes rather than chowns them, so a hard link planted
@@ -876,11 +876,11 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   - Doctor: checks with fix buttons.
 - **Client:** the app speaks JSON-RPC over the socket with `yard-proto`'s own types, through a
   client shared with the CLI; its state updates from event subscriptions — no polling.
-- **Onboarding:** check Homebrew → install CLI symlink and `yardd` LaunchAgent →
-  register helper via `SMAppService` → offer
-  the `privileged` profile (80/443) when nothing else holds those ports.
-- The app bundle carries `yard`, `yardd`, `yard-helper` and the shim binary in
-  `Contents/Helpers/`.
+- **Onboarding:** check Homebrew → locate `yard` and start `yardd` → install the helper
+  (M6: `sudo yard helper install` handed to Terminal; M7: `SMAppService`) → offer the
+  `privileged` profile (80/443) when nothing else holds those ports.
+- From M7 the app bundle carries `yard`, `yardd`, `yard-helper` and the shim binary in
+  `Contents/Helpers/`; M6 uses the installed `yard` (M6 design §18 Q6).
 
 ## 10. Testing
 
