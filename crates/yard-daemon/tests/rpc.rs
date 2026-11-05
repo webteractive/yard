@@ -107,6 +107,28 @@ async fn link_answers_once_a_pool_it_started_listens() {
     d.shutdown().await.unwrap();
 }
 
+/// A client that shows a list refetches it after a reconcile (M6 design §7.2); a broken file
+/// arrives as the event's `config_error`.
+#[tokio::test]
+async fn reconciled_follows_a_hand_edit() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    c.call("subscribe", json!({"topics": ["state"]})).await.unwrap();
+
+    d.project("scratch");
+    let done = c.event_where(Duration::from_secs(5), |e| e["type"] == "reconciled").await;
+    let done = done.expect("a reconciled event after the edit");
+    assert_eq!(done["config_error"], Value::Null, "{done}");
+
+    std::fs::write(d.fx.paths.sites_toml(), "[sites").unwrap();
+    let broken = c
+        .event_where(Duration::from_secs(5), |e| e["type"] == "reconciled" && !e["config_error"].is_null())
+        .await
+        .expect("a reconciled event naming the broken file");
+    assert_eq!(broken["config_error"]["code"], "CONFIG_INVALID", "{broken}");
+    d.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn linking_in_sites_toml_emits_site_added() {
     let d = prepared("").await.start().await;

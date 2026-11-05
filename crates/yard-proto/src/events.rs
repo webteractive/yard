@@ -12,6 +12,8 @@ pub enum Topic {
     Ports,
     Jobs,
     Tunnels,
+    /// `reconciled` (protocol 2.11).
+    State,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,6 +56,12 @@ pub enum Event {
     TunnelChanged {
         tunnel: Box<TunnelInfo>,
     },
+    /// A reconcile finished (protocol 2.11): a client refetches what it shows. `config_error` is
+    /// the reconcile's error, a TOML that does not parse among them; `null` when it went through.
+    Reconciled {
+        #[serde(default)]
+        config_error: Option<YardError>,
+    },
     /// An event a newer yardd sends that this build does not know (`{"type":"unknown"}`);
     /// never sent, and a client drops it.
     #[serde(other)]
@@ -70,6 +78,7 @@ impl Event {
             Event::PortConflict { .. } => Topic::Ports,
             Event::JobProgress { .. } | Event::JobFinished { .. } => Topic::Jobs,
             Event::TunnelChanged { .. } => Topic::Tunnels,
+            Event::Reconciled { .. } => Topic::State,
             Event::Unknown => return None,
         })
     }
@@ -79,6 +88,14 @@ impl Event {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn reconciled_is_on_the_state_topic() {
+        let e = Event::Reconciled { config_error: None };
+        assert_eq!(serde_json::to_value(&e).unwrap(), json!({"type":"reconciled","config_error":null}));
+        assert_eq!(e.topic(), Some(Topic::State));
+        assert_eq!(serde_json::to_value(Topic::State).unwrap(), json!("state"));
+    }
 
     #[test]
     fn event_tags_and_topics() {

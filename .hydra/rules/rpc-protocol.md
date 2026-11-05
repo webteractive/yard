@@ -55,6 +55,9 @@ triggers:
   `kind`, and each has an `Other` fallback the daemon never sends: `#[serde(other)]` on an
   internally tagged enum reads an unknown kind with fields too. An `Other` need is not
   installable, and `ServiceManager::Other` shows as `-`.
+- Protocol 2.11 (M6): topic `state` and event `reconciled { config_error }`, emitted once at the end
+  of every `Reconciler::reconcile` after `last_error` is set (`config_error` is that error or `null`).
+  A client of an older yardd leaves `state` out of `subscribe`, which would refuse it.
 - Protocol 2.10 (M5, tunnels): `job_finished` carries an optional `result` (a job's answer, sent
   only on success); `tunnels.list` returns every tunnel the last reconcile ran as `TunnelInfo`,
   sorted by site, and `tunnel_changed` (topic `tunnels`) goes out when a tunnel's state, url or

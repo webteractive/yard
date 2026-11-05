@@ -607,9 +607,11 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
   In the CLI, Ctrl-C during a job cancels it and waits; a second Ctrl-C stops waiting
   and exits 130.
 - Subscriptions (`subscribe` with topic list: `units`, `sites`, `logs`, `ports`,
-  `jobs`, `tunnels`) push events tagged `unit_state_changed`, `site_added`, `site_removed`,
-  `job_progress`, `job_finished`, `log_line`, `port_conflict`, `tunnel_changed` (M5, when a
-  tunnel's state, URL or last error changes). From protocol 2.10 `job_finished` carries an
+  `jobs`, `tunnels`, and from protocol 2.11 `state`) push events tagged `unit_state_changed`,
+  `site_added`, `site_removed`, `job_progress`, `job_finished`, `log_line`, `port_conflict`,
+  `tunnel_changed` (M5, when a tunnel's state, URL or last error changes) and `reconciled`
+  (2.11, topic `state`: once after every reconcile, with `config_error`, the reconcile's error
+  or `null`, so a client refetches what it shows). From protocol 2.10 `job_finished` carries an
   optional `result`, the job's answer on success (`tunnels.add` sends its `TunnelInfo`).
 - Types are defined once in `yard-proto` (serde) and used unchanged by the CLI and, from M6,
   Yard.app. A daemon and an app from different builds still meet, so every enum a newer yardd

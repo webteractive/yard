@@ -349,6 +349,8 @@ impl Reconciler {
         let mut state = self.state.lock().await;
         let result = self.run(&mut state, mail).await;
         state.last_error = result.as_ref().err().cloned();
+        // Once per call, after last_error is set: a client refetches what it shows (protocol 2.11).
+        self.bus.emit(Event::Reconciled { config_error: state.last_error.clone() });
         result
     }
 
