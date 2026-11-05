@@ -54,18 +54,24 @@ pub enum Event {
     TunnelChanged {
         tunnel: Box<TunnelInfo>,
     },
+    /// An event a newer yardd sends that this build does not know (`{"type":"unknown"}`);
+    /// never sent, and a client drops it.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Event {
-    pub fn topic(&self) -> Topic {
-        match self {
+    /// The topic a subscriber names to get it; `None` for an event this build does not know.
+    pub fn topic(&self) -> Option<Topic> {
+        Some(match self {
             Event::UnitStateChanged { .. } => Topic::Units,
             Event::SiteAdded { .. } | Event::SiteRemoved { .. } => Topic::Sites,
             Event::LogLine { .. } => Topic::Logs,
             Event::PortConflict { .. } => Topic::Ports,
             Event::JobProgress { .. } | Event::JobFinished { .. } => Topic::Jobs,
             Event::TunnelChanged { .. } => Topic::Tunnels,
-        }
+            Event::Unknown => return None,
+        })
     }
 }
 
@@ -78,15 +84,15 @@ mod tests {
     fn event_tags_and_topics() {
         let e = Event::SiteRemoved { name: "x".into() };
         assert_eq!(serde_json::to_value(&e).unwrap(), json!({"type":"site_removed","name":"x"}));
-        assert_eq!(e.topic(), Topic::Sites);
-        assert_eq!(Event::LogLine { unit: "nginx".into(), line: "l".into() }.topic(), Topic::Logs);
+        assert_eq!(e.topic(), Some(Topic::Sites));
+        assert_eq!(Event::LogLine { unit: "nginx".into(), line: "l".into() }.topic(), Some(Topic::Logs));
         assert_eq!(
             Event::PortConflict { unit: "redis".into(), port: 6379, holder: None }.topic(),
-            Topic::Ports
+            Some(Topic::Ports)
         );
         assert_eq!(serde_json::to_value(Topic::Units).unwrap(), json!("units"));
         let done = Event::JobFinished { job_id: "php-install-1".into(), error: None, result: None };
-        assert_eq!(done.topic(), Topic::Jobs);
+        assert_eq!(done.topic(), Some(Topic::Jobs));
         assert_eq!(
             serde_json::to_value(&done).unwrap(),
             json!({"type": "job_finished", "job_id": "php-install-1", "error": null})
@@ -103,6 +109,6 @@ mod tests {
             Event::JobFinished { job_id: "j-1".into(), error: None, result: Some(json!({"site":"blog"})) };
         assert_eq!(serde_json::to_value(&done).unwrap()["result"]["site"], "blog");
         let changed = Event::TunnelChanged { tunnel: Box::new(crate::types::tests::sample_tunnel()) };
-        assert_eq!(changed.topic(), Topic::Tunnels);
+        assert_eq!(changed.topic(), Some(Topic::Tunnels));
     }
 }

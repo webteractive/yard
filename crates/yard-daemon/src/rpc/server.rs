@@ -118,7 +118,7 @@ async fn forward(
 ) {
     loop {
         match events.recv().await {
-            Ok(event) if topics.contains(&event.topic()) => {
+            Ok(event) if event.topic().is_some_and(|t| topics.contains(&t)) => {
                 if out.send(encode_line(&Notification::event(event))).is_err() {
                     return;
                 }

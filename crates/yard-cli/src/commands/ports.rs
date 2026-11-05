@@ -83,6 +83,7 @@ fn status(s: PortStatus) -> &'static str {
         PortStatus::InUse => "in use",
         PortStatus::ExternalListening => "listening",
         PortStatus::ExternalNotListening => "not listening",
+        PortStatus::Other => "unknown",
     }
 }
 

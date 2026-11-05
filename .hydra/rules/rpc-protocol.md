@@ -28,6 +28,13 @@ triggers:
   catches a unit variant: an enum with data variants that may gain more with data
   (`ServiceState`) uses `#[serde(remote = "Self")]` and a hand-written `Deserialize` that reads
   an unknown `{"<variant>": …}` as `Other` too, and still fails a known variant that does not parse.
+- The fallbacks (M6): `ErrorCode::Other` (`"OTHER"`), `Event::Unknown` (`{"type":"unknown"}`,
+  whose `topic()` is `None`), and `Other` (`"other"`) on `UnitState`, `PortMode`, `PortStatus`,
+  `HolderKind`, `CheckStatus`, `SiteSource`, `SiteKind`, `ProjectFileKind`, `IgnoredBecause` and
+  `Profile`; the CLI prints any of them as `unknown`. `Topic` has none (a client sends it). A
+  fallback is for reading answers, never the daemon's inputs: `ports.toml` and `ProfileParams`
+  read `PortMode` and `Profile` through `yard_proto::strict`, which refuses an unknown name.
+  `methods::ALL` lists every method name in file order; add a new one to it.
 - The `node.*` methods (protocol 2.7, M4c): `node.list` (`NodeListParams`, `null` is the
   defaults), `node.install` and `node.uninstall` (jobs), `node.default`, `node.use` and
   `node.unuse`; `SiteInfo.node` is filled per request, not in reconcile's snapshot.

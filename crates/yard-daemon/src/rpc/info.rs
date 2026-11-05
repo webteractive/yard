@@ -211,7 +211,7 @@ fn site_containing<'a>(snap: &'a Snapshot, path: &Path) -> Option<&'a SiteInfo> 
         .iter()
         .filter_map(|site| match &site.kind {
             SiteKind::Php { path: root, .. } => Some((site, resolve(Path::new(root)))),
-            SiteKind::Proxy { .. } => None,
+            SiteKind::Proxy { .. } | SiteKind::Other => None,
         })
         .filter(|(_, root)| path.starts_with(root))
         .max_by_key(|(_, root)| root.components().count())

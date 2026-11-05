@@ -193,7 +193,8 @@ pub fn service_info(
             None if snapshot.left_out.contains_key(name) => {
                 ServiceState::Failed { last_lines: vec![], reason: snapshot.left_out.get(name).cloned() }
             }
-            Some((UnitState::Stopped, _)) | None => ServiceState::Stopped,
+            // The supervisor never reports `Other`; it exists only for a client.
+            Some((UnitState::Stopped | UnitState::Other, _)) | None => ServiceState::Stopped,
         }
     };
     let sleeping_since = match (&state, asleep, waking) {

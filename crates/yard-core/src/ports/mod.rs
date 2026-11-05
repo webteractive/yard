@@ -60,6 +60,7 @@ impl PortRange {
 #[serde(deny_unknown_fields)]
 pub struct PortEntry {
     pub port: u16,
+    #[serde(deserialize_with = "yard_proto::strict::port_mode")]
     pub mode: PortMode,
     #[serde(default)]
     pub preferred: Option<u16>,
@@ -78,6 +79,7 @@ pub struct Registry {
 struct Raw {
     range: Option<String>,
     auto_fallback: Option<bool>,
+    #[serde(default, deserialize_with = "yard_proto::strict::opt_profile")]
     profile: Option<Profile>,
     ports: Option<BTreeMap<String, PortEntry>>,
 }
@@ -94,6 +96,7 @@ pub fn mode_str(mode: PortMode) -> &'static str {
         PortMode::Preferred => "preferred",
         PortMode::Auto => "auto",
         PortMode::External => "external",
+        PortMode::Other => "unknown",
     }
 }
 
@@ -209,6 +212,10 @@ impl Registry {
                 self.check_unregistered(unit, p)?;
                 p
             }
+            // ports.toml reads modes strictly; only a client reading a newer yardd sees `Other`.
+            PortMode::Other => {
+                return Err(YardError::new(ErrorCode::InvalidArgument, format!("{unit}: unknown port mode")));
+            }
         };
         let preferred = if mode == PortMode::Preferred { preferred } else { None };
         self.entries.insert(unit.to_string(), PortEntry { port, mode, preferred });
@@ -301,6 +308,8 @@ impl Registry {
                     self.allocate(unit, PortMode::Auto, None, is_free)
                 }
             }
+            // Never read from ports.toml (strict), so never recorded; keep what is there.
+            PortMode::Other => Ok(e.port),
         }
     }
 
@@ -441,6 +450,19 @@ mod tests {
     use crate::config::TomlFile;
     use std::path::Path;
     use yard_proto::ErrorCode;
+
+    /// yard-proto's `PortMode` and `Profile` read an unknown name as `Other` for a client; the
+    /// user's ports.toml must still refuse a typo (M6 Task 1).
+    #[test]
+    fn an_unknown_mode_or_profile_is_still_a_config_error() {
+        let file = Path::new("/r/ports.toml");
+        let e = Registry::parse(Some("[ports]\na = { port = 3306, mode = \"pined\" }\n"), file).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid, "{e:?}");
+        assert!(e.message.contains("pined"), "{}", e.message);
+        let e = Registry::parse(Some("profile = \"turbo\"\n"), file).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid, "{e:?}");
+        assert!(e.message.contains("turbo"), "{}", e.message);
+    }
 
     const SPEC_EXAMPLE: &str = r#"range = "33000-33999"
 auto_fallback = false

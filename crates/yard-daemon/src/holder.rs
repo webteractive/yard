@@ -37,7 +37,7 @@ pub fn label(holder: Option<&Holder>) -> String {
         HolderKind::Dbngin => "DBngin",
         HolderKind::PostgresApp => "Postgres.app",
         HolderKind::Yard => "Yard",
-        HolderKind::Unknown => "unknown",
+        HolderKind::Unknown | HolderKind::Other => "unknown",
     };
     format!("{} (pid {}, {kind})", h.name, h.pid)
 }

@@ -34,11 +34,13 @@ fn row(site: &SiteInfo) -> Vec<String> {
     let source = match site.source {
         SiteSource::Linked => "linked",
         SiteSource::Proxy => "proxy",
+        SiteSource::Other => "unknown",
     };
     let (target, php) = match &site.kind {
         // The directory nginx serves, so a `public/` that appears later shows up here.
         SiteKind::Php { docroot, php, .. } => (docroot.clone(), php.clone()),
         SiteKind::Proxy { target } => (target.clone(), "-".into()),
+        SiteKind::Other => ("unknown".into(), "-".into()),
     };
     let status = if site.needs_setup() { "needs setup" } else { "serving" };
     vec![site.name.clone(), site.url.clone(), source.into(), target, php, status.into()]
@@ -126,6 +128,7 @@ pub async fn docroot(ctx: &Ctx, path: String, site: Option<String>) -> Outcome {
             format!("{} now serves {docroot}{}\n", updated.name, set_in(&updated))
         }
         SiteKind::Proxy { target } => format!("{} proxies to {target}\n", updated.name),
+        SiteKind::Other => format!("{} is a site of a kind this yard does not know\n", updated.name),
     });
     Ok(0)
 }
@@ -174,6 +177,7 @@ pub async fn isolate(ctx: &Ctx, php: Option<String>, site: Option<String>) -> Ou
     ctx.emit(&updated, || match &updated.kind {
         SiteKind::Php { php, .. } => format!("{} now runs PHP {php}{}\n", updated.name, set_in(&updated)),
         SiteKind::Proxy { target } => format!("{} proxies to {target}\n", updated.name),
+        SiteKind::Other => format!("{} is a site of a kind this yard does not know\n", updated.name),
     });
     Ok(0)
 }

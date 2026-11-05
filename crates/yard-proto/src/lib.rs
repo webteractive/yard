@@ -5,6 +5,7 @@ pub mod events;
 pub mod helper;
 pub mod methods;
 pub mod rpc;
+pub mod strict;
 pub mod types;
 
 pub use error::{ErrorCode, YardError};

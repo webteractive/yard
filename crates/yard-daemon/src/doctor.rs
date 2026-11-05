@@ -737,6 +737,8 @@ fn managed_checks(paths: &Paths, sites: &[SiteInfo]) -> Vec<Check> {
                 format!("{file} is for {}, not {path}", ignored.project.as_deref().unwrap_or("no project")),
                 format!("cd {path} && yard init --replace"),
             ),
+            // yardd sets `because` itself; `Other` exists only for a client.
+            IgnoredBecause::Other => continue,
         });
     }
     let linked = |name: &str| sites.iter().any(|s| s.name == name && matches!(s.kind, SiteKind::Php { .. }));
@@ -834,7 +836,8 @@ fn instance_state(view: &ServiceView<'_>, instance: &str, entry: &ServiceEntry) 
             let unit = unit?;
             fail(&id, failure(unit, last_lines), format!("yard service restart {instance}"))
         }
-        Some(UnitState::Stopped) => {
+        // The supervisor never reports `Other`; it exists only for a client.
+        Some(UnitState::Stopped | UnitState::Other) => {
             warn(&id, format!("{instance} is not running"), format!("yard service restart {instance}"))
         }
         None => warn(
@@ -1269,7 +1272,7 @@ fn stop_command(h: &Holder, port: u16) -> String {
         HolderKind::Dbngin => "quit DBngin, or stop the server it runs on that port".into(),
         HolderKind::PostgresApp => "quit Postgres.app, or stop its server".into(),
         HolderKind::Yard => format!("stop the Yard that runs pid {}", h.pid),
-        HolderKind::Unknown => format!("kill {}", h.pid),
+        HolderKind::Unknown | HolderKind::Other => format!("kill {}", h.pid),
     }
 }
 

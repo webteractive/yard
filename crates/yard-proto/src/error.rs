@@ -98,6 +98,9 @@ pub enum ErrorCode {
     /// `unlink` or `unproxy` of a site shared through a named tunnel.
     SiteTunnelled,
     Internal,
+    /// A code a newer yardd sends that this build does not know (`"OTHER"`); never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

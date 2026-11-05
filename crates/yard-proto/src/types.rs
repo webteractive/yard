@@ -15,6 +15,9 @@ pub enum Profile {
     Standard,
     #[serde(alias = "default")]
     Privileged,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 impl Profile {
@@ -23,6 +26,7 @@ impl Profile {
         match self {
             Profile::Standard => "standard",
             Profile::Privileged => "privileged",
+            Profile::Other => "unknown",
         }
     }
 
@@ -30,6 +34,8 @@ impl Profile {
         match self {
             Profile::Standard => 8080,
             Profile::Privileged => 80,
+            // Never in a registry: ports.toml and ports.profile read it strictly.
+            Profile::Other => 8080,
         }
     }
 
@@ -37,6 +43,7 @@ impl Profile {
         match self {
             Profile::Standard => 8443,
             Profile::Privileged => 443,
+            Profile::Other => 8443,
         }
     }
 }
@@ -46,13 +53,25 @@ impl Profile {
 pub enum SiteSource {
     Linked,
     Proxy,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SiteKind {
-    Php { path: String, docroot: String, php: String },
-    Proxy { target: String },
+    Php {
+        path: String,
+        docroot: String,
+        php: String,
+    },
+    Proxy {
+        target: String,
+    },
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +174,9 @@ pub enum ProjectFileKind {
     Project,
     /// `<data root>/sites/<name>/.yard`.
     Managed,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// A managed `.yard` that exists for a site but is not used.
@@ -174,6 +196,9 @@ pub enum IgnoredBecause {
     Committed,
     /// The file names another directory as its project, or none.
     OtherProject,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// Something a project's `.yard` asks for that is not installed.
@@ -287,8 +312,15 @@ pub enum UnitState {
     Stopped,
     Starting,
     Running,
-    Backoff { retry_in_ms: u64 },
-    Failed { last_lines: Vec<String> },
+    Backoff {
+        retry_in_ms: u64,
+    },
+    Failed {
+        last_lines: Vec<String>,
+    },
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 impl UnitState {
@@ -300,6 +332,7 @@ impl UnitState {
             UnitState::Running => "running",
             UnitState::Backoff { .. } => "backoff",
             UnitState::Failed { .. } => "failed",
+            UnitState::Other => "unknown",
         }
     }
 }
@@ -321,6 +354,9 @@ pub enum PortMode {
     Preferred,
     Auto,
     External,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +368,9 @@ pub enum PortStatus {
     InUse,
     ExternalListening,
     ExternalNotListening,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,6 +385,9 @@ pub enum HolderKind {
     PostgresApp,
     Yard,
     Unknown,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,6 +415,9 @@ pub enum CheckStatus {
     Ok,
     Warn,
     Fail,
+    /// A value a newer yardd sends that this build does not know; never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1232,5 +1277,63 @@ pub(crate) mod tests {
         assert_eq!(serde_json::to_value(ErrorCode::TunnelDnsExists).unwrap(), json!("TUNNEL_DNS_EXISTS"));
         let t = sample_tunnel();
         assert_eq!(serde_json::from_value::<TunnelInfo>(serde_json::to_value(&t).unwrap()).unwrap(), t);
+    }
+
+    /// A newer yardd may send a value this build does not know; the answer still decodes, with
+    /// the value read as its fallback (M6 design §6.3).
+    #[test]
+    fn unknown_values_read_as_their_fallback() {
+        use crate::Event;
+        let e: YardError =
+            serde_json::from_value(json!({"code":"SOMETHING_NEW","message":"m","hint":"h"})).unwrap();
+        assert_eq!((e.code, e.message.as_str(), e.hint.as_deref()), (ErrorCode::Other, "m", Some("h")));
+        let ev: Event = serde_json::from_value(json!({"type":"service_moved","x":1})).unwrap();
+        assert_eq!(ev, Event::Unknown);
+        let u: UnitInfo = serde_json::from_value(
+            json!({"name":"nginx","state":"paused","pid":null,"restarts":0,"last_error":null}),
+        )
+        .unwrap();
+        assert_eq!(u.state, UnitState::Other);
+        assert_eq!(serde_json::from_value::<PortStatus>(json!("sleeping")).unwrap(), PortStatus::Other);
+        assert_eq!(serde_json::from_value::<HolderKind>(json!("orbstack")).unwrap(), HolderKind::Other);
+        assert_eq!(serde_json::from_value::<PortMode>(json!("leased")).unwrap(), PortMode::Other);
+        assert_eq!(serde_json::from_value::<CheckStatus>(json!("skipped")).unwrap(), CheckStatus::Other);
+        assert_eq!(serde_json::from_value::<SiteSource>(json!("static")).unwrap(), SiteSource::Other);
+        assert_eq!(
+            serde_json::from_value::<ProjectFileKind>(json!("global")).unwrap(),
+            ProjectFileKind::Other
+        );
+        assert_eq!(serde_json::from_value::<IgnoredBecause>(json!("stale")).unwrap(), IgnoredBecause::Other);
+        assert_eq!(serde_json::from_value::<Profile>(json!("turbo")).unwrap(), Profile::Other);
+        let site: SiteInfo = serde_json::from_value(json!({
+            "name":"blog","host":"blog.yard","url":"http://blog.yard:8080/","source":"linked",
+            "kind":"static","path":"/p"
+        }))
+        .unwrap();
+        assert_eq!(site.kind, SiteKind::Other);
+    }
+
+    #[test]
+    fn a_known_variant_that_does_not_parse_still_fails() {
+        let backoff = json!({"name":"x","state":"backoff","pid":null,"restarts":0,"last_error":null});
+        assert!(serde_json::from_value::<UnitInfo>(backoff).is_err());
+    }
+
+    /// A fallback is for reading a newer daemon's answers, never for the daemon's own inputs.
+    #[test]
+    fn strict_profile_and_mode_refuse_an_unknown_name() {
+        #[derive(Debug, Deserialize)]
+        struct T {
+            #[serde(deserialize_with = "crate::strict::profile")]
+            p: Profile,
+            #[serde(deserialize_with = "crate::strict::port_mode")]
+            m: PortMode,
+        }
+        let ok: T = serde_json::from_value(json!({"p":"trial","m":"pinned"})).unwrap();
+        assert_eq!((ok.p, ok.m), (Profile::Standard, PortMode::Pinned));
+        let e = serde_json::from_value::<T>(json!({"p":"turbo","m":"pinned"})).unwrap_err().to_string();
+        assert!(e.contains("unknown variant `turbo`"), "{e}");
+        let e = serde_json::from_value::<T>(json!({"p":"standard","m":"other"})).unwrap_err().to_string();
+        assert!(e.contains("unknown variant `other`"), "{e}");
     }
 }

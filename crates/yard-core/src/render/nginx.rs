@@ -222,6 +222,8 @@ fn site_body(ctx: &RenderCtx, site: &SiteInfo, wake: bool, tunnelled: bool) -> S
             let forwarded = if tunnelled { Forwarded::Tunnel } else { Forwarded::Local };
             proxy_location(target, "$host", "", forwarded)
         }
+        // yardd builds every site it renders; `Other` exists only for a client.
+        SiteKind::Other => String::new(),
     }
 }
 
@@ -395,7 +397,7 @@ fn setup_text(site: &SiteInfo) -> String {
     }
     let path = match &site.kind {
         SiteKind::Php { path, .. } => path.as_str(),
-        SiteKind::Proxy { .. } => "",
+        SiteKind::Proxy { .. } | SiteKind::Other => "",
     };
     let list = Need::describe_all(&site.needs);
     let mut text = format!("{} needs {list}.\n", site.name);

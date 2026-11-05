@@ -203,7 +203,7 @@ async fn carry(ctx: &Context, name: &str, other: &SiteEntry, dir: &Path) -> Site
         snapshot.as_ref().and_then(|s| s.resolution.sites.iter().find(|s| s.name == name)).and_then(|s| {
             match &s.kind {
                 SiteKind::Php { docroot, .. } => std::fs::canonicalize(docroot).ok(),
-                SiteKind::Proxy { .. } => None,
+                SiteKind::Proxy { .. } | SiteKind::Other => None,
             }
         });
     SiteEntry {

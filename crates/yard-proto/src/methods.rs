@@ -68,6 +68,73 @@ pub const TUNNELS_REMOVE: &str = "tunnels.remove";
 pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
+/// Every method's name, in the order this file declares them (`hello` and `subscribe` included).
+pub const ALL: &[&str] = &[
+    HELLO,
+    STATUS,
+    DOCTOR,
+    SITES_LIST,
+    SITES_LINK,
+    SITES_UNLINK,
+    SITES_PROXY,
+    SITES_UNPROXY,
+    SITES_DOCROOT,
+    SITES_ISOLATE,
+    SITES_INIT,
+    SITES_SECURE,
+    SITES_UNSECURE,
+    SITES_INFO,
+    CA_INFO,
+    PORTS_LIST,
+    PORTS_CHECK,
+    PORTS_SET,
+    PORTS_PIN,
+    PORTS_UNPIN,
+    PORTS_RANGE,
+    PORTS_PROFILE,
+    UNITS_RESTART,
+    PHP_LIST,
+    PHP_INSTALL,
+    PHP_UNINSTALL,
+    PHP_DEFAULT,
+    PHP_CONFIG_GET,
+    PHP_CONFIG_SET,
+    PHP_CONFIG_UNSET,
+    EXT_ADD,
+    EXT_LIST,
+    EXT_ENABLE,
+    EXT_DISABLE,
+    EXT_REMOVE,
+    XDEBUG_SET,
+    SERVICES_LIST,
+    SERVICES_ADD,
+    SERVICES_REMOVE,
+    SERVICES_START,
+    SERVICES_STOP,
+    SERVICES_RESTART,
+    SERVICES_LOGS,
+    SERVICES_PORT,
+    SERVICES_SLEEP_SET,
+    ENV_PRINT,
+    SOURCES_LIST,
+    SOURCES_TRUST,
+    SOURCES_UNTRUST,
+    NODE_LIST,
+    NODE_INSTALL,
+    NODE_UNINSTALL,
+    NODE_DEFAULT,
+    NODE_USE,
+    NODE_UNUSE,
+    TUNNELS_LIST,
+    TUNNELS_DOMAINS,
+    TUNNELS_DOMAIN_ADD,
+    TUNNELS_DOMAIN_REMOVE,
+    TUNNELS_ADD,
+    TUNNELS_REMOVE,
+    JOBS_CANCEL,
+    SUBSCRIBE,
+];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HelloParams {
     pub protocol: String,
@@ -168,6 +235,8 @@ pub struct RangeParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileParams {
+    /// Read strictly: `Profile::Other` is for a client reading a newer yardd, not an input.
+    #[serde(deserialize_with = "crate::strict::profile")]
     pub profile: Profile,
 }
 
@@ -274,6 +343,23 @@ pub struct TunnelDomainParams {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn all_lists_every_method_const() {
+        let consts: Vec<&str> = include_str!("methods.rs")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const ").filter(|r| r.contains(": &str = \"")))
+            .map(|r| r.split('"').nth(1).unwrap())
+            .collect();
+        assert_eq!(ALL, consts.as_slice());
+    }
+
+    #[test]
+    fn ports_profile_refuses_an_unknown_profile() {
+        assert!(serde_json::from_value::<ProfileParams>(json!({"profile":"turbo"})).is_err());
+        let p: ProfileParams = serde_json::from_value(json!({"profile":"default"})).unwrap();
+        assert_eq!(p.profile, Profile::Privileged);
+    }
 
     #[test]
     fn tunnel_method_names() {

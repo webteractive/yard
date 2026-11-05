@@ -46,6 +46,7 @@ fn unit_row(u: &UnitInfo) -> Vec<String> {
             format!("backoff (retry in {:.1} s)", *retry_in_ms as f64 / 1000.0)
         }
         UnitState::Failed { .. } => "failed (yard doctor shows why)".to_string(),
+        UnitState::Other => "unknown".to_string(),
     };
     let pid = u.pid.map_or("-".to_string(), |p| p.to_string());
     vec![u.name.clone(), state, pid, u.restarts.to_string()]

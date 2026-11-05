@@ -66,6 +66,7 @@ fn human(report: &DoctorReport) -> String {
             CheckStatus::Ok => "ok",
             CheckStatus::Warn => "warn",
             CheckStatus::Fail => "FAIL",
+            CheckStatus::Other => "unknown",
         };
         let mut lines = c.message.lines();
         // A space after the id always, so a long id (`project-file:<site>`) never runs into its message.

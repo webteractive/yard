@@ -131,6 +131,7 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
             settings.push(("docroot", shown_docroot, Some(source_name(detail, "docroot"))));
         }
         SiteKind::Proxy { target } => out.push_str(&line("target", target)),
+        SiteKind::Other => out.push_str(&line("kind", "unknown")),
     }
     settings.push(("https", https.to_string(), Some(source_name(detail, "secure"))));
     let width = settings.iter().map(|(_, v, _)| v.chars().count()).max().unwrap_or(0).max(VALUE);

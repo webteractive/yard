@@ -147,7 +147,7 @@ pub fn info(site: &str, planned: &Planned, unit_info: Option<&UnitInfo>, live: O
         Some(UnitState::Running | UnitState::Starting) => TunnelState::Connecting,
         Some(UnitState::Backoff { .. }) => TunnelState::Backoff,
         Some(UnitState::Failed { .. }) => TunnelState::Failed,
-        Some(UnitState::Stopped) | None => TunnelState::Stopped,
+        Some(UnitState::Stopped | UnitState::Other) | None => TunnelState::Stopped,
     };
     let url = match planned.kind {
         TunnelKind::Named => planned.host.as_ref(),

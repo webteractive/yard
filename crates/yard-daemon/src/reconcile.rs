@@ -931,7 +931,7 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
         .filter(|s| !s.needs_setup())
         .filter_map(|s| match &s.kind {
             SiteKind::Php { php, .. } => php.parse().ok(),
-            SiteKind::Proxy { .. } => None,
+            SiteKind::Proxy { .. } | SiteKind::Other => None,
         })
         .collect()
 }
