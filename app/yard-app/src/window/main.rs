@@ -56,6 +56,10 @@ pub fn visible_keys(screen: &Screen) -> Vec<ResourceKey> {
 pub fn open(env: &AppEnv, screen: Screen, cx: &mut App) {
     let keys = visible_keys(&screen);
     env.nav.update(cx, |n, cx| {
+        // The Logs screen's tail holds a connection; it closes when the screen is left.
+        if !matches!(screen, Screen::Logs(_)) {
+            n.logs = None;
+        }
         n.screen = screen;
         cx.notify();
     });
@@ -307,6 +311,12 @@ fn content(env: &AppEnv, screen: &Screen, window: &mut Window, cx: &mut App) -> 
         Screen::Activity => crate::activity::activity(env, window, cx),
         Screen::Sites(_) => crate::sites::sites(env, window, cx),
         Screen::Services(_) => crate::services::services(env, window, cx),
-        other => div().text_color(Theme::of(window).muted).child(format!("{other:?}")).into_any_element(),
+        Screen::Php => crate::screens::php::php(env, window, cx),
+        Screen::Node => crate::screens::node::node(env, window, cx),
+        Screen::Tunnels => crate::screens::tunnels::tunnels(env, window, cx),
+        Screen::Ports => crate::screens::ports::ports(env, window, cx),
+        Screen::Logs(_) => crate::screens::logs::logs(env, window, cx),
+        Screen::Doctor => crate::screens::doctor::doctor(env, window, cx),
+        Screen::Sources => crate::screens::sources::sources(env, window, cx),
     }
 }

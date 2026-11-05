@@ -130,6 +130,34 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, _window: &mut Window, _cx: &mut App) -
                 },
             )
         }
+        Sheet::UnitPort { unit, port } => {
+            let (submit, unit, port) = (env.clone(), unit.clone(), port.clone());
+            Form::new("sheet:unit-port", format!("Move {unit} to another port")).field(port.clone()).submit(
+                "Move",
+                false,
+                move |_, _, cx| {
+                    let Ok(number) = port.read(cx).value().trim().parse::<u16>() else { return };
+                    let (daemon, u) = (submit.daemon.clone(), unit.clone());
+                    submit.runner.update(cx, |r, cx| {
+                        r.perform(
+                            ActionId(format!("port:{u}:set")),
+                            async move {
+                                call(
+                                    &*daemon,
+                                    api::PORTS_SET,
+                                    yard_proto::methods::PortSetParams { unit: u, port: number },
+                                )
+                                .await
+                                .map(|_| ())
+                            },
+                            cx,
+                        )
+                        .detach()
+                    });
+                    close(&submit, cx);
+                },
+            )
+        }
         Sheet::Sleep { name, after } => {
             let (submit, name, after) = (env.clone(), name.clone(), after.clone());
             Form::new("sheet:sleep", format!("When {name} sleeps")).field(after.clone()).submit(

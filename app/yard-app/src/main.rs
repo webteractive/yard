@@ -11,6 +11,7 @@ mod menubar;
 mod overview;
 mod platform;
 mod runner;
+mod screens;
 mod services;
 mod settings_window;
 mod sites;

@@ -45,6 +45,11 @@ pub enum Sheet {
         name: String,
         port: Entity<crate::widgets::text_field::TextField>,
     },
+    /// A unit's port in ports.toml (`ports.set`), for a unit that is not a service instance.
+    UnitPort {
+        unit: String,
+        port: Entity<crate::widgets::text_field::TextField>,
+    },
     Sleep {
         name: String,
         after: Entity<crate::widgets::text_field::TextField>,
@@ -61,6 +66,39 @@ pub struct Nav {
     pub sheet: Option<Sheet>,
     /// The service whose log the Services screen shows.
     pub service_log: Option<(String, Entity<crate::services::logs::LogTail>)>,
+    /// Text fields a screen keeps between frames, by id.
+    pub fields: std::collections::HashMap<String, Entity<crate::widgets::text_field::TextField>>,
+    /// The PHP version whose extensions the PHP screen shows.
+    pub php_version: Option<String>,
+    /// The Logs screen's tail, open while the screen is shown.
+    pub logs: Option<Entity<crate::services::logs::LogTail>>,
+    /// The Node releases nodejs.org lists, once asked for.
+    pub node_available: Option<String>,
+}
+
+impl Nav {
+    /// The text field `id`, made on first use.
+    pub fn field(
+        env: &AppEnv,
+        id: &str,
+        label: &str,
+        placeholder: &str,
+        cx: &mut App,
+    ) -> Entity<crate::widgets::text_field::TextField> {
+        if let Some(f) = env.nav.read(cx).fields.get(id) {
+            return f.clone();
+        }
+        let f = cx.new(|cx| {
+            crate::widgets::text_field::TextField::new(
+                id.to_string(),
+                label.to_string(),
+                placeholder.to_string(),
+                cx,
+            )
+        });
+        env.nav.update(cx, |n, _| n.fields.insert(id.to_string(), f.clone()));
+        f
+    }
 }
 
 #[derive(Clone)]
@@ -87,6 +125,10 @@ impl AppEnv {
             settle: None,
             sheet: None,
             service_log: None,
+            fields: Default::default(),
+            php_version: None,
+            logs: None,
+            node_available: None,
         });
         let settings = Rc::new(Settings::default());
         let cli = Rc::new(CliRunner::new(

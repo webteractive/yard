@@ -21,7 +21,6 @@ impl Checkbox {
         Checkbox { id: id.into(), label: label.into(), checked, on_toggle: None }
     }
 
-    #[expect(dead_code, reason = "the extension screen (M6 Task 15)")]
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self

@@ -26,6 +26,18 @@ impl ActionErrors {
     pub fn get(&self, id: &ActionId) -> Option<&YardError> {
         self.errors.get(id)
     }
+
+    /// Every error whose action id starts with `prefix`, sorted by id: a screen's errors.
+    pub fn matching(&self, prefix: &str) -> Vec<(ActionId, YardError)> {
+        let mut found: Vec<(ActionId, YardError)> = self
+            .errors
+            .iter()
+            .filter(|(id, _)| id.0.starts_with(prefix))
+            .map(|(id, e)| (id.clone(), e.clone()))
+            .collect();
+        found.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+        found
+    }
 }
 
 /// A question the app asks before it goes on.
@@ -64,6 +76,16 @@ mod tests {
         errors.clear(&secure);
         assert!(errors.get(&secure).is_none());
         assert_eq!(errors.get(&php).map(|e| e.code), Some(ErrorCode::PhpNotInstalled));
+    }
+
+    #[test]
+    fn errors_are_found_by_prefix() {
+        let mut errors = ActionErrors::default();
+        errors.record(ActionId("php:8.4:install".into()), YardError::new(ErrorCode::Internal, "a"));
+        errors.record(ActionId("php:7.1:default".into()), YardError::new(ErrorCode::Internal, "b"));
+        errors.record(ActionId("node:install".into()), YardError::new(ErrorCode::Internal, "c"));
+        let php: Vec<String> = errors.matching("php:").into_iter().map(|(id, _)| id.0).collect();
+        assert_eq!(php, ["php:7.1:default", "php:8.4:install"], "sorted by id");
     }
 
     #[test]

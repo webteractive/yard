@@ -68,7 +68,6 @@ pub struct AppState {
     pub ca: Resource<CaInfo>,
     pub extensions: HashMap<String, Resource<Vec<ExtInfo>>>,
     pub site_detail: HashMap<String, Resource<SiteDetail>>,
-    #[cfg_attr(not(test), expect(dead_code, reason = "the Doctor screen (M6 Task 15)"))]
     pub doctor: Resource<DoctorReport>,
     pub jobs: JobsStore,
     queue: RefreshQueue,
@@ -132,7 +131,6 @@ impl AppState {
     }
 
     /// `doctor` is slow and runs brew, so it is fetched only when asked.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the Doctor screen (M6 Task 15)"))]
     pub fn run_doctor(&mut self, cx: &mut Context<Self>) {
         self.doctor.loading = true;
         let daemon = self.daemon.clone();
