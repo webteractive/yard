@@ -1,8 +1,12 @@
 # Yard M6: Yard.app — design
 
 Date: 2026-11-05, rewritten 2026-11-06 for Rust and GPUI
-Status: draft, not approved. Written by Claude for the maintainer's review; nothing here is decided until
-the maintainer approves it. It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
+Status: built 2026-11-06 (maintainer approved the plan that day; built inline on main, Tasks 1–17).
+Where the build departed from this text it says so in the commit messages; the main departures:
+the menu is rebuilt and replaced rather than updated item by item, the table draws plain rows
+rather than a virtual list, the log view copies all lines rather than selecting text, GPUI's
+accessibility tree cannot be read in tests (widgets assert the id, role and label they set), and
+the site detail sets the docroot by Detect and Node by Use default only. It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
 §12) and is planned in `docs/superpowers/plans/2026-11-05-yard-m6-app.md`.
 
 The first draft (2026-11-05) described a SwiftUI app built with Tuist over a Swift package with

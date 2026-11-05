@@ -102,6 +102,14 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   now resolves through 1.1.1.1); a named tunnel is the maintainer's manual check on his own zone (`yard
   tunnels domain add <domain>`, `yard tunnel --host <name>.<domain>`, curl it, `yard untunnel`,
   delete the CNAME, `yard doctor` clears once the record is gone).
+- M6 (Yard.app in Rust and GPUI, the maintainer 2026-11-06) is built: design
+  `docs/superpowers/specs/2026-11-05-yard-m6-app-design.md`, plan
+  `docs/superpowers/plans/2026-11-05-yard-m6-app.md` (approved and built 2026-11-06, inline on
+  main, one commit per task). Protocol 2.11 (`reconciled`, `php.list { available }`) and
+  `yard-client` came with it. Checked here: the app against a scratch yardd follows a stop and a
+  restart, runs as a menu bar item with a Dock icon only while a window is open, and onboarding
+  judged this Mac set up. Its manual checklist (plan Task 17: VoiceOver, clicking through menus
+  and screens) needs a person at the screen and is the maintainer's.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -185,7 +193,8 @@ spec's milestone notes and in older rules means the maintainer's main Mac, where
 1. An Apple Silicon Mac with Homebrew at `/opt/homebrew` and the `shivammathur/php` and
    `shivammathur/extensions` taps (`brew tap shivammathur/php`, `brew tap
    shivammathur/extensions`). Xcode 26 (the macOS 26 SDK and its Metal toolchain) only matters
-   from M6, for Yard.app's GPUI build.
+   from M6, for Yard.app's GPUI build, with Rust 1.98.1 (`rustup toolchain install 1.98.1
+   --profile minimal --component clippy,rustfmt`; `app/rust-toolchain.toml` picks it in `app/`).
 2. Rust from rustup, never brew's `rust` formula, which ignores `rust-toolchain.toml` (1.92;
    CI's clippy runs on it, and a newer rustc lints differently). Install rustup with the
    official installer (`sh.rustup.rs`, `--no-modify-path` when the shell already sources
@@ -333,6 +342,9 @@ holds 80 or 443, since with both free the switch would go through.
 - `brew install cargo-deny cargo-audit` (0.20.2, 0.22.2) on 2026-11-06, the maintainer having left it to
   Claude; `cargo deny check` passes. Their formulas need brew's `rust` only to build, so it stays
   absent.
+- Rust 1.98.1 installed beside 1.92 for Yard.app (2026-11-06); Xcode's `metal` compiled GPUI's shaders
+  (`xcrun -f metal` resolves). A clean GPUI build takes about a minute here and fills `app/target`
+  with about 5 GB.
 - Steam listens on `*:27036`, inside the tests' 20000–29999 range; `support::free_port` skips it.
 - `~/.local/bin/node`, `npm` and `npx` are symlinks to Hermes's own Node 22 (`~/.hermes/node`), so a
   bare `npm install -g` lands there, off PATH. `playwright-cli` is installed with brew's npm
@@ -340,6 +352,13 @@ holds 80 or 443, since with both free the switch would go through.
 
 ## Build & test
 
+- Yard.app, in `app/` (its `rust-toolchain.toml` picks Rust 1.98.1): `cargo fmt --check`, `cargo
+  clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked` and,
+  after an `app/Cargo.lock` change, `cargo deny check`. `scripts/bundle.sh` builds
+  `app/target/Yard.app` (ad hoc, this Mac only); `open app/target/Yard.app --args --root
+  /tmp/yard-dev` runs it against a scratch yardd (`cargo run -p yard-daemon --bin yardd -- --root
+  /tmp/yard-dev` at the root). Without `--root` it finds the real LaunchAgent and talks to the real
+  yardd. A GPUI build fills `app/target` with several GB: remove it when done.
 - `cargo test --workspace` — full suite. Tests use a temp `YARD_ROOT` and free ports in
   20000-29999 (below macOS's ephemeral range), and never touch Herd, `/etc/resolver` or ports 53/80/443/8080/8443/53535.
   If test daemons time out at startup, `target/debug/deps` has grown too big for FSEvents:
@@ -465,8 +484,9 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
   dispatching on `argv[0]`; it reads the TOMLs itself and runs without a daemon. `php` and
   `composer` ask yardd's `run/wake.sock` to wake a site's sleeping services first, when
   `run/sleeping` lists the site (M4e).
-- `app/` — Yard.app (M6, Rust and GPUI): planned in the M6 design (a draft) as a second Cargo
-  workspace with its own toolchain, lockfile and `deny.toml`; not built.
+- `app/` — Yard.app (M6, Rust and GPUI): a second Cargo workspace with its own toolchain (1.98.1),
+  lockfile and `deny.toml`. `yard-app-model` holds the decisions (no GPUI, tokio, files or clock),
+  `yard-app` the GPUI entities, platform glue, widgets and screens.
 
 ## Conventions
 

@@ -36,7 +36,9 @@ running as its own LaunchAgent: `mail.<tld>` shows its web UI, `yard env` prints
 lines, and a `.yard` can say `emailulator = true`. M5 shares a site at a public HTTPS URL
 through cloudflared: `yard tunnel` gives a random `trycloudflare.com` URL with no account, or
 with `--host` a stable name on a Cloudflare domain you set up with `yard tunnels domain add`
-(a quick tunnel is verified end to end; a named one awaits a check on a real domain). Yard.app (M6) comes later.
+(a quick tunnel is verified end to end; a named one awaits a check on a real domain). M6 adds
+Yard.app, a menu bar app and window written in Rust with GPUI, built from `app/` with
+`app/scripts/bundle.sh` (signed for this Mac only until M7).
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080`. Herd keeps its `.test` domain,
@@ -207,4 +209,6 @@ error, 3 `yardd` is not running.
 
 ## Development
 
-See [`AGENTS.md`](AGENTS.md) for the build, test and lint commands and the conventions.
+See [`AGENTS.md`](AGENTS.md) for the build, test and lint commands and the conventions. Yard.app is
+a second workspace in `app/` on its own toolchain (Rust 1.98.1, from `app/rust-toolchain.toml`):
+`cd app && cargo test --workspace --locked`, and `scripts/bundle.sh` builds `app/target/Yard.app`.

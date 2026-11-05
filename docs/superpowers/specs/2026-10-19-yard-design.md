@@ -128,12 +128,13 @@ yard/
   Cargo.toml                 # workspace
   crates/
     yard-core/               # domain: sites, php, ports, config rendering, state files
-    yard-proto/              # API types (serde) + JSON Schema generation
+    yard-proto/              # API types (serde), used as-is by the CLI and Yard.app
+    yard-client/             # the connection to yardd, shared by the CLI and Yard.app
     yard-daemon/             # yardd binary: supervisor, registry, RPC server
     yard-helper/             # root helper binary
     yard-cli/                # yard binary
     yard-shim/               # php/composer/pecl/phpize/php-config and node/npm/npx shims (one multicall binary)
-  app/                       # Yard.app (M6, GPUI): planned as a second Cargo workspace, M6 design §4
+  app/                       # Yard.app (M6, GPUI): a second Cargo workspace on Rust 1.98.1, M6 design §4
   docs/
 ```
 
@@ -864,9 +865,11 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 
 ## 9. Yard.app
 
-- Rust with GPUI (Zed's UI framework), macOS 14+ (maintainer, 2026-11-06). The M6 design
-  (`2026-11-05-yard-m6-app-design.md`, a draft) settles the toolkit's details: where GPUI comes
-  from, the app's toolchain, and whether the menu bar is a native `NSMenu` or a GPUI window.
+- Rust with GPUI (Zed's UI framework, pinned by git revision to Zed v1.27.0), macOS 14+ (maintainer,
+  2026-11-06); built in M6 (2026-11-06) as `app/`, a second Cargo workspace on Rust 1.98.1. The
+  menu bar is a native `NSStatusItem` and `NSMenu` (tray-icon and muda), rebuilt from the app's
+  state when what it shows changes; the windows are GPUI. The M6 design
+  (`2026-11-05-yard-m6-app-design.md`) has the details.
 - **Menu bar**: health indicator, quick toggles for services
   and Xdebug, recent sites (open in browser), badges for failed units and port
   conflicts.
@@ -930,8 +933,8 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 
 ## 11. Distribution
 
-- Developer ID signed, notarized `.dmg` of Yard.app (arm64). Helper registered
-  with `SMAppService`.
+- Developer ID signed, notarized `.dmg` of Yard.app (arm64), from `app/scripts/bundle.sh`, which
+  M6 left sealing ad hoc for the local Mac. Helper registered with `SMAppService`.
 - Team updates via appdater; public updates via Sparkle if/when public.
 - Homebrew tap formula for CLI-only installs (`yard`, `yardd`, helper, shims).
 - Details follow the existing macOS release-signing and appdater conventions at
@@ -998,7 +1001,8 @@ Each milestone is usable on its own and gets its own implementation plan.
    found that this Mac's resolver cached the NXDOMAIN of a URL asked for before Cloudflare
    published it, so the script now resolves through 1.1.1.1). A named tunnel is the maintainer's manual
    check on his own zone.
-6. **M6 Yard.app:** client, menu bar, main window, onboarding.
+6. **M6 Yard.app:** client, menu bar, main window, onboarding. Built 2026-11-06 (`app/`); its
+   manual checklist (M6 plan Task 17) is the maintainer's.
 7. **M7 Distribution:** signing, notarization, appdater, brew tap.
 
 The maintainer reordered M4–M7 on 2026-10-21: Node and services first, then tunnels, then the

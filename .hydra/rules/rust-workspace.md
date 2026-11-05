@@ -16,6 +16,12 @@ triggers:
   effects, `yardd`), `yard-helper` (root), `yard-client` (the connection to yardd the CLI and
   Yard.app share; yard-proto and tokio only), `yard-cli` (`yard`), `yard-shim` (the PHP
   shims; depends on core and proto only, and reads the TOMLs without a daemon).
+- Yard.app is a second workspace in `app/` on Rust 1.98.1 (`app/rust-toolchain.toml`) with its own
+  `Cargo.lock` and `deny.toml`; it uses yard-proto, yard-core and yard-client by path, so those three
+  must build on 1.98.1 too. `yard-app-model` holds the app's decisions with no GPUI, tokio, files or
+  clock; only `yard-app` imports `gpui`, `tray-icon`, `muda` or `objc2*`. GPUI is pinned by git `rev`
+  to a Zed release commit and bumped on purpose; never take a crate from Zed outside GPUI's tree
+  (`ui`, `theme`, `editor` are GPL).
 - `yard-core` is pure: parse, render, decide. No spawning, binding, sockets or clock
   reads. Inject `exists` / `is_free` / `read_link` closures and `Instant`s instead.
   Side effects live in `yard-daemon`. The helper and CLI depend on core, never the reverse.
