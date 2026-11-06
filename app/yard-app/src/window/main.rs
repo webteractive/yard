@@ -14,6 +14,7 @@ use gpui::{
     Role, SharedString, Styled, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
 use yard_app_model::health::Link;
+use yard_app_model::hint::HintAction;
 use yard_app_model::hint::Screen;
 use yard_app_model::refresh::ResourceKey;
 use yard_client::api;
@@ -42,7 +43,7 @@ impl MainWindow {
 /// The lists a screen shows: fetched when it opens and when the window becomes active.
 pub fn visible_keys(screen: &Screen) -> Vec<ResourceKey> {
     match screen {
-        Screen::Overview => vec![ResourceKey::Status],
+        Screen::Overview => vec![ResourceKey::Status, ResourceKey::Ca],
         Screen::Sites(Some(site)) => {
             vec![ResourceKey::Sites, ResourceKey::SiteDetail(site.clone()), ResourceKey::Php]
         }
@@ -227,7 +228,7 @@ impl Render for MainWindow {
                     .flex()
                     .flex_col()
                     .children(banner(&env, cx))
-                    .children(open_errors(&env, cx))
+                    .children(elsewhere_errors(&env, &screen, cx))
                     .child(
                         div()
                             .id("content")
@@ -340,12 +341,59 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .into_any_element()
 }
 
-/// The action ids of opening a file or folder from any screen or the menu.
+/// The action ids of opening a file or folder from any screen or the menu; no screen owns them.
 pub const OPEN_ERRORS: &str = "open-";
 
-/// Why a file or folder was not opened, above every screen: the open can start anywhere.
-pub fn open_errors(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
-    crate::screens::errors(env, OPEN_ERRORS, cx)
+/// Whether `screen` shows the error of action `id` beside its own controls.
+fn shown_on(screen: &Screen, id: &str, services: &[String]) -> bool {
+    let prefixed = |prefixes: &[&str]| prefixes.iter().any(|p| id.starts_with(p));
+    match screen {
+        Screen::Overview => crate::overview::ERRORS.contains(&id),
+        Screen::Sites(selected) => {
+            id == "site:link"
+                || id == "site:proxy"
+                || selected
+                    .as_ref()
+                    .is_some_and(|n| crate::sites::DETAIL_VERBS.iter().any(|v| id == format!("site:{n}:{v}")))
+        }
+        Screen::Services(_) => {
+            id == "service:add"
+                || services
+                    .iter()
+                    .any(|n| crate::services::VERBS.iter().any(|v| id == format!("service:{n}:{v}")))
+        }
+        Screen::Php => prefixed(&["php:"]),
+        Screen::Node => prefixed(&["node:"]),
+        Screen::Tunnels => prefixed(&["tunnel:", "domain:"]),
+        Screen::Ports => prefixed(&["port:"]),
+        Screen::Sources => prefixed(&["source:"]),
+        Screen::Logs(_) | Screen::Doctor | Screen::Activity => false,
+    }
+}
+
+/// The action errors `screen` does not show itself, by id: an action can start from the menu, a
+/// hint on another screen or a file open, and its failure must reach whatever screen is open.
+#[cfg(test)]
+pub fn elsewhere_error_ids(env: &AppEnv, screen: &Screen, cx: &App) -> Vec<String> {
+    elsewhere(env, screen, cx).into_iter().map(|(id, _)| id.0).collect()
+}
+
+fn elsewhere(env: &AppEnv, screen: &Screen, cx: &App) -> Vec<(ActionId, yard_proto::YardError)> {
+    let services: Vec<String> =
+        env.state.read(cx).services.value.iter().flatten().map(|s| s.name.clone()).collect();
+    let mut all = env.runner.read(cx).errors.matching("");
+    all.retain(|(id, _)| !shown_on(screen, &id.0, &services));
+    all
+}
+
+/// Those errors, above the screen's content.
+pub fn elsewhere_errors(env: &AppEnv, screen: &Screen, cx: &App) -> Vec<AnyElement> {
+    crate::screens::error_views(env, elsewhere(env, screen, cx))
+}
+
+/// The file a configuration error is in (`data.file`), which the banner opens.
+fn config_file(e: &yard_proto::YardError) -> Option<std::path::PathBuf> {
+    e.data.as_ref()?.get("file")?.as_str().map(std::path::PathBuf::from)
 }
 
 fn banner(env: &AppEnv, cx: &App) -> Option<AnyElement> {
@@ -358,7 +406,15 @@ fn banner(env: &AppEnv, cx: &App) -> Option<AnyElement> {
         return Some(Banner::new("banner:offline", BannerKind::Error, why).action(start).into_any_element());
     }
     if let Some(e) = s.status.value.as_ref().and_then(|st| st.config_error.clone()) {
-        return Some(Banner::new("banner:config", BannerKind::Error, e.message).into_any_element());
+        let mut banner = Banner::new("banner:config", BannerKind::Error, e.message.clone());
+        if let Some(file) = config_file(&e) {
+            let env2 = env.clone();
+            banner = banner.action(
+                Button::new("banner:config:open", "Open file")
+                    .on_click(move |_, _, cx| env2.perform(HintAction::OpenFile(file.clone()), cx)),
+            );
+        }
+        return Some(banner.into_any_element());
     }
     if matches!(link(&s.connection), Link::Connected { stale: true }) {
         let env2 = env.clone();
@@ -404,8 +460,6 @@ mod tests {
     use yard_proto::methods::PhpParams;
     use yard_proto::{ErrorCode, YardError};
 
-    /// An install started from the menu with no window open still gets brew's trust question
-    /// (found in the M6 final review: it showed only while the main window was open).
     /// A hinted file Yard refuses to open (a symlink, an executable) says why in the main window,
     /// opened for it if need be: the refusal was recorded where no screen showed it.
     #[gpui::test]
@@ -419,8 +473,40 @@ mod tests {
         cx.update(|cx| env.perform(yard_app_model::hint::HintAction::OpenFile(link.clone()), cx));
         cx.run_until_parked();
         assert!(cx.update(super::is_open), "the main window opens to say it");
-        let shown = cx.update(|cx| super::open_errors(&env, cx).len());
+        let shown = cx.update(|cx| super::elsewhere_errors(&env, &Screen::Overview, cx).len());
         assert_eq!(shown, 1);
+    }
+
+    /// Every action error reaches the screen the person is on: the screen that owns it shows it
+    /// beside its controls, and any other screen above its content (M6 final review: Restart on
+    /// the Overview's units, the menu's Xdebug switch and a Doctor hint's yard trust failed with
+    /// no word anywhere).
+    /// A configuration error names its file in `data.file`: the banner opens it.
+    #[test]
+    fn a_config_error_names_the_file_to_open() {
+        let e = YardError::new(ErrorCode::ConfigInvalid, "sites.toml line 3: expected =")
+            .with_data(json!({"file": "/r/sites.toml", "line": 3, "column": 7}));
+        assert_eq!(super::config_file(&e), Some(std::path::PathBuf::from("/r/sites.toml")));
+        assert_eq!(super::config_file(&YardError::internal("x")), None);
+    }
+
+    #[gpui::test]
+    async fn an_error_shows_on_whatever_screen_is_open(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        env.runner.update(cx, |r, _| {
+            for id in ["unit:nginx:restart", "xdebug:8.4", "cli:trust", "php:8.4:install", "yardd:start"] {
+                r.errors.record(ActionId(id.into()), YardError::internal("it failed"));
+            }
+        });
+        let ids = |screen: Screen, cx: &mut TestAppContext| -> Vec<String> {
+            cx.update(|cx| super::elsewhere_error_ids(&env, &screen, cx))
+        };
+        assert_eq!(
+            ids(Screen::Overview, cx),
+            ["cli:trust", "php:8.4:install", "unit:nginx:restart", "xdebug:8.4"]
+        );
+        assert_eq!(ids(Screen::Php, cx), ["cli:trust", "unit:nginx:restart", "xdebug:8.4", "yardd:start"]);
+        assert_eq!(ids(Screen::Doctor, cx).len(), 5);
     }
 
     /// A site's detail shows a PHP picker of the installed versions, so it loads the PHP list
@@ -434,6 +520,8 @@ mod tests {
         assert!(keys.contains(&ResourceKey::SiteDetail("blog".into())));
     }
 
+    /// An install started from the menu with no window open still gets brew's trust question
+    /// (found in the M6 final review: it showed only while the main window was open).
     #[gpui::test]
     async fn a_question_with_no_window_open_opens_one_to_ask_it(cx: &mut TestAppContext) {
         let (fake, env) = env(cx);

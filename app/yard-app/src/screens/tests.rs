@@ -124,7 +124,149 @@ fn every_table_column_has_a_title() {
         &super::node::COLUMNS[..],
         &super::ports::COLUMNS[..],
         &super::tunnels::COLUMNS[..],
+        &super::sources::COLUMNS[..],
     ] {
         assert!(columns.iter().all(|c| !c.trim().is_empty()), "{columns:?}");
+    }
+}
+
+/// A failed `ext.list` is not asked again each time the PHP screen draws (M6 final review: with
+/// yardd stopped the screen asked about six times a second).
+#[gpui::test]
+async fn a_failed_extension_list_is_not_refetched_by_drawing(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    fake.fail("ext.list", yard_proto::YardError::internal("yardd is not answering"));
+    env.state.update(cx, |s, _| {
+        s.php.value = serde_json::from_value(json!([
+            {"version": "8.4", "default": true, "installed": true, "sites": [], "pool": "running"}
+        ]))
+        .ok();
+    });
+    let state = env.state.clone();
+    let (_v, cx) = cx.add_window_view(|_, cx| {
+        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        Host(env, super::php::php)
+    });
+    for _ in 0..10 {
+        cx.run_until_parked();
+        cx.executor().advance_clock(std::time::Duration::from_millis(300));
+    }
+    assert!(fake.count("ext.list") <= 1, "asked {} times", fake.count("ext.list"));
+}
+
+/// Add extension… takes a `.so` chosen in an open panel, sent absolute (design §8.2 PHP; M6 final
+/// review: only a typed path worked).
+#[gpui::test]
+async fn choose_so_puts_the_chosen_path_in_the_add_field(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    cx.update(|cx| super::php::choose_so(&env, cx));
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_paths(), "an open panel");
+    cx.simulate_path_prompt_response(|_| Some(vec![std::path::PathBuf::from("/opt/ext/custom.so")]));
+    cx.run_until_parked();
+    let field = cx.update(|cx| crate::env::Nav::field(&env, "php:ext:add", "Extension to add", "", cx));
+    assert_eq!(cx.read(|cx| field.read(cx).value().to_string()), "/opt/ext/custom.so");
+}
+
+/// Sources trusts or untrusts a whole tap or one formula of it (design §8.2; M6 final review: only
+/// taps).
+#[test]
+fn sources_offer_a_tap_and_each_formula() {
+    let tap: yard_proto::SourceInfo = serde_json::from_value(json!({
+        "tap": "minio/stable", "tapped": true, "trusted": false,
+        "formulae": [{"name": "minio", "trusted": true, "installed": true}, {"name": "mc", "trusted": false, "installed": false}]
+    }))
+    .unwrap();
+    let targets: Vec<(String, &str, String, bool)> = super::sources::targets(&tap)
+        .into_iter()
+        .map(|t| (t.key, t.verb, t.params.target, t.params.tap))
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            ("minio/stable".to_string(), "Trust", "minio/stable".to_string(), true),
+            ("minio/stable/minio".to_string(), "Untrust", "minio/stable/minio".to_string(), false),
+            ("minio/stable/mc".to_string(), "Trust", "minio/stable/mc".to_string(), false),
+        ]
+    );
+}
+
+/// Ports' Range… sets the auto range (`ports.range`; design §8.2; M6 final review: missing).
+#[gpui::test]
+async fn range_sets_the_auto_range(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    fake.answer("ports.range", json!(null));
+    cx.update(|cx| super::ports::set_range(&env, "29000-29099".into(), cx));
+    cx.run_until_parked();
+    let asked: Vec<serde_json::Value> =
+        fake.calls().into_iter().filter(|(m, _)| m == "ports.range").map(|(_, p)| p).collect();
+    assert_eq!(asked, [json!({"range": "29000-29099"})]);
+}
+
+/// Stopping a named tunnel can leave its DNS record in Cloudflare: Tunnels says which to delete,
+/// as `yard untunnel` does (design §8.2; M6 final review: `dns_left` was never shown).
+#[gpui::test]
+async fn stop_sharing_says_which_dns_records_to_delete(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    fake.answer("tunnels.remove", crate::testing::job("tunnel-remove-1"));
+    cx.update(|cx| super::tunnels::stop_sharing(&env, "blog".into(), false, cx));
+    cx.run_until_parked();
+    let remove = fake.calls().into_iter().find(|(m, _)| m == "tunnels.remove").unwrap().1;
+    assert_eq!(remove, json!({"site": "blog", "keep_tunnel": false}));
+    fake.event(yard_proto::Event::JobFinished {
+        job_id: "tunnel-remove-1".into(),
+        error: None,
+        result: Some(json!({"site": "blog", "deleted_tunnel": true,
+            "dns_left": [{"host": "blog.example.com", "target": "abc.cfargotunnel.com"}]})),
+    });
+    cx.run_until_parked();
+    let note = env
+        .runner
+        .read_with(cx, |r, _| r.errors.get(&crate::runner::ActionId("tunnel:blog:dns".into())).cloned())
+        .expect("a note");
+    assert!(
+        note.message.contains("Delete the CNAME blog.example.com (→ abc.cfargotunnel.com)"),
+        "{}",
+        note.message
+    );
+}
+
+/// A named share whose host already has a DNS record asks whether to overwrite it, then shares
+/// again with `overwrite_dns` (design §8.2 Tunnels).
+#[gpui::test]
+async fn a_named_share_asks_to_overwrite_a_dns_record(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    fake.answers(
+        "tunnels.add",
+        vec![Ok(crate::testing::job("tunnel-add-1")), Ok(crate::testing::job("tunnel-add-2"))],
+    );
+    let (_v, cx) = cx.add_window_view(|_, _| Blank);
+    cx.update(|window, cx| {
+        super::tunnels::share(&env, "blog".into(), Some("blog.example.com".into()), false, window, cx)
+    });
+    cx.run_until_parked();
+    let exists = yard_proto::YardError::new(
+        yard_proto::ErrorCode::TunnelDnsExists,
+        "blog.example.com has a DNS record",
+    );
+    fake.event(crate::testing::finished("tunnel-add-1", Some(exists)));
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt(), "asks whether to overwrite");
+    cx.simulate_prompt_answer("Overwrite");
+    cx.run_until_parked();
+    let overwrites: Vec<bool> = fake
+        .calls()
+        .into_iter()
+        .filter(|(m, _)| m == "tunnels.add")
+        .map(|(_, p)| p["overwrite_dns"].as_bool().unwrap())
+        .collect();
+    assert_eq!(overwrites, [false, true]);
+}
+
+struct Blank;
+
+impl Render for Blank {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::div()
     }
 }

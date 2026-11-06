@@ -126,11 +126,8 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
 }
 
 fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window, cx: &mut App) -> AnyElement {
+    // Fetched with the PHP list (AppState::store), never from here: drawing must not ask.
     let loaded = env.state.read(cx).extensions.get(v).and_then(|r| r.value.clone());
-    if loaded.is_none() && !env.state.read(cx).extensions.get(v).is_some_and(|r| r.loading) {
-        let key = ResourceKey::Extensions(v.to_string());
-        env.state.update(cx, |s, cx| s.refresh([key], cx));
-    }
     let options: Vec<SharedString> = installed.iter().map(|x| SharedString::from(x.clone())).collect();
     let (pick, all) = (env.clone(), installed.to_vec());
     let picker =
@@ -205,20 +202,29 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                 .child(picker),
         )
         .child(table)
-        .child(div().flex().gap(px(6.)).child(add.clone()).child(
-            Button::new("php:ext:add:go", "Add").on_click(move |_, _, cx| {
-                if let Some(name) = value(&add2, cx) {
-                    job(
-                        &e3,
-                        format!("php:{v3}:ext:{name}"),
-                        api::EXT_ADD,
-                        ExtAddParams { name: name.clone(), php: Some(v3.clone()) },
-                        format!("Add {name} to PHP {v3}"),
-                        cx,
-                    );
-                }
-            }),
-        ))
+        .child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(add.clone())
+                .child({
+                    let e = env.clone();
+                    Button::new("php:ext:add:choose", "Choose .so…")
+                        .on_click(move |_, _, cx| choose_so(&e, cx))
+                })
+                .child(Button::new("php:ext:add:go", "Add").on_click(move |_, _, cx| {
+                    if let Some(name) = value(&add2, cx) {
+                        job(
+                            &e3,
+                            format!("php:{v3}:ext:{name}"),
+                            api::EXT_ADD,
+                            ExtAddParams { name: name.clone(), php: Some(v3.clone()) },
+                            format!("Add {name} to PHP {v3}"),
+                            cx,
+                        );
+                    }
+                })),
+        )
         .child(div().text_lg().child(crate::widgets::text("overrides:heading", "php.ini overrides")))
         .child(
             div()
@@ -258,4 +264,25 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
             )
         }))
         .into_any_element()
+}
+
+/// Add extension… from a `.so`: an open panel puts the chosen file's absolute path in the add
+/// field, which **Add** sends as `ext.add`'s name (design §8.2 PHP).
+pub fn choose_so(env: &AppEnv, cx: &mut App) {
+    let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: Some("Choose".into()),
+    });
+    let env = env.clone();
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(paths))) = picked.await else { return };
+        let Some(so) = paths.into_iter().next() else { return };
+        cx.update(|cx| {
+            let field = Nav::field(&env, "php:ext:add", "Extension to add", "", cx);
+            field.update(cx, |f, cx| f.set_value(so.display().to_string(), cx));
+        });
+    })
+    .detach();
 }

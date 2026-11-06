@@ -79,9 +79,86 @@ mod tests {
     use crate::widgets::table::{Row, Table};
     use crate::widgets::text_field::TextField;
     use crate::widgets::toggle::Toggle;
-    use gpui::{Context, IntoElement, ParentElement, Render, Styled, TestAppContext, Window, div};
+    use gpui::{
+        Context, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+        TestAppContext, Window, div,
+    };
     use yard_app_model::hint::HintAction;
     use yard_proto::{ErrorCode, YardError};
+
+    /// Something clickable that covers the window, under whatever the test draws on top.
+    struct Covered<F: Fn() -> gpui::AnyElement + 'static> {
+        under: std::rc::Rc<std::cell::Cell<u32>>,
+        top: F,
+    }
+
+    impl<F: Fn() -> gpui::AnyElement + 'static> Render for Covered<F> {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let under = self.under.clone();
+            div()
+                .size_full()
+                .relative()
+                .child(
+                    div()
+                        .id("under")
+                        .absolute()
+                        .inset_0()
+                        .on_click(move |_, _, _| under.set(under.get() + 1)),
+                )
+                .child(div().absolute().top_0().left_0().size_full().child((self.top)()))
+        }
+    }
+
+    fn click(cx: &mut gpui::VisualTestContext, at: gpui::Point<gpui::Pixels>) {
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    /// A sheet is modal: a click on its backdrop or its blank space never reaches the controls
+    /// under it (M6 final review: a click in the Port sheet could press Stop on the row beneath).
+    #[gpui::test]
+    async fn a_sheet_keeps_clicks_from_what_is_under_it(cx: &mut TestAppContext) {
+        let under = std::rc::Rc::new(std::cell::Cell::new(0));
+        let u = under.clone();
+        let (_v, cx) = cx.add_window_view(move |_, _| Covered {
+            under: u.clone(),
+            top: || Form::new("sheet", "A sheet").into_any_element(),
+        });
+        cx.run_until_parked();
+        click(cx, gpui::point(gpui::px(4.), gpui::px(4.)));
+        let sheet = cx.debug_bounds("sheet").expect("the sheet is drawn");
+        click(cx, sheet.origin + gpui::point(gpui::px(8.), gpui::px(40.)));
+        assert_eq!(under.get(), 0, "a click reached the control under the sheet");
+    }
+
+    /// Choosing from a picker's popup chooses, and presses nothing under the popup (M6 final
+    /// review: picking a site's PHP could press Detect docroot below it).
+    #[gpui::test]
+    async fn a_picker_option_keeps_its_click(cx: &mut TestAppContext) {
+        let under = std::rc::Rc::new(std::cell::Cell::new(0));
+        let chosen = std::rc::Rc::new(std::cell::Cell::new(None));
+        let (u, c) = (under.clone(), chosen.clone());
+        let (_v, cx) = cx.add_window_view(move |_, _| {
+            let c = c.clone();
+            Covered {
+                under: u.clone(),
+                top: move || {
+                    let c = c.clone();
+                    Picker::new("pick", "PHP", vec!["7.1".into(), "8.4".into()], Some(0))
+                        .on_select(move |i, _, _| c.set(Some(i)))
+                        .into_any_element()
+                },
+            }
+        });
+        cx.run_until_parked();
+        let picker = cx.debug_bounds("pick").expect("the picker is drawn");
+        click(cx, picker.center());
+        let option = cx.debug_bounds("pick:option:1").expect("the popup is open");
+        let before = under.get();
+        click(cx, option.center());
+        assert_eq!(chosen.get(), Some(1));
+        assert_eq!(under.get(), before, "the option's click reached the control under it");
+    }
 
     fn rows(keys: &[&str]) -> Vec<Row> {
         keys.iter().map(|k| Row::new(*k, vec![SharedString::from(*k), "x".into()])).collect()

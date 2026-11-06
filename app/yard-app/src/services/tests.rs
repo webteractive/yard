@@ -42,6 +42,17 @@ async fn remove_is_refused_locally_while_in_use(cx: &mut TestAppContext) {
     assert!(!cx.update(|cx| super::table::refuse_in_use(&env, "mysql-8.4", cx)), "nobody uses it");
 }
 
+/// Remove asks whether to delete the data too (design §11.3; M6 final review: it always deleted).
+#[test]
+fn remove_asks_whether_to_keep_the_data() {
+    let (title, buttons) = super::table::remove_question("postgres-17");
+    assert_eq!(title, "Delete postgres-17 and its data?");
+    assert_eq!(buttons, ["Delete", "Remove, keep its data", "Cancel"]);
+    assert_eq!(super::table::keep_data(0), Some(false));
+    assert_eq!(super::table::keep_data(1), Some(true));
+    assert_eq!(super::table::keep_data(2), None);
+}
+
 /// Copy .env copies what `yard env` prints: an instance that is not added is the one note that
 /// says so and how to add it (found by the checklist script: the app copied a bare `# postgres-17`).
 #[test]

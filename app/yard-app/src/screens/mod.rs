@@ -25,10 +25,15 @@ pub fn heading(title: &str) -> AnyElement {
 
 /// Every action error whose id starts with `prefix`, each with its hint's action.
 pub fn errors(env: &AppEnv, prefix: &str, cx: &App) -> Vec<AnyElement> {
-    env.runner
-        .read(cx)
-        .errors
-        .matching(prefix)
+    error_views(env, env.runner.read(cx).errors.matching(prefix))
+}
+
+/// An ErrorView per `(id, error)`, each with its hint's action.
+pub fn error_views(
+    env: &AppEnv,
+    errors: Vec<(crate::runner::ActionId, yard_proto::YardError)>,
+) -> Vec<AnyElement> {
+    errors
         .into_iter()
         .map(|(id, e)| {
             let env = env.clone();

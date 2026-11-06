@@ -6,7 +6,14 @@ Where the build departed from this text it says so in the commit messages; the m
 the table draws plain rows
 rather than a virtual list, the log view copies all lines rather than selecting text, GPUI's
 accessibility tree cannot be read in tests (widgets assert the id, role and label they set), and
-the site detail sets the docroot by Detect and Node by Use default only. It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
+the site detail sets the docroot by Detect and Node by Use default only. The final review
+(2026-11-07) found features this text names that the first build lacked (the Overview's CA,
+Remove keeping data, Save settings' location and replace, Not now, a `.so` from an open panel,
+Range…, per-formula trust, a failed job's output, named shares, Copy URL and the DNS records a stop
+leaves); they are built. A named share takes its host as text; the daemon checks it is under a
+set-up domain. A picker's popup closes by choosing or by its control, not by a click elsewhere.
+Open: in Activity, the accessibility tree gives every job card after the first the wrong or no
+log lines, though the screen is right. It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
 §12) and is planned in `docs/superpowers/plans/2026-11-05-yard-m6-app.md`.
 
 The first draft (2026-11-05) described a SwiftUI app built with Tuist over a Swift package with
@@ -347,7 +354,9 @@ its sequential `Client` (moved into yard-client unchanged); it does not need pip
   connect again after 0.25 s, 0.5 s, 1 s, 2 s, then every 5 s, for as long as the app runs. A
   connect attempt to a missing socket costs one syscall; this is reconnecting, not polling state.
 - It also tries at once when the app becomes active, when the menu bar menu opens (if tray-icon
-  reports it, §8.1), and after the app itself runs `yard start` (§5.7).
+  reports it, §8.1), and after the app itself runs `yard start` (§5.7). While connected, that
+  `reconnect_now` does nothing: `yard start` against a running yardd leaves it alone, and the jobs
+  the connection follows must not turn lost (found by the final review, 2026-11-07).
 - After a successful `hello` and `subscribe`, it reports `Connected(Session info)` with the new
   epoch, and the app fetches what the menu shows and every resource it holds (§7.2). Events that arrive while those fetches
   run are applied after them; every event's effect is idempotent (§7.3), so order does not matter.
@@ -462,7 +471,7 @@ one fetch in flight per resource and one more queued if it was invalidated meanw
 
 | Trigger | Effect |
 |---|---|
-| connected (new epoch) | `status` and what the menu bar menu and its icon read (`sites`, `services`, `ports`, `tunnels`), which are always on screen, plus every resource loaded once |
+| connected (new epoch) | `status` and what the menu bar menu and its icon read (`sites`, `services`, `ports`, `tunnels`, and `php` with the `extensions` of each installed version, for the Xdebug submenu), which are always on screen, plus every resource loaded once |
 | `reconciled` (§13) | `status`, `sites`, `services`, `php`, `node`, `tunnels`, `ports`, loaded `extensions`, loaded `site_detail` |
 | `job_finished` | the same set, plus `sources`, `tunnel_domains` and `ca` |
 | `unit_state_changed` | patch `status.units` in place at once; then `services` when the unit is a service instance, `php` when it is a `php-fpm` pool, `tunnels` when it is `tunnel-<site>` |
@@ -472,7 +481,8 @@ one fetch in flight per resource and one more queued if it was invalidated meanw
 | the main window becoming active, the menu opening | `status`, plus whatever the visible screen shows |
 
 The last row covers a daemon older than 2.11 (no `reconciled`), and costs one local call per
-visible list. Nothing runs on a timer.
+visible list. Nothing runs on a timer, and drawing a screen never fetches: a version's
+`extensions` come with the PHP list, so a failed `ext.list` is not asked again each frame.
 
 ### 7.3 Idempotence
 
@@ -634,7 +644,8 @@ signed build keeps them.
 ### 8.4 Onboarding
 
 A window shown on first launch and whenever Yard is not set up (§5.7), also reachable from the
-Overview. It is a checklist computed from facts each time it is shown and whenever the app becomes
+Overview's and the menu's **Set up Yard…**, which raise it when it is open (until 2026-11-07 the
+menu's opened the main window and nothing reopened a closed checklist). It is a checklist computed from facts each time it is shown and whenever the app becomes
 active, so a step already done shows done, and the user can do a step in Terminal and come back
 **(builder's call)**. No timer: **Check again** re-reads the facts. A step's action that fails
 says why in this window, under the steps (until 2026-11-06 Start yardd's error showed only on the
@@ -731,8 +742,13 @@ job's `result` is decoded by the action that started it (`TunnelInfo` for `tunne
 
 `yard_proto::YardError { code, message, hint, data }` is the only error the client, the model and
 the app produce. The app keeps the last error per action (`ActionId`, e.g. `site:blog:secure`),
-cleared when the action next succeeds, so the view shows it beside the control. Connection-level
-errors show as the window banner and the menu's status line.
+cleared when the action next succeeds, so the view shows it beside the control. An action can
+start from the menu, a hint on another screen or a file open, so whatever error the open screen
+does not show beside its own controls appears above its content: every failure reaches the screen
+the person is on (found by the final review, 2026-11-07: Restart on a unit, the menu's Xdebug switch
+and a Doctor hint's `yard trust` failed with no word). Connection-level
+errors show as the window banner and the menu's status line; a configuration error's banner has
+**Open file** for its `data.file`.
 
 ### 10.2 Hints become actions **(builder's call)**
 
@@ -1021,7 +1037,8 @@ Metal component on each Mac); `README.md`; the rpc-protocol rule (protocol 2.11,
 toolchain); the root-helper rule (the `SMAppService` line); the cli-output rule (`yard php list
 --available`); and a new project rule `.hydra/rules/app.md` for `app/**` (crate boundaries, no
 writes, the hint allowlist, roles and labels on every widget, how to bump GPUI, never a Zed GPL
-crate), if the maintainer wants the app's conventions as a rule like the other areas.
+crate), if the maintainer wants the app's conventions as a rule like the other areas (he did: added
+2026-11-07).
 
 ## 18. Questions, decided
 

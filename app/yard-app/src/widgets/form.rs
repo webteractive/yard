@@ -17,6 +17,7 @@ pub struct Form {
     title: SharedString,
     fields: Vec<AnyElement>,
     submit: SharedString,
+    cancel: SharedString,
     submit_disabled: bool,
     on_submit: Option<Handler>,
     on_cancel: Option<Handler>,
@@ -29,6 +30,7 @@ impl Form {
             title: title.into(),
             fields: vec![],
             submit: "OK".into(),
+            cancel: "Cancel".into(),
             submit_disabled: false,
             on_submit: None,
             on_cancel: None,
@@ -52,6 +54,12 @@ impl Form {
         self
     }
 
+    /// The cancel button's label (`Not now` where cancelling leaves something undone).
+    pub fn cancel_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.cancel = label.into();
+        self
+    }
+
     pub fn on_cancel(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_cancel = Some(Rc::new(f));
         self
@@ -66,7 +74,7 @@ impl RenderOnce for Form {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let t = Theme::of(window);
         let a11y = self.a11y();
-        let mut cancel = Button::new(format!("{}:cancel", self.id), "Cancel");
+        let mut cancel = Button::new(format!("{}:cancel", self.id), self.cancel);
         if let Some(h) = self.on_cancel {
             cancel = cancel.on_click(move |e, w, cx| h(e, w, cx));
         }
@@ -76,16 +84,19 @@ impl RenderOnce for Form {
         if let Some(h) = self.on_submit {
             submit = submit.on_click(move |e, w, cx| h(e, w, cx));
         }
+        // Modal: occluded, so no click on the backdrop or the sheet reaches what is under it.
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
             .items_center()
             .justify_center()
             .bg(gpui::hsla(0., 0., 0., 0.35))
             .child(
                 div()
-                    .id(ElementId::Name(a11y.id))
+                    .id(ElementId::Name(a11y.id.clone()))
+                    .debug_selector(|| a11y.id.to_string())
                     .role(Role::Dialog)
                     .aria_label(a11y.label)
                     .w(px(440.))

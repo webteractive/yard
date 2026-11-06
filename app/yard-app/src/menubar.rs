@@ -98,7 +98,7 @@ pub fn menu_model(env: &AppEnv, recent: &[String], cx: &App) -> Vec<MenuEntry> {
             let (id, title) = if env.location.agent_installed {
                 ("start-yardd", "Start yardd")
             } else {
-                ("open", "Set up Yard…")
+                ("setup", "Set up Yard…")
             };
             out.push(MenuEntry::Action { id: id.into(), title: title.into() });
         }
@@ -445,6 +445,7 @@ fn on_click(id: &str, cx: &mut App) {
         ["quit"] => cx.quit(),
         ["open"] => crate::window::main::open(&env, env.nav.read(cx).screen.clone(), cx),
         ["settings"] => crate::settings_window::open(&env, cx),
+        ["setup"] => crate::onboarding::open(&env, cx),
         ["start-yardd"] => env.start_daemon(cx),
         ["restart-yardd"] => env.restart_daemon(cx),
         ["problem", _] => {
@@ -583,6 +584,21 @@ mod tests {
             MenuChange::Rebuild,
             "a problem with a fix is enabled; one without is not"
         );
+    }
+
+    /// With no yardd and no LaunchAgent for the root, the menu's Set up Yard… is the onboarding
+    /// checklist, not the main window (M6 final review; design §8.1).
+    #[gpui::test]
+    async fn set_up_yard_opens_onboarding(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        env.state.update(cx, |s, _| {
+            s.connection = ConnectionState::Disconnected(yard_proto::YardError::new(
+                yard_proto::ErrorCode::DaemonNotRunning,
+                "yardd is not running",
+            ));
+        });
+        let entries = cx.update(|cx| menu_model(&env, &[], cx));
+        assert!(entries.contains(&action("setup", "Set up Yard…")), "{entries:?}");
     }
 
     #[gpui::test]

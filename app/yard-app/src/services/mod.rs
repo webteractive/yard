@@ -14,6 +14,10 @@ use crate::widgets::theme::Theme;
 use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use yard_app_model::hint::HintAction;
 
+/// The actions on an instance whose errors the Services screen shows, as `service:<name>:<verb>`;
+/// with `service:add`.
+pub const VERBS: [&str; 8] = ["start", "stop", "restart", "remove", "port", "sleep", "env", "add"];
+
 pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let add = env.clone();
@@ -51,7 +55,7 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         env.state.read(cx).services.value.iter().flatten().map(|s| s.name.clone()).collect();
     let mut errors = vec![];
     for n in names.iter().map(String::as_str).chain(["add"]) {
-        for verb in ["start", "stop", "restart", "remove", "port", "sleep", "env", "add"] {
+        for verb in VERBS {
             let id = if n == "add" { "service:add".to_string() } else { format!("service:{n}:{verb}") };
             if let Some(e) = runner.errors.get(&ActionId(id.clone())) {
                 let env = env.clone();

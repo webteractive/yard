@@ -2,7 +2,7 @@
 //! extensions, then services, then Node.
 
 use yard_core::present::{install_hint, missing_node};
-use yard_proto::{Need, SiteInfo};
+use yard_proto::{ErrorCode, Need, SiteInfo, YardError};
 
 /// One stage of a settle, run as jobs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,9 @@ pub struct SettlePlan {
     /// Needs the app cannot install (manual, or unknown to this build): listed, never run.
     pub manual: Vec<Need>,
     pub node_only: bool,
+    /// What **Not now** leaves beside the site when its Node is missing: the note `yard init`
+    /// prints, with the install command as its hint. A missing Node never blocks serving.
+    pub not_now: Option<YardError>,
 }
 
 impl SettlePlan {
@@ -38,7 +41,14 @@ impl SettlePlan {
             lines.push(format!("Node {spec}  ({})", install_hint(&spec)));
         }
         let manual = site.needs.iter().filter(|n| !n.installable()).cloned().collect();
-        Some(SettlePlan { lines, manual, node_only: site.needs.is_empty() })
+        let not_now = node.map(|spec| {
+            YardError::new(
+                ErrorCode::NodeMissing,
+                format!("{} runs Node {spec}, which is not installed", site.name),
+            )
+            .with_hint(install_hint(&spec))
+        });
+        Some(SettlePlan { lines, manual, node_only: site.needs.is_empty(), not_now })
     }
 }
 
@@ -148,6 +158,20 @@ mod tests {
         let plan = SettlePlan::new(&s).unwrap();
         assert_eq!(plan.manual.len(), 2);
         assert_eq!(next_stage(&s, None), None, "nothing to run");
+    }
+
+    /// Not now leaves the note `yard init` prints for a missing Node, with its install command
+    /// (design §11.1; M6 final review: Not now left nothing).
+    #[test]
+    fn not_now_leaves_the_node_note() {
+        let s = site(json!([]), json!({"spec": "22", "source": "project", "version": null}));
+        let note = SettlePlan::new(&s).unwrap().not_now.expect("a note");
+        assert_eq!(note.message, "legacy runs Node 22, which is not installed");
+        assert_eq!(note.hint.as_deref(), Some("yard node install 22"));
+        assert_eq!(note.code, yard_proto::ErrorCode::NodeMissing);
+        assert!(SettlePlan::new(&all()).unwrap().not_now.is_some());
+        let php_only = site(json!([{"kind": "php", "php": "7.3"}]), json!(null));
+        assert_eq!(SettlePlan::new(&php_only).unwrap().not_now, None);
     }
 
     #[test]

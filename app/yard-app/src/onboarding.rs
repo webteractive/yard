@@ -199,20 +199,32 @@ pub fn step_errors(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
 }
 
 /// Opens the onboarding window.
+struct OnboardingHandle(gpui::WindowHandle<OnboardingView>);
+
+impl gpui::Global for OnboardingHandle {}
+
+/// Opens the checklist, or raises it when it is open (from the menu's or the Overview's Set up
+/// Yard…, or by itself at launch).
 pub fn open(env: &AppEnv, cx: &mut App) {
     env.state.update(cx, |s, cx| s.refresh([ResourceKey::Status, ResourceKey::Ca, ResourceKey::Sites], cx));
+    if let Some(handle) = cx.try_global::<OnboardingHandle>().map(|h| h.0)
+        && crate::window::is_open(handle, cx)
+    {
+        crate::window::raise(handle, cx);
+        activation::window_opened(cx);
+        return;
+    }
     let bounds = Bounds::centered(None, size(px(620.), px(640.)), cx);
     let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
     let env = env.clone();
-    if cx
-        .open_window(options, |_, cx| {
-            cx.new(|cx| {
-                cx.observe(&env.state, |_, _, cx| cx.notify()).detach();
-                OnboardingView { env }
-            })
+    let opened = cx.open_window(options, |_, cx| {
+        cx.new(|cx| {
+            cx.observe(&env.state, |_, _, cx| cx.notify()).detach();
+            OnboardingView { env }
         })
-        .is_ok()
-    {
+    });
+    if let Ok(handle) = opened {
+        cx.set_global(OnboardingHandle(handle));
         activation::window_opened(cx);
     }
 }
@@ -243,6 +255,16 @@ mod tests {
     use gpui::{Context, IntoElement, Render, TestAppContext, Window};
     use yard_app_model::setup::SetupFacts;
     use yard_proto::Profile;
+
+    /// Set up Yard… raises the open checklist rather than opening another.
+    #[gpui::test]
+    async fn onboarding_opens_once(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        cx.update(|cx| super::open(&env, cx));
+        cx.update(|cx| super::open(&env, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+    }
 
     fn fresh() -> SetupFacts {
         SetupFacts {

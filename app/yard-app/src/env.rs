@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use yard_app_model::hint::{HintAction, JobCall, RpcCall, Screen, TerminalCommand};
 use yard_app_model::locate::Location;
+use yard_app_model::refresh::ResourceKey;
 use yard_client::api;
 use yard_proto::YardError;
 
@@ -191,6 +192,28 @@ impl AppEnv {
             )
             .detach()
         });
+    }
+
+    /// Runs `yard <args> --json` like `run_cli`, then fetches `keys` again whatever the result:
+    /// for a CLI command that changes something yardd sends no event for (`trust`, `untrust`).
+    pub fn run_cli_refreshing(&self, id: &str, args: Vec<String>, keys: Vec<ResourceKey>, cx: &mut App) {
+        let cli = self.cli.clone();
+        let state = self.state.clone();
+        let task = self.runner.update(cx, |r, cx| {
+            r.perform(
+                ActionId(id.to_string()),
+                async move {
+                    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+                    cli.run::<Value>(&argv).await.map(|_| ())
+                },
+                cx,
+            )
+        });
+        cx.spawn(async move |cx| {
+            task.await;
+            state.update(cx, |s, cx| s.refresh(keys, cx));
+        })
+        .detach();
     }
 
     pub fn start_daemon(&self, cx: &mut App) {

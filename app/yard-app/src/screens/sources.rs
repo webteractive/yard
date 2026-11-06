@@ -1,4 +1,5 @@
-//! Sources (M6 design §8.2): the brew taps Yard installs from, and whether brew trusts them.
+//! Sources (M6 design §8.2): the brew taps Yard installs from, and whether brew trusts each tap
+//! and each formula in it.
 
 use super::{errors, heading, job};
 use crate::env::AppEnv;
@@ -6,41 +7,60 @@ use crate::widgets::button::Button;
 use crate::widgets::table::{Row, Table};
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use yard_client::api;
+use yard_proto::SourceInfo;
 use yard_proto::methods::SourceParams;
+
+/// The table's column titles, each read out by VoiceOver.
+pub const COLUMNS: [&str; 3] = ["Tap or formula", "Tapped or installed", "Trusted by brew"];
+
+/// A row's trust action: the tap's, or one of its formulae's (`<tap>/<name>`).
+pub struct Target {
+    pub key: String,
+    pub cells: [String; 3],
+    pub verb: &'static str,
+    pub params: SourceParams,
+}
+
+/// The tap, then each of its formulae, with Trust or Untrust for each.
+pub fn targets(s: &SourceInfo) -> Vec<Target> {
+    let verb = |trusted: bool| if trusted { "Untrust" } else { "Trust" };
+    let trust = |trusted: bool| (if trusted { "trusted" } else { "not trusted" }).to_string();
+    let mut out = vec![Target {
+        key: s.tap.clone(),
+        cells: [s.tap.clone(), (if s.tapped { "tapped" } else { "not tapped" }).into(), trust(s.trusted)],
+        verb: verb(s.trusted),
+        params: SourceParams { target: s.tap.clone(), tap: true },
+    }];
+    out.extend(s.formulae.iter().map(|f| {
+        let full = format!("{}/{}", s.tap, f.name);
+        Target {
+            key: full.clone(),
+            cells: [
+                format!("  {}", f.name),
+                (if f.installed { "installed" } else { "not installed" }).into(),
+                trust(f.trusted),
+            ],
+            verb: verb(f.trusted),
+            params: SourceParams { target: full, tap: false },
+        }
+    }));
+    out
+}
 
 pub fn sources(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let sources = env.state.read(cx).sources.value.clone().unwrap_or_default();
-    let rows = sources.iter().map(|s| {
-        let (e, tap, trusted) = (env.clone(), s.tap.clone(), s.trusted);
-        let label = if trusted { "Untrust" } else { "Trust" };
-        Row::new(
-            s.tap.clone(),
-            vec![
-                s.tap.clone().into(),
-                (if s.tapped { "tapped" } else { "not tapped" }).into(),
-                (if trusted { "trusted" } else { "not trusted" }).into(),
-            ],
+    let rows = sources.iter().flat_map(targets).map(|t| {
+        let e = env.clone();
+        let Target { key, cells, verb, params } = t;
+        Row::new(key.clone(), cells.into_iter().map(SharedString::from).collect()).extra(
+            Button::new(format!("source:{key}:{}", verb.to_lowercase()), verb).on_click(move |_, _, cx| {
+                let m = if verb == "Untrust" { api::SOURCES_UNTRUST } else { api::SOURCES_TRUST };
+                job(&e, format!("source:{key}"), m, params.clone(), format!("{verb} {key}"), cx)
+            }),
         )
-        .extra(Button::new(format!("source:{}:{}", s.tap, label.to_lowercase()), label).on_click(
-            move |_, _, cx| {
-                let m = if trusted { api::SOURCES_UNTRUST } else { api::SOURCES_TRUST };
-                let title = format!("{} {tap}", if trusted { "Untrust" } else { "Trust" });
-                job(
-                    &e,
-                    format!("source:{tap}"),
-                    m,
-                    SourceParams { target: tap.clone(), tap: true },
-                    title,
-                    cx,
-                )
-            },
-        ))
     });
-    let table = Table::new(
-        "sources",
-        ["Tap", "", "brew"].iter().map(|c| SharedString::from(*c)).collect(),
-        rows.collect(),
-    );
+    let table =
+        Table::new("sources", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
     div()
         .flex()
         .flex_col()

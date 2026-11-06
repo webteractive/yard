@@ -18,6 +18,64 @@ use yard_client::api;
 use yard_proto::methods::{DocrootParams, EnvParams, InitParams, IsolateParams, NameParams, SiteParams};
 use yard_proto::{ProjectFileKind, SettingSource, SiteDetail, SiteInfo, SiteKind, SiteSource};
 
+/// Save settings to .yard (`sites.init`): asks whether Yard keeps the file in its data root (the
+/// repository stays clean) or writes it into the project, and when another directory's site has
+/// the name (`SITE_NAME_TAKEN`) whether to replace it (design §8.2, §11.3).
+pub fn save_settings(env: &AppEnv, site: &str, path: &str, window: &mut Window, cx: &mut App) {
+    let answer = window.prompt(
+        PromptLevel::Info,
+        &format!("Save {site}'s settings to a .yard?"),
+        Some("Yard keeps it in its data root, so the repository stays clean. Written into the project, it travels with the code, and it then owns PHP, HTTPS and the docroot."),
+        &["Save", "Write it into the project", "Cancel"],
+        cx,
+    );
+    let (env, site, path) = (env.clone(), site.to_string(), path.to_string());
+    window
+        .spawn(cx, async move |cx| {
+            let local = match answer.await {
+                Ok(0) => false,
+                Ok(1) => true,
+                _ => return,
+            };
+            let id = ActionId(format!("site:{site}:init"));
+            let init = |replace: bool, cx: &mut gpui::AsyncWindowContext| {
+                let daemon = env.daemon.clone();
+                let params =
+                    InitParams { path: path.clone(), name: Some(site.clone()), force: false, replace, local };
+                let id = id.clone();
+                env.runner.update(cx, |r, cx| {
+                    r.perform(
+                        id,
+                        async move { call(&*daemon, api::SITES_INIT, params).await.map(|_| ()) },
+                        cx,
+                    )
+                })
+            };
+            if init(false, cx).await.is_some() {
+                return;
+            }
+            let Some(taken) = env.runner.update(cx, |r, _| r.errors.get(&id).cloned()) else { return };
+            if taken.code != yard_proto::ErrorCode::SiteNameTaken {
+                return;
+            }
+            let Ok(answer) = cx.update(|window, cx| {
+                window.prompt(
+                    PromptLevel::Warning,
+                    "Replace it with this directory?",
+                    Some(&taken.message),
+                    &["Replace", "Cancel"],
+                    cx,
+                )
+            }) else {
+                return;
+            };
+            if answer.await == Ok(0) {
+                init(true, cx).await;
+            }
+        })
+        .detach();
+}
+
 fn from(source: Option<&SettingSource>) -> &'static str {
     match source {
         Some(SettingSource::ProjectFile) => "from the project's .yard",
@@ -267,28 +325,8 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         actions = actions.child(
             Button::new(format!("site:{name}:init"), "Save settings to .yard")
                 .disabled(lock.is_some())
-                .on_click(move |_, _, cx| {
-                    let (daemon, site, path) = (e5.daemon.clone(), n5.clone(), p5.display().to_string());
-                    quick(
-                        &e5,
-                        format!("site:{n5}:init"),
-                        async move {
-                            call(
-                                &*daemon,
-                                api::SITES_INIT,
-                                InitParams {
-                                    path,
-                                    name: Some(site),
-                                    force: false,
-                                    replace: false,
-                                    local: false,
-                                },
-                            )
-                            .await
-                            .map(|_| ())
-                        },
-                        cx,
-                    )
+                .on_click(move |_, window, cx| {
+                    save_settings(&e5, &n5, &p5.display().to_string(), window, cx)
                 }),
         );
     }

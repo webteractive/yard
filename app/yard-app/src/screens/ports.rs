@@ -10,7 +10,7 @@ use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString
 use yard_app_model::refresh::ResourceKey;
 use yard_client::api;
 use yard_core::ports::mode_str;
-use yard_proto::methods::{ProfileParams, UnitParams};
+use yard_proto::methods::{ProfileParams, RangeParams, UnitParams};
 use yard_proto::{PortMode, PortStatus, Profile};
 
 /// The table's column titles, each read out by VoiceOver.
@@ -94,6 +94,8 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
     });
     let check = env.clone();
+    let range = crate::env::Nav::field(env, "port:range", "Auto range", "29000-29099", cx);
+    let (set, field) = (env.clone(), range.clone());
     div()
         .flex()
         .flex_col()
@@ -107,5 +109,17 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
             }),
         ))
         .child(table)
+        .child(div().flex().gap(px(8.)).items_center().child(range).child(
+            Button::new("port:range:set", "Set range").on_click(move |_, _, cx| {
+                if let Some(r) = super::value(&field, cx) {
+                    set_range(&set, r, cx);
+                }
+            }),
+        ))
         .into_any_element()
+}
+
+/// Range…: the ports Yard picks automatically come from `range` (`ports.range`, `29000-29099`).
+pub fn set_range(env: &AppEnv, range: String, cx: &mut App) {
+    quick(env, "port:range".into(), api::PORTS_RANGE, RangeParams { range }, cx);
 }

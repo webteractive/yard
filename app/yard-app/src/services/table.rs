@@ -17,6 +17,20 @@ use yard_core::present::{sleep_text, state_text};
 use yard_proto::methods::{EnvParams, ServiceParams, ServiceRemoveParams};
 use yard_proto::{ErrorCode, ServiceInfo, ServiceManager, ServiceState, YardError, engine_display};
 
+/// Remove's question and its buttons (design §11.3).
+pub fn remove_question(name: &str) -> (String, [&'static str; 3]) {
+    (format!("Delete {name} and its data?"), ["Delete", "Remove, keep its data", "Cancel"])
+}
+
+/// The answer to `remove_question` as `services.remove`'s `keep_data`; `None` is Cancel.
+pub fn keep_data(answer: usize) -> Option<bool> {
+    match answer {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
+}
+
 /// Each row's cells as shown: instance, engine and line, state, ports, sleep, managed by, used by.
 #[cfg(test)]
 pub fn row_texts(env: &AppEnv, cx: &App) -> Vec<Vec<String>> {
@@ -214,16 +228,11 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                         if refuse_in_use(&e7, &n7, cx) {
                             return;
                         }
-                        let answer = window.prompt(
-                            PromptLevel::Critical,
-                            &format!("Remove {}?", n7),
-                            Some("Its data is deleted."),
-                            &["Remove", "Cancel"],
-                            cx,
-                        );
+                        let (title, buttons) = remove_question(&n7);
+                        let answer = window.prompt(PromptLevel::Critical, &title, None, &buttons, cx);
                         let (env, name) = (e7.clone(), n7.clone());
                         cx.spawn(async move |cx| {
-                            if answer.await == Ok(0) {
+                            if let Some(keep_data) = answer.await.ok().and_then(keep_data) {
                                 cx.update(|cx| {
                                     let daemon = env.daemon.clone();
                                     env.runner.update(cx, |r, cx| {
@@ -233,7 +242,7 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                                                 call(
                                                     &*daemon,
                                                     api::SERVICES_REMOVE,
-                                                    ServiceRemoveParams { name, keep_data: false },
+                                                    ServiceRemoveParams { name, keep_data },
                                                 )
                                                 .await
                                                 .map(|_| ())

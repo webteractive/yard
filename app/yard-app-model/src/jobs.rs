@@ -19,7 +19,8 @@ pub struct JobKey {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobPhase {
-    /// Queued behind another job: its only line is `waiting for <behind>`.
+    /// Queued behind another job: its only line is `waiting for <job id>`; `behind` is that job's
+    /// title.
     Waiting {
         behind: String,
     },
@@ -80,12 +81,13 @@ impl JobsStore {
     pub fn apply(&mut self, event: &Event, epoch: u64, now: OffsetDateTime) {
         match event {
             Event::JobProgress { job_id, line } => {
+                let behind = line.strip_prefix("waiting for ").map(|id| self.title_of(id, epoch));
                 let r = self.record(job_id, epoch, now);
                 if r.phase.is_finished() {
                     return;
                 }
-                r.phase = match (r.lines.is_empty(), line.strip_prefix("waiting for ")) {
-                    (true, Some(behind)) => JobPhase::Waiting { behind: behind.to_string() },
+                r.phase = match (r.lines.is_empty(), behind) {
+                    (true, Some(behind)) => JobPhase::Waiting { behind },
                     _ => JobPhase::Running,
                 };
                 r.lines.push_back(line.clone());
@@ -121,6 +123,14 @@ impl JobsStore {
         let r = self.record(job_id, epoch, now);
         r.title = title;
         r.started_by_app = true;
+    }
+
+    /// What Activity calls `job_id`: its record's title, or the title for a job started elsewhere.
+    fn title_of(&self, job_id: &str, epoch: u64) -> String {
+        self.records
+            .iter()
+            .find(|r| r.key.epoch == epoch && r.key.id == job_id)
+            .map_or_else(|| title_elsewhere(job_id), |r| r.title.clone())
     }
 
     pub fn phase(&self, key: &JobKey) -> Option<&JobPhase> {
@@ -201,6 +211,25 @@ mod tests {
         assert_eq!(s.phase(&key(1, "php-install-1")), Some(&JobPhase::Succeeded(None)));
     }
 
+    /// The job it waits for is named as Activity names that job, never by its id (found by
+    /// checklist-installs.sh: Activity said `waiting for php-install-1`).
+    #[test]
+    fn waiting_names_the_job_it_waits_for() {
+        let mut s = JobsStore::default();
+        s.claim("php-install-1", 1, "Install PHP 7.1".into(), NOW);
+        s.claim("php-install-2", 1, "Install PHP 7.2".into(), NOW);
+        s.apply(&line("php-install-2", "waiting for php-install-1"), 1, NOW);
+        assert_eq!(
+            s.phase(&key(1, "php-install-2")),
+            Some(&JobPhase::Waiting { behind: "Install PHP 7.1".into() })
+        );
+        s.apply(&line("ext-add-4", "waiting for php-install-3"), 1, NOW);
+        assert_eq!(
+            s.phase(&key(1, "ext-add-4")),
+            Some(&JobPhase::Waiting { behind: "Install PHP (started elsewhere)".into() })
+        );
+    }
+
     #[test]
     fn waiting_for_is_a_phase() {
         let mut s = JobsStore::default();
@@ -208,7 +237,7 @@ mod tests {
         s.apply(&line("php-install-2", "waiting for php-install-1"), 1, NOW);
         assert_eq!(
             s.phase(&key(1, "php-install-2")),
-            Some(&JobPhase::Waiting { behind: "php-install-1".into() })
+            Some(&JobPhase::Waiting { behind: "Install PHP (started elsewhere)".into() })
         );
         s.apply(&line("php-install-2", "==> Downloading"), 1, NOW);
         assert_eq!(s.phase(&key(1, "php-install-2")), Some(&JobPhase::Running));

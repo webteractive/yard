@@ -77,13 +77,15 @@ pub struct AppState {
 }
 
 /// What the menu bar menu and its icon read. The menu is always on screen, so a connect fetches
-/// these whether or not a window ever showed them (design §7.2).
-const MENU: [ResourceKey; 5] = [
+/// these whether or not a window ever showed them (design §7.2). The PHP list brings each installed
+/// version's extensions with it, for the Xdebug submenu (`store`).
+const MENU: [ResourceKey; 6] = [
     ResourceKey::Status,
     ResourceKey::Sites,
     ResourceKey::Services,
     ResourceKey::Ports,
     ResourceKey::Tunnels,
+    ResourceKey::Php,
 ];
 
 impl AppState {
@@ -261,6 +263,12 @@ impl AppState {
                 let answer = fetch.await;
                 let _ = this.update(cx, |s, cx| {
                     s.store(&key, answer);
+                    if key == ResourceKey::Php {
+                        let unseen = s.unseen_extensions();
+                        if !unseen.is_empty() {
+                            s.refresh(unseen, cx);
+                        }
+                    }
                     if s.queue.finished(key) {
                         s.schedule(cx);
                     }
@@ -269,6 +277,16 @@ impl AppState {
             })
             .detach();
         }
+    }
+
+    /// The extension lists of installed PHP versions never asked for. Once asked, a list is
+    /// refetched by the events that change it and on reconnect, never by drawing a screen.
+    fn unseen_extensions(&self) -> Vec<ResourceKey> {
+        let installed = self.php.value.iter().flatten().filter(|p| p.installed);
+        installed
+            .filter(|p| !self.extensions.contains_key(&p.version))
+            .map(|p| ResourceKey::Extensions(p.version.clone()))
+            .collect()
     }
 
     fn fetch(&mut self, key: &ResourceKey) -> BoxFuture<'static, Result<Value, YardError>> {
@@ -349,17 +367,42 @@ mod tests {
         let fake = FakeDaemon::new();
         let state = started(cx, &fake);
         let menu = |fake: &FakeDaemon| {
-            ["status", "sites.list", "services.list", "ports.list", "tunnels.list"].map(|m| fake.count(m))
+            ["status", "sites.list", "services.list", "ports.list", "tunnels.list", "php.list"]
+                .map(|m| fake.count(m))
         };
-        assert_eq!(menu(&fake), [1; 5], "the menu's resources on the first connect");
-        assert_eq!(fake.count("php.list"), 0, "nothing the menu does not show");
+        assert_eq!(menu(&fake), [1; 6], "the menu's resources on the first connect");
+        assert_eq!(fake.count("node.list"), 0, "nothing the menu does not show");
         assert!(state.read_with(cx, |s, _| s.status.value.is_some() && s.sites.value.is_some()));
-        state.update(cx, |s, cx| s.refresh([ResourceKey::Php], cx));
+        state.update(cx, |s, cx| s.refresh([ResourceKey::Node], cx));
         settle(cx);
         fake.push(connected(2));
         settle(cx);
-        assert_eq!(menu(&fake), [2; 5]);
-        assert_eq!(fake.count("php.list"), 2, "a new epoch fetches what was loaded");
+        assert_eq!(menu(&fake), [2; 6]);
+        assert_eq!(fake.count("node.list"), 2, "a new epoch fetches what was loaded");
+    }
+
+    /// The menu's Xdebug submenu reads each installed PHP's extensions, so a connect fetches the
+    /// PHP list and then those (M6 final review: the submenu was missing after a launch until the
+    /// PHP screen had shown that version).
+    #[gpui::test]
+    async fn connect_fetches_each_installed_phps_extensions(cx: &mut TestAppContext) {
+        let fake = FakeDaemon::new();
+        fake.answer(
+            "php.list",
+            json!([
+                {"version": "7.1", "default": false, "installed": true, "sites": [], "pool": null},
+                {"version": "8.3", "default": false, "installed": false, "sites": [], "pool": null},
+                {"version": "8.4", "default": true, "installed": true, "sites": [], "pool": "running"}
+            ]),
+        );
+        fake.answer("ext.list", json!([{"name": "xdebug", "source": "pecl", "enabled": true}]));
+        let state = started(cx, &fake);
+        settle(cx);
+        let mut asked: Vec<String> =
+            fake.calls().into_iter().filter(|(m, _)| m == "ext.list").map(|(_, p)| p.to_string()).collect();
+        asked.sort();
+        assert_eq!(asked, [r#"{"php":"7.1"}"#, r#"{"php":"8.4"}"#]);
+        assert!(state.read_with(cx, |s, _| s.extensions.get("8.4").is_some_and(|r| r.value.is_some())));
     }
 
     #[gpui::test]

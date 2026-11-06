@@ -60,8 +60,10 @@ impl RenderOnce for Picker {
         let disabled = self.disabled.clone();
         let toggle = open.clone();
         let a11y = self.a11y();
+        let id = self.id.to_string();
         let mut root = div()
             .id(ElementId::Name(a11y.id.clone()))
+            .debug_selector(|| id)
             .role(a11y.role)
             .aria_label(a11y.label)
             .aria_value(current.clone())
@@ -95,8 +97,10 @@ impl RenderOnce for Picker {
             let items = self.options.iter().enumerate().map(|(i, o)| {
                 let close = open.clone();
                 let handler = self.on_select.clone();
+                let selector = format!("{}:option:{i}", self.id);
                 div()
                     .id(ElementId::Name(format!("{}:option:{o}", self.id).into()))
+                    .debug_selector(|| selector)
                     .role(Role::MenuItem)
                     .aria_label(o.clone())
                     .aria_selected(self.selected == Some(i))
@@ -120,6 +124,8 @@ impl RenderOnce for Picker {
                     div()
                         .id(ElementId::Name(format!("{}:menu", self.id).into()))
                         .role(Role::Menu)
+                        // Its options take their clicks: nothing under the popup is pressed.
+                        .occlude()
                         .mt(px(26.))
                         .py(px(4.))
                         .rounded(px(6.))

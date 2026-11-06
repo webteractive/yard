@@ -16,6 +16,10 @@ use gpui::{
 use yard_app_model::hint::{HintAction, Screen};
 use yard_proto::SiteKind;
 
+/// The actions on a site's detail whose errors the Sites screen shows beside it, as
+/// `site:<name>:<verb>`; with `site:link` and `site:proxy`.
+pub const DETAIL_VERBS: [&str; 7] = ["php", "secure", "docroot", "init", "env", "unlink", "node"];
+
 pub fn link_folder(env: &AppEnv, cx: &mut App) {
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: false,
@@ -112,11 +116,7 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let runner = env.runner.read(cx);
     let mut ids: Vec<String> = vec!["site:link".into(), "site:proxy".into()];
     if let Some(n) = &selected {
-        ids.extend(
-            ["php", "secure", "docroot", "init", "env", "unlink", "node"]
-                .iter()
-                .map(|v| format!("site:{n}:{v}")),
-        );
+        ids.extend(DETAIL_VERBS.iter().map(|v| format!("site:{n}:{v}")));
     }
     let errors: Vec<_> = ids
         .into_iter()

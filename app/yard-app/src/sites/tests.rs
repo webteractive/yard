@@ -105,3 +105,59 @@ fn the_detail_shows_the_sites_node_and_offers_to_unpin_yards_own_pin() {
 
     assert!(!super::detail::source_lines(&detail("default")).iter().any(|l| l.starts_with("Node")));
 }
+
+struct Blank;
+
+impl Render for Blank {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::div()
+    }
+}
+
+/// Save settings to .yard asks where to write it (Yard's data root or the project) and, when
+/// another directory's site has the name, whether to replace it (design §8.2, §11.3; M6 final
+/// review: it always wrote the managed file and stopped at SITE_NAME_TAKEN).
+#[gpui::test]
+async fn save_settings_asks_where_and_whether_to_replace(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    let taken = yard_proto::YardError::new(yard_proto::ErrorCode::SiteNameTaken, "blog serves /old/blog");
+    let written =
+        json!({"file": "/p/blog/.yard", "text": "", "written": true, "site": site("blog", json!([]))});
+    fake.answers("sites.init", vec![Err(taken), Ok(written)]);
+    let (_v, cx) = cx.add_window_view(|_, _| Blank);
+    cx.update(|window, cx| super::detail::save_settings(&env, "blog", "/p/blog", window, cx));
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt(), "asks where");
+    cx.simulate_prompt_answer("Write it into the project");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt(), "asks whether to replace");
+    cx.simulate_prompt_answer("Replace");
+    cx.run_until_parked();
+    let inits: Vec<(bool, bool)> = fake
+        .calls()
+        .into_iter()
+        .filter(|(m, _)| m == "sites.init")
+        .map(|(_, p)| (p["local"].as_bool().unwrap(), p["replace"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(inits, [(true, false), (true, true)]);
+    let error = env
+        .runner
+        .read_with(cx, |r, _| r.errors.get(&crate::runner::ActionId("site:blog:init".into())).cloned());
+    assert_eq!(error, None, "the replace went through");
+}
+
+/// Not now on a settle with a missing Node leaves `yard init`'s note beside the site, its install
+/// command as the hint (design §11.1).
+#[gpui::test]
+async fn not_now_leaves_the_node_note_beside_the_site(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    let s: yard_proto::SiteInfo = serde_json::from_value(site("blog", json!([]))).unwrap();
+    let mut s = s;
+    s.node = serde_json::from_value(json!({"spec": "22", "source": "project", "version": null})).unwrap();
+    let note = yard_app_model::settle::SettlePlan::new(&s).unwrap().not_now.unwrap();
+    let id = crate::runner::ActionId("site:blog:node".into());
+    cx.update(|cx| super::forms::not_now(&env, id.clone(), note, cx));
+    let shown = env.runner.read_with(cx, |r, _| r.errors.get(&id).cloned()).unwrap();
+    assert_eq!(shown.message, "blog runs Node 22, which is not installed");
+    assert!(crate::sites::DETAIL_VERBS.contains(&"node"), "the Sites detail shows it");
+}

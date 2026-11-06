@@ -91,13 +91,34 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
                 )));
             }
             let submit = env.clone();
-            form.submit("Install", false, move |_, _, cx| {
+            let form = form.submit("Install", false, move |_, _, cx| {
                 let task = submit.runner.update(cx, |r, cx| r.settle(found.clone(), cx));
                 task.detach();
                 close(&submit, cx);
-            })
+            });
+            if let Some(note) = plan.not_now {
+                let (later, id) = (env.clone(), ActionId(format!("site:{site}:node")));
+                return Some(
+                    form.cancel_label("Not now")
+                        .on_cancel(move |_, _, cx| {
+                            not_now(&later, id.clone(), note.clone(), cx);
+                            close(&later, cx);
+                        })
+                        .into_any_element(),
+                );
+            }
+            form
         }
         _ => return None,
     };
     Some(form.on_cancel(move |_, _, cx| close(&cancel, cx)).into_any_element())
+}
+
+/// **Not now** on a settle whose Node is missing: the site serves, and the note stays beside it
+/// with the install command (design §11.1).
+pub fn not_now(env: &AppEnv, id: ActionId, note: yard_proto::YardError, cx: &mut App) {
+    env.runner.update(cx, |r, cx| {
+        r.errors.record(id, note);
+        cx.notify();
+    });
 }
