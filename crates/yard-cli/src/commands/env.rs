@@ -1,7 +1,7 @@
 //! `yard env`: the `.env` lines for a project's services. Prints; never writes a file.
 
 use super::{Ctx, Outcome, cwd_absolute};
-use yard_core::emailulator::NAME as EMAILULATOR;
+use yard_core::present::{env_text, split_env_warnings};
 use yard_proto::methods::{self, EnvParams, SiteDetailParams};
 use yard_proto::{EnvBlock, ErrorCode, SiteDetail};
 
@@ -33,25 +33,18 @@ pub async fn env(ctx: &Ctx, site: Option<String>, service: Option<String>) -> Ou
         }
         return Ok(0);
     }
-    print!("{}", human(&warn_notes(blocks)));
+    print!("{}", env_text(&warn_notes(blocks)));
     Ok(0)
 }
 
 /// Prints emailulator's note as a `warning:` on stderr when the block still has lines (it is
 /// caught but not answering), and drops it from what is pasted.
 pub fn warn_notes(blocks: Vec<EnvBlock>) -> Vec<EnvBlock> {
+    let (blocks, warnings) = split_env_warnings(blocks);
+    for note in warnings {
+        eprintln!("warning: {note}");
+    }
     blocks
-        .into_iter()
-        .map(|mut block| {
-            if block.instance == EMAILULATOR
-                && !block.lines.is_empty()
-                && let Some(note) = block.note.take()
-            {
-                eprintln!("warning: {note}");
-            }
-            block
-        })
-        .collect()
 }
 
 /// Why a project prints nothing, and how to get lines anyway.
@@ -64,28 +57,4 @@ fn nothing_for(detail: &SiteDetail) -> String {
     format!(
         "{why} yard env --service <instance> prints one instance (yard services lists them); outside a project, yard env prints every instance."
     )
-}
-
-/// `# <instance>`, a `# note` when there is one, then the lines; blocks are separated by a
-/// blank line. A block with a note and no lines is that one comment line: the note already
-/// names the instance and the command that fixes it.
-pub fn human(blocks: &[EnvBlock]) -> String {
-    let rendered: Vec<String> = blocks
-        .iter()
-        .map(|block| match (&block.note, block.lines.is_empty()) {
-            (Some(note), true) => format!("# {note}\n"),
-            (note, _) => {
-                let mut out = format!("# {}\n", block.instance);
-                if let Some(note) = note {
-                    out.push_str(&format!("# {note}\n"));
-                }
-                for line in &block.lines {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-                out
-            }
-        })
-        .collect();
-    rendered.join("\n")
 }

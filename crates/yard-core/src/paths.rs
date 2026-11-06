@@ -9,6 +9,8 @@ pub const DAEMON_LABEL: &str = "dev.more.yard.daemon";
 pub const HELPER_LABEL: &str = "dev.more.yard.helper";
 pub const HELPER_SOCKET: &str = "/var/run/dev.more.yard.helper.sock";
 pub const HELPER_BINARY: &str = "/Library/PrivilegedHelperTools/dev.more.yard.helper";
+/// The helper's LaunchDaemon plist; its `--root` names the data root the helper serves.
+pub const HELPER_PLIST: &str = "/Library/LaunchDaemons/dev.more.yard.helper.plist";
 pub const RESOLVER_MARKER: &str = "# Managed by Yard";
 pub const RESOLVER_DIR: &str = "/etc/resolver";
 

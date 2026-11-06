@@ -78,7 +78,11 @@ Rust daemon.
 
 - **`yardd`** owns all state and logic. Long-running, Tokio-based. Its
   LaunchAgent label is `dev.more.yard.daemon`; the helper's is
-  `dev.more.yard.helper`.
+  `dev.more.yard.helper`. One label serves one data root (the plist's `YARD_ROOT`, else
+  `~/.yard`), so `yard start` and `yard stop` refuse a root the installed agent does not
+  serve, with the hint to run `yardd --root <root>` directly: otherwise starting a scratch
+  root would rewrite the agent and stopping one would stop the real yardd (2026-11-06,
+  found by the M6 checklist, whose Start, Stop and Restart yardd run them).
 - **nginx runs as the user**, master and workers, supervised by `yardd` like every
   other unit. Root never runs nginx and never reads its config. A root nginx
   reading a user-owned config is a no-password path to root for anything running
@@ -91,6 +95,11 @@ Rust daemon.
   directory and the Homebrew prefix are fixed when the helper is installed, and
   the remaining arguments (TLD, port) are validated. It listens on
   `/var/run/dev.more.yard.helper.sock` and serves only the owning user's uid.
+  Any process of that user can reach it, so `yardd` asks for `resolver.install`,
+  `resolver.remove` and `ports.bind` only while the helper's plist names its own data
+  root (`--root`): a `yardd` on a scratch root leaves the Mac's resolver and 80/443 to the
+  helper's root, and `doctor` says so (2026-11-06; a scratch run had sent this Mac's
+  `.yard` names to a dnsmasq that then stopped).
 - **`ports.bind`** exists only for the `privileged` profile (§7). It accepts port 80
   or 443 and nothing else, binds that port on `127.0.0.1` and `::1`, and returns
   the listening sockets to `yardd` as `SCM_RIGHTS` on the helper socket. `yardd`

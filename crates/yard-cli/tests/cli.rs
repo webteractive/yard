@@ -2524,3 +2524,34 @@ fn service_add_help_mentions_emailulator() {
     assert!(so.contains("mysql, postgres, redis, minio or emailulator"), "{so}");
     assert!(so.contains("Yard never installs emailulator itself"), "{so}");
 }
+
+/// One LaunchAgent label serves one data root: `yard --root <scratch> start` must not rewrite the
+/// agent that serves another root, nor `stop` boot it out (found by the M6 checklist: Yard.app's
+/// Start, Stop and Restart yardd run these for the root it was opened with). A fake `launchctl`
+/// first on PATH records any call, so the real agent is never touched, even by a failing run.
+#[test]
+fn start_and_stop_leave_another_roots_agent_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let agents = home.path().join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let plist = yard_core::render::launchd::daemon_plist(Path::new("/y/yardd"), None, Path::new("/l.log"));
+    let file = agents.join("dev.more.yard.daemon.plist");
+    std::fs::write(&file, &plist).unwrap();
+    let bin = TempDir::new().unwrap();
+    let log = bin.path().join("launchctl.log");
+    let fake = bin.path().join("launchctl");
+    std::fs::write(&fake, format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 0\n", log.display())).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.path().display());
+    for verb in ["start", "stop"] {
+        let out =
+            yard_at(root.path()).env("HOME", home.path()).env("PATH", &path).arg(verb).output().unwrap();
+        assert!(!out.status.success(), "{verb} went through: {}", stdout(&out));
+        let served = home.path().join(".yard");
+        assert!(stderr(&out).contains(&format!("serves {}", served.display())), "{verb}: {}", stderr(&out));
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), plist, "the agent's plist is untouched");
+    assert!(!log.exists(), "launchctl ran: {:?}", std::fs::read_to_string(&log).ok());
+}

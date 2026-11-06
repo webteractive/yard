@@ -165,6 +165,63 @@ async fn first_reconcile_writes_configs_and_starts_units() {
     e.sup.shutdown().await;
 }
 
+/// A yardd on a scratch root never repoints the system's resolver at its own dnsmasq: the
+/// installed helper serves another root (found running Yard.app's checklist on a scratch root,
+/// which sent this Mac's .yard names to a dnsmasq that then stopped).
+#[tokio::test]
+async fn a_helper_installed_for_another_root_is_left_alone() {
+    let fx = Fixture::new();
+    let resolver = tempfile::tempdir().unwrap();
+    let plist = fx.paths.root().join("helper.plist");
+    let elsewhere = tempfile::tempdir().unwrap();
+    let xml = yard_core::render::launchd::helper_plist(
+        Path::new("/x/helper"),
+        501,
+        "me",
+        elsewhere.path(),
+        Path::new("/opt/homebrew"),
+    );
+    std::fs::write(&plist, xml).unwrap();
+    let helper = spawn_helper(&fx, resolver.path(), &[]).await.serving(fx.paths.root(), &plist);
+    assert_eq!(helper.other_root().as_deref(), Some(elsewhere.path()));
+    let e = env_with(fx, resolver, helper);
+    e.site("blog");
+
+    let report = e.rec.reconcile().await.unwrap();
+    assert!(!e.resolver.path().join("yard").exists(), "the resolver is the other root's");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("the helper serves") && w.contains(&elsewhere.path().display().to_string())),
+        "{report:?}"
+    );
+    e.unit("nginx", running).await;
+    e.sup.shutdown().await;
+}
+
+/// The helper installed for this root is used as before.
+#[tokio::test]
+async fn a_helper_installed_for_this_root_installs_the_resolver() {
+    let fx = Fixture::new();
+    let resolver = tempfile::tempdir().unwrap();
+    let plist = fx.paths.root().join("helper.plist");
+    let xml = yard_core::render::launchd::helper_plist(
+        Path::new("/x/helper"),
+        501,
+        "me",
+        fx.paths.root(),
+        Path::new("/opt/homebrew"),
+    );
+    std::fs::write(&plist, xml).unwrap();
+    let helper = spawn_helper(&fx, resolver.path(), &[]).await.serving(fx.paths.root(), &plist);
+    assert_eq!(helper.other_root(), None);
+    let e = env_with(fx, resolver, helper);
+    e.rec.reconcile().await.unwrap();
+    assert!(e.resolver.path().join("yard").exists());
+    e.sup.shutdown().await;
+}
+
 #[tokio::test]
 async fn reconcile_is_idempotent() {
     let e = env().await;

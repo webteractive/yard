@@ -225,6 +225,31 @@ async fn resolver_on_wrong_port_warns() {
     assert!(c.hint.is_some());
 }
 
+/// On a scratch root the resolver points at the helper's root, which is no fault to restart away.
+#[tokio::test]
+async fn a_resolver_for_the_helpers_other_root_names_it() {
+    let e = env().await;
+    e.write_resolver(&resolver_file(e.dns + 1));
+    let elsewhere = tempfile::tempdir().unwrap();
+    let plist = e.fx.paths.root().join("helper.plist");
+    let xml = yard_core::render::launchd::helper_plist(
+        std::path::Path::new("/x/helper"),
+        501,
+        "me",
+        elsewhere.path(),
+        std::path::Path::new("/opt/homebrew"),
+    );
+    std::fs::write(&plist, xml).unwrap();
+    let helper = e.helper.clone().serving(e.fx.paths.root(), &plist);
+
+    let report = e.offline(&helper).await;
+
+    let c = only(&report, "resolver");
+    assert_eq!(c.status, CheckStatus::Warn);
+    assert!(c.message.contains(&elsewhere.path().display().to_string()), "{c:?}");
+    assert!(c.hint.as_deref().unwrap().contains("helper install"), "{c:?}");
+}
+
 #[tokio::test]
 async fn port_held_by_listener_fails_with_holder() {
     let e = env().await;

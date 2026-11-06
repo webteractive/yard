@@ -136,22 +136,24 @@ pub fn resolve_line(
     }
     let key = engine.key();
     let name = engine.display();
+    let offered: Vec<&str> = found.iter().map(|(l, _)| l.as_str()).collect();
     let (message, hint) = match found.first() {
         None if !engine.versioned() => (format!("{name} has no versions to choose between"), None),
         None => {
             (format!("brew offers no {name} release lines"), Some("brew update, then try again".to_string()))
         }
-        Some((first, _)) => {
-            let offered: Vec<&str> = found.iter().map(|(l, _)| l.as_str()).collect();
-            (
-                format!("{name} {line} is not available from brew; it offers {}", offered.join(", ")),
-                Some(format!("yard service add {key} --version {first}")),
-            )
-        }
+        Some((first, _)) => (
+            format!("{name} {line} is not available from brew; it offers {}", offered.join(", ")),
+            Some(format!("yard service add {key} --version {first}")),
+        ),
     };
     let mut error = YardError::new(ErrorCode::ServiceVersionUnsupported, message);
     if let Some(hint) = hint {
         error = error.with_hint(hint);
+    }
+    // The lines brew has, for a client to offer instead (Yard.app's line picker).
+    if !offered.is_empty() {
+        error = error.with_data(serde_json::json!({ "available": offered }));
     }
     Err(error)
 }
@@ -206,6 +208,8 @@ mod tests {
         assert_eq!(err.code, ErrorCode::ServiceVersionUnsupported);
         assert!(err.message.contains("8.0, 8.4, 9.7, 26.10"), "{}", err.message);
         assert_eq!(err.hint.as_deref(), Some("yard service add mysql --version 8.0"));
+        // Yard.app turns the line field into a picker of these (M6 design §8.2).
+        assert_eq!(err.data, Some(serde_json::json!({"available": ["8.0", "8.4", "9.7", "26.10"]})));
     }
 
     #[test]

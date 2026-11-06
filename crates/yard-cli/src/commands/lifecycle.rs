@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use yard_core::paths::DAEMON_LABEL;
-use yard_core::render::launchd::daemon_plist;
+use yard_core::paths::Paths;
+use yard_core::render::launchd::{agent_root_conflict, daemon_plist};
 use yard_proto::{ErrorCode, YardError};
 
 const START_WAIT: Duration = Duration::from_secs(5);
 
 pub async fn start(ctx: &Ctx) -> Outcome {
+    leaves_other_roots_agent(ctx)?;
     let yardd = sibling("yardd")?;
     let log = ctx.paths.log("yardd");
     std::fs::create_dir_all(ctx.paths.logs_dir()).map_err(|e| io(&ctx.paths.logs_dir(), e))?;
@@ -57,6 +59,7 @@ pub async fn start(ctx: &Ctx) -> Outcome {
 }
 
 pub async fn stop(ctx: &Ctx) -> Outcome {
+    leaves_other_roots_agent(ctx)?;
     let service = format!("gui/{}/{DAEMON_LABEL}", uid());
     let out = Command::new("launchctl")
         .args(["bootout", &service])
@@ -78,6 +81,27 @@ pub async fn stop(ctx: &Ctx) -> Outcome {
         if was_running { "yardd stopped.\n".into() } else { "yardd was not running.\n".into() }
     });
     Ok(0)
+}
+
+/// Refuses when the installed agent serves another data root. It has one label, so starting it
+/// for this root would rewrite it and stopping it would stop that root's yardd: a scratch root
+/// gets a yardd of its own, run directly.
+fn leaves_other_roots_agent(ctx: &Ctx) -> Result<(), YardError> {
+    let Ok(bytes) = std::fs::read(agent_plist()?) else { return Ok(()) };
+    let default_root = Paths::from_vars(None, std::env::var_os("HOME").map(PathBuf::from))?;
+    let Some(served) = agent_root_conflict(&bytes, ctx.paths.root(), default_root.root()) else {
+        return Ok(());
+    };
+    let yardd = sibling("yardd").map_or_else(|_| "yardd".to_string(), |p| p.display().to_string());
+    Err(YardError::new(
+        ErrorCode::InvalidArgument,
+        format!(
+            "the yardd LaunchAgent serves {}, not {}; it has one label, so yard start and stop leave it to that root",
+            served.display(),
+            ctx.paths.root().display()
+        ),
+    )
+    .with_hint(format!("{yardd} --root {}", ctx.paths.root().display())))
 }
 
 /// `bootout` returns before launchd lets go of the label; a `bootstrap` in that window fails.

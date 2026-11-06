@@ -36,7 +36,11 @@ triggers:
   the same way. Checking only the canonical path misses a symlink sitting in someone
   else's directory. `yard helper install` checks it.
 - Socket: `/var/run/dev.more.yard.helper.sock`, mode 0666, and every connection is
-  checked with `getpeereid`. Only the owning uid (or root) is served. It is not in the
+  checked with `getpeereid`. Only the owning uid (or root) is served. That is every yardd the
+  user runs, scratch roots included, so yardd's `HelperClient::serving` sends `resolver.install`,
+  `resolver.remove` and `ports.bind` only while the helper's plist (`HELPER_PLIST`, read with
+  `render::launchd::helper_root`) names yardd's own root; `doctor`'s `resolver` check says when it
+  does not. Tests leave `DaemonOptions.helper_plist` absent, so their in-process helper serves. It is not in the
   data root, so root never creates files in a directory the user can rewrite.
 - **Root never acts on a path in the data root by name.** The owner can make any name
   there a hard link or symlink to a root file. Upgrading from M1, `helper install`

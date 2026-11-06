@@ -3,7 +3,7 @@
 use crate::services::sleep::SleepAfter;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use yard_proto::{ServiceInfo, ServiceManager, ServiceState, SiteNode};
+use yard_proto::{EnvBlock, ServiceInfo, ServiceManager, ServiceState, SiteNode};
 
 /// `yard node install 22`, quoted where the shell would read the spec.
 pub use crate::node::install_hint;
@@ -53,6 +53,50 @@ pub fn sleep_text(info: &ServiceInfo) -> String {
 /// The Node spec a site asks for that nothing installed matches.
 pub fn missing_node(node: Option<&SiteNode>) -> Option<&str> {
     node.filter(|n| n.error.is_none() && n.version.is_none()).and_then(|n| n.spec.as_deref())
+}
+
+/// Takes emailulator's note out of its block when the block still has lines (emailulator is
+/// caught but not answering): it is a warning for the reader, not a line to paste. Returns the
+/// blocks to paste and the notes taken out.
+pub fn split_env_warnings(blocks: Vec<EnvBlock>) -> (Vec<EnvBlock>, Vec<String>) {
+    let mut warnings = vec![];
+    let blocks = blocks
+        .into_iter()
+        .map(|mut block| {
+            if block.instance == crate::emailulator::NAME
+                && !block.lines.is_empty()
+                && let Some(note) = block.note.take()
+            {
+                warnings.push(note);
+            }
+            block
+        })
+        .collect();
+    (blocks, warnings)
+}
+
+/// The `.env` text `yard env` prints and Yard.app copies: `# <instance>`, a `# note` when there
+/// is one, then the lines; blocks are separated by a blank line. A block with a note and no lines
+/// is that one comment line: the note already names the instance and the command that fixes it.
+pub fn env_text(blocks: &[EnvBlock]) -> String {
+    let rendered: Vec<String> = blocks
+        .iter()
+        .map(|block| match (&block.note, block.lines.is_empty()) {
+            (Some(note), true) => format!("# {note}\n"),
+            (note, _) => {
+                let mut out = format!("# {}\n", block.instance);
+                if let Some(note) = note {
+                    out.push_str(&format!("# {note}\n"));
+                }
+                for line in &block.lines {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out
+            }
+        })
+        .collect();
+    rendered.join("\n")
 }
 
 #[cfg(test)]

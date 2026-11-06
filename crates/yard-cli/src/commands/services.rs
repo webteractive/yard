@@ -167,7 +167,7 @@ pub async fn add_instance(
     println!("Added {}. For your .env:", created.name);
     let params = EnvParams { service: Some(created.name), ..Default::default() };
     let blocks: Vec<EnvBlock> = ctx.client().await?.call(methods::ENV_PRINT, params).await?;
-    print!("{}", env::human(&env::warn_notes(blocks)));
+    print!("{}", yard_core::present::env_text(&env::warn_notes(blocks)));
     Ok(())
 }
 
@@ -180,7 +180,7 @@ async fn print_mail(ctx: &Ctx) -> Result<(), CliError> {
     }
     let params = EnvParams { service: Some(EMAILULATOR.into()), ..Default::default() };
     let blocks: Vec<EnvBlock> = ctx.client().await?.call(methods::ENV_PRINT, params).await?;
-    print!("{}", env::human(&env::warn_notes(blocks)));
+    print!("{}", yard_core::present::env_text(&env::warn_notes(blocks)));
     Ok(())
 }
 

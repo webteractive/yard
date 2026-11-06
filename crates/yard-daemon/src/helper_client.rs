@@ -18,22 +18,64 @@ const INSTALL_HINT: &str = "sudo yard helper install";
 #[derive(Debug, Clone)]
 pub struct HelperClient {
     socket: PathBuf,
+    /// This yardd's data root and the helper's LaunchDaemon plist, when the helper may only be
+    /// used by the yardd of the root it was installed for (`serving`).
+    serving: Option<(PathBuf, PathBuf)>,
 }
 
 impl HelperClient {
     pub fn new(socket: impl Into<PathBuf>) -> Self {
-        Self { socket: socket.into() }
+        Self { socket: socket.into(), serving: None }
+    }
+
+    /// Asks the helper to change the system (the resolver, 80 and 443) only while it was
+    /// installed for `root`, as `plist` records. The helper takes these verbs from any process of
+    /// its user, so without this a yardd on a scratch root would point the Mac's `.yard` names at
+    /// its own dnsmasq.
+    pub fn serving(mut self, root: &Path, plist: &Path) -> Self {
+        self.serving = Some((root.to_path_buf(), plist.to_path_buf()));
+        self
     }
 
     pub fn socket(&self) -> &Path {
         &self.socket
     }
 
+    /// The data root the installed helper serves, when it is not this yardd's. `None` when it is
+    /// this one's, or no helper plist can be read (the call then fails as it always has).
+    pub fn other_root(&self) -> Option<PathBuf> {
+        let (root, plist) = self.serving.as_ref()?;
+        let theirs = yard_core::render::launchd::helper_root(&std::fs::read(plist).ok()?)?;
+        let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        };
+        (!same(root, &theirs)).then_some(theirs)
+    }
+
+    /// Refuses a verb that changes the system when the helper serves another root.
+    fn ours(&self) -> Result<(), YardError> {
+        match (self.other_root(), &self.serving) {
+            (Some(theirs), Some((root, _))) => Err(YardError::new(
+                ErrorCode::HelperRefused,
+                format!(
+                    "the helper serves {}, not {}, so this yardd leaves the resolver and ports 80 and 443 to that root's yardd",
+                    theirs.display(),
+                    root.display()
+                ),
+            )
+            .with_hint(format!("sudo yard --root {} helper install", root.display()))),
+            _ => Ok(()),
+        }
+    }
+
     pub async fn install_resolver(&self, tld: &str, port: u16) -> Result<(), YardError> {
+        self.ours()?;
         self.call(helper::RESOLVER_INSTALL, json!({ "tld": tld, "port": port })).await
     }
 
     pub async fn remove_resolver(&self, tld: &str) -> Result<(), YardError> {
+        self.ours()?;
         self.call(helper::RESOLVER_REMOVE, json!({ "tld": tld })).await
     }
 
@@ -45,6 +87,7 @@ impl HelperClient {
     /// that order. The answer carries them, so this reads it with `recvmsg` on a
     /// blocking socket that times out like `call` does.
     pub async fn bind_port(&self, port: u16) -> Result<Vec<OwnedFd>, YardError> {
+        self.ours()?;
         let socket = self.socket.clone();
         let exchange = move || -> Result<Vec<OwnedFd>, YardError> {
             let mut stream =

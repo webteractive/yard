@@ -32,10 +32,13 @@ const STARTUP: Duration = Duration::from_secs(60);
 pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: &Path) -> DaemonOptions {
     let no_apps = paths.root().join("no-applications");
     let home = paths.root().join("home");
+    // No plist: the in-process helper serves whatever root a test gives it.
+    let helper_plist = paths.root().join("no-helper.plist");
     DaemonOptions {
         paths,
         brew_prefix: brew.to_path_buf(),
         helper_socket,
+        helper_plist,
         resolver_dir: resolver_dir.to_path_buf(),
         supervisor: fast(),
         debounce: Duration::from_millis(50),

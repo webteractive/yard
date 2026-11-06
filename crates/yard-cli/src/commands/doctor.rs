@@ -38,7 +38,8 @@ fn client_env() -> BTreeMap<String, String> {
 async fn offline(ctx: &Ctx) -> DoctorReport {
     // A missing Homebrew is the brew check's to report, so fall back to its usual prefix.
     let brew = Brew::from_env(&|p: &Path| p.exists()).unwrap_or_else(|_| Brew::new(DEFAULT_PREFIX));
-    let helper = HelperClient::new(HELPER_SOCKET);
+    let helper =
+        HelperClient::new(HELPER_SOCKET).serving(ctx.paths.root(), Path::new(yard_core::paths::HELPER_PLIST));
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     doctor::run(DoctorInput {
         paths: &ctx.paths,

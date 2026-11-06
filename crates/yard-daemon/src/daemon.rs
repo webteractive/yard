@@ -33,6 +33,9 @@ pub struct DaemonOptions {
     pub paths: Paths,
     pub brew_prefix: PathBuf,
     pub helper_socket: PathBuf,
+    /// The helper's LaunchDaemon plist: yardd asks the helper for the resolver and 80/443 only
+    /// while it names this data root (`HelperClient::serving`).
+    pub helper_plist: PathBuf,
     /// Where `doctor` looks for the resolver file the helper writes.
     pub resolver_dir: PathBuf,
     pub supervisor: SupervisorConfig,
@@ -70,6 +73,7 @@ impl DaemonOptions {
             paths,
             brew_prefix,
             helper_socket: PathBuf::from(yard_core::paths::HELPER_SOCKET),
+            helper_plist: PathBuf::from(yard_core::paths::HELPER_PLIST),
             resolver_dir: PathBuf::from(yard_core::paths::RESOLVER_DIR),
             supervisor: SupervisorConfig::default(),
             debounce: Duration::from_millis(500),
@@ -146,7 +150,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     }
     private_root(opts.paths.root())?;
     let bus = EventBus::new();
-    let helper = HelperClient::new(&opts.helper_socket);
+    let helper = HelperClient::new(&opts.helper_socket).serving(opts.paths.root(), &opts.helper_plist);
     let brew = Brew::new(&opts.brew_prefix);
     let sockets = Arc::new(PrivilegedSockets::new(helper.clone()));
     let supervisor = Arc::new(Supervisor::new(opts.supervisor, opts.paths.logs_dir(), bus.clone(), sockets));

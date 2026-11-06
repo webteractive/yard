@@ -229,7 +229,14 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         }
     });
 
-    checks.push(resolver(&view, input.resolver_dir, input.daemon_running));
+    let helper_root = input.helper.other_root();
+    checks.push(resolver(
+        &view,
+        input.resolver_dir,
+        input.daemon_running,
+        input.paths.root(),
+        helper_root.as_deref(),
+    ));
 
     match &view.registry {
         Some(registry) => {
@@ -1179,10 +1186,21 @@ pub fn exit_code(report: &DoctorReport) -> i32 {
     i32::from(report.checks.iter().any(|c| c.status == CheckStatus::Fail))
 }
 
-fn resolver(view: &View, dir: &Path, daemon_running: bool) -> Check {
+fn resolver(view: &View, dir: &Path, daemon_running: bool, root: &Path, helper_root: Option<&Path>) -> Check {
     let Some(tld) = &view.tld else {
         return warn("resolver", "not checked while the configuration does not parse", view.config_hint());
     };
+    // A scratch root: the resolver is the helper's root's, and this yardd leaves it alone.
+    if let Some(theirs) = helper_root {
+        return warn(
+            "resolver",
+            format!(
+                "the helper serves {}, so .{tld} names on this Mac resolve through that root's dnsmasq, not this one's; installing the helper for this root moves it here",
+                theirs.display()
+            ),
+            format!("sudo yard --root {} helper install", root.display()),
+        );
+    }
     let dns = view.registry.as_ref().and_then(|r| r.entries.get(DNSMASQ)).map_or(DNSMASQ_PORT, |e| e.port);
     let file = dir.join(tld);
     // yardd installs the resolver on start, and again after a restart.

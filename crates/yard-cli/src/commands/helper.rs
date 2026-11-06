@@ -18,7 +18,7 @@ use yard_daemon::helper_client::HelperClient;
 use yard_proto::helper::{HelperInstall, HelperStatus};
 use yard_proto::{ErrorCode, YardError};
 
-const PLIST: &str = "/Library/LaunchDaemons/dev.more.yard.helper.plist";
+const PLIST: &str = yard_core::paths::HELPER_PLIST;
 /// M1's helper ran nginx as root. Sent to the helper being replaced, so its nginx lets go
 /// of the ports before yardd starts its own.
 const LEGACY_NGINX_STOP: &str = "nginx.stop";

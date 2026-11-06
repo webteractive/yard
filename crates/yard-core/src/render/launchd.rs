@@ -71,6 +71,17 @@ pub fn read_agent(bytes: &[u8]) -> Result<AgentFacts, YardError> {
     Ok(AgentFacts { program: PathBuf::from(program), root })
 }
 
+/// The data root the installed daemon agent serves when it is not `ours`: its `YARD_ROOT`, else
+/// `default_root`. The agent has one label, so `yard start` or `stop` for `ours` would take it from
+/// that root. `None` when it serves `ours`, or when the plist does not parse (`start` rewrites it).
+pub fn agent_root_conflict(plist: &[u8], ours: &Path, default_root: &Path) -> Option<PathBuf> {
+    let served = read_agent(plist).ok()?.root.unwrap_or_else(|| default_root.to_path_buf());
+    let same = |a: &Path, b: &Path| {
+        a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+    };
+    (!same(&served, ours)).then_some(served)
+}
+
 /// Everything the helper trusts is fixed here at install time, never sent by a caller.
 pub fn helper_plist(binary: &Path, uid: u32, user: &str, root: &Path, brew_prefix: &Path) -> Vec<u8> {
     let mut d = Dictionary::new();
@@ -93,10 +104,55 @@ pub fn helper_plist(binary: &Path, uid: u32, user: &str, root: &Path, brew_prefi
     to_xml(d)
 }
 
+/// The data root an installed helper serves: the `--root` its plist was written with. `None` when
+/// the bytes are not a helper plist.
+pub fn helper_root(plist: &[u8]) -> Option<PathBuf> {
+    let value = Value::from_reader(std::io::Cursor::new(plist)).ok()?;
+    let args = value.as_dictionary()?.get("ProgramArguments")?.as_array()?;
+    let at = args.iter().position(|a| a.as_string() == Some("--root"))?;
+    args.get(at + 1)?.as_string().map(PathBuf::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use yard_proto::ErrorCode;
+
+    /// One LaunchAgent label serves one data root: `yard --root <scratch> start` must not rewrite
+    /// the agent that serves `~/.yard`, nor `stop` boot it out (found by the M6 checklist: the
+    /// app's Start, Stop and Restart yardd against a scratch root would have done both).
+    #[test]
+    fn an_agent_for_another_root_is_named() {
+        let home_root = Path::new("/Users/me/.yard");
+        let default = daemon_plist(Path::new("/y/yardd"), None, Path::new("/l"));
+        let custom = daemon_plist(Path::new("/y/yardd"), Some(Path::new("/srv/yard")), Path::new("/l"));
+        assert_eq!(
+            agent_root_conflict(&default, Path::new("/tmp/scratch"), home_root),
+            Some(home_root.into())
+        );
+        assert_eq!(agent_root_conflict(&default, home_root, home_root), None);
+        assert_eq!(agent_root_conflict(&custom, Path::new("/srv/yard"), home_root), None);
+        assert_eq!(agent_root_conflict(&custom, home_root, home_root), Some("/srv/yard".into()));
+        assert_eq!(
+            agent_root_conflict(b"garbage", Path::new("/tmp/scratch"), home_root),
+            None,
+            "start rewrites it"
+        );
+    }
+
+    #[test]
+    fn helper_root_reads_what_render_writes() {
+        let plist = helper_plist(
+            Path::new("/Library/PrivilegedHelperTools/dev.more.yard.helper"),
+            501,
+            "me",
+            Path::new("/Users/me/.yard"),
+            Path::new("/opt/homebrew"),
+        );
+        assert_eq!(helper_root(&plist), Some(PathBuf::from("/Users/me/.yard")));
+        assert_eq!(helper_root(b"not a plist"), None);
+        assert_eq!(helper_root(&daemon_plist(Path::new("/y/yardd"), None, Path::new("/r/l.log"))), None);
+    }
 
     #[test]
     fn read_agent_reads_what_render_writes() {
