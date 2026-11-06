@@ -16,9 +16,9 @@
 # root, the daemon and the app running for a look afterwards.
 #
 # What it cannot check is still a person's: what VoiceOver says aloud (it checks what VoiceOver
-# is given: every control's label, state and the screens' text), and anything needing a password,
-# an install or a public tunnel (T1, T2, B3, P2, P3's add and remove, N2, M5's submenu, the trust
-# question). N3 asks nodejs.org.
+# is given: every control's label, state and the screens' text). The items that install, share or
+# need a password (T1, T2, B3, P2, P3's add and remove, N2, M5's submenu, the trust question) are
+# checklist-installs.sh's, against a fake brew. N3 asks nodejs.org.
 set -euo pipefail
 
 app_dir="$(cd "$(dirname "$0")/.." && pwd)"
@@ -159,12 +159,18 @@ stop_yardd() {
 cleanup() {
   if $keep; then
     echo "kept: root $root, yardd pid ${yardd_pid:-none}, app pid ${app_pid:-none}"
+    echo "Yard.app's settings are the run's: put them back with defaults import $app_domain $out/defaults.plist"
     return
   fi
   [[ -n "$app_pid" ]] && kill -TERM "$app_pid" 2>/dev/null || true
   [[ -n "${holder_pid:-}" ]] && kill "$holder_pid" 2>/dev/null || true
   stop_yardd
-  [[ -s "$out/defaults.plist" ]] && defaults import "$app_domain" "$out/defaults.plist" 2>/dev/null || true
+  # Yard.app's settings as they were, or none when it had none.
+  if [[ -s "$out/defaults.plist" ]]; then
+    defaults import "$app_domain" "$out/defaults.plist" 2>/dev/null || true
+  else
+    defaults delete "$app_domain" 2>/dev/null || true
+  fi
   rm -rf "$root" "$onb_root"
 }
 trap cleanup EXIT
@@ -281,11 +287,27 @@ if [[ "$got" == "$want" ]]; then pass "O1 Overview shows yardd's version and com
 app_commit="$(git -C "$repo" rev-parse --short HEAD)"
 got="$(fact Yard.app)"
 if [[ "$got" == *"($app_commit)" ]]; then pass "O1 and Yard.app's ($got)"; else fail "O1 Yard.app" "app $got, HEAD $app_commit (rebuild the bundle?)"; fi
+got="$(fact CA)"
+if [[ "$got" =~ ^(trusted|not\ trusted),\ expires\ [0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  pass "O1 the Overview says whether this Mac trusts the CA ($got)"
+else
+  fail "O1 CA" "'$got'"
+fi
 
 cp -p "$root/sites.toml" "$out/sites.toml.bak"
 printf '\n[broken\n' >>"$root/sites.toml"
 if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; (.value // .name // \"\") | test(\"sites.toml\"))'"; then
   pass "O3 a broken sites.toml shows the banner: $(ax tree | jq -r '.[] | select(.subrole == "AXApplicationAlert") | .name')"
+  textedit_was_running=false
+  pgrep -x TextEdit >/dev/null && textedit_was_running=true
+  ax press "Open file" >/dev/null
+  if within 10 sh -c "osascript -l JavaScript '$ax_js' windows-of TextEdit | jq -e 'index(\"sites.toml\")'"; then
+    pass "O3 the banner's Open file opens sites.toml in TextEdit"
+  else
+    fail "O3 Open file" "$(ax windows-of TextEdit)"
+  fi
+  ax close-window TextEdit sites.toml >/dev/null 2>&1 || true
+  $textedit_was_running || pkill -x TextEdit || true
 else
   fail "O3 no banner for a broken sites.toml"
 fi
@@ -539,8 +561,8 @@ if svc minio | grep -q minio; then
   ax press "Remove…" minio >/dev/null
   sleep 0.5
   d="$(ax dialog)"
-  if jq -e '.buttons | index("Remove") and index("Cancel")' <<<"$d" >/dev/null 2>&1; then
-    ax answer Remove >/dev/null
+  if jq -e '.buttons | index("Delete") and index("Remove, keep its data") and index("Cancel")' <<<"$d" >/dev/null 2>&1; then
+    ax answer Delete >/dev/null
     if within 30 sh -c "! '$yard_bin' --root '$root' services --json | jq -e 'any(.[]; .name == \"minio\")'"; then
       pass "V6 Remove… asks ($(jq -r '.text | join(" ")' <<<"$d")) and removes minio"
     else fail "V6 minio still there after Remove"; fi
@@ -866,7 +888,7 @@ if within 20 sh -c "osascript -l JavaScript '$ax_js' tree other | jq -e 'any(.[]
     fail "B1 onboarding's steps" "$steps"
   fi
   ax press "Start yardd" @other >/dev/null
-  if within 10 sh -c "osascript -l JavaScript '$ax_js' tree other | jq -e 'any(.[]; .subrole == \"AXApplicationAlert\" and (.name | test(\"LaunchAgent serves\")))'"; then
+  if within 10 sh -c "osascript -l JavaScript '$ax_js' tree other | jq -e 'any(.[]; .subrole == \"AXApplicationAlert\" and (.name | test(\"LaunchAgent .*serves\")))'"; then
     pass "B2 Start yardd for a scratch root is refused in onboarding, naming the root the LaunchAgent serves"
   else
     fail "B2 Start yardd" "$(ax tree other | jq -c '[.[] | select(.subrole == "AXApplicationAlert") | .name]')"

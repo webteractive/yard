@@ -117,9 +117,22 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   dropping a note; a failed service shown twice in the menu and without its holder on the screen;
   the line picker never offered (`data.available`); a `--root` helper hint offering only Copy;
   onboarding hiding its own errors; and two scratch-root hazards: a scratch yardd repointing this
-  Mac's resolver, and `yard --root <scratch> start|stop` taking the real LaunchAgent. Still the maintainer's,
-  at the screen: what VoiceOver says aloud (A1, A2), T1, T2, B3, P2, N2, P3's add and remove, M5's
-  submenu and the trust question (a public tunnel, a password, installs).
+  Mac's resolver, and `yard --root <scratch> start|stop` taking the real LaunchAgent. The final
+  whole-branch review (2026-11-07, root and app reviewed apart) found, and this fixed: clicks
+  falling through sheets and picker popups, `reconnect_now` dropping a live session (its jobs
+  turned lost), action errors no screen showed, onboarding that could not be reopened, the Xdebug
+  submenu missing after a launch, the PHP screen asking for a failed `ext.list` every frame, a
+  `cargo test` that ran a real yardd on 8080/8443/53535, `yard start` refused for good by an agent
+  left for a deleted scratch root, and the features the design names that were missing (the
+  Overview's CA, Remove keeping data, Save settings' location and replace, Not now, a `.so` from an
+  open panel, Range…, per-formula trust, a failed job's output, named shares, Copy URL, the DNS
+  records a stop leaves). `checklist.sh` then passed 72/72, `checklist-installs.sh` (installs,
+  tunnels and Terminal against a fake brew) 14/14, and `checklist-real.sh` (plan Step 4) 11/11
+  against the real yardd here on 2026-11-07, which now runs that build. Open: in Activity, the
+  accessibility tree gives every job card after the first the wrong or no log lines (the screen is
+  right; not duplicate node ids, not the order or the `Log` role), so VoiceOver may misread job
+  output. Still the maintainer's, at the screen: what VoiceOver says aloud (A1, A2), and R3 on his main Mac
+  (Herd).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -392,6 +405,22 @@ holds 80 or 443, since with both free the switch would go through.
   it made unless `--keep`. Other apps are driven only through accessibility (Apple Events to
   TextEdit or Finder would ask for Automation permission). A full run takes about 12 minutes; do
   not edit the script while it runs (bash reads it as it goes). `shellcheck` stays clean.
+- `app/scripts/checklist-installs.sh [--keep]` — the M6 checklist items that install, share or need
+  a password, against a scratch yardd on `/tmp/yard-check-installs` whose brew (`YARD_BREW_PREFIX`,
+  `/tmp/yard-check-installs-brew`) is the test suite's fake: `yard-fake-unit` as brew, nginx,
+  dnsmasq, php-fpm, fnm and cloudflared, so nothing is installed, no tunnel is public and no
+  password is typed. B3 (onboarding's helper step opens Terminal; the `sudo` it starts is stopped
+  at its password), Set up Yard… from the menu and the Overview, P2 (install progress, a second
+  install waiting and cancelled), P3's add and remove, M5 (the Xdebug submenu follows xdebug), the
+  trust question (MinIO from the untrusted `minio/stable`), N2 and T1/T2. Same ports as
+  `checklist.sh` minus the instances' (MinIO on 28900), so run them one after the other. It needs
+  `target/release/{yard,yardd,yard-fake-unit}` and `app/target/Yard.app`; about 3 minutes.
+- `app/scripts/checklist-real.sh` — plan Task 17 Step 4, only with the maintainer's approval: the checklist
+  items that change nothing, against the real yardd on `~/.yard` (M3, O1, A1, R1, D1, S4 on a
+  scratch site `chk-real` it links, secures and unlinks, R3 where Herd is installed, and M1 last,
+  which runs `yard stop` and `yard start`, so every site is down for a few seconds and the
+  LaunchAgent's yardd comes back as the build in `target/release`). It backs up and restores
+  `yard.toml`, `sites.toml`, `ports.toml` and `services.toml`, and refuses a running Yard.app.
 - `cargo test --workspace` — full suite. Tests use a temp `YARD_ROOT` and free ports in
   20000-29999 (below macOS's ephemeral range), and never touch Herd, `/etc/resolver` or ports 53/80/443/8080/8443/53535.
   If test daemons time out at startup, `target/debug/deps` has grown too big for FSEvents:
@@ -405,8 +434,9 @@ holds 80 or 443, since with both free the switch would go through.
   sites answer at `http://<site>.yard:<its port>/` through the real resolver only because every
   `.yard` name resolves to 127.0.0.1. A yardd built before 2026-11-06 lacks that guard and
   repoints the real resolver at its own dnsmasq. Run it directly: `yard --root <scratch>
-  start|stop` refuses while the LaunchAgent serves another root, since it has one label (before
-  2026-11-06 they rewrote the agent for the scratch root and stopped the real yardd). Give a
+  start|stop` refuses while the LaunchAgent serves another root that still exists, since it has
+  one label (before 2026-11-06 they rewrote the agent for the scratch root and stopped the real
+  yardd; an agent such a yard left for a root since deleted is taken over by the next `yard start`). Give a
   scratch service instance a `--port` of its own: a sleeping real instance's port is free, and
   a scratch one that takes it fails the real one when it wakes.
 - `cargo run -p yard-cli -- --root /tmp/yard-dev sites` — the CLI against that daemon.
@@ -561,6 +591,7 @@ Rule files are in `.hydra/rules`.
 
 | Applies when | Matches (path glob / command) | Rule |
 | --- | --- | --- |
+| changing a Yard.app screen, widget or menu item · adding an action Yard.app runs against yardd, the yard CLI or Terminal · bumping GPUI or adding a dependency to the app workspace | `app/**` | app.md |
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
 | adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` | config-ownership.md |
 | running yard against the real data root on a real machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |

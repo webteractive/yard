@@ -7,6 +7,7 @@ then read those rule files, which sit beside this index.
 
 | Applies when | Matches (path glob / command) | Rule |
 | --- | --- | --- |
+| changing a Yard.app screen, widget or menu item · adding an action Yard.app runs against yardd, the yard CLI or Terminal · bumping GPUI or adding a dependency to the app workspace | `app/**` | app.md |
 | adding or changing a yard CLI command or its output | `crates/yard-cli/**` | cli-output.md |
 | adding a generated config file · writing to a user's toml or override file · Yard overwrote something the user edited · reading or writing a project's .yard · reading or writing a managed .yard in Yard's data root | `crates/yard-core/src/render/**` · `crates/yard-core/src/config/**` · `crates/yard-core/src/generated.rs` · `crates/yard-daemon/src/reconcile.rs` · `crates/yard-daemon/src/doctor.rs` · `crates/yard-core/src/project.rs` · `crates/yard-daemon/src/project.rs` · `crates/yard-daemon/src/rpc/project.rs` · `crates/yard-daemon/src/managed.rs` · `crates/yard-daemon/src/node.rs` · `crates/yard-daemon/src/rpc/node.rs` | config-ownership.md |
 | running yard against the real data root on a real machine · binding ports or touching /etc/resolver · switching port profiles or the TLD · reading Herd's configuration | `scripts/e2e*` · `crates/yard-core/src/ports/**` | herd-coexistence.md |
