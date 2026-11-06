@@ -25,7 +25,7 @@ pub fn facts(env: &AppEnv, cx: &App) -> SetupFacts {
     let connected = matches!(s.connection, ConnectionState::Connected(_));
     SetupFacts {
         brew: brew_installed(),
-        yard: env.location.yard.clone(),
+        yard: env.cli.yard(),
         agent_installed: env.location.agent_installed,
         daemon_answers: connected,
         helper_version: s.status.value.as_ref().and_then(|st| st.version.helper.clone()),
@@ -78,7 +78,7 @@ fn action(env: &AppEnv, step: &SetupStep) -> Option<AnyElement> {
                 if let Ok(Ok(Some(paths))) = picked.await
                     && let Some(path) = paths.into_iter().next()
                 {
-                    cx.update(|_| env.settings.set_yard_path(Some(&path)));
+                    cx.update(|cx| env.set_yard_path(Some(&path), cx));
                 }
             })
             .detach();
@@ -235,6 +235,16 @@ mod tests {
             profile: None,
             site_count: None,
         }
+    }
+
+    /// A yard chosen in onboarding or Settings is run at once (it applied only at the next launch).
+    #[gpui::test]
+    async fn a_chosen_yard_is_used_at_once(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        assert_eq!(cx.update(|cx| facts(&env, cx).yard), None);
+        cx.update(|cx| env.use_yard_setting(Some("/opt/yard/yard".into()), cx));
+        assert_eq!(cx.update(|cx| facts(&env, cx).yard), Some("/opt/yard/yard".into()));
+        assert_eq!(env.cli.yard(), Some("/opt/yard/yard".into()), "and the CLI runs it");
     }
 
     fn stopped() -> SetupFacts {

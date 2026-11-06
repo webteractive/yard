@@ -152,7 +152,15 @@ pub fn env(cx: &mut gpui::TestAppContext) -> (Arc<FakeDaemon>, crate::env::AppEn
     let fake = FakeDaemon::new();
     fake.answer("status", status());
     let env = cx.update(|cx| {
-        crate::env::AppEnv::new(fake.clone(), test_location(), Arc::new(crate::bridge::Bridge::new()), cx)
+        // Any path chosen is taken as executable.
+        let locate_yard: crate::env::LocateYard = std::rc::Rc::new(|setting| setting);
+        crate::env::AppEnv::new(
+            fake.clone(),
+            test_location(),
+            locate_yard,
+            Arc::new(crate::bridge::Bridge::new()),
+            cx,
+        )
     });
     fake.push(connected(1));
     cx.run_until_parked();

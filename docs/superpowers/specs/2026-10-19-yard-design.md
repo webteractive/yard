@@ -867,8 +867,9 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 
 - Rust with GPUI (Zed's UI framework, pinned by git revision to Zed v1.27.0), macOS 14+ (maintainer,
   2026-11-06); built in M6 (2026-11-06) as `app/`, a second Cargo workspace on Rust 1.98.1. The
-  menu bar is a native `NSStatusItem` and `NSMenu` (tray-icon and muda), rebuilt from the app's
-  state when what it shows changes; the windows are GPUI. The M6 design
+  menu bar is a native `NSStatusItem` and `NSMenu` (tray-icon and muda), kept in step with the
+  app's state (titles and check marks change in place; it is rebuilt only when an item is added,
+  removed or replaced); the windows are GPUI. The M6 design
   (`2026-11-05-yard-m6-app-design.md`) has the details.
 - **Menu bar**: health indicator, quick toggles for services
   and Xdebug, recent sites (open in browser), badges for failed units and port

@@ -81,6 +81,23 @@ pub fn open(env: &AppEnv, screen: Screen, cx: &mut App) {
     }
 }
 
+/// Whether the main window is open.
+fn is_open(cx: &mut App) -> bool {
+    cx.try_global::<MainHandle>().map(|h| h.0).is_some_and(|h| h.update(cx, |_, _, _| ()).is_ok())
+}
+
+/// A question from the runner needs a window to be asked in: the main window asks it, so when an
+/// install started from the menu bar needs brew's trust and no window is open, this opens one on
+/// Activity, where the job shows.
+pub fn ask_without_a_window(env: &AppEnv, cx: &mut App) {
+    cx.observe(&env.runner, |runner, cx| {
+        if runner.read(cx).prompt.is_some() && !is_open(cx) {
+            open(&AppEnv::global(cx), Screen::Activity, cx);
+        }
+    })
+    .detach();
+}
+
 const PAGES: [(&str, Screen); 11] = [
     ("Overview", Screen::Overview),
     ("Sites", Screen::Sites(None)),
@@ -350,5 +367,51 @@ fn content(env: &AppEnv, screen: &Screen, window: &mut Window, cx: &mut App) -> 
         Screen::Logs(_) => crate::screens::logs::logs(env, window, cx),
         Screen::Doctor => crate::screens::doctor::doctor(env, window, cx),
         Screen::Sources => crate::screens::sources::sources(env, window, cx),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::runner::ActionId;
+    use crate::testing::env;
+    use gpui::{AppContext, TestAppContext};
+    use serde_json::json;
+    use yard_app_model::hint::Screen;
+    use yard_client::api;
+    use yard_proto::methods::PhpParams;
+    use yard_proto::{ErrorCode, YardError};
+
+    /// An install started from the menu with no window open still gets brew's trust question
+    /// (found in the M6 final review: it showed only while the main window was open).
+    #[gpui::test]
+    async fn a_question_with_no_window_open_opens_one_to_ask_it(cx: &mut TestAppContext) {
+        let (fake, env) = env(cx);
+        cx.update(|cx| {
+            cx.set_global(env.clone());
+            super::ask_without_a_window(&env, cx);
+        });
+        let untrusted = YardError::new(ErrorCode::FormulaUntrusted, "not trusted")
+            .with_data(json!({"formula": "shivammathur/php/php@8.3", "tap": "shivammathur/php"}));
+        fake.fail("php.install", untrusted);
+        assert!(cx.windows().is_empty());
+        env.runner
+            .update(cx, |r, cx| {
+                r.run_job(
+                    ActionId("php:8.3:install".into()),
+                    api::PHP_INSTALL,
+                    PhpParams { php: "8.3".into() },
+                    "Install PHP 8.3".into(),
+                    cx,
+                )
+            })
+            .detach();
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1, "the main window opened");
+        assert_eq!(cx.read_entity(&env.nav, |n, _| n.screen.clone()), Screen::Activity);
+        assert!(cx.has_pending_prompt(), "and asks the question");
+        cx.simulate_prompt_answer("Don't trust");
+        cx.run_until_parked();
+        assert!(cx.read_entity(&env.runner, |r, _| r.prompt.is_none()));
+        assert_eq!(fake.count("sources.trust"), 0);
     }
 }

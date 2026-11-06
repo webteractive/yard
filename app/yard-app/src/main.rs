@@ -42,7 +42,10 @@ fn main() {
         let location = platform::locator::location(root.clone(), settings.yard_path());
         let socket = location.root.join("yardd.sock");
         let daemon = daemon::SessionDaemon::start(SessionConfig::new(socket, client_name()), bridge.clone());
-        let env = env::AppEnv::new(daemon, location, bridge.clone(), cx);
+        let root_arg = root.clone();
+        let locate_yard: env::LocateYard =
+            std::rc::Rc::new(move |setting| platform::locator::location(root_arg.clone(), setting).yard);
+        let env = env::AppEnv::new(daemon, location, locate_yard, bridge.clone(), cx);
         // GPUI drops this closure once it returns, and with it anything only the closure holds;
         // the session and the CLI runner hold the bridge, and AppEnv holds them as a global, so
         // the runtime under every session lives as long as the app (found 2026-11-06, when a
@@ -52,6 +55,7 @@ fn main() {
         if let Err(e) = menubar::install(&env, cx) {
             eprintln!("Yard.app: no menu bar item: {e}");
         }
+        window::main::ask_without_a_window(&env, cx);
         onboarding::open_if_needed(&env, cx);
         // Started for a scratch root: open the window, as a developer running it wants.
         if root.is_some() {

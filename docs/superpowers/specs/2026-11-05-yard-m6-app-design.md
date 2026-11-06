@@ -3,7 +3,7 @@
 Date: 2026-11-05, rewritten 2026-11-06 for Rust and GPUI
 Status: built 2026-11-06 (maintainer approved the plan that day; built inline on main, Tasks 1–17).
 Where the build departed from this text it says so in the commit messages; the main departures:
-the menu is rebuilt and replaced rather than updated item by item, the table draws plain rows
+the table draws plain rows
 rather than a virtual list, the log view copies all lines rather than selecting text, GPUI's
 accessibility tree cannot be read in tests (widgets assert the id, role and label they set), and
 the site detail sets the docroot by Detect and Node by Use default only. It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
@@ -521,8 +521,10 @@ and site search moves to the main window. The status item's icon is a template i
   running; **Stop yardd** is in the main window's Overview, behind a confirmation, since it stops
   every site.
 
-The menu is rebuilt from `AppState` whenever a resource it shows changes; muda updates item titles,
-check states and enabled flags in place, so an open menu shows a job's next line. Whether
+The menu follows `AppState` whenever a resource it shows changes: item titles and check marks
+change in place (muda), so an open menu shows a job's next line, and the menu is built again only
+when an item is added, removed or replaced (a new id, or a problem gaining or losing its fix). A
+click on a check item puts its mark back at once: the state, not the click, decides it. Whether
 tray-icon reports the menu opening (to refresh `status`, §7.2) is checked in the plan's first app
 task; without it the menu relies on events, which is enough from protocol 2.11.
 
@@ -607,7 +609,9 @@ error view with its hint button, and a form overlay for the forms below. Confirm
 
 A small GPUI window: the `yard` path (shows the located one, with **Choose…**), the editor (an app
 chosen in an open panel; until one is chosen, **Open in editor** asks), the terminal app (default
-Terminal), and the data root in use (read-only; it is set with `--root`). Settings, the recent
+Terminal), and the data root in use (read-only; it is set with `--root`). A `yard` path chosen here or in
+onboarding is run from then on, with no relaunch; Save says which `yard` is now in use, or that none
+was found. Settings, the recent
 sites and `did_onboard` live in `NSUserDefaults` under the bundle id, through `objc2-foundation`
 **(builder's call)**: they are the app's own preferences, outside Yard's data root, and a later
 signed build keeps them.
@@ -765,6 +769,8 @@ which is not installed`.
 When a call or job fails with `FORMULA_UNTRUSTED` and `data` names `formula` and `tap`, the app
 asks **Trust <formula> (from the <tap> tap)?**; yes runs the `sources.trust` job and then repeats
 the original call once. A skipped settle never answers trust for the user, as `--yes` never does.
+The main window asks; when no window is open (an install started from the menu bar), the main window
+opens on Activity to ask it.
 
 ### 11.3 Deleting and replacing
 

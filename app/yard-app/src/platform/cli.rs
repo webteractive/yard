@@ -4,6 +4,7 @@
 use crate::bridge::Bridge;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::cell::RefCell;
 use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -15,7 +16,8 @@ use yard_proto::{ErrorCode, YardError};
 const PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 pub struct CliRunner {
-    pub yard: Option<PathBuf>,
+    /// The `yard` to run; a new choice in Settings or onboarding replaces it at once.
+    yard: RefCell<Option<PathBuf>>,
     pub root: PathBuf,
     pub root_is_default: bool,
     bridge: Arc<Bridge>,
@@ -33,7 +35,15 @@ impl CliRunner {
         root_is_default: bool,
         bridge: Arc<Bridge>,
     ) -> CliRunner {
-        CliRunner { yard, root, root_is_default, bridge }
+        CliRunner { yard: RefCell::new(yard), root, root_is_default, bridge }
+    }
+
+    pub fn yard(&self) -> Option<PathBuf> {
+        self.yard.borrow().clone()
+    }
+
+    pub fn set_yard(&self, yard: Option<PathBuf>) {
+        *self.yard.borrow_mut() = yard;
     }
 
     /// `yard [--root <root>] <args> --json`: exit 0 decodes `R`, exit 1 is the CLI's
@@ -42,7 +52,7 @@ impl CliRunner {
         &self,
         args: &[&str],
     ) -> impl Future<Output = Result<R, YardError>> + use<R> {
-        let yard = self.yard.clone();
+        let yard = self.yard();
         let mut argv: Vec<String> = vec![];
         if !self.root_is_default {
             argv.extend(["--root".to_string(), self.root.display().to_string()]);

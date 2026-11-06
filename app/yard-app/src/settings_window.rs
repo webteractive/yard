@@ -63,8 +63,8 @@ impl SettingsView {
             let v = f.read(cx).value().trim().to_string();
             (!v.is_empty()).then_some(v)
         };
-        let s = &self.env.settings;
-        s.set_yard_path(value(&self.yard, cx).as_deref().map(Path::new));
+        let s = self.env.settings.clone();
+        self.env.set_yard_path(value(&self.yard, cx).as_deref().map(Path::new), cx);
         s.set_editor_app(value(&self.editor, cx).as_deref().map(Path::new));
         s.set_terminal_app(value(&self.terminal, cx).as_deref().map(Path::new));
         self.saved = true;
@@ -114,12 +114,24 @@ impl Render for SettingsView {
                             .style(ButtonStyle::Primary)
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     )
-                    .child(div().text_xs().text_color(t.muted).child(if self.saved {
-                        "Saved; a new path of yard applies at the next launch."
-                    } else {
-                        ""
-                    })),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t.muted)
+                            .child(saved_text(self.saved, self.env.cli.yard())),
+                    ),
             )
+    }
+}
+
+/// What Save says: the `yard` now in use, or that none was found.
+fn saved_text(saved: bool, yard: Option<std::path::PathBuf>) -> String {
+    match (saved, yard) {
+        (false, _) => String::new(),
+        (true, Some(yard)) => format!("Saved. Yard.app now runs {}.", yard.display()),
+        (true, None) => {
+            "Saved, but no executable yard was found there or beside the LaunchAgent's yardd.".into()
+        }
     }
 }
 

@@ -11,6 +11,7 @@ use crate::runner::{ActionId, ActionRunner};
 use crate::state::AppState;
 use gpui::{App, AppContext, Entity, Global};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -101,6 +102,9 @@ impl Nav {
     }
 }
 
+/// Finds the `yard` to run, given the path chosen in Settings (or none).
+pub type LocateYard = Rc<dyn Fn(Option<PathBuf>) -> Option<PathBuf>>;
+
 #[derive(Clone)]
 pub struct AppEnv {
     pub daemon: Arc<dyn Daemon>,
@@ -110,13 +114,22 @@ pub struct AppEnv {
     pub cli: Rc<CliRunner>,
     pub terminal: Rc<TerminalLauncher>,
     pub settings: Rc<Settings>,
+    /// Where Yard was found at launch. The `yard` in use is `cli.yard()`: a path chosen later
+    /// applies at once.
     pub location: Location,
+    locate_yard: LocateYard,
 }
 
 impl Global for AppEnv {}
 
 impl AppEnv {
-    pub fn new(daemon: Arc<dyn Daemon>, location: Location, bridge: Arc<Bridge>, cx: &mut App) -> AppEnv {
+    pub fn new(
+        daemon: Arc<dyn Daemon>,
+        location: Location,
+        locate_yard: LocateYard,
+        bridge: Arc<Bridge>,
+        cx: &mut App,
+    ) -> AppEnv {
         let state = AppState::new(daemon.clone(), Duration::from_millis(150), cx);
         let runner = ActionRunner::new(daemon.clone(), state.clone(), cx);
         let nav = cx.new(|_| Nav {
@@ -139,7 +152,20 @@ impl AppEnv {
         ));
         let terminal =
             Rc::new(TerminalLauncher { temp: std::env::temp_dir(), terminal_app: settings.terminal_app() });
-        AppEnv { daemon, state, runner, nav, cli, terminal, settings, location }
+        AppEnv { daemon, state, runner, nav, cli, terminal, settings, location, locate_yard }
+    }
+
+    /// Saves `path` as the `yard` to run and runs it from now on; with none, `yard` is found again
+    /// beside the LaunchAgent's yardd or in the bundle.
+    pub fn set_yard_path(&self, path: Option<&Path>, cx: &mut App) {
+        self.settings.set_yard_path(path);
+        self.use_yard_setting(path.map(Path::to_path_buf), cx);
+    }
+
+    /// Finds the `yard` to run with `setting` as the Settings choice, and runs it from now on.
+    pub fn use_yard_setting(&self, setting: Option<PathBuf>, cx: &mut App) {
+        self.cli.set_yard((self.locate_yard)(setting));
+        cx.refresh_windows();
     }
 
     pub fn global(cx: &App) -> AppEnv {
@@ -278,9 +304,9 @@ impl AppEnv {
             }
             HintAction::Terminal(command) => {
                 let args = match command {
-                    TerminalCommand::HelperInstall => match &self.location.yard {
+                    TerminalCommand::HelperInstall => match self.cli.yard() {
                         Some(yard) => {
-                            helper_install_args(yard, &self.location.root, self.location.root_is_default)
+                            helper_install_args(&yard, &self.location.root, self.location.root_is_default)
                         }
                         None => {
                             return self.record(
