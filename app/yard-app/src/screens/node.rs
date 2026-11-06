@@ -9,6 +9,9 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Wi
 use yard_client::api;
 use yard_proto::methods::{NodeInstallParams, NodeListParams, NodeSpecParams, NodeVersionParams};
 
+/// The table's column titles, each read out by VoiceOver.
+pub const COLUMNS: [&str; 3] = ["Version", "Default", "Sites"];
+
 pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let list = env.state.read(cx).node.value.clone();
@@ -53,11 +56,7 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new(
-        "node",
-        ["Version", "", "Sites"].iter().map(|c| SharedString::from(*c)).collect(),
-        rows.collect(),
-    );
+    let table = Table::new("node", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
     let spec = Nav::field(env, "node:install:spec", "Node version to install", "22, 22.17, lts/*", cx);
     let (e3, s3) = (env.clone(), spec.clone());
     let e4 = env.clone();
@@ -68,12 +67,10 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(12.))
         .child(heading("Node"))
         .children(errors(env, "node:", cx))
-        .child(
-            div()
-                .text_sm()
-                .text_color(t.muted)
-                .child(format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default())),
-        )
+        .child(div().text_sm().text_color(t.muted).child(crate::widgets::text(
+            "node:default",
+            format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
+        )))
         .child(table)
         .child(div().flex().gap(px(6.)).child(spec.clone()).child(
             Button::new("node:install", "Install").style(ButtonStyle::Primary).on_click(move |_, _, cx| {
@@ -126,6 +123,10 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             })
             .detach();
         }))
-        .children(available.map(|a| div().text_xs().text_color(t.muted).child(a)))
+        .children(
+            available.map(|a| {
+                div().text_xs().text_color(t.muted).child(crate::widgets::text("node:available", a))
+            }),
+        )
         .into_any_element()
 }

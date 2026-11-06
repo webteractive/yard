@@ -60,7 +60,7 @@ impl ErrorView {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::Alert, label: self.message.clone() }
+        A11y::new(self.id.clone(), Role::Alert, self.message.clone())
     }
 }
 

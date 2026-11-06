@@ -5,6 +5,7 @@ use crate::env::AppEnv;
 use crate::menubar::link;
 use crate::platform::activation;
 use crate::runner::ActionId;
+use crate::widgets::Pressable;
 use crate::widgets::banner::{Banner, BannerKind};
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::theme::Theme;
@@ -42,7 +43,9 @@ impl MainWindow {
 pub fn visible_keys(screen: &Screen) -> Vec<ResourceKey> {
     match screen {
         Screen::Overview => vec![ResourceKey::Status],
-        Screen::Sites(Some(site)) => vec![ResourceKey::Sites, ResourceKey::SiteDetail(site.clone())],
+        Screen::Sites(Some(site)) => {
+            vec![ResourceKey::Sites, ResourceKey::SiteDetail(site.clone()), ResourceKey::Php]
+        }
         Screen::Sites(None) => vec![ResourceKey::Sites],
         Screen::Services(_) => vec![ResourceKey::Services],
         Screen::Php => vec![ResourceKey::Php],
@@ -66,9 +69,9 @@ pub fn open(env: &AppEnv, screen: Screen, cx: &mut App) {
         cx.notify();
     });
     env.state.update(cx, |s, cx| s.became_active(&keys, cx));
-    if let Some(handle) = cx.try_global::<MainHandle>().map(|h| h.0)
-        && handle.update(cx, |_, window, _| window.activate_window()).is_ok()
-    {
+    if let Some(handle) = open_handle(cx) {
+        // Called from inside the window (a site row, a hint), it is raised once the click is done.
+        super::raise(handle, cx);
         activation::window_opened(cx);
         return;
     }
@@ -81,9 +84,15 @@ pub fn open(env: &AppEnv, screen: Screen, cx: &mut App) {
     }
 }
 
+/// The main window, while it is open.
+fn open_handle(cx: &App) -> Option<WindowHandle<MainWindow>> {
+    let handle = cx.try_global::<MainHandle>()?.0;
+    super::is_open(handle, cx).then_some(handle)
+}
+
 /// Whether the main window is open.
-fn is_open(cx: &mut App) -> bool {
-    cx.try_global::<MainHandle>().map(|h| h.0).is_some_and(|h| h.update(cx, |_, _, _| ()).is_ok())
+pub fn is_open(cx: &mut App) -> bool {
+    open_handle(cx).is_some()
 }
 
 /// A question from the runner needs a window to be asked in: the main window asks it, so when an
@@ -213,14 +222,20 @@ impl Render for MainWindow {
             .text_color(t.text)
             .child(sidebar(&env, &screen, window, cx))
             .child(
-                div().flex_1().flex().flex_col().children(banner(&env, cx)).child(
-                    div()
-                        .id("content")
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .p(px(16.))
-                        .child(content(&env, &screen, window, cx)),
-                ),
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .children(banner(&env, cx))
+                    .children(open_errors(&env, cx))
+                    .child(
+                        div()
+                            .id("content")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .p(px(16.))
+                            .child(content(&env, &screen, window, cx)),
+                    ),
             )
             .children(sheet)
     }
@@ -295,7 +310,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .rounded(px(6.))
             .cursor_pointer()
             .when(selected, |d| d.bg(Theme::wash(t.accent)))
-            .on_click(move |_, _, cx| open(&env, page.clone(), cx))
+            .on_press(move |_, _, cx| open(&env, page.clone(), cx))
             .child(*label)
             .when_some(count, |d, n| {
                 d.child(
@@ -323,6 +338,14 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .text_sm()
         .children(items)
         .into_any_element()
+}
+
+/// The action ids of opening a file or folder from any screen or the menu.
+pub const OPEN_ERRORS: &str = "open-";
+
+/// Why a file or folder was not opened, above every screen: the open can start anywhere.
+pub fn open_errors(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
+    crate::screens::errors(env, OPEN_ERRORS, cx)
 }
 
 fn banner(env: &AppEnv, cx: &App) -> Option<AnyElement> {
@@ -383,6 +406,34 @@ mod tests {
 
     /// An install started from the menu with no window open still gets brew's trust question
     /// (found in the M6 final review: it showed only while the main window was open).
+    /// A hinted file Yard refuses to open (a symlink, an executable) says why in the main window,
+    /// opened for it if need be: the refusal was recorded where no screen showed it.
+    #[gpui::test]
+    async fn a_refused_file_says_why_in_the_main_window(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.conf");
+        std::fs::write(&target, "x").unwrap();
+        let link = dir.path().join("link.conf");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        cx.update(|cx| env.perform(yard_app_model::hint::HintAction::OpenFile(link.clone()), cx));
+        cx.run_until_parked();
+        assert!(cx.update(super::is_open), "the main window opens to say it");
+        let shown = cx.update(|cx| super::open_errors(&env, cx).len());
+        assert_eq!(shown, 1);
+    }
+
+    /// A site's detail shows a PHP picker of the installed versions, so it loads the PHP list
+    /// with the site (found by the checklist script: opened before the PHP screen, the picker of a
+    /// site on 7.1 read "—").
+    #[test]
+    fn a_sites_detail_loads_the_php_list_for_its_picker() {
+        use yard_app_model::refresh::ResourceKey;
+        let keys = super::visible_keys(&Screen::Sites(Some("blog".into())));
+        assert!(keys.contains(&ResourceKey::Php), "{keys:?}");
+        assert!(keys.contains(&ResourceKey::SiteDetail("blog".into())));
+    }
+
     #[gpui::test]
     async fn a_question_with_no_window_open_opens_one_to_ask_it(cx: &mut TestAppContext) {
         let (fake, env) = env(cx);
@@ -413,5 +464,24 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.read_entity(&env.runner, |r, _| r.prompt.is_none()));
         assert_eq!(fake.count("sources.trust"), 0);
+    }
+
+    /// Opening a screen from inside the main window (a site row, a Doctor hint) shows it there
+    /// (found by the checklist script: each click on a site row opened another main window).
+    #[gpui::test]
+    async fn a_screen_opened_from_inside_the_main_window_reuses_it(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        cx.update(|cx| {
+            cx.set_global(env.clone());
+            super::open(&env, Screen::Sites(None), cx);
+        });
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.global::<super::MainHandle>().0);
+        let inner = env.clone();
+        handle.update(cx, |_, _, cx| super::open(&inner, Screen::Sites(Some("chk1".into())), cx)).unwrap();
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1, "no second main window");
+        assert_eq!(cx.read_entity(&env.nav, |n, _| n.screen.clone()), Screen::Sites(Some("chk1".into())));
+        assert!(cx.update(super::is_open), "and it is still the one open");
     }
 }

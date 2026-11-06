@@ -7,6 +7,7 @@ use crate::runner::ActionId;
 use crate::services::table::copy_env;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::picker::Picker;
+use crate::widgets::text;
 use crate::widgets::theme::Theme;
 use crate::widgets::toggle::Toggle;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
@@ -15,7 +16,7 @@ use yard_app_model::hint::HintAction;
 use yard_app_model::settle::SettlePlan;
 use yard_client::api;
 use yard_proto::methods::{DocrootParams, EnvParams, InitParams, IsolateParams, NameParams, SiteParams};
-use yard_proto::{SettingSource, SiteDetail, SiteKind, SiteSource};
+use yard_proto::{ProjectFileKind, SettingSource, SiteDetail, SiteInfo, SiteKind, SiteSource};
 
 fn from(source: Option<&SettingSource>) -> &'static str {
     match source {
@@ -28,7 +29,7 @@ fn from(source: Option<&SettingSource>) -> &'static str {
     }
 }
 
-/// `PHP 8.4.3 — from the managed .yard`, and the same for the docroot and HTTPS.
+/// `PHP 8.4.3 — from the managed .yard`, and the same for the docroot, HTTPS and Node.
 pub fn source_lines(d: &SiteDetail) -> Vec<String> {
     let mut lines = vec![];
     if let SiteKind::Php { php, docroot, .. } = &d.site.kind {
@@ -44,14 +45,39 @@ pub fn source_lines(d: &SiteDetail) -> Vec<String> {
         if d.site.secure { "on" } else { "off" },
         from(d.sources.get("secure"))
     ));
+    if let Some(node) = &d.site.node {
+        let source = match &node.file {
+            Some(file) => format!("from {file}"),
+            None => from(Some(&node.source)).to_string(),
+        };
+        lines.push(match (&node.error, &node.version, &node.spec) {
+            (Some(e), _, _) => format!("Node: {}", e.message),
+            (None, Some(version), _) => format!("Node {version} — {source}"),
+            (None, None, spec) => {
+                format!("Node {} — not installed, {source}", spec.as_deref().unwrap_or("?"))
+            }
+        });
+    }
     lines
 }
 
-/// Why the PHP picker is disabled: a committed `.yard` owns the version, and only an edit of that
-/// file changes it. A managed `.yard` is edited for you, so it does not lock.
-pub fn php_lock(d: &SiteDetail) -> Option<String> {
-    (d.sources.get("php") == Some(&SettingSource::ProjectFile))
-        .then(|| format!("set in {}", d.site.project_file.clone().unwrap_or_else(|| ".yard".into())))
+/// Whether the site's Node is a pin Yard made (`yard node use`, kept in sites.toml or the managed
+/// `.yard`), which Use default Node removes; a `.nvmrc` or a committed `.yard` is the project's.
+pub fn node_pinned_by_yard(site: &SiteInfo) -> bool {
+    site.node
+        .as_ref()
+        .is_some_and(|n| matches!(n.source, SettingSource::SitesToml | SettingSource::ManagedFile))
+}
+
+/// Why the PHP picker, the HTTPS switch, Detect docroot and Save settings to .yard are disabled: the
+/// project has its own `.yard`, which yardd never edits, so it refuses `isolate`, `secure` and
+/// `docroot` for the site whatever keys the file sets, and `init` finds it already there. A
+/// managed `.yard` is edited for you, so it does not lock.
+pub fn project_lock(site: &SiteInfo) -> Option<String> {
+    match (&site.project_file, site.project_file_kind) {
+        (Some(file), Some(ProjectFileKind::Project)) => Some(format!("set in {file}")),
+        _ => None,
+    }
 }
 
 fn quick(
@@ -67,7 +93,11 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
     let t = Theme::of(window);
     let s = env.state.read(cx);
     let site = s.sites.value.iter().flatten().find(|x| x.name == name).cloned();
-    let Some(site) = site else { return div().child(format!("{name} is not linked")).into_any_element() };
+    let Some(site) = site else {
+        return div()
+            .child(text(format!("site:{name}:missing"), format!("{name} is not linked")))
+            .into_any_element();
+    };
     let detail = s.site_detail.get(name).and_then(|r| r.value.clone());
     let php_options: Vec<String> =
         s.php.value.iter().flatten().filter(|p| p.installed).map(|p| p.version.clone()).collect();
@@ -80,11 +110,16 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         .border_1()
         .border_color(t.border)
         .bg(t.surface);
-    pane = pane
-        .child(div().text_lg().child(site.name.clone()))
-        .child(div().text_sm().text_color(t.accent).child(site.url.clone()));
+    pane = pane.child(div().text_lg().child(text(format!("site:{name}:name"), site.name.clone()))).child(
+        div().text_sm().text_color(t.accent).child(text(format!("site:{name}:url"), site.url.clone())),
+    );
     if let Some(d) = &detail {
-        pane = pane.children(source_lines(d).into_iter().map(|l| div().text_sm().child(l)));
+        pane = pane.children(
+            source_lines(d)
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| div().text_sm().child(text(format!("site:{name}:source:{i}"), l))),
+        );
         if let SiteKind::Php { php, .. } = &site.kind {
             let mut options: Vec<SharedString> = vec!["Default".into()];
             options.extend(php_options.iter().map(|v| SharedString::from(v.clone())));
@@ -92,7 +127,7 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
             let (e, n, versions) = (env.clone(), name.to_string(), php_options.clone());
             pane = pane.child(
                 Picker::new(format!("site:{name}:php"), format!("PHP for {name}"), options, selected)
-                    .disabled_because(php_lock(d).map(Into::into))
+                    .disabled_because(project_lock(&site).map(Into::into))
                     .on_select(move |i, _, cx| {
                         let php = if i == 0 { None } else { versions.get(i - 1).cloned() };
                         let (daemon, site) = (e.daemon.clone(), n.clone());
@@ -108,7 +143,7 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
                         )
                     }),
             );
-            if let (Some(_), Some(file)) = (php_lock(d), site.project_file.clone()) {
+            if let (Some(_), Some(file)) = (project_lock(&site), site.project_file.clone()) {
                 let e = env.clone();
                 pane = pane.child(
                     Button::new(format!("site:{name}:open-yard"), "Open .yard")
@@ -118,17 +153,19 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         }
         for svc in &d.services {
             let met = if svc.service.is_some() { "met" } else { "missing" };
-            pane = pane.child(div().text_sm().child(format!(
-                "{} {} — {met}",
-                yard_proto::engine_display(&svc.engine),
-                svc.want.clone().unwrap_or_default()
+            let want = svc.want.as_deref().map(|w| format!(" {w}")).unwrap_or_default();
+            pane = pane.child(div().text_sm().child(text(
+                format!("site:{name}:service:{}", svc.engine),
+                format!("{}{want} — {met}", yard_proto::engine_display(&svc.engine)),
             )));
         }
     }
+    let lock = project_lock(&site);
     let (e, n, secure) = (env.clone(), name.to_string(), site.secure);
     pane = pane.child(
-        Toggle::new(format!("site:{name}:secure"), format!("HTTPS for {name}"), secure).on_toggle(
-            move |on, _, cx| {
+        Toggle::new(format!("site:{name}:secure"), format!("HTTPS for {name}"), secure)
+            .disabled_because(lock.clone().map(Into::into))
+            .on_toggle(move |on, _, cx| {
                 let (daemon, site) = (e.daemon.clone(), n.clone());
                 let m = if on { api::SITES_SECURE } else { api::SITES_UNSECURE };
                 quick(
@@ -137,9 +174,22 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
                     async move { call(&*daemon, m, SiteParams { site }).await.map(|_| ()) },
                     cx,
                 )
-            },
-        ),
+            }),
     );
+    if node_pinned_by_yard(&site) {
+        let (e, n) = (env.clone(), name.to_string());
+        pane = pane.child(Button::new(format!("site:{name}:node-unuse"), "Use default Node").on_click(
+            move |_, _, cx| {
+                let (daemon, site) = (e.daemon.clone(), n.clone());
+                quick(
+                    &e,
+                    format!("site:{n}:node"),
+                    async move { call(&*daemon, api::NODE_UNUSE, SiteParams { site }).await.map(|_| ()) },
+                    cx,
+                )
+            },
+        ));
+    }
     if SettlePlan::new(&site).is_some() {
         let (e, n) = (env.clone(), name.to_string());
         pane = pane.child(
@@ -154,7 +204,9 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         );
     }
     if let Some(e) = &site.project_error {
-        pane = pane.child(div().text_sm().text_color(t.danger).child(e.message.clone()));
+        pane = pane.child(
+            div().text_sm().text_color(t.danger).child(text(format!("site:{name}:error"), e.message.clone())),
+        );
     }
     let mut actions = div().flex().flex_wrap().gap(px(6.));
     let url = site.url.clone();
@@ -166,8 +218,16 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         let path = PathBuf::from(path);
         let (e1, p1) = (env.clone(), path.clone());
         actions = actions.child(Button::new(format!("site:{name}:editor"), "Open in editor").on_click(
-            move |_, _, _| {
-                let _ = Opener::open_with(&p1, e1.settings.editor_app().as_deref());
+            move |_, _, cx| {
+                let id = ActionId(format!("{}folder", crate::window::main::OPEN_ERRORS));
+                let result = Opener::open_folder(cx, &p1, e1.settings.editor_app().as_deref());
+                e1.runner.update(cx, |r, cx| {
+                    match result {
+                        Ok(()) => r.errors.clear(&id),
+                        Err(e) => r.errors.record(id, e),
+                    }
+                    cx.notify();
+                });
             },
         ));
         let p2 = path.clone();
@@ -186,41 +246,51 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
             },
         ));
         let (e4, n4) = (env.clone(), name.to_string());
-        actions = actions.child(Button::new(format!("site:{name}:detect"), "Detect docroot").on_click(
-            move |_, _, cx| {
-                let (daemon, site) = (e4.daemon.clone(), n4.clone());
-                quick(
-                    &e4,
-                    format!("site:{n4}:docroot"),
-                    async move {
-                        call(&*daemon, api::SITES_DOCROOT, DocrootParams { site, path: None })
+        actions = actions.child(
+            Button::new(format!("site:{name}:detect"), "Detect docroot").disabled(lock.is_some()).on_click(
+                move |_, _, cx| {
+                    let (daemon, site) = (e4.daemon.clone(), n4.clone());
+                    quick(
+                        &e4,
+                        format!("site:{n4}:docroot"),
+                        async move {
+                            call(&*daemon, api::SITES_DOCROOT, DocrootParams { site, path: None })
+                                .await
+                                .map(|_| ())
+                        },
+                        cx,
+                    )
+                },
+            ),
+        );
+        let (e5, n5, p5) = (env.clone(), name.to_string(), path.clone());
+        actions = actions.child(
+            Button::new(format!("site:{name}:init"), "Save settings to .yard")
+                .disabled(lock.is_some())
+                .on_click(move |_, _, cx| {
+                    let (daemon, site, path) = (e5.daemon.clone(), n5.clone(), p5.display().to_string());
+                    quick(
+                        &e5,
+                        format!("site:{n5}:init"),
+                        async move {
+                            call(
+                                &*daemon,
+                                api::SITES_INIT,
+                                InitParams {
+                                    path,
+                                    name: Some(site),
+                                    force: false,
+                                    replace: false,
+                                    local: false,
+                                },
+                            )
                             .await
                             .map(|_| ())
-                    },
-                    cx,
-                )
-            },
-        ));
-        let (e5, n5, p5) = (env.clone(), name.to_string(), path.clone());
-        actions = actions.child(Button::new(format!("site:{name}:init"), "Save settings to .yard").on_click(
-            move |_, _, cx| {
-                let (daemon, site, path) = (e5.daemon.clone(), n5.clone(), p5.display().to_string());
-                quick(
-                    &e5,
-                    format!("site:{n5}:init"),
-                    async move {
-                        call(
-                            &*daemon,
-                            api::SITES_INIT,
-                            InitParams { path, name: Some(site), force: false, replace: false, local: false },
-                        )
-                        .await
-                        .map(|_| ())
-                    },
-                    cx,
-                )
-            },
-        ));
+                        },
+                        cx,
+                    )
+                }),
+        );
     }
     let (e6, root, n6) = (env.clone(), env.location.root.clone(), name.to_string());
     actions = actions.child(Button::new(format!("site:{name}:override"), "Edit nginx override").on_click(

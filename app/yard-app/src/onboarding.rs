@@ -98,7 +98,7 @@ fn action(env: &AppEnv, step: &SetupStep) -> Option<AnyElement> {
 }
 
 /// The checklist for `facts`, with each step's action while it is to do.
-pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, _cx: &mut App) -> AnyElement {
+pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let all = steps(facts);
     let ready = all.iter().filter(|s| !s.optional).all(|s| s.done);
@@ -123,17 +123,25 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, _cx: &mu
                 div()
                     .flex()
                     .flex_col()
-                    .child(div().text_sm().text_color(color).child(title(s.id)))
-                    .child(div().text_xs().text_color(t.muted).child(state(s))),
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(color)
+                            .child(crate::widgets::text(format!("step:{:?}:title", s.id), title(s.id))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t.muted)
+                            .child(crate::widgets::text(format!("step:{:?}:state", s.id), state(s))),
+                    ),
             )
             .children(action(env, s));
         if s.id == SetupStepId::Helper && !s.done && !s.blocked {
-            row = row.child(
-                div()
-                    .text_xs()
-                    .text_color(t.muted)
-                    .child("macOS asks for your password in Terminal: the helper writes /etc/resolver."),
-            );
+            row = row.child(div().text_xs().text_color(t.muted).child(crate::widgets::text(
+                "helper:note",
+                "macOS asks for your password in Terminal: the helper writes /etc/resolver.",
+            )));
         }
         row
     });
@@ -146,13 +154,17 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, _cx: &mu
         .p(px(16.))
         .bg(t.background)
         .text_color(t.text)
-        .child(div().text_xl().child("Set up Yard"))
-        .child(div().text_sm().text_color(t.muted).child(if ready {
-            "Yard is set up. The optional steps can wait."
-        } else {
-            "Each step shows done once it is; do one in Terminal and come back."
-        }))
+        .child(div().text_xl().child(crate::widgets::text("heading", "Set up Yard")))
+        .child(div().text_sm().text_color(t.muted).child(crate::widgets::text(
+            "summary",
+            if ready {
+                "Yard is set up. The optional steps can wait."
+            } else {
+                "Each step shows done once it is; do one in Terminal and come back."
+            },
+        )))
         .children(rows)
+        .children(step_errors(env, cx))
         .child(div().flex().gap(px(8.)).child(Button::new("setup:check", "Check again").on_click(
             move |_, _, cx| {
                 check.daemon.reconnect_now();
@@ -176,6 +188,14 @@ impl Render for OnboardingView {
         }
         checklist(&self.env, &facts, window, cx)
     }
+}
+
+/// What the steps' actions report when they fail: Start yardd, the helper's Terminal, Trust, the
+/// ports profile and a first link, shown in the window they were pressed in.
+const STEP_ERRORS: [&str; 4] = ["yardd:start", "terminal", "setup:", "site:link"];
+
+pub fn step_errors(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
+    STEP_ERRORS.iter().flat_map(|prefix| crate::screens::errors(env, prefix, cx)).collect()
 }
 
 /// Opens the onboarding window.
@@ -291,5 +311,20 @@ mod tests {
             let (_v, cx) = cx.add_window_view(|_, _| Host(env, facts));
             cx.run_until_parked();
         }
+    }
+
+    /// A step that fails says why in the onboarding window, where it was pressed (found by the
+    /// checklist script: Start yardd's refusal showed only on the main window's Overview).
+    #[gpui::test]
+    async fn a_failed_step_says_why_in_onboarding(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        env.runner.update(cx, |r, _| {
+            let e = yard_proto::YardError::new(
+                yard_proto::ErrorCode::InvalidArgument,
+                "the agent serves another root",
+            );
+            r.errors.record(crate::runner::ActionId("yardd:start".into()), e)
+        });
+        assert_eq!(cx.update(|cx| super::step_errors(&env, cx).len()), 1);
     }
 }

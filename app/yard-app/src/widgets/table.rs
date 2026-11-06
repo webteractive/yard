@@ -1,8 +1,9 @@
 //! A table whose rows keep their ids across refreshes: a row's id comes from its key, so a list
 //! that refetches does not make assistive technology announce every row again.
 
-use super::A11y;
+use super::Pressable;
 use super::theme::Theme;
+use super::{A11y, text};
 use gpui::{
     AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window,
     div, prelude::*, px,
@@ -52,7 +53,7 @@ impl Table {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::Table, label: self.columns.join(", ").into() }
+        A11y::new(self.id.clone(), Role::Table, self.columns.join(", ").into())
     }
 
     /// `(key, element id)` of each row.
@@ -78,7 +79,12 @@ impl RenderOnce for Table {
             .border_color(t.border)
             .text_xs()
             .text_color(t.muted)
-            .children(self.columns.iter().map(|c| div().flex_1().child(c.clone())));
+            .children(
+                self.columns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| div().flex_1().child(text(format!("column:{i}"), c.clone()))),
+            );
         let mut rows = vec![];
         let ids: Vec<SharedString> = self.rows.iter().map(|r| self.row_id(&r.key)).collect();
         for (row, row_id) in self.rows.into_iter().zip(ids) {
@@ -98,10 +104,10 @@ impl RenderOnce for Table {
                     .border_b_1()
                     .border_color(t.border)
                     .when(selected, |d| d.bg(Theme::wash(t.accent)))
-                    .when_some(handler, |d, h| d.cursor_pointer().on_click(move |_, w, cx| h(&key, w, cx)))
-                    .children(
-                        row.cells.into_iter().map(|c| div().flex_1().text_sm().text_color(t.text).child(c)),
-                    )
+                    .when_some(handler, |d, h| d.cursor_pointer().on_press(move |_, w, cx| h(&key, w, cx)))
+                    .children(row.cells.into_iter().enumerate().map(|(i, c)| {
+                        div().flex_1().text_sm().text_color(t.text).child(text(format!("cell:{i}"), c))
+                    }))
                     .children(row.extra),
             );
         }

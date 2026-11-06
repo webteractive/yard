@@ -24,7 +24,12 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
         Sheet::Link { folder, name } => {
             let (submit, folder, name) = (env.clone(), folder.clone(), name.clone());
             Form::new("sheet:link", "Link a folder")
-                .field(div().text_sm().text_color(t.muted).child(folder.display().to_string()))
+                .field(
+                    div()
+                        .text_sm()
+                        .text_color(t.muted)
+                        .child(crate::widgets::text("sheet:link:folder", folder.display().to_string())),
+                )
                 .field(name.clone())
                 .submit("Link", false, move |_, _, cx| {
                     let site = name.read(cx).value().trim().to_string();
@@ -72,16 +77,18 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
             let found = env.state.read(cx).sites.value.iter().flatten().find(|s| &s.name == site).cloned()?;
             let plan = SettlePlan::new(&found)?;
             let mut form = Form::new("sheet:settle", format!("{} needs", found.name));
-            for line in &plan.lines {
-                form = form.field(div().text_sm().child(line.clone()));
-            }
-            for need in &plan.manual {
+            for (i, line) in plan.lines.iter().enumerate() {
                 form = form.field(
                     div()
-                        .text_xs()
-                        .text_color(t.muted)
-                        .child(format!("Not installed by Yard: {}", need.describe())),
+                        .text_sm()
+                        .child(crate::widgets::text(format!("sheet:settle:line:{i}"), line.clone())),
                 );
+            }
+            for (i, need) in plan.manual.iter().enumerate() {
+                form = form.field(div().text_xs().text_color(t.muted).child(crate::widgets::text(
+                    format!("sheet:settle:manual:{i}"),
+                    format!("Not installed by Yard: {}", need.describe()),
+                )));
             }
             let submit = env.clone();
             form.submit("Install", false, move |_, _, cx| {

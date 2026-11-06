@@ -17,6 +17,7 @@ runtime-shaders = ["gpui_platform/runtime_shaders"]
 
 [dependencies]
 futures.workspace = true
+libc = "0.2.191"
 gpui.workspace = true
 gpui_platform.workspace = true
 muda.workspace = true

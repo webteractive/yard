@@ -76,6 +76,16 @@ pub struct AppState {
     _updates: Task<()>,
 }
 
+/// What the menu bar menu and its icon read. The menu is always on screen, so a connect fetches
+/// these whether or not a window ever showed them (design §7.2).
+const MENU: [ResourceKey; 5] = [
+    ResourceKey::Status,
+    ResourceKey::Sites,
+    ResourceKey::Services,
+    ResourceKey::Ports,
+    ResourceKey::Tunnels,
+];
+
 impl AppState {
     /// Starts reading the daemon's updates; fetches are coalesced over `debounce`.
     pub fn new(daemon: Arc<dyn Daemon>, debounce: Duration, cx: &mut App) -> Entity<AppState> {
@@ -168,7 +178,7 @@ impl AppState {
                         self.resolve_waiters();
                     }
                     let mut keys = self.queue.loaded();
-                    keys.insert(ResourceKey::Status);
+                    keys.extend(MENU.iter().cloned());
                     self.refresh(keys, cx);
                 }
                 // The connection a job ran on dropped: its end will never arrive on it, so it is
@@ -330,26 +340,26 @@ mod tests {
         state
     }
 
+    /// The menu bar menu is always on screen: a connect fetches what it and the icon read (sites,
+    /// services, ports, tunnels) with `status`, and a new epoch also what a window loaded. Found by
+    /// the checklist script: a launch with no window open left the menu without sites or services
+    /// until the next event.
     #[gpui::test]
-    async fn connect_fetches_status_and_loaded_resources(cx: &mut TestAppContext) {
+    async fn connect_fetches_what_the_menu_shows_and_loaded_resources(cx: &mut TestAppContext) {
         let fake = FakeDaemon::new();
         let state = started(cx, &fake);
-        assert_eq!(
-            (fake.count("status"), fake.count("sites.list")),
-            (1, 0),
-            "only status until a list is shown"
-        );
-        assert!(state.read_with(cx, |s, _| s.status.value.is_some()));
-        state.update(cx, |s, cx| s.refresh([ResourceKey::Sites], cx));
+        let menu = |fake: &FakeDaemon| {
+            ["status", "sites.list", "services.list", "ports.list", "tunnels.list"].map(|m| fake.count(m))
+        };
+        assert_eq!(menu(&fake), [1; 5], "the menu's resources on the first connect");
+        assert_eq!(fake.count("php.list"), 0, "nothing the menu does not show");
+        assert!(state.read_with(cx, |s, _| s.status.value.is_some() && s.sites.value.is_some()));
+        state.update(cx, |s, cx| s.refresh([ResourceKey::Php], cx));
         settle(cx);
-        assert_eq!(fake.count("sites.list"), 1);
         fake.push(connected(2));
         settle(cx);
-        assert_eq!(
-            (fake.count("status"), fake.count("sites.list")),
-            (2, 2),
-            "a new epoch fetches what was loaded"
-        );
+        assert_eq!(menu(&fake), [2; 5]);
+        assert_eq!(fake.count("php.list"), 2, "a new epoch fetches what was loaded");
     }
 
     #[gpui::test]
@@ -360,9 +370,9 @@ mod tests {
             fake.event(Event::Reconciled { config_error: None });
         }
         cx.run_until_parked();
-        assert_eq!(fake.count("sites.list"), 0, "nothing before the debounce");
+        assert_eq!(fake.count("sites.list"), 1, "nothing more before the debounce");
         settle(cx);
-        assert_eq!(fake.count("sites.list"), 1);
+        assert_eq!(fake.count("sites.list"), 2);
         assert_eq!(state.read_with(cx, |s, _| s.sites.value.as_ref().map(Vec::len)), Some(1));
     }
 
@@ -401,6 +411,6 @@ mod tests {
         let state = started(cx, &fake);
         state.update(cx, |s, cx| s.became_active(&[ResourceKey::Sites], cx));
         settle(cx);
-        assert_eq!((fake.count("status"), fake.count("sites.list")), (2, 1));
+        assert_eq!((fake.count("status"), fake.count("sites.list")), (2, 2));
     }
 }

@@ -8,6 +8,9 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Wi
 use yard_client::api;
 use yard_proto::methods::{TunnelAddParams, TunnelDomainAddParams, TunnelDomainParams, TunnelRemoveParams};
 
+/// The table's column titles, each read out by VoiceOver.
+pub const COLUMNS: [&str; 4] = ["Site", "Kind", "URL", "State"];
+
 pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let s = env.state.read(cx);
     let tunnels = s.tunnels.value.clone().unwrap_or_default();
@@ -47,11 +50,8 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new(
-        "tunnels",
-        ["Site", "Kind", "URL", "State"].iter().map(|c| SharedString::from(*c)).collect(),
-        rows.collect(),
-    );
+    let table =
+        Table::new("tunnels", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
     let site = Nav::field(env, "tunnel:share:site", "Site to share", "blog", cx);
     let (e1, site1) = (env.clone(), site.clone());
     let domain_rows = domains.iter().map(|d| {
@@ -107,7 +107,7 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                 },
             ),
         ))
-        .child(div().text_lg().child("Domains for named tunnels"))
+        .child(div().text_lg().child(crate::widgets::text("domains:heading", "Domains for named tunnels")))
         .child(domain_table)
         .child(div().flex().gap(px(6.)).child(domain.clone()).child(
             Button::new("domain:add", "Add domain").on_click(move |_, _, cx| {

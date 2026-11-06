@@ -1,6 +1,8 @@
 //! A push button.
 
 use super::A11y;
+use super::Pressable;
+use super::disabled::Disabled;
 use super::theme::Theme;
 use gpui::{
     App, ClickEvent, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window,
@@ -53,7 +55,7 @@ impl Button {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::Button, label: self.label.clone() }
+        A11y { disabled: self.disabled, ..A11y::new(self.id.clone(), Role::Button, self.label.clone()) }
     }
 }
 
@@ -67,10 +69,10 @@ impl RenderOnce for Button {
         };
         let handler = self.on_click.clone();
         let a11y = self.a11y();
-        div()
-            .id(ElementId::Name(a11y.id))
+        let button = div()
+            .id(ElementId::Name(a11y.id.clone()))
             .role(a11y.role)
-            .aria_label(a11y.label)
+            .aria_label(a11y.label.clone())
             .px(px(10.))
             .py(px(4.))
             .rounded(px(6.))
@@ -81,7 +83,8 @@ impl RenderOnce for Button {
             .text_sm()
             .when(self.disabled, |d| d.opacity(0.5))
             .when(!self.disabled, |d| d.cursor_pointer())
-            .when_some(handler.filter(|_| !self.disabled), |d, h| d.on_click(move |e, w, cx| h(e, w, cx)))
-            .child(self.label)
+            .when_some(handler.filter(|_| !self.disabled), |d, h| d.on_press(move |e, w, cx| h(e, w, cx)))
+            .child(self.label);
+        if a11y.disabled { Disabled(button).into_any_element() } else { button.into_any_element() }
     }
 }

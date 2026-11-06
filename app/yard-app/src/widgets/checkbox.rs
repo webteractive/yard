@@ -1,6 +1,7 @@
 //! A checkbox: a choice that is ticked or not.
 
 use super::A11y;
+use super::Pressable;
 use super::theme::Theme;
 use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Toggled, Window, div,
@@ -27,7 +28,7 @@ impl Checkbox {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::CheckBox, label: self.label.clone() }
+        A11y::new(self.id.clone(), Role::CheckBox, self.label.clone())
     }
 }
 
@@ -44,7 +45,7 @@ impl RenderOnce for Checkbox {
             .flex()
             .items_center()
             .gap(px(6.))
-            .when_some(self.on_toggle, |d, h| d.cursor_pointer().on_click(move |_, w, cx| h(!checked, w, cx)))
+            .when_some(self.on_toggle, |d, h| d.cursor_pointer().on_press(move |_, w, cx| h(!checked, w, cx)))
             .child(
                 div()
                     .size(px(14.))

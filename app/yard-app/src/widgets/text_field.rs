@@ -103,7 +103,7 @@ impl TextField {
     }
 
     pub fn a11y(&self) -> super::A11y {
-        super::A11y { id: self.id.clone(), role: Role::TextInput, label: self.label.clone() }
+        super::A11y::new(self.id.clone(), Role::TextInput, self.label.clone())
     }
 
     fn left(&mut self, _: &Left, window: &mut Window, cx: &mut Context<Self>) {
@@ -637,6 +637,7 @@ impl Render for TextField {
             .role(a11y.role)
             .aria_label(a11y.label)
             .aria_value(self.content.clone())
+            .aria_placeholder(self.placeholder.clone())
             .flex()
             .key_context("TextField")
             .track_focus(&self.focus_handle(cx))

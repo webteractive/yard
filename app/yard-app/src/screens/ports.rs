@@ -13,6 +13,9 @@ use yard_core::ports::mode_str;
 use yard_proto::methods::{ProfileParams, UnitParams};
 use yard_proto::{PortMode, PortStatus, Profile};
 
+/// The table's column titles, each read out by VoiceOver.
+pub const COLUMNS: [&str; 5] = ["Unit", "Port", "Mode", "Status", "Held by"];
+
 fn status(s: PortStatus) -> &'static str {
     match s {
         PortStatus::Free => "free",
@@ -73,11 +76,7 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new(
-        "ports",
-        ["Unit", "Port", "Mode", "Status", "Held by"].iter().map(|c| SharedString::from(*c)).collect(),
-        rows.collect(),
-    );
+    let table = Table::new("ports", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
     let pick = env.clone();
     let profile_picker = Picker::new(
         "ports:profile",

@@ -41,3 +41,32 @@ async fn remove_is_refused_locally_while_in_use(cx: &mut TestAppContext) {
     assert_eq!(fake.count("services.remove"), 0);
     assert!(!cx.update(|cx| super::table::refuse_in_use(&env, "mysql-8.4", cx)), "nobody uses it");
 }
+
+/// Copy .env copies what `yard env` prints: an instance that is not added is the one note that
+/// says so and how to add it (found by the checklist script: the app copied a bare `# postgres-17`).
+#[test]
+fn copy_env_matches_yard_env() {
+    let blocks: Vec<yard_proto::EnvBlock> = serde_json::from_value(serde_json::json!([
+        {"instance": "postgres-17", "lines": [], "note": "postgres-17 is not added: yard service add postgres --version 17"},
+        {"instance": "redis", "lines": ["REDIS_HOST=127.0.0.1", "REDIS_PORT=6380"], "note": null}
+    ]))
+    .unwrap();
+    assert_eq!(
+        super::table::env_text(&blocks),
+        "# postgres-17 is not added: yard service add postgres --version 17\n\n# redis\nREDIS_HOST=127.0.0.1\nREDIS_PORT=6380\n"
+    );
+}
+
+/// A failed instance says why on the Services screen, holder and fix included, as `yard services`
+/// does under its table (found by the checklist script: the row said only `failed`).
+#[gpui::test]
+async fn a_failed_instance_says_why(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    env.state.update(cx, |s, _| s.services.value = serde_json::from_value(services()).ok());
+    let failures = cx.update(|cx| super::failures(&env, cx));
+    assert_eq!(failures.len(), 1);
+    let (name, e) = &failures[0];
+    assert_eq!(name, "mysql-8.4");
+    assert!(e.message.contains("held by mysqld (pid 9)"), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("yard service port mysql-8.4 <port>"));
+}

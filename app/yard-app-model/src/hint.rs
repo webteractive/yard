@@ -172,7 +172,11 @@ impl HintAction {
             }
             ["yard", "init"] | ["yard", "init", "--yes"] => HintAction::Settle { site: None },
             ["edit", file] if file.starts_with('/') => HintAction::OpenFile(PathBuf::from(file)),
-            ["sudo", "yard", "helper", "install"] => HintAction::Terminal(TerminalCommand::HelperInstall),
+            // With `--root`, doctor names the root yardd serves; the app runs it for its own root,
+            // which is the same one.
+            ["sudo", "yard", "helper", "install"] | ["sudo", "yard", "--root", _, "helper", "install"] => {
+                HintAction::Terminal(TerminalCommand::HelperInstall)
+            }
             ["brew", verb @ ("install" | "reinstall"), f] if is_word(f) => {
                 HintAction::Terminal(TerminalCommand::Brew {
                     reinstall: *verb == "reinstall",
@@ -190,6 +194,20 @@ mod tests {
 
     fn s(v: &str) -> String {
         v.to_string()
+    }
+
+    /// Doctor's hint for a root that is not `~/.yard` names it; the app builds the command from its
+    /// own root, which is that one (found by the checklist script: it offered only Copy).
+    #[test]
+    fn the_helper_install_hint_for_another_root_opens_terminal() {
+        assert_eq!(
+            HintAction::parse("sudo yard --root /tmp/yard-check helper install"),
+            HintAction::Terminal(TerminalCommand::HelperInstall)
+        );
+        assert_eq!(
+            HintAction::parse("sudo yard --root '/tmp/a b' helper install"),
+            HintAction::Terminal(TerminalCommand::HelperInstall)
+        );
     }
 
     #[test]

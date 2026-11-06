@@ -6,6 +6,7 @@ use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
 use crate::widgets::table::{Row, Table};
+use crate::widgets::text;
 use crate::widgets::theme::Theme;
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, prelude::*,
@@ -22,8 +23,13 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         div()
             .flex()
             .gap(px(8.))
-            .child(div().w(px(110.)).text_color(t.muted).child(label.to_string()))
-            .child(value)
+            .child(
+                div()
+                    .w(px(110.))
+                    .text_color(t.muted)
+                    .child(text(format!("{label}:label"), label.to_string())),
+            )
+            .child(text(format!("{label}:value"), value))
     };
     let mut facts = div().flex().flex_col().gap(px(4.)).text_sm();
     if let Some(st) = &s.status.value {

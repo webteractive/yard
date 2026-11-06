@@ -52,8 +52,15 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 div()
                     .flex()
                     .justify_between()
-                    .child(div().text_sm().child(j.title.clone()))
-                    .child(div().text_xs().text_color(t.muted).child(phase_text(&j.phase))),
+                    .child(
+                        div().text_sm().child(crate::widgets::text(format!("{id}:title"), j.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t.muted)
+                            .child(crate::widgets::text(format!("{id}:phase"), phase_text(&j.phase))),
+                    ),
             )
             .when(!tail.is_empty(), |d| d.child(LogView::new(format!("{id}:log"), tail)))
             .when(running, |d| {
@@ -69,7 +76,7 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(10.))
-        .child(div().text_xl().child("Activity"))
+        .child(div().text_xl().child(crate::widgets::text("heading", "Activity")))
         .children(cards)
         .into_any_element()
 }

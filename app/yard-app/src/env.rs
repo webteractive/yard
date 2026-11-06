@@ -294,8 +294,22 @@ impl AppEnv {
             }
             HintAction::OpenFile(file) => {
                 // A hint's file opens only as text in an editor, never with its default handler.
-                if let Err(e) = Opener::open_text(&file, self.settings.editor_app().as_deref()) {
-                    self.runner.update(cx, |r, _| r.errors.record(ActionId("open-file".into()), e));
+                let id = ActionId(format!("{}file", crate::window::main::OPEN_ERRORS));
+                match Opener::open_text(&file, self.settings.editor_app().as_deref()) {
+                    Ok(()) => self.runner.update(cx, |r, cx| {
+                        r.errors.clear(&id);
+                        cx.notify();
+                    }),
+                    Err(e) => {
+                        self.runner.update(cx, |r, cx| {
+                            r.errors.record(id, e);
+                            cx.notify();
+                        });
+                        // Asked from the menu or a closed window: open one to say why.
+                        if !crate::window::main::is_open(cx) {
+                            crate::window::main::open(self, Screen::Overview, cx);
+                        }
+                    }
                 }
             }
             HintAction::Settle { site } => {

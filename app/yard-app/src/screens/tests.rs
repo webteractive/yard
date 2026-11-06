@@ -114,3 +114,17 @@ fn a_job_line_with_a_url_is_a_link() {
     assert_eq!(link_in("open http://blog.yard:8080/"), Some("http://blog.yard:8080/"));
     assert_eq!(link_in("==> Pouring php@8.4"), None);
 }
+
+/// Every column has a title for VoiceOver to announce (found by the checklist script: the PHP and
+/// Node tables' default column was blank).
+#[test]
+fn every_table_column_has_a_title() {
+    for columns in [
+        &super::php::COLUMNS[..],
+        &super::node::COLUMNS[..],
+        &super::ports::COLUMNS[..],
+        &super::tunnels::COLUMNS[..],
+    ] {
+        assert!(columns.iter().all(|c| !c.trim().is_empty()), "{columns:?}");
+    }
+}

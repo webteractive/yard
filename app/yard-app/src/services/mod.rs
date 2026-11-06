@@ -17,33 +17,35 @@ use yard_app_model::hint::HintAction;
 pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let add = env.clone();
-    let header =
-        div().flex().justify_between().items_center().child(div().text_xl().child("Services")).child(
-            Button::new("service:add", "Add service…").style(ButtonStyle::Primary).on_click(
-                move |_, _, cx| {
-                    let line = cx.new(|cx| {
-                        TextField::new(
-                            "sheet:add-service:line",
-                            "Line (optional), such as 8.4",
-                            "the engine's default",
-                            cx,
-                        )
-                    });
-                    let port = cx.new(|cx| {
-                        TextField::new(
-                            "sheet:add-service:port",
-                            "Port (optional)",
-                            "the usual port, else the next free one",
-                            cx,
-                        )
-                    });
-                    add.nav.update(cx, |n, cx| {
-                        n.sheet = Some(Sheet::AddService { engine: 0, line, port, lines: vec![] });
-                        cx.notify();
-                    });
-                },
-            ),
-        );
+    let header = div()
+        .flex()
+        .justify_between()
+        .items_center()
+        .child(div().text_xl().child(crate::widgets::text("heading", "Services")))
+        .child(Button::new("service:add", "Add service…").style(ButtonStyle::Primary).on_click(
+            move |_, _, cx| {
+                let line = cx.new(|cx| {
+                    TextField::new(
+                        "sheet:add-service:line",
+                        "Line (optional), such as 8.4",
+                        "the engine's default",
+                        cx,
+                    )
+                });
+                let port = cx.new(|cx| {
+                    TextField::new(
+                        "sheet:add-service:port",
+                        "Port (optional)",
+                        "the usual port, else the next free one",
+                        cx,
+                    )
+                });
+                add.nav.update(cx, |n, cx| {
+                    n.sheet = Some(Sheet::AddService { engine: 0, line, port, lines: vec![] });
+                    cx.notify();
+                });
+            },
+        ));
     let runner = env.runner.read(cx);
     let names: Vec<String> =
         env.state.read(cx).services.value.iter().flatten().map(|s| s.name.clone()).collect();
@@ -79,7 +81,12 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 div()
                     .flex()
                     .justify_between()
-                    .child(div().text_sm().text_color(t.muted).child(format!("{name}'s log")))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t.muted)
+                            .child(crate::widgets::text("service:log:title", format!("{name}'s log"))),
+                    )
                     .child(Button::new("service:log:close", "Close log").on_click(move |_, _, cx| {
                         close.nav.update(cx, |n, cx| {
                             n.service_log = None;
@@ -89,6 +96,15 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             )
             .child(LogView::new("service:log", lines))
     });
+    let failed = failures(env, cx).into_iter().map(|(name, e)| {
+        let env = env.clone();
+        ErrorView::new(
+            format!("service:{name}:failed"),
+            &e,
+            HintAction::parse(e.hint.as_deref().unwrap_or("")),
+        )
+        .on_action(move |a, _, cx| env.perform(a, cx))
+    });
     div()
         .flex()
         .flex_col()
@@ -96,8 +112,16 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .child(header)
         .children(errors)
         .child(table::table(env, window, cx))
+        .children(failed)
         .children(log)
         .into_any_element()
+}
+
+/// Why each failed instance failed, with the command that fixes it (`PORT_IN_USE` names the
+/// holder and offers Port…), as `yard services` prints under its table.
+pub fn failures(env: &AppEnv, cx: &App) -> Vec<(String, yard_proto::YardError)> {
+    let services = env.state.read(cx).services.value.clone().unwrap_or_default();
+    services.into_iter().filter_map(|s| s.state.failure(&s.name).map(|e| (s.name, e))).collect()
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
 pub mod banner;
 pub mod button;
 pub mod checkbox;
+pub mod disabled;
 pub mod error_view;
 pub mod form;
 pub mod log_view;
@@ -13,8 +14,33 @@ pub mod text_field;
 pub mod theme;
 pub mod toggle;
 
-use gpui::{App, Role, SharedString, Window};
+use gpui::{App, ElementId, Role, SharedString, Window};
 use std::rc::Rc;
+
+/// Text that assistive technology can read. GPUI puts a `Text` with an id in the accessibility
+/// tree and never a plain string, so every visible line that is not a control's own label goes
+/// through here. `id` must be unique among the elements under the nearest ancestor with an id, and
+/// stable across frames, so a refresh does not announce unchanged text again.
+pub fn text(id: impl Into<ElementId>, s: impl Into<SharedString>) -> gpui::Text {
+    gpui::Text::new(id.into(), s.into())
+}
+
+/// A control's press, by mouse or by assistive technology. GPUI turns an accessibility press into
+/// a mouse click at the element's centre, which lands nowhere when the element is scrolled out of
+/// view, so VoiceOver could not press a control below the fold (found by the checklist script: a
+/// long site detail's Copy .env). `on_press` also answers the accessibility press directly.
+pub trait Pressable: gpui::StatefulInteractiveElement + Sized {
+    fn on_press(self, f: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        let f = Rc::new(f);
+        let g = f.clone();
+        self.on_click(move |e, w, cx| f(e, w, cx))
+            .on_a11y_action(gpui::accesskit::Action::Click, move |_, w, cx| {
+                g(&gpui::ClickEvent::default(), w, cx)
+            })
+    }
+}
+
+impl<E: gpui::StatefulInteractiveElement> Pressable for E {}
 
 /// A widget's handler, called with a value (the new state, the chosen index).
 pub type Callback<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
@@ -28,6 +54,16 @@ pub struct A11y {
     pub id: SharedString,
     pub role: Role,
     pub label: SharedString,
+    /// Reported unavailable ([`disabled::Disabled`]): it is greyed out and does nothing.
+    pub disabled: bool,
+    /// Read after the label and value, such as why a control is disabled.
+    pub description: Option<SharedString>,
+}
+
+impl A11y {
+    pub fn new(id: SharedString, role: Role, label: SharedString) -> A11y {
+        A11y { id, role, label, disabled: false, description: None }
+    }
 }
 
 #[cfg(test)]
@@ -72,6 +108,26 @@ mod tests {
             assert!(!w.id.is_empty(), "{w:?}");
             assert!(!w.label.is_empty(), "{w:?}");
             assert!(!matches!(w.role, Role::Unknown | Role::GenericContainer), "{w:?}");
+        }
+    }
+
+    /// A greyed-out control is reported unavailable, with the reason as its description, so
+    /// VoiceOver does not offer a control that does nothing (found by the checklist script: a PHP
+    /// picker a committed `.yard` locks read as enabled, its reason as no text at all).
+    #[test]
+    fn a_disabled_control_says_so_and_why() {
+        let locked = Picker::new("site:blog:php", "PHP for blog", vec!["8.4".into()], Some(0))
+            .disabled_because(Some("set in /p/.yard".into()))
+            .a11y();
+        assert!(locked.disabled);
+        assert_eq!(locked.description.as_deref(), Some("set in /p/.yard"));
+        assert!(Button::new("b", "Install").disabled(true).a11y().disabled);
+        let switch =
+            Toggle::new("t", "HTTPS for blog", false).disabled_because(Some("set in /p/.yard".into())).a11y();
+        assert!(switch.disabled);
+        assert_eq!(switch.description.as_deref(), Some("set in /p/.yard"));
+        for w in widgets() {
+            assert!(!w.disabled && w.description.is_none(), "{w:?}");
         }
     }
 

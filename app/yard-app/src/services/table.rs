@@ -81,13 +81,9 @@ fn simple(
     });
 }
 
-/// The `.env` lines `yard env` prints, joined.
+/// What Copy .env copies: what `yard env` prints, without emailulator's warning.
 pub fn env_text(blocks: &[yard_proto::EnvBlock]) -> String {
-    blocks
-        .iter()
-        .map(|b| format!("# {}\n{}", b.instance, b.lines.join("\n")))
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    yard_core::present::env_text(&yard_core::present::split_env_warnings(blocks.to_vec()).0)
 }
 
 pub fn copy_env(env: &AppEnv, params: EnvParams, id: String, cx: &mut App) {

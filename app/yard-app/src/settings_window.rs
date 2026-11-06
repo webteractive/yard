@@ -7,8 +7,8 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Theme;
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
-    WindowBounds, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Context, Entity, Global, IntoElement, ParentElement, Render, Styled, Window,
+    WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 use std::path::Path;
 
@@ -91,19 +91,17 @@ impl Render for SettingsView {
             .flex_col()
             .bg(t.background)
             .text_color(t.text)
-            .child(div().text_lg().child("Settings"))
+            .child(div().text_lg().child(crate::widgets::text("heading", "Settings")))
             .child(row(
                 "yard (a path, or empty to find it beside the LaunchAgent's yardd)",
                 self.yard.clone(),
             ))
             .child(row("Editor app", self.editor.clone()))
             .child(row("Terminal app", self.terminal.clone()))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t.muted)
-                    .child(format!("Data root: {}", self.env.location.root.display())),
-            )
+            .child(div().text_xs().text_color(t.muted).child(crate::widgets::text(
+                "data-root",
+                format!("Data root: {}", self.env.location.root.display()),
+            )))
             .child(
                 div()
                     .flex()
@@ -115,10 +113,10 @@ impl Render for SettingsView {
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(t.muted)
-                            .child(saved_text(self.saved, self.env.cli.yard())),
+                        div().text_xs().text_color(t.muted).child(crate::widgets::text(
+                            "saved",
+                            saved_text(self.saved, self.env.cli.yard()),
+                        )),
                     ),
             )
     }
@@ -135,12 +133,24 @@ fn saved_text(saved: bool, yard: Option<std::path::PathBuf>) -> String {
     }
 }
 
-/// Opens the Settings window.
+struct SettingsHandle(WindowHandle<SettingsView>);
+
+impl Global for SettingsHandle {}
+
+/// Opens the Settings window, or raises it when it is open.
 pub fn open(env: &AppEnv, cx: &mut App) {
+    if let Some(handle) = cx.try_global::<SettingsHandle>().map(|h| h.0)
+        && crate::window::is_open(handle, cx)
+    {
+        crate::window::raise(handle, cx);
+        activation::window_opened(cx);
+        return;
+    }
     let bounds = Bounds::centered(None, size(px(560.), px(360.)), cx);
     let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
     let env = env.clone();
-    if cx.open_window(options, |_, cx| cx.new(|cx| SettingsView::new(env, cx))).is_ok() {
+    if let Ok(handle) = cx.open_window(options, |_, cx| cx.new(|cx| SettingsView::new(env, cx))) {
+        cx.set_global(SettingsHandle(handle));
         activation::window_opened(cx);
     }
 }
@@ -149,6 +159,17 @@ pub fn open(env: &AppEnv, cx: &mut App) {
 mod tests {
     use crate::testing::env;
     use gpui::TestAppContext;
+
+    /// Settings… from the menu raises the open Settings window rather than opening another
+    /// (found by the checklist script: each click opened one more).
+    #[gpui::test]
+    async fn settings_opens_once(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        cx.update(|cx| super::open(&env, cx));
+        cx.update(|cx| super::open(&env, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1);
+    }
 
     #[gpui::test]
     async fn settings_renders(cx: &mut TestAppContext) {

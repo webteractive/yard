@@ -14,6 +14,9 @@ use yard_app_model::refresh::ResourceKey;
 use yard_client::api;
 use yard_proto::methods::{ExtAddParams, ExtParams, PhpConfigParams, PhpParams};
 
+/// The table's column titles, each read out by VoiceOver.
+pub const COLUMNS: [&str; 4] = ["Version", "Default", "Sites", "Pool"];
+
 pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let versions = env.state.read(cx).php.value.clone().unwrap_or_default();
     let default = versions.iter().find(|v| v.default).map(|v| v.version.clone());
@@ -108,11 +111,7 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new(
-        "php",
-        ["Version", "", "Sites", "Pool"].iter().map(|c| SharedString::from(*c)).collect(),
-        rows.collect(),
-    );
+    let table = Table::new("php", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
     let mut page = div()
         .flex()
         .flex_col()
@@ -198,7 +197,12 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
         .flex_col()
         .gap(px(8.))
         .child(
-            div().flex().gap(px(8.)).items_center().child(div().text_lg().child("Extensions")).child(picker),
+            div()
+                .flex()
+                .gap(px(8.))
+                .items_center()
+                .child(div().text_lg().child(crate::widgets::text("extensions:heading", "Extensions")))
+                .child(picker),
         )
         .child(table)
         .child(div().flex().gap(px(6.)).child(add.clone()).child(
@@ -215,7 +219,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                 }
             }),
         ))
-        .child(div().text_lg().child("php.ini overrides"))
+        .child(div().text_lg().child(crate::widgets::text("overrides:heading", "php.ini overrides")))
         .child(
             div()
                 .flex()

@@ -1,6 +1,8 @@
 //! A choice of one value from a short list, shown in a popup under it.
 
 use super::A11y;
+use super::Pressable;
+use super::disabled::Disabled;
 use super::theme::Theme;
 use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window, anchored,
@@ -40,7 +42,11 @@ impl Picker {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::ComboBox, label: self.label.clone() }
+        A11y {
+            disabled: self.disabled.is_some(),
+            description: self.disabled.clone(),
+            ..A11y::new(self.id.clone(), Role::ComboBox, self.label.clone())
+        }
     }
 }
 
@@ -55,11 +61,12 @@ impl RenderOnce for Picker {
         let toggle = open.clone();
         let a11y = self.a11y();
         let mut root = div()
-            .id(ElementId::Name(a11y.id))
+            .id(ElementId::Name(a11y.id.clone()))
             .role(a11y.role)
             .aria_label(a11y.label)
             .aria_value(current.clone())
             .aria_expanded(is_open)
+            .when_some(a11y.description.clone(), |d, why| d.aria_description(why))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -75,8 +82,9 @@ impl RenderOnce for Picker {
             .child(div().text_color(t.muted).child("▾"));
         if let Some(why) = &disabled {
             root = root.opacity(0.6).child(div().text_xs().text_color(t.muted).child(why.clone()));
+            return Disabled(root).into_any_element();
         } else {
-            root = root.cursor_pointer().on_click(move |_, _, cx| {
+            root = root.cursor_pointer().on_press(move |_, _, cx| {
                 toggle.update(cx, |o, cx| {
                     *o = !*o;
                     cx.notify();
@@ -96,7 +104,7 @@ impl RenderOnce for Picker {
                     .py(px(4.))
                     .cursor_pointer()
                     .when(self.selected == Some(i), |d| d.bg(Theme::wash(t.accent)))
-                    .on_click(move |_, w, cx| {
+                    .on_press(move |_, w, cx| {
                         close.update(cx, |o, cx| {
                             *o = false;
                             cx.notify();
@@ -123,6 +131,6 @@ impl RenderOnce for Picker {
                 ),
             ));
         }
-        root
+        root.into_any_element()
     }
 }

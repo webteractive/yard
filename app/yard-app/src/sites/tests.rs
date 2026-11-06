@@ -15,11 +15,15 @@ impl Render for Host {
 }
 
 fn detail(php_source: &str) -> yard_proto::SiteDetail {
+    detail_of(php_source, "project")
+}
+
+fn detail_of(php_source: &str, kind: &str) -> yard_proto::SiteDetail {
     serde_json::from_value(json!({
         "site": {
             "name": "blog", "host": "blog.yard", "url": "http://blog.yard:8080/", "source": "linked",
             "kind": "php", "path": "/p", "docroot": "/p/public", "php": "8.3", "project_file": "/p/.yard",
-            "project_file_kind": "project"
+            "project_file_kind": kind
         },
         "php_full": "8.3.21",
         "sources": {"php": php_source, "docroot": "default", "secure": "sites_toml"},
@@ -59,9 +63,45 @@ async fn site_detail_renders_sources(cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
+/// yardd refuses `isolate`, `secure` and `docroot` (and `init` finds the file there) for a site
+/// whose project has its own `.yard`, whatever keys it sets: the PHP picker, the HTTPS switch,
+/// Detect docroot and Save settings to .yard are locked, saying where (found by the checklist
+/// script: only the picker was, and only when the file set `php`).
 #[test]
-fn php_picker_is_disabled_for_a_committed_yard() {
-    assert_eq!(super::detail::php_lock(&detail("project_file")), Some("set in /p/.yard".to_string()));
-    assert_eq!(super::detail::php_lock(&detail("managed_file")), None, "a managed file is edited for you");
-    assert_eq!(super::detail::php_lock(&detail("sites_toml")), None);
+fn a_committed_yard_locks_what_yardd_would_refuse() {
+    let lock = |d: yard_proto::SiteDetail| super::detail::project_lock(&d.site);
+    assert_eq!(lock(detail_of("project_file", "project")), Some("set in /p/.yard".to_string()));
+    assert_eq!(
+        lock(detail_of("default", "project")),
+        Some("set in /p/.yard".to_string()),
+        "even without php"
+    );
+    assert_eq!(lock(detail_of("managed_file", "managed")), None, "a managed file is edited for you");
+    let mut none = detail_of("sites_toml", "project");
+    (none.site.project_file, none.site.project_file_kind) = (None, None);
+    assert_eq!(lock(none), None);
+}
+
+/// The detail says which Node a site runs and where that comes from, and offers Use default Node
+/// only for a pin Yard made (`yard node use`, in sites.toml or the managed `.yard`); a `.nvmrc` or a
+/// committed `.yard` is the project's own (found by the checklist script: no Node line at all).
+#[test]
+fn the_detail_shows_the_sites_node_and_offers_to_unpin_yards_own_pin() {
+    let with_node = |node: serde_json::Value| {
+        let mut d = detail_of("default", "managed");
+        d.site.node = serde_json::from_value(node).unwrap();
+        d
+    };
+    let pinned = with_node(json!({"spec": "22", "source": "sites_toml", "version": null}));
+    let lines = super::detail::source_lines(&pinned);
+    assert!(lines.contains(&"Node 22 — not installed, from sites.toml".to_string()), "{lines:?}");
+    assert!(super::detail::node_pinned_by_yard(&pinned.site));
+
+    let nvmrc =
+        with_node(json!({"spec": "22", "source": "nvmrc", "file": "/p/.nvmrc", "version": "22.11.0"}));
+    let lines = super::detail::source_lines(&nvmrc);
+    assert!(lines.contains(&"Node 22.11.0 — from /p/.nvmrc".to_string()), "{lines:?}");
+    assert!(!super::detail::node_pinned_by_yard(&nvmrc.site));
+
+    assert!(!super::detail::source_lines(&detail("default")).iter().any(|l| l.starts_with("Node")));
 }

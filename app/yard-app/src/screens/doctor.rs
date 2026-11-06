@@ -4,6 +4,7 @@ use super::heading;
 use crate::env::AppEnv;
 use crate::platform::open::Opener;
 use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::text;
 use crate::widgets::theme::Theme;
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_app_model::hint::HintAction;
@@ -63,7 +64,7 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             .on_click(move |_, _, cx| run.state.update(cx, |s, cx| s.run_doctor(cx))),
     );
     if let Some(e) = &s.doctor.error {
-        page = page.child(div().text_sm().text_color(t.danger).child(e.message.clone()));
+        page = page.child(div().text_sm().text_color(t.danger).child(text("error", e.message.clone())));
     }
     let Some(report) = report else { return page.into_any_element() };
     for status in [CheckStatus::Fail, CheckStatus::Warn, CheckStatus::Ok] {
@@ -76,7 +77,7 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             CheckStatus::Warn => ("Warnings", t.warning),
             _ => ("OK", t.muted),
         };
-        page = page.child(div().text_lg().text_color(color).child(title));
+        page = page.child(div().text_lg().text_color(color).child(text(format!("group:{title}"), title)));
         for c in checks {
             let mut row = div()
                 .flex()
@@ -86,14 +87,12 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 .rounded(px(6.))
                 .border_1()
                 .border_color(t.border)
-                .child(div().text_sm().child(c.message.clone()));
+                .child(div().text_sm().child(text(format!("{}:message", c.id), c.message.clone())));
             if let Some(hint) = c.hint.clone() {
                 let action = HintAction::parse(&hint);
-                let mut controls = div()
-                    .flex()
-                    .gap(px(6.))
-                    .items_center()
-                    .child(div().text_xs().text_color(t.muted).child(hint.clone()));
+                let mut controls = div().flex().gap(px(6.)).items_center().child(
+                    div().text_xs().text_color(t.muted).child(text(format!("{}:hint", c.id), hint.clone())),
+                );
                 for label in buttons(Some(&hint)) {
                     let (env, action, hint) = (env.clone(), action.clone(), hint.clone());
                     controls =

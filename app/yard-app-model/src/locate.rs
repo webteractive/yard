@@ -24,6 +24,7 @@ pub struct Location {
     /// The root is `~/.yard`, so the CLI needs no `--root`.
     pub root_is_default: bool,
     pub yard: Option<PathBuf>,
+    /// A LaunchAgent serves this root.
     pub agent_installed: bool,
 }
 
@@ -42,7 +43,11 @@ pub fn locate(input: &LocateInput) -> Location {
         .into_iter()
         .flatten()
         .find(|p| input.executables.contains(p));
-    Location { root_is_default: root == default, root, yard, agent_installed: input.agent.is_some() }
+    // The agent has one label and serves one root (its `YARD_ROOT`, else `~/.yard`); for any other
+    // root there is no agent, and `yard start` refuses to take that one.
+    let agent_installed =
+        input.agent.as_ref().is_some_and(|a| a.root.clone().unwrap_or_else(|| default.clone()) == root);
+    Location { root_is_default: root == default, root, yard, agent_installed }
 }
 
 #[cfg(test)]
@@ -73,6 +78,20 @@ mod tests {
             ..input()
         });
         assert_eq!((l.root.as_path(), l.root_is_default), (Path::new("/tmp/yard-dev"), false));
+        // The agent serves /elsewhere: for this root there is none, so Start yardd (which `yard
+        // start` would refuse) is not offered, and onboarding counts the agent step as to do.
+        assert!(!l.agent_installed);
+    }
+
+    #[test]
+    fn an_agent_counts_only_for_the_root_it_serves() {
+        let home_agent = || Some(agent("/x/yardd", None));
+        let mine =
+            locate(&LocateInput { root_arg: Some("/Users/me/.yard".into()), agent: home_agent(), ..input() });
+        assert!(mine.agent_installed);
+        let scratch =
+            locate(&LocateInput { root_arg: Some("/tmp/yard-check".into()), agent: home_agent(), ..input() });
+        assert!(!scratch.agent_installed);
     }
 
     #[test]

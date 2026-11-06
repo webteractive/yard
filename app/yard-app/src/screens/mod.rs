@@ -20,7 +20,7 @@ use yard_proto::JobStarted;
 
 /// The screen's title.
 pub fn heading(title: &str) -> AnyElement {
-    div().text_xl().child(title.to_string()).into_any_element()
+    div().text_xl().child(crate::widgets::text("heading", title.to_string())).into_any_element()
 }
 
 /// Every action error whose id starts with `prefix`, each with its hint's action.

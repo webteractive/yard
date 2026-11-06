@@ -1,6 +1,7 @@
 //! Output lines in a monospaced block, with `http(s)://` addresses as links.
 
 use super::A11y;
+use super::Pressable;
 use super::theme::Theme;
 use crate::platform::open::Opener;
 use gpui::{
@@ -20,7 +21,7 @@ impl LogView {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::Log, label: "Output".into() }
+        A11y::new(self.id.clone(), Role::Log, "Output".into())
     }
 }
 
@@ -36,19 +37,21 @@ impl RenderOnce for LogView {
         let t = Theme::of(window);
         let a11y = self.a11y();
         let all = self.lines.join("\n");
+        // A plain line is text assistive technology reads (a role and a label alone left VoiceOver
+        // with nothing to read: found by the checklist script); a line with an address is a link.
         let rows = self.lines.into_iter().enumerate().map(|(i, line)| {
-            let row = div()
-                .id(ElementId::Name(format!("{}:line:{i}", self.id).into()))
-                .role(Role::Label)
-                .aria_label(line.clone());
+            let id = format!("{}:line:{i}", self.id);
             match link_in(&line).map(str::to_string) {
-                Some(url) => row
+                Some(url) => div()
+                    .id(ElementId::Name(id.into()))
                     .role(Role::Link)
+                    .aria_label(line.clone())
                     .text_color(t.accent)
                     .cursor_pointer()
-                    .on_click(move |_, _, cx| Opener::open_url(cx, &url))
-                    .child(line),
-                None => row.child(line),
+                    .on_press(move |_, _, cx| Opener::open_url(cx, &url))
+                    .child(line)
+                    .into_any_element(),
+                None => div().child(super::text(id, line)).into_any_element(),
             }
         });
         div()
@@ -71,7 +74,7 @@ impl RenderOnce for LogView {
                     .self_end()
                     .text_color(t.muted)
                     .cursor_pointer()
-                    .on_click(move |_, _, cx| Opener::copy(cx, &all))
+                    .on_press(move |_, _, cx| Opener::copy(cx, &all))
                     .child("Copy all"),
             )
             .children(rows)

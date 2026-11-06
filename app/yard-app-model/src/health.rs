@@ -52,7 +52,11 @@ pub fn evaluate(
         if let Some(e) = &s.config_error {
             errors.push(problem(e.message.clone(), e.hint.as_deref()));
         }
-        for u in s.units.iter().filter(|u| matches!(u.state, UnitState::Failed { .. })) {
+        // A service instance is a unit too; its failure is the service's problem below.
+        let is_service = |unit: &str| services.unwrap_or_default().iter().any(|svc| svc.name == unit);
+        for u in
+            s.units.iter().filter(|u| matches!(u.state, UnitState::Failed { .. }) && !is_service(&u.name))
+        {
             errors.push(problem(format!("{} failed", u.name), Some("yard doctor")));
         }
     }
@@ -143,5 +147,27 @@ mod tests {
             evaluate(&Link::Connected { stale: true }, Some(&ok), None, None, None, 0),
             Health::Warning(_)
         ));
+    }
+
+    /// A service instance is a unit too: when it fails it is one problem, the service's, which
+    /// names the holder and offers Port…, not also a bare `redis failed` that offers doctor (found
+    /// by the checklist script: the menu listed both, the bare one first).
+    #[test]
+    fn a_failed_service_is_one_problem_that_names_the_holder() {
+        let failed = status(json!([unit("redis", json!({"state": "failed", "last_lines": []}))]), None);
+        let svc: ServiceInfo = serde_json::from_value(json!({
+            "name": "redis", "engine": "redis", "version": null, "formula": "redis",
+            "ports": [{"name": "redis", "port": 6380}], "stopped_by_user": false,
+            "account": {"user": null, "password": null}, "console": null, "used_by": [],
+            "state": {"failed": {"last_lines": [], "reason": {
+                "code": "PORT_IN_USE", "message": "port 6380 is held by Python (pid 7, unknown)",
+                "hint": "yard service port redis <port>"}}}
+        }))
+        .unwrap();
+        let Health::Error(problems) = evaluate(&UP, Some(&failed), None, Some(&[svc]), None, 0) else {
+            panic!()
+        };
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].text.contains("held by Python"), "{}", problems[0].text);
     }
 }

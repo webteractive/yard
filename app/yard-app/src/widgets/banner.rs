@@ -34,7 +34,7 @@ impl Banner {
 
     pub fn a11y(&self) -> A11y {
         let role = if self.kind == BannerKind::Info { Role::Status } else { Role::Alert };
-        A11y { id: self.id.clone(), role, label: self.text.clone() }
+        A11y::new(self.id.clone(), role, self.text.clone())
     }
 }
 

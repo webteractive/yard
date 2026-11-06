@@ -58,7 +58,7 @@ impl Form {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { id: self.id.clone(), role: Role::Dialog, label: self.title.clone() }
+        A11y::new(self.id.clone(), Role::Dialog, self.title.clone())
     }
 }
 

@@ -349,7 +349,7 @@ its sequential `Client` (moved into yard-client unchanged); it does not need pip
 - It also tries at once when the app becomes active, when the menu bar menu opens (if tray-icon
   reports it, §8.1), and after the app itself runs `yard start` (§5.7).
 - After a successful `hello` and `subscribe`, it reports `Connected(Session info)` with the new
-  epoch, and the app fetches every resource it holds (§7.2). Events that arrive while those fetches
+  epoch, and the app fetches what the menu shows and every resource it holds (§7.2). Events that arrive while those fetches
   run are applied after them; every event's effect is idempotent (§7.3), so order does not matter.
 - Job ids restart at 1 when yardd restarts (`<kind>-<n>`), so the app keys jobs by
   `(epoch, job_id)`. A job still running when the connection dropped becomes **lost** (§9.1).
@@ -360,7 +360,7 @@ The locator (§5.8) reads the LaunchAgent's plist, so the app can tell three cas
 
 | Facts | State shown | Offered |
 |---|---|---|
-| no `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and no answer | **Yard is not set up** | the onboarding window (§8.4) |
+| no `~/Library/LaunchAgents/dev.more.yard.daemon.plist`, or one serving another root, and no answer | **Yard is not set up** | the onboarding window (§8.4) |
 | plist present, socket does not answer | **yardd is not running** | **Start yardd**: runs `yard start` |
 | answers | connected (or stale, §5.3) | everything |
 
@@ -368,7 +368,11 @@ The offline commands are the CLI's (main spec §3.1, cli-output rule): `start`, 
 `doctor`, `ports check`, `install-shims`, `trust`/`untrust` (which run `security` as the user),
 and `helper install|uninstall` (sudo). The app runs them through `CliRunner` (`yard-app`):
 `tokio::process::Command` with the located `yard`, an argument vector, `--json`, and `--root
-<root>` when the root is not the default. Exit 0 decodes the yard-proto type; exit 1 decodes
+<root>` when the root is not the default. The agent has one label and serves one root, so `yard
+start` and `yard stop` refuse a root the installed agent does not serve (main spec §3): against a
+scratch root, Start, Stop and Restart yardd say so instead of taking the agent from `~/.yard`, and
+the locator counts an agent as installed only for the root it serves (2026-11-06, found by the
+checklist script). Exit 0 decodes the yard-proto type; exit 1 decodes
 `{"error": YardError}`; exit 3 is `DAEMON_NOT_RUNNING`; anything else is `INTERNAL` with stderr's
 last line. An app launched from Finder has launchd's PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), which
 is what `yard start` (`launchctl`) and `yard trust` (`/usr/bin/security`) need; `CliRunner` sets
@@ -458,7 +462,7 @@ one fetch in flight per resource and one more queued if it was invalidated meanw
 
 | Trigger | Effect |
 |---|---|
-| connected (new epoch) | fetch every resource that has been loaded once, and `status` |
+| connected (new epoch) | `status` and what the menu bar menu and its icon read (`sites`, `services`, `ports`, `tunnels`), which are always on screen, plus every resource loaded once |
 | `reconciled` (§13) | `status`, `sites`, `services`, `php`, `node`, `tunnels`, `ports`, loaded `extensions`, loaded `site_detail` |
 | `job_finished` | the same set, plus `sources`, `tunnel_domains` and `ca` |
 | `unit_state_changed` | patch `status.units` in place at once; then `services` when the unit is a service instance, `php` when it is a `php-fpm` pool, `tunnels` when it is `tunnel-<site>` |
@@ -505,7 +509,8 @@ and site search moves to the main window. The status item's icon is a template i
 - A status line (disabled item): `Yard <daemon version> · <profile> · .<tld>`, or the offline /
   not set up / stale message, with its action as the next item (**Start yardd**, **Set up Yard…**,
   **Restart yardd**) (§5.3, §5.7).
-- Problems, each one item that performs its action: a failed unit, a service that failed (its
+- Problems, each one item that performs its action: a failed unit that is not a service instance, a
+  service that failed (its
   `ServiceState::failure` text), a port held by another program (holder name and kind), a
   `config_error`, a tunnel in `failed`.
 - Running jobs: one disabled item each, `<title> — <last output line>` (truncated to fit), followed
@@ -530,7 +535,10 @@ task; without it the menu relies on events, which is enough from protocol 2.11.
 
 ### 8.2 Main window
 
-One GPUI window, titled `Yard`, with a sidebar and a content pane. The sidebar has a badge per
+One GPUI window, titled `Yard`, with a sidebar and a content pane. Opening a screen from anywhere
+(the menu, a site row, a hint) shows it in that window when it is open and raises it; whether it is
+open is read from the app's windows, since GPUI refuses to update a window from inside its own
+click handler (until 2026-11-06 each click on a site row opened another window). The sidebar has a badge per
 section with a problem. Each section is a list or table with a detail pane; every action shows its
 error inline beside the control that started it (§10).
 
@@ -552,17 +560,22 @@ error view with its hint button, and a form overlay for the forms below. Confirm
   `sites.link` with the folder's canonical absolute path) or adds a proxy (`sites.proxy`). The
   detail pane (`sites.info`) shows each setting with where it comes from (`SiteDetail.sources`:
   from `.yard`, from the managed file, from `sites.toml`, default) and the controls for it:
-  - PHP picker (`sites.isolate`, with **Default** to unisolate). When a committed `.yard` owns
-    the setting the picker is disabled and says `set in <file>` with **Open file**; when a managed
-    `.yard` owns it the change goes through and the inline note says `set in <file>`.
+  - PHP picker (`sites.isolate`, with **Default** to unisolate). yardd refuses `isolate`,
+    `secure` and `docroot` for a site whose project has its own `.yard`, whatever keys it sets,
+    and `init` finds the file there, so for such a site the PHP picker, the HTTPS switch,
+    **Detect docroot** and **Save settings to .yard** are disabled, the picker saying `set in
+    <file>` with **Open .yard**; a managed `.yard` is edited for you and locks nothing.
   - Secure toggle (`sites.secure` / `sites.unsecure`), docroot (`sites.docroot`, with **Detect**
-    to clear), Node (`node.use` / `node.unuse`).
+    to clear), and a line saying the site's Node and where it is set (`Node 22 — not installed,
+    from sites.toml`, `Node 22.11.0 — from /p/.nvmrc`), with **Use default Node** (`node.unuse`)
+    only for a pin Yard made (sites.toml or the managed `.yard`).
   - Services the `.yard` asks for (`SiteDetail.services`) with met or missing; needs and a
     missing Node with **Install…** (the settle flow, §11.1); `project_error` and
     `ignored_managed_file` as notes with their hint.
   - Tunnel: the URL and state, or **Share…** (§8.2 Tunnels).
   - Actions: **Open in browser**, **Open in editor**, **Reveal in Finder**, **Open in Terminal**,
-    **Edit nginx override** (opens `nginx/overrides/<site>.conf`), **Copy .env**
+    **Edit nginx override** (opens `nginx/overrides/<site>.conf`), **Copy .env** (the text `yard
+    env` prints, from `yard_core::present::env_text`)
     (`env.print { site }`, the lines joined as `yard env` prints them), **Save settings to .yard**
     (`sites.init`, managed by default, with a **Write it into the project** option for `local`;
     `SITE_NAME_TAKEN` asks to replace, §11.3), **Unlink** / **Remove proxy** after a confirmation.
@@ -573,7 +586,9 @@ error view with its hint button, and a form overlay for the forms below. Confirm
   after…** (`services.sleep.set` with a duration, `off` or `default`), **Remove…** (§11.3). **Add
   service**: engine (MySQL, PostgreSQL, Redis, MinIO, emailulator), an optional line and an
   optional port, as the job `services.add`; `SERVICE_VERSION_UNSUPPORTED` turns the line field
-  into a picker of `data.available`.
+  into a picker of `data.available`. Under the table, each failed instance says why with its fix,
+  as `yard services` does (`ServiceState::failure`: `PORT_IN_USE` names the holder and offers
+  **Port…**).
 - **PHP:** each version from `php.list { available: true }` (§13): installed or not, default,
   sites on it, pool state. **Install** and **Uninstall** are jobs; **Make default**
   (`php.default`). For an installed version: its extensions (`ext.list { php }`) with
@@ -607,7 +622,7 @@ error view with its hint button, and a form overlay for the forms below. Confirm
 
 ### 8.3 Settings
 
-A small GPUI window: the `yard` path (shows the located one, with **Choose…**), the editor (an app
+A small GPUI window, one at a time (**Settings…** raises it when open): the `yard` path (shows the located one, with **Choose…**), the editor (an app
 chosen in an open panel; until one is chosen, **Open in editor** asks), the terminal app (default
 Terminal), and the data root in use (read-only; it is set with `--root`). A `yard` path chosen here or in
 onboarding is run from then on, with no relaunch; Save says which `yard` is now in use, or that none
@@ -621,7 +636,9 @@ signed build keeps them.
 A window shown on first launch and whenever Yard is not set up (§5.7), also reachable from the
 Overview. It is a checklist computed from facts each time it is shown and whenever the app becomes
 active, so a step already done shows done, and the user can do a step in Terminal and come back
-**(builder's call)**. No timer: **Check again** re-reads the facts.
+**(builder's call)**. No timer: **Check again** re-reads the facts. A step's action that fails
+says why in this window, under the steps (until 2026-11-06 Start yardd's error showed only on the
+main window's Overview).
 
 | Step | Done when | Action |
 |---|---|---|
@@ -646,9 +663,24 @@ The helper is step 4, not optional: without `/etc/resolver/<tld>` no `.yard` nam
   `yard-app::widgets` sets a role and a label, and every list row an id that stays the same across
   frames (the instance or site name), or VoiceOver announces rows as removed and added on each
   refresh.
-- The honest gap: Zed's own coverage is partial, our widgets are new, and there is no automated
-  check. M6 checks by hand with VoiceOver and Accessibility Inspector on the checklist (A1–A3). A
-  screen that does not read well is a bug for M6, not a later polish item, but full parity with a
+- Text is the same: GPUI puts a `Text` with an id in the tree and never a plain string, so every
+  visible line that is not a control's own label (headings, table cells, Overview's facts, the site
+  detail, Doctor's results, job titles, onboarding's steps) goes through `widgets::text(id, …)` with
+  an id stable across frames. Until 2026-11-06 the app drew plain strings and VoiceOver could read
+  only its controls.
+- A control that is greyed out is also unavailable to assistive technology, with its reason as its
+  description: GPUI's builder has no disabled state, so `widgets::disabled::Disabled` wraps the
+  element and marks its AccessKit node disabled (buttons, the picker, the switch). A press from
+  VoiceOver reaches the handler directly (`widgets::Pressable::on_press`): GPUI turns an
+  accessibility press into a mouse click at the element's centre, which lands nowhere when the
+  element is scrolled out of view. A log line is text like any other, and a table column has a title
+  (the PHP and Node tables' **Default**). All found by the checklist script, 2026-11-06.
+- The check: GPUI's tree cannot be read in a test, so `app/scripts/checklist.sh` reads it through
+  macOS accessibility (`app/scripts/ax.js`) against a scratch yardd: every control on all 11 screens
+  has a label (A3); Overview, the Sites table, the site detail, the Services failures, Logs, Doctor
+  and onboarding expose their text, and the disabled controls say so and why (A1). What VoiceOver
+  says aloud, and whether a refresh re-announces rows (A2), are still checked by ear.
+  A screen that does not read well is a bug for M6, not a later polish item, but full parity with a
   SwiftUI app is not promised. GPUI on crates.io (0.2.2) has no AccessKit at all, which is one more
   reason for the git pin (§4.2).
 
@@ -1066,6 +1098,7 @@ floor (assumed: 14; GPUI allows 12).
    workspace; the app's workspace pins Zed's (§4.3, §18 Q3).
 10. **Smaller gaps the screens work around:** `php.config` has no "list all overrides" (the app
     opens `99-overrides.ini` and offers a per-key form); a service engine's lines are known only
-    inside `services.add` (the app learns them from `SERVICE_VERSION_UNSUPPORTED`); there is no
-    `jobs.list` (§13); the per-site PHP picker is refused for a site whose committed `.yard` owns
-    PHP (`SITE_HAS_PROJECT_FILE`), so the picker explains instead of failing.
+    inside `services.add` (the app learns them from `SERVICE_VERSION_UNSUPPORTED`'s
+    `data.available`, which yardd sent only from 2026-11-06); there is no
+    `jobs.list` (§13); `isolate`, `secure` and `docroot` are refused for a site whose project has
+    its own `.yard` (`SITE_HAS_PROJECT_FILE`), so their controls explain instead of failing.
