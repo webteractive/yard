@@ -131,9 +131,12 @@ impl Session {
         conn.call(m, params).await
     }
 
-    /// Drops the backoff (or an incompatible wait) and connects now.
+    /// Drops the backoff (or an incompatible wait) and connects now. Connected, it does nothing:
+    /// the connection and the jobs it follows stay.
     pub fn reconnect_now(&self) {
-        self.inner.wake.notify_one();
+        if lock(&self.inner.calls).is_none() {
+            self.inner.wake.notify_one();
+        }
     }
 
     /// Whether job events reach this session, so a job's progress and end can be followed.
@@ -187,7 +190,6 @@ async fn run(inner: Arc<Inner>, tx: mpsc::UnboundedSender<Update>) {
                             None => break events.closed().await,
                         },
                         why = calls.closed() => break why,
-                        () = inner.wake.notified() => break YardError::internal("reconnecting to yardd"),
                     }
                 };
                 inner.following.store(false, Ordering::SeqCst);

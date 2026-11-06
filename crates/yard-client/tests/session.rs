@@ -81,6 +81,28 @@ async fn reconnects_with_a_new_epoch() {
     assert_eq!(subscribes, 2);
 }
 
+/// `reconnect_now` while connected keeps the connection (and the jobs it follows): the app calls
+/// it after any `yard start`, which leaves a running yardd alone (found by the M6 final review).
+#[tokio::test]
+async fn reconnect_now_while_connected_keeps_the_connection() {
+    let fake = FakeYardd::start_new();
+    fake.answer("sites.list", json!([]));
+    let (session, mut updates) = Session::start(config(&fake));
+    assert_eq!(connected(&mut updates).await.epoch, 1);
+    session.reconnect_now();
+    session.reconnect_now();
+    let quiet = tokio::time::timeout(Duration::from_millis(300), next_state(&mut updates)).await;
+    assert!(quiet.is_err(), "no state change: {quiet:?}");
+    session.call(api::SITES_LIST, ()).await.unwrap();
+    // A permit left from those calls must not cut the next connection short either.
+    fake.stop();
+    assert!(matches!(next_state(&mut updates).await, ConnectionState::Disconnected(_)));
+    fake.start();
+    assert_eq!(connected(&mut updates).await.epoch, 2);
+    let quiet = tokio::time::timeout(Duration::from_millis(300), next_state(&mut updates)).await;
+    assert!(quiet.is_err(), "epoch 2 stays up: {quiet:?}");
+}
+
 #[tokio::test]
 async fn pending_calls_fail_on_disconnect() {
     let fake = FakeYardd::start_new();

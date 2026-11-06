@@ -34,9 +34,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Install yardd's LaunchAgent and start it.
+    /// Install yardd's LaunchAgent and start it (refused while the agent serves another data root).
     Start,
-    /// Stop yardd and unload its LaunchAgent; sites stop being served.
+    /// Stop yardd and unload its LaunchAgent; sites stop being served (refused for another root's agent).
     Stop,
     /// Show the profile, TLD, units and site count.
     Status,

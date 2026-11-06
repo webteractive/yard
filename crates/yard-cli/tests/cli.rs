@@ -2536,6 +2536,8 @@ fn start_and_stop_leave_another_roots_agent_alone() {
     let home = TempDir::new().unwrap();
     let agents = home.path().join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents).unwrap();
+    // The root the agent serves exists: one that is gone is no conflict.
+    std::fs::create_dir_all(home.path().join(".yard")).unwrap();
     let plist = yard_core::render::launchd::daemon_plist(Path::new("/y/yardd"), None, Path::new("/l.log"));
     let file = agents.join("dev.more.yard.daemon.plist");
     std::fs::write(&file, &plist).unwrap();

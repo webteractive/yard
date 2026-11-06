@@ -82,7 +82,9 @@ Rust daemon.
   `~/.yard`), so `yard start` and `yard stop` refuse a root the installed agent does not
   serve, with the hint to run `yardd --root <root>` directly: otherwise starting a scratch
   root would rewrite the agent and stopping one would stop the real yardd (2026-11-06,
-  found by the M6 checklist, whose Start, Stop and Restart yardd run them).
+  found by the M6 checklist, whose Start, Stop and Restart yardd run them). An agent that
+  serves a root which no longer exists (an older yard wrote it for a scratch root) is no
+  conflict, so `yard start` takes it over instead of being refused for good.
 - **nginx runs as the user**, master and workers, supervised by `yardd` like every
   other unit. Root never runs nginx and never reads its config. A root nginx
   reading a user-owned config is a no-password path to root for anything running

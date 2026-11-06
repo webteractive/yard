@@ -161,8 +161,8 @@ error, 3 `yardd` is not running.
 
 | Command | Needs yardd | What it does |
 |---|---|---|
-| `yard start` | no | Installs yardd's LaunchAgent and starts it. |
-| `yard stop` | no | Stops yardd and unloads its LaunchAgent. |
+| `yard start` | no | Installs yardd's LaunchAgent and starts it. The agent has one label, so it is refused while the agent serves another data root that still exists; run a scratch root's `yardd --root <path>` directly. |
+| `yard stop` | no | Stops yardd and unloads its LaunchAgent; refused, as `start` is, for another root's agent. |
 | `yard status` | yes | Profile, TLD, units and site count; a sleeping service instance is a row of its own (`sleeping`). |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. It tells yardd which `XDG_CONFIG_HOME` and `HOMEBREW_FORBIDDEN_*` your shell sets (and nothing else), so it can warn when brew would see something else under launchd. With a tunnel configured or running it also checks cloudflared, each domain's sign-in, each tunnel's state and credentials, a Vite `public/hot` file in a shared site, and every DNS record Yard left for you to delete, until it no longer resolves. |

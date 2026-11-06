@@ -96,7 +96,8 @@ fn leaves_other_roots_agent(ctx: &Ctx) -> Result<(), YardError> {
     Err(YardError::new(
         ErrorCode::InvalidArgument,
         format!(
-            "the yardd LaunchAgent serves {}, not {}; it has one label, so yard start and stop leave it to that root",
+            "the yardd LaunchAgent ({}) serves {}, not {}; it has one label, so yard start and stop leave it to that root",
+            agent_plist()?.display(),
             served.display(),
             ctx.paths.root().display()
         ),

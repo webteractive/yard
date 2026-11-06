@@ -22,7 +22,9 @@ triggers:
 - A flag that asks yardd for more sends params only when set (`php list --available` sends
   `{"available": true}`, else `null`), so an older yardd still answers the plain command.
 - Tests run `yard --root <tmp>` against `tests/support::MockDaemon`, never a real yardd,
-  and never `yard start`/`stop` or `helper install` (they change launchd).
+  and never `helper install`. They run `yard start`/`stop` only behind a fake `launchctl` first
+  on PATH and a temp `HOME` (`start_and_stop_leave_another_roots_agent_alone`), since the real
+  ones change launchd.
 - `--version` is ours, not clap's (`disable_version_flag`), because it asks yardd too.
   `--version`, `-V` and `yard version [--json]` all report CLI, daemon, helper and
   protocol versions plus the commit and build date. The commit is injected by
