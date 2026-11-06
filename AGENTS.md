@@ -108,8 +108,18 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   main, one commit per task). Protocol 2.11 (`reconciled`, `php.list { available }`) and
   `yard-client` came with it. Checked here: the app against a scratch yardd follows a stop and a
   restart, runs as a menu bar item with a Dock icon only while a window is open, and onboarding
-  judged this Mac set up. Its manual checklist (plan Task 17: VoiceOver, clicking through menus
-  and screens) needs a person at the screen and is the maintainer's.
+  judged this Mac set up. Most of its checklist (plan Task 17) is `app/scripts/checklist.sh`,
+  which drives the app through macOS accessibility against a scratch yardd; it passed 71/71 on the
+  Mac mini on 2026-11-06. Its runs found and fixed: a site row and Settings… each opening another
+  window; VoiceOver reading no text (then no log lines), greyed-out controls reading as enabled, and
+  controls below the fold doing nothing when pressed; the menu missing sites and services after a
+  launch; a committed `.yard` locking only the PHP picker; the site detail with no Node; Copy .env
+  dropping a note; a failed service shown twice in the menu and without its holder on the screen;
+  the line picker never offered (`data.available`); a `--root` helper hint offering only Copy;
+  onboarding hiding its own errors; and two scratch-root hazards: a scratch yardd repointing this
+  Mac's resolver, and `yard --root <scratch> start|stop` taking the real LaunchAgent. Still the maintainer's,
+  at the screen: what VoiceOver says aloud (A1, A2), T1, T2, B3, P2, N2, P3's add and remove, M5's
+  submenu and the trust question (a public tunnel, a password, installs).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -317,8 +327,8 @@ holds 80 or 443, since with both free the switch would go through.
 - emailulator 0.1.4 was installed with its own installer into `~/.local/bin` the same
   day, its agent on SMTP 127.0.0.1:2525 and web 127.0.0.1:8026, because
   brew's `mailpit` (a running brew service, the maintainer's) holds 1025 and 8025. Its LaunchAgent label is
-  `co.webteractive.emailulator`, not the `com.` that `yard_core::emailulator::LABEL` (unused) and
-  the M4d docs name; Yard reads the label from `service status --json`, so nothing breaks.
+  `co.webteractive.emailulator`, not the `com.` the M4d docs name (the unused
+  `yard_core::emailulator::LABEL` that carried it was removed on 2026-11-06); Yard reads the label from `service status --json`, so nothing breaks.
 - Every `scripts/e2e-*.sh` passed here on 2026-11-05 (maintainer approved the runs), after two fixes:
   the scripts skip their Herd-only steps without Herd, and a reconcile waits for a PHP pool it
   started before reloading nginx. The first runs of `e2e-m4d.sh` and `e2e-m5.sh` had found the
@@ -346,6 +356,11 @@ holds 80 or 443, since with both free the switch would go through.
   (`xcrun -f metal` resolves). A clean GPUI build takes about a minute here and fills `app/target`
   with about 5 GB.
 - Steam listens on `*:27036`, inside the tests' 20000–29999 range; `support::free_port` skips it.
+- zetty.app has Accessibility and Screen Recording (2026-11-06) for `app/scripts/checklist.sh`; this
+  session's processes run under zetty's `zmx`, and macOS attributes them to zetty.app. A zetty
+  update leaves the old Accessibility grant in place but no longer matching (`tccd` logs "Failed to
+  match existing code requirement"): `tccutil reset Accessibility co.webteractive.zetty`, then
+  allow it again.
 - `~/.local/bin/node`, `npm` and `npx` are symlinks to Hermes's own Node 22 (`~/.hermes/node`), so a
   bare `npm install -g` lands there, off PATH. `playwright-cli` is installed with brew's npm
   (`/opt/homebrew/bin/playwright-cli`).
@@ -359,6 +374,24 @@ holds 80 or 443, since with both free the switch would go through.
   /tmp/yard-dev` runs it against a scratch yardd (`cargo run -p yard-daemon --bin yardd -- --root
   /tmp/yard-dev` at the root). Without `--root` it finds the real LaunchAgent and talks to the real
   yardd. A GPUI build fills `app/target` with several GB: remove it when done.
+- `app/scripts/checklist.sh [--keep]` — the M6 checklist a script can see: a scratch yardd on
+  `/tmp/yard-check` (nginx and dnsmasq pinned to 28080/28443/28053, its instances to 28379-28381
+  and 28900, auto ports 29000-29099), three linked sites (one with a committed `.yard` that needs
+  things) and a redis instance, Yard.app driven through `app/scripts/ax.js` (menus, tabs, buttons,
+  switches, pickers, text fields, rows, prompts, the open panel, other apps' windows, the icon's
+  shape), each screen compared with the `yard` CLI and screenshotted, timings read by a 50 ms
+  watcher, then a second launch on an empty root for onboarding. With `YARD_CHECK_OLD_YARDD`
+  naming a yardd built from 2c1ed9b (before protocol 2.11) it also checks the stale banner (O4);
+  that yardd predates the helper guard, so build it with yard-core's `HELPER_SOCKET` pointed at a
+  path that does not exist (the script refuses one that can reach the helper: the first O4 run
+  repointed this Mac's resolver for a few minutes on 2026-11-06).
+  It needs `target/release/{yard,yardd}`, `app/target/Yard.app`, jq, brew's redis keg (and adds
+  and removes MinIO when brew has it), Accessibility and Screen Recording for the terminal app,
+  and the network for N3. It refuses `~/.yard`, a running Yard.app or a used port; fails if
+  `/etc/resolver` or yardd's LaunchAgent changed; puts Yard.app's settings back; and removes what
+  it made unless `--keep`. Other apps are driven only through accessibility (Apple Events to
+  TextEdit or Finder would ask for Automation permission). A full run takes about 12 minutes; do
+  not edit the script while it runs (bash reads it as it goes). `shellcheck` stays clean.
 - `cargo test --workspace` — full suite. Tests use a temp `YARD_ROOT` and free ports in
   20000-29999 (below macOS's ephemeral range), and never touch Herd, `/etc/resolver` or ports 53/80/443/8080/8443/53535.
   If test daemons time out at startup, `target/debug/deps` has grown too big for FSEvents:
@@ -367,6 +400,15 @@ holds 80 or 443, since with both free the switch would go through.
 - `cargo deny check` — after any `Cargo.lock` change (supply-chain gates; `deny.toml` follows the reference in `~/AI/skillset`).
 - `cargo run -p yard-daemon --bin yardd -- --root /tmp/yard-dev` — a daemon on a scratch data
   root (logs to stderr). `yardd --version` prints the build; the socket is `<root>/yardd.sock`.
+  Pin its nginx and dnsmasq away from the real ones in its `ports.toml`, as `checklist.sh` does. It
+  leaves `/etc/resolver` and 80/443 alone (the helper serves `~/.yard`; `doctor` warns so), so its
+  sites answer at `http://<site>.yard:<its port>/` through the real resolver only because every
+  `.yard` name resolves to 127.0.0.1. A yardd built before 2026-11-06 lacks that guard and
+  repoints the real resolver at its own dnsmasq. Run it directly: `yard --root <scratch>
+  start|stop` refuses while the LaunchAgent serves another root, since it has one label (before
+  2026-11-06 they rewrote the agent for the scratch root and stopped the real yardd). Give a
+  scratch service instance a `--port` of its own: a sleeping real instance's port is free, and
+  a scratch one that takes it fails the real one when it wakes.
 - `cargo run -p yard-cli -- --root /tmp/yard-dev sites` — the CLI against that daemon.
   `doctor` and `ports check` also work with no daemon running.
 - `scripts/e2e-m1.sh` — real-machine check in the standard profile. It needs the
@@ -451,8 +493,9 @@ holds 80 or 443, since with both free the switch would go through.
 
 ## Verifying a change on a real machine
 
-The helper is bound to the real data root (`~/.yard`), so a
-change to serving, the helper or reconcile is only observable there, through `yard`. On a
+The helper is bound to the real data root (`~/.yard`), and a yardd on any other root leaves the
+resolver and 80/443 alone, so a change to serving, the helper or reconcile is only observable
+there, through `yard`. On a
 Mac that is not set up yet, follow Machines → Setting up a Mac first.
 
 - `cargo build --release`, then `./target/release/yard stop && ./target/release/yard start`;
