@@ -1013,8 +1013,9 @@ Each milestone is usable on its own and gets its own implementation plan.
    found that this Mac's resolver cached the NXDOMAIN of a URL asked for before Cloudflare
    published it, so the script now resolves through 1.1.1.1). A named tunnel is the maintainer's manual
    check on his own zone.
-6. **M6 Yard.app:** client, menu bar, main window, onboarding. Built 2026-11-06 (`app/`); its
-   manual checklist (M6 plan Task 17) is the maintainer's.
+6. **M6 Yard.app:** client, menu bar, main window, onboarding. Built 2026-11-06 (`app/`); done
+   2026-11-07 after its final review and checklist (M6 plan Task 17: `app/scripts/checklist.sh`,
+   `checklist-installs.sh`, `checklist-real.sh` and VoiceOver; R3 dropped by the maintainer).
 7. **M7 Distribution:** signing, notarization, appdater, brew tap.
 
 The maintainer reordered M4–M7 on 2026-10-21: Node and services first, then tunnels, then the

@@ -1,7 +1,7 @@
 # Yard M6: Yard.app — design
 
 Date: 2026-11-05, rewritten 2026-11-06 for Rust and GPUI
-Status: built 2026-11-06 (maintainer approved the plan that day; built inline on main, Tasks 1–17).
+Status: built 2026-11-06 (maintainer approved the plan that day; built inline on main, Tasks 1–17); done 2026-11-07 after the final review and its checklist, VoiceOver included.
 Where the build departed from this text it says so in the commit messages; the main departures:
 the table draws plain rows
 rather than a virtual list, the log view copies all lines rather than selecting text, GPUI's
@@ -666,7 +666,10 @@ The helper is step 4, not optional: without `/etc/resolver/<tld>` no `.yard` nam
 
 ### 8.5 Accessibility
 
-- The menu bar menu is a native `NSMenu` and is read by VoiceOver like any other.
+- The menu bar menu is a native `NSMenu` and is read by VoiceOver like any other. tray-icon opens
+  it from mouse events in a view over the status button and gives the button no action, so
+  VoiceOver found "Yard, status menu" and VO-Space did nothing; `platform::status_press` gives the
+  button a target that opens the menu as a click does (found with VoiceOver, 2026-11-07).
 - Alerts from `Window::prompt` and the open panels are native.
 - Everything else is drawn by GPUI. GPUI exposes an element to VoiceOver through AccessKit only
   when the element has an id and a role (GPUI's accessibility guide, AccessKit support since
@@ -686,11 +689,17 @@ The helper is step 4, not optional: without `/etc/resolver/<tld>` no `.yard` nam
   accessibility press into a mouse click at the element's centre, which lands nowhere when the
   element is scrolled out of view. A log line is text like any other, and a table column has a title
   (the PHP and Node tables' **Default**). All found by the checklist script, 2026-11-06.
+- A table is an AccessKit `List` of `ListItem` rows (an `AXList` of groups), not a `Table` of
+  `Row`s: AccessKit's macOS adapter (0.26) gives a table no `AXRows`, so VoiceOver read every table
+  as "empty" and could not reach a row (found with VoiceOver, 2026-11-07).
 - The check: GPUI's tree cannot be read in a test, so `app/scripts/checklist.sh` reads it through
   macOS accessibility (`app/scripts/ax.js`) against a scratch yardd: every control on all 11 screens
   has a label (A3); Overview, the Sites table, the site detail, the Services failures, Logs, Doctor
   and onboarding expose their text, and the disabled controls say so and why (A1). What VoiceOver
-  says aloud, and whether a refresh re-announces rows (A2), are still checked by ear.
+  says was checked with VoiceOver itself on 2026-11-07, its caption panel read after each VO key:
+  the menu (VO-M to "Yard, status menu", VO-Space, each item), the Overview's facts, buttons and
+  units, the Sites list (alpha, beta, gamma), a site's detail, and that a change to another site
+  does not re-announce the row under the VoiceOver cursor (A2).
   A screen that does not read well is a bug for M6, not a later polish item, but full parity with a
   SwiftUI app is not promised. GPUI on crates.io (0.2.2) has no AccessKit at all, which is one more
   reason for the git pin (§4.2).

@@ -25,8 +25,9 @@ triggers:
   `widgets::text` (a `Role::Label` with only `aria_label` gives VoiceOver nothing); a control is
   pressed with `on_press` (GPUI turns an accessibility press into a click at the centre, which
   misses a control scrolled out of view); a greyed-out control is `Disabled` with its reason as
-  the description; a table column always has a title. An overlay (a sheet, a picker's popup)
-  `occlude`s, or a click on it also presses what is under it.
+  the description; a table column always has a title, and a table stays an AccessKit `List` of
+  `ListItem`s (a `Table` has no rows on macOS, and VoiceOver reads it as empty). An overlay (a
+  sheet, a picker's popup) `occlude`s, or a click on it also presses what is under it.
 - **Every failure reaches the screen.** An action records its error under an `ActionId`; the
   screen that owns it shows it beside the control, and `window::main::shown_on` says which ids each
   screen shows. Whatever the open screen does not show appears above its content, so a new screen

@@ -131,7 +131,12 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   against the real yardd here on 2026-11-07, which now runs that build. System Events (ax.js) gives
   a repeated structure's later items the first item's text and frame (Activity's job cards); the
   AX API itself, which VoiceOver reads, is right, so such checks read `app/scripts/axdump.swift`.
-  Still the maintainer's, at the screen: what VoiceOver says aloud (A1, A2), and R3 on his main Mac (Herd).
+  A1 and A2 were checked with VoiceOver on (maintainer approved) on 2026-11-07, reading its caption panel
+  after each VO key; it found and this fixed two bugs: every table read "empty" (AccessKit gives a
+  macOS table no rows; tables are now lists of groups) and VO-Space could not open the status
+  menu (tray-icon gives the button no action; `platform::status_press`). R3 (the app's privileged
+  switch refused, naming Herd) was dropped from M6 (maintainer, 2026-11-07): the Mac mini has no Herd,
+  and `e2e-m1.sh` checks yardd's refusal on his main Mac. M6 is done.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
