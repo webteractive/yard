@@ -12,8 +12,8 @@ Remove keeping data, Save settings' location and replace, Not now, a `.so` from 
 Range…, per-formula trust, a failed job's output, named shares, Copy URL and the DNS records a stop
 leaves); they are built. A named share takes its host as text; the daemon checks it is under a
 set-up domain. A picker's popup closes by choosing or by its control, not by a click elsewhere.
-Open: in Activity, the accessibility tree gives every job card after the first the wrong or no
-log lines, though the screen is right. It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
+(What looked like wrong log lines for Activity's later job cards was System Events misreading a
+repeated structure; the AX API, which VoiceOver reads, gives each card its own.) It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
 §12) and is planned in `docs/superpowers/plans/2026-11-05-yard-m6-app.md`.
 
 The first draft (2026-11-05) described a SwiftUI app built with Tuist over a Swift package with

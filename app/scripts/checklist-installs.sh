@@ -237,9 +237,13 @@ if within 10 job_phase "waiting for Install PHP 7.1"; then
   shot activity-waiting
   ax press "Cancel Install PHP 7.2" >/dev/null
   if within 10 job_phase cancelled && within 40 php_installed 7.1 && ! php_installed 7.2; then
-    # brew's output is on screen (see the screenshots), but the accessibility tree gives every job
-    # card the first card's log lines (an open finding), so it is not read from the tree here.
-    pass "P2 a second install waits for the first ('waiting for Install PHP 7.1') and Cancel cancels it (7.1 installed, 7.2 not)"
+    # brew's output in the second card, read through the AX API as VoiceOver reads it: System
+    # Events gives a repeated structure's later cards the first card's text (axdump.swift).
+    if swift "$app_dir/scripts/axdump.swift" "$app_pid" | grep -q "fake brew install shivammathur/php/php@7.1"; then
+      pass "P2 a second install waits for the first ('waiting for Install PHP 7.1'), Cancel cancels it (7.1 installed, 7.2 not), and 7.1's card reads brew's output"
+    else
+      fail "P2 7.1's card has no brew output for assistive technology" "$(swift "$app_dir/scripts/axdump.swift" "$app_pid" | grep -i 'fake brew' | head -3)"
+    fi
   else
     fail "P2 cancel or install" "$(texts | tr '\n' '|')"
   fi

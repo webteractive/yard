@@ -39,7 +39,9 @@ triggers:
   and raise the open window rather than open another (`window::is_open`, `window::raise`).
 - **Check a UI change on the real app.** After the tests, `app/scripts/checklist.sh` and
   `app/scripts/checklist-installs.sh` (scratch roots, a fake brew; never edit a script while it
-  runs). `app/scripts/checklist-real.sh` touches the real yardd: only with the maintainer's approval.
+  runs). `app/scripts/checklist-real.sh` touches the real yardd: only with the maintainer's approval. System
+  Events (`ax.js`) can give a repeated structure's later items the first one's text and frame;
+  `swift app/scripts/axdump.swift <pid>` reads the AX API as VoiceOver does.
 - **GPUI is pinned by `rev`** to a Zed stable release commit, `gpui` and `gpui_platform` only.
   A bump: read the release's GPUI changes, update the `rev`, review the `app/Cargo.lock` diff, run
   `cargo deny check`, build, run the tests and both checklists. Never a crate from Zed outside

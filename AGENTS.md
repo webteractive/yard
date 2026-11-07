@@ -128,11 +128,10 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   open panel, Range…, per-formula trust, a failed job's output, named shares, Copy URL, the DNS
   records a stop leaves). `checklist.sh` then passed 72/72, `checklist-installs.sh` (installs,
   tunnels and Terminal against a fake brew) 14/14, and `checklist-real.sh` (plan Step 4) 11/11
-  against the real yardd here on 2026-11-07, which now runs that build. Open: in Activity, the
-  accessibility tree gives every job card after the first the wrong or no log lines (the screen is
-  right; not duplicate node ids, not the order or the `Log` role), so VoiceOver may misread job
-  output. Still the maintainer's, at the screen: what VoiceOver says aloud (A1, A2), and R3 on his main Mac
-  (Herd).
+  against the real yardd here on 2026-11-07, which now runs that build. System Events (ax.js) gives
+  a repeated structure's later items the first item's text and frame (Activity's job cards); the
+  AX API itself, which VoiceOver reads, is right, so such checks read `app/scripts/axdump.swift`.
+  Still the maintainer's, at the screen: what VoiceOver says aloud (A1, A2), and R3 on his main Mac (Herd).
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -414,7 +413,8 @@ holds 80 or 443, since with both free the switch would go through.
   install waiting and cancelled), P3's add and remove, M5 (the Xdebug submenu follows xdebug), the
   trust question (MinIO from the untrusted `minio/stable`), N2 and T1/T2. Same ports as
   `checklist.sh` minus the instances' (MinIO on 28900), so run them one after the other. It needs
-  `target/release/{yard,yardd,yard-fake-unit}` and `app/target/Yard.app`; about 3 minutes.
+  `target/release/{yard,yardd,yard-fake-unit}`, `app/target/Yard.app` and `swift` (P2 reads the job
+  cards through `app/scripts/axdump.swift`, the AX API itself); about 3 minutes.
 - `app/scripts/checklist-real.sh` — plan Task 17 Step 4, only with the maintainer's approval: the checklist
   items that change nothing, against the real yardd on `~/.yard` (M3, O1, A1, R1, D1, S4 on a
   scratch site `chk-real` it links, secures and unlinks, R3 where Herd is installed, and M1 last,
