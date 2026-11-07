@@ -53,7 +53,7 @@ impl Table {
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y::new(self.id.clone(), Role::Table, self.columns.join(", ").into())
+        A11y::new(self.id.clone(), Role::List, self.columns.join(", ").into())
     }
 
     /// `(key, element id)` of each row.
@@ -94,7 +94,7 @@ impl RenderOnce for Table {
             rows.push(
                 div()
                     .id(ElementId::Name(row_id))
-                    .role(Role::Row)
+                    .role(Role::ListItem)
                     .aria_label(row.cells.first().cloned().unwrap_or_default())
                     .aria_selected(selected)
                     .flex()
@@ -113,7 +113,7 @@ impl RenderOnce for Table {
         }
         div()
             .id(ElementId::Name(a11y.id))
-            .role(Role::Table)
+            .role(Role::List)
             .aria_label(a11y.label)
             .flex()
             .flex_col()

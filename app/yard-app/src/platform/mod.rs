@@ -7,4 +7,5 @@ pub mod locator;
 pub mod open;
 pub mod settings;
 pub mod setup_probe;
+pub mod status_press;
 pub mod terminal;

@@ -296,7 +296,7 @@ fi
 
 cp -p "$root/sites.toml" "$out/sites.toml.bak"
 printf '\n[broken\n' >>"$root/sites.toml"
-if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; (.value // .name // \"\") | test(\"sites.toml\"))'"; then
+if within 30 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; (.value // .name // \"\") | test(\"sites.toml\"))'"; then
   pass "O3 a broken sites.toml shows the banner: $(ax tree | jq -r '.[] | select(.subrole == "AXApplicationAlert") | .name')"
   textedit_was_running=false
   pgrep -x TextEdit >/dev/null && textedit_was_running=true
@@ -312,7 +312,7 @@ else
   fail "O3 no banner for a broken sites.toml"
 fi
 cp -p "$out/sites.toml.bak" "$root/sites.toml"
-if within 10 sh -c "! osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; (.value // .name // \"\") | test(\"sites.toml\"))'"; then
+if within 30 sh -c "! osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; (.value // .name // \"\") | test(\"sites.toml\"))'"; then
   pass "O3 and fixing it clears the banner"
 else
   fail "O3 the banner stayed after the fix"
@@ -795,6 +795,9 @@ if [[ -n "$at" ]] && perl -e "exit(!($at - $stopped_at <= 1))"; then
 else
   fail "M1 menu after yardd stopped" "$(cat "$out/watch.json")"
 fi
+# The icon is read from a screenshot; the status item stays highlighted while the watcher's menu
+# closes, so its shape is read again for up to 3 s.
+within 3 sh -c "[ \"\$(osascript -l JavaScript '$ax_js' icon)\" = offline ]" || true
 icon="$(ax icon)"
 if [[ "$icon" == offline ]]; then pass "M1 and the icon is the ring"; else fail "M1 icon with yardd down" "$icon"; fi
 watch_start 15 menu-header is "$ok_header"

@@ -198,16 +198,28 @@ function press(e) {
 
 const KEYS = { return: 36, escape: 53, tab: 48 };
 
+// A table row: the app's tables are lists of groups (AccessKit gives a macOS table no rows, so
+// VoiceOver read every table as empty), so a group in a list is reported as AXRow.
+function isRow(e) {
+  const role = str(() => e.role());
+  if (role === "AXRow") return true;
+  // A row is named (its first cell); asking every unnamed group for its parent slows a tree read
+  // past the scripts' waits.
+  if (role !== "AXGroup" || !str(() => e.name())) return false;
+  try { return e.attributes.byName("AXParent").value().role() === "AXList"; } catch (err) { return false; }
+}
+
 function tree(w) {
   const out = [];
   w.entireContents().forEach((e) => {
-    const role = str(() => e.role());
+    let role = str(() => e.role());
     // A group is kept only when it carries a name: a banner is an alert group named by its text.
     if (!role || (role === "AXGroup" && !str(() => e.name()))) return;
+    if (role === "AXGroup" && isRow(e)) role = "AXRow";
     let row = null;
     try {
       const parent = e.attributes.byName("AXParent").value();
-      if (parent && parent.role() === "AXRow") row = parent.name();
+      if (parent && isRow(parent)) row = parent.name();
     } catch (err) {}
     let value = null;
     if (role === "AXCheckBox" || role === "AXPopUpButton" || role === "AXStaticText" || role === "AXTextField") value = str(() => String(e.value()));
@@ -431,7 +443,7 @@ function run(argv) {
     }
     case "row": {
       const w = mainWindow();
-      const r = w.entireContents().find((e) => str(() => e.role()) === "AXRow" && str(() => e.name()) === args[0]);
+      const r = w.entireContents().find((e) => isRow(e) && str(() => e.name()) === args[0]);
       if (!r) throw new Error("no row named " + args[0]);
       r.actions.byName("AXPress").perform();
       delay(0.5);

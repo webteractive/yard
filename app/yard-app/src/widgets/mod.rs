@@ -160,6 +160,15 @@ mod tests {
         assert_eq!(under.get(), before, "the option's click reached the control under it");
     }
 
+    /// A table is a list VoiceOver can walk: AccessKit gives a macOS table no rows, so VoiceOver
+    /// read every table as "empty" and could not reach a row (found with VoiceOver, 2026-11-07).
+    #[test]
+    fn a_table_is_a_list_voiceover_can_walk() {
+        let t = Table::new("sites", vec!["Name".into(), "URL".into()], rows(&["blog"]));
+        assert_eq!(t.a11y().role, Role::List);
+        assert_eq!(t.a11y().label.as_ref(), "Name, URL");
+    }
+
     fn rows(keys: &[&str]) -> Vec<Row> {
         keys.iter().map(|k| Row::new(*k, vec![SharedString::from(*k), "x".into()])).collect()
     }

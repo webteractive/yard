@@ -324,6 +324,21 @@ pub fn install(env: &AppEnv, cx: &mut App) -> Result<(), String> {
     })
     .detach();
     cx.observe(&env.state, |_, cx| rebuild(&AppEnv::global(cx), cx)).detach();
+    // VoiceOver's press on the status item opens the menu as a click does.
+    let (press_tx, mut press_rx) = mpsc::unbounded::<()>();
+    if crate::platform::status_press::install(move || {
+        let _ = press_tx.unbounded_send(());
+    }) {
+        cx.spawn(async move |cx| {
+            while press_rx.next().await.is_some() {
+                cx.update(|cx| {
+                    let tray = &cx.global::<MenuBar>().tray;
+                    crate::platform::status_press::opening(|| tray.show_menu());
+                });
+            }
+        })
+        .detach();
+    }
     Ok(())
 }
 
