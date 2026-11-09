@@ -404,10 +404,10 @@ In M6 the app carries no binaries. It follows the yardd the LaunchAgent runs:
 1. **Data root:** the app's `--root <path>` argument (as `yard --root`; `cargo run -p yard-app --
    --root /tmp/yard-dev`, or `open Yard.app --args --root /tmp/yard-dev`), else the LaunchAgent
    plist's `EnvironmentVariables.YARD_ROOT` (written by `yard start --root …`), else `~/.yard`.
-2. **`yard`:** the `YardCLIPath` setting when set, else the `yard` beside the plist's
-   `ProgramArguments[0]` (`yard start` writes the `yardd` beside the `yard` that ran it, so on both
-   Macs both are `target/release/`), else `Contents/Helpers/yard` inside the app when present (the
-   M7 layout, main spec §9), else none: CLI actions are disabled with `yard was not found`, hint
+2. **`yard`:** the `YardCLIPath` setting when set, else `Contents/Helpers/yard` inside the app
+   when present (the M7 layout, which comes before the agent's from M7: a release app runs the CLI
+   it shipped with even while the agent runs a dev build), else the `yard` beside the plist's
+   `ProgramArguments[0]` (`yard start` writes the `yardd` beside the `yard` that ran it), else none: CLI actions are disabled with `yard was not found`, hint
    `set its path in Settings`.
 
 Reading the plist is `yard_core::launchd::read_agent(bytes)` (the `plist` crate yard-core already

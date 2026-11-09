@@ -29,7 +29,9 @@ pub struct Location {
 }
 
 /// Design §5.8's order: the root from `--root`, the agent's `YARD_ROOT`, else `~/.yard`; `yard`
-/// from the setting, beside the agent's yardd, then the bundle, the first that is executable.
+/// from the setting, then the bundle's own (M7: a release app runs the CLI it shipped with, even
+/// when the agent still runs a dev build), then beside the agent's yardd, the first that is
+/// executable.
 pub fn locate(input: &LocateInput) -> Location {
     let default = input.home.join(".yard");
     let root = input
@@ -39,7 +41,7 @@ pub fn locate(input: &LocateInput) -> Location {
         .unwrap_or_else(|| default.clone());
     let beside_agent = input.agent.as_ref().and_then(|a| a.program.parent().map(|d| d.join("yard")));
     let in_bundle = input.bundle_helpers.as_ref().map(|d| d.join("yard"));
-    let yard = [input.cli_setting.clone(), beside_agent, in_bundle]
+    let yard = [input.cli_setting.clone(), in_bundle, beside_agent]
         .into_iter()
         .flatten()
         .find(|p| input.executables.contains(p));
@@ -108,6 +110,21 @@ mod tests {
             (l.root.as_path(), l.root_is_default, l.agent_installed),
             (Path::new("/Users/me/.yard"), true, false)
         );
+    }
+
+    #[test]
+    fn the_bundled_yard_wins_over_the_agents() {
+        let mut i = LocateInput {
+            agent: Some(agent("/repo/target/release/yardd", None)),
+            bundle_helpers: Some("/Applications/Yard.app/Contents/Helpers".into()),
+            ..input()
+        };
+        i.executables.insert("/repo/target/release/yard".into());
+        i.executables.insert("/Applications/Yard.app/Contents/Helpers/yard".into());
+        assert_eq!(locate(&i).yard, Some(PathBuf::from("/Applications/Yard.app/Contents/Helpers/yard")));
+        i.cli_setting = Some("/opt/yard".into());
+        i.executables.insert("/opt/yard".into());
+        assert_eq!(locate(&i).yard, Some(PathBuf::from("/opt/yard")), "the setting still wins");
     }
 
     #[test]
