@@ -18,6 +18,15 @@ use yard_client::api;
 use yard_proto::methods::{DocrootParams, EnvParams, InitParams, IsolateParams, NameParams, SiteParams};
 use yard_proto::{ProjectFileKind, SettingSource, SiteDetail, SiteInfo, SiteKind, SiteSource};
 
+/// Unlink's question, and what it leaves behind: a site's project, or what a proxy forwards to.
+pub fn unlink_question(name: &str, proxy: bool) -> (String, &'static str) {
+    if proxy {
+        (format!("Remove the proxy {name}?"), "What it forwards to keeps running.")
+    } else {
+        (format!("Unlink {name}?"), "Its project stays where it is.")
+    }
+}
+
 /// Save settings to .yard (`sites.init`): asks whether Yard keeps the file in its data root (the
 /// repository stays clean) or writes it into the project, and when another directory's site has
 /// the name (`SITE_NAME_TAKEN`) whether to replace it (design §8.2, §11.3).
@@ -295,12 +304,20 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         );
         let (e3, p3) = (env.clone(), path.clone());
         actions = actions.child(Button::new(format!("site:{name}:terminal"), "Open in Terminal").on_click(
-            move |_, _, _| {
+            move |_, _, cx| {
                 let app = e3
                     .settings
                     .terminal_app()
                     .unwrap_or_else(|| PathBuf::from("/System/Applications/Utilities/Terminal.app"));
-                let _ = Opener::open_with(&p3, Some(&app));
+                let id = ActionId(format!("{}terminal", crate::window::main::OPEN_ERRORS));
+                let result = Opener::open_with(&p3, Some(&app));
+                e3.runner.update(cx, |r, cx| {
+                    match result {
+                        Ok(()) => r.errors.clear(&id),
+                        Err(e) => r.errors.record(id, e),
+                    }
+                    cx.notify();
+                });
             },
         ));
         let (e4, n4) = (env.clone(), name.to_string());
@@ -330,12 +347,11 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
                 }),
         );
     }
-    let (e6, root, n6) = (env.clone(), env.location.root.clone(), name.to_string());
-    actions = actions.child(Button::new(format!("site:{name}:override"), "Edit nginx override").on_click(
-        move |_, _, cx| {
-            e6.perform(HintAction::OpenFile(root.join("nginx/overrides").join(format!("{n6}.conf"))), cx)
-        },
-    ));
+    let (e6, file) = (env.clone(), env.paths().nginx_override(name));
+    actions = actions.child(
+        Button::new(format!("site:{name}:override"), "Edit nginx override")
+            .on_click(move |_, _, cx| e6.perform(HintAction::OpenFile(file.clone()), cx)),
+    );
     let (e7, n7) = (env.clone(), name.to_string());
     actions =
         actions.child(Button::new(format!("site:{name}:env"), "Copy .env").on_click(move |_, _, cx| {
@@ -352,15 +368,9 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         Button::new(format!("site:{name}:unlink"), if proxy { "Remove proxy…" } else { "Unlink…" })
             .style(ButtonStyle::Destructive)
             .on_click(move |_, window, cx| {
-                let question =
-                    if proxy { format!("Remove the proxy {n8}?") } else { format!("Unlink {n8}?") };
-                let answer = window.prompt(
-                    PromptLevel::Warning,
-                    &question,
-                    Some("Its project stays where it is."),
-                    &["Remove", "Cancel"],
-                    cx,
-                );
+                let (question, detail) = unlink_question(&n8, proxy);
+                let answer =
+                    window.prompt(PromptLevel::Warning, &question, Some(detail), &["Remove", "Cancel"], cx);
                 let (env, name) = (e8.clone(), n8.clone());
                 cx.spawn(async move |cx| {
                     if answer.await == Ok(0) {

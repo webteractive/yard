@@ -342,10 +342,15 @@ function run(argv) {
       break;
     }
     case "menu-click": {
-      menuItemAt(openMenu(), args).actions.byName("AXPress").perform();
+      // Pressing an enabled item closes the menu itself. Escape after it would reach Yard's key
+      // window and cancel the sheet the item opened (a sheet takes Escape), so only a disabled
+      // item, which leaves the menu open, is followed by closing it.
+      const item = menuItemAt(openMenu(), args);
+      const enabled = item.enabled();
+      item.actions.byName("AXPress").perform();
       delay(0.2);
-      closeMenu();
-      result = { clicked: args };
+      if (!enabled) closeMenu();
+      result = { clicked: args, enabled };
       break;
     }
     case "windows": {

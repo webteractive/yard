@@ -27,11 +27,17 @@ triggers:
   misses a control scrolled out of view); a greyed-out control is `Disabled` with its reason as
   the description; a table column always has a title, and a table stays an AccessKit `List` of
   `ListItem`s (a `Table` has no rows on macOS, and VoiceOver reads it as empty). An overlay (a
-  sheet, a picker's popup) `occlude`s, or a click on it also presses what is under it.
+  sheet, a picker's popup) `occlude`s, or a click on it also presses what is under it. A sheet
+  (`Form`) takes Enter and Escape, and a picker's popup closes on a click outside it. A button
+  whose label does not say what it does (Copy) gets a `description`, and a tab's badge is read
+  as its description.
 - **Every failure reaches the screen.** An action records its error under an `ActionId`; the
   screen that owns it shows it beside the control, and `window::main::shown_on` says which ids each
   screen shows. Whatever the open screen does not show appears above its content, so a new screen
-  that shows its own errors adds them to `shown_on`.
+  that shows its own errors adds them to `shown_on`. Input a sheet cannot send (a port that is not
+  one) is recorded the same way and shown in the sheet (`Form::error`), never dropped.
+- **Yard's files by `yard_core::Paths`.** A file of the data root the app opens comes from
+  `AppEnv::paths()`, never a path spelled out by hand.
 - **Drawing never fetches.** A screen reads `AppState`; what is fetched comes from the keys
   `visible_keys` returns for the screen, the menu's (`MENU`, plus each installed PHP's extensions),
   the events that invalidate them, and the actions that change them. A refresh from `render` loops

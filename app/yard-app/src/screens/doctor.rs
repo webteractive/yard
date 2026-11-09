@@ -21,34 +21,37 @@ fn buttons(hint: Option<&str>) -> Vec<&'static str> {
     }
 }
 
+/// The groups the screen shows, in order. `Other` holds checks a newer yardd gives a status this
+/// app does not know, so none is left off the screen.
+const GROUPS: [(&str, CheckStatus); 4] = [
+    ("Failing", CheckStatus::Fail),
+    ("Warnings", CheckStatus::Warn),
+    ("OK", CheckStatus::Ok),
+    ("Other", CheckStatus::Other),
+];
+
+/// `(group, status, checks)` in the screen's order, leaving out empty groups.
+fn grouped(report: &yard_proto::DoctorReport) -> Vec<(&'static str, CheckStatus, Vec<&Check>)> {
+    GROUPS
+        .into_iter()
+        .map(|(name, status)| (name, status, report.checks.iter().filter(|c| c.status == status).collect()))
+        .filter(|(_, _, checks): &(_, _, Vec<&Check>)| !checks.is_empty())
+        .collect()
+}
+
 /// A check as the screen lists it: its message and the buttons its hint becomes.
 #[cfg(test)]
 pub type Line = (String, Vec<&'static str>);
 
-/// `(group, lines)`: failing, then warnings, then ok, leaving out empty groups, as the tests read it.
+/// `(group, lines)` as the screen shows them, as the tests read it.
 #[cfg(test)]
 pub fn groups(report: &yard_proto::DoctorReport) -> Vec<(&'static str, Vec<Line>)> {
-    let of = |status: CheckStatus| -> Vec<&Check> {
-        report.checks.iter().filter(|c| c.status == status).collect()
-    };
-    [
-        ("Failing", CheckStatus::Fail),
-        ("Warnings", CheckStatus::Warn),
-        ("OK", CheckStatus::Ok),
-        ("Other", CheckStatus::Other),
-    ]
-    .into_iter()
-    .map(|(name, status)| {
-        (
-            name,
-            of(status)
-                .into_iter()
-                .map(|c| (c.message.clone(), buttons(c.hint.as_deref())))
-                .collect::<Vec<_>>(),
-        )
-    })
-    .filter(|(_, checks)| !checks.is_empty())
-    .collect()
+    grouped(report)
+        .into_iter()
+        .map(|(name, _, checks)| {
+            (name, checks.into_iter().map(|c| (c.message.clone(), buttons(c.hint.as_deref()))).collect())
+        })
+        .collect()
 }
 
 pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -67,15 +70,11 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         page = page.child(div().text_sm().text_color(t.danger).child(text("error", e.message.clone())));
     }
     let Some(report) = report else { return page.into_any_element() };
-    for status in [CheckStatus::Fail, CheckStatus::Warn, CheckStatus::Ok] {
-        let checks: Vec<Check> = report.checks.iter().filter(|c| c.status == status).cloned().collect();
-        if checks.is_empty() {
-            continue;
-        }
-        let (title, color) = match status {
-            CheckStatus::Fail => ("Failing", t.danger),
-            CheckStatus::Warn => ("Warnings", t.warning),
-            _ => ("OK", t.muted),
+    for (title, status, checks) in grouped(&report) {
+        let color = match status {
+            CheckStatus::Fail => t.danger,
+            CheckStatus::Warn => t.warning,
+            _ => t.muted,
         };
         page = page.child(div().text_lg().text_color(color).child(text(format!("group:{title}"), title)));
         for c in checks {

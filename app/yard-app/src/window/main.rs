@@ -96,12 +96,23 @@ pub fn is_open(cx: &mut App) -> bool {
     open_handle(cx).is_some()
 }
 
+/// A window closed: with the main window gone, its log tails close too.
+pub fn closed(env: &AppEnv, cx: &mut App) {
+    if is_open(cx) {
+        return;
+    }
+    env.nav.update(cx, |n, _| {
+        n.logs = None;
+        n.service_log = None;
+    });
+}
+
 /// A question from the runner needs a window to be asked in: the main window asks it, so when an
 /// install started from the menu bar needs brew's trust and no window is open, this opens one on
 /// Activity, where the job shows.
 pub fn ask_without_a_window(env: &AppEnv, cx: &mut App) {
     cx.observe(&env.runner, |runner, cx| {
-        if runner.read(cx).prompt.is_some() && !is_open(cx) {
+        if runner.read(cx).prompt().is_some() && !is_open(cx) {
             open(&AppEnv::global(cx), Screen::Activity, cx);
         }
     })
@@ -182,7 +193,7 @@ pub fn xdebug(env: &AppEnv, v: &str, on: bool, cx: &mut App) {
 impl MainWindow {
     /// Shows the runner's question (brew's trust) as a native alert and passes the answer back.
     fn ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(prompt) = self.env.runner.read(cx).prompt.clone().filter(|_| !self.asking) else { return };
+        let Some(prompt) = self.env.runner.read(cx).prompt().filter(|_| !self.asking) else { return };
         let (title, detail, buttons) = match &prompt {
             crate::runner::Prompt::Trust { formula, tap } => (
                 format!("Trust {formula}?"),
@@ -201,7 +212,7 @@ impl MainWindow {
         let runner = self.env.runner.clone();
         cx.spawn(async move |this, cx| {
             let choice = answer.await.unwrap_or(1);
-            runner.update(cx, |r, cx| r.answer(prompt, choice, cx));
+            runner.update(cx, |r, cx| r.answer(choice, cx));
             let _ = this.update(cx, |w, _| w.asking = false);
         })
         .detach();
@@ -242,22 +253,8 @@ impl Render for MainWindow {
     }
 }
 
-/// The open sheet, drawn over the window. A port or settle request from a hint opens its sheet.
+/// The open sheet, drawn over the window. A settle request from a hint opens its sheet.
 fn sheet(env: &AppEnv, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
-    if let Some((owner, true)) = env.nav.read(cx).edit_port.clone() {
-        let port = cx.new(|cx| {
-            crate::widgets::text_field::TextField::new(
-                format!("sheet:port:{owner}"),
-                format!("Port for {owner}"),
-                "a free port",
-                cx,
-            )
-        });
-        env.nav.update(cx, |n, _| {
-            n.edit_port = None;
-            n.sheet = Some(crate::env::Sheet::Port { name: owner, port });
-        });
-    }
     if let Some(site) = env.nav.read(cx).settle.clone() {
         let target = site.or_else(|| match &env.nav.read(cx).screen {
             Screen::Sites(s) => s.clone(),
@@ -292,6 +289,15 @@ fn badge(env: &AppEnv, screen: &Screen, cx: &App) -> Option<usize> {
     (n > 0).then_some(n)
 }
 
+/// A badge's count in words, read with its tab.
+fn badge_text(screen: &Screen, n: usize) -> String {
+    match screen {
+        Screen::Services(_) => format!("{n} failed"),
+        Screen::Ports => format!("{n} held by another app"),
+        _ => format!("{n} running"),
+    }
+}
+
 fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let items = PAGES.iter().map(|(label, page)| {
@@ -303,6 +309,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .id(ElementId::Name(format!("nav:{label}").into()))
             .role(Role::Tab)
             .aria_label(SharedString::from(*label))
+            .when_some(count, |d, n| d.aria_description(badge_text(&page, n)))
             .aria_selected(selected)
             .flex()
             .justify_between()
@@ -481,6 +488,77 @@ mod tests {
     /// beside its controls, and any other screen above its content (M6 final review: Restart on
     /// the Overview's units, the menu's Xdebug switch and a Doctor hint's yard trust failed with
     /// no word anywhere).
+    /// A port hint opens the sheet that sets it: a service's port or, for any other unit, its
+    /// port in ports.toml (M6 final review: a unit's hint went to Ports and opened nothing).
+    #[gpui::test]
+    async fn a_port_hint_opens_its_sheet(cx: &mut TestAppContext) {
+        use crate::env::Sheet;
+        use yard_app_model::hint::HintAction;
+        let (_fake, env) = env(cx);
+        let open = |owner: &str, is_service: bool, cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                env.nav.update(cx, |n, _| n.sheet = None);
+                env.perform(HintAction::EditPort { owner: owner.into(), is_service }, cx)
+            });
+            cx.run_until_parked();
+            cx.update(|cx| {
+                let n = env.nav.read(cx);
+                match &n.sheet {
+                    Some(Sheet::Port { name, .. }) => format!("service {name}"),
+                    Some(Sheet::UnitPort { unit, .. }) => format!("unit {unit}"),
+                    _ => "none".into(),
+                }
+            })
+        };
+        assert_eq!(open("mysql-8.4", true, cx), "service mysql-8.4");
+        assert_eq!(open("nginx-http", false, cx), "unit nginx-http");
+    }
+
+    /// Closing the main window closes its log tails, and with them their connections (M6 final
+    /// review: the Logs screen's and a service's tail stayed subscribed with no window to show them).
+    #[gpui::test]
+    async fn closing_the_window_drops_its_log_tails(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let all = cx.new(|cx| crate::services::logs::LogTail::new(&env, None, None, cx));
+        let one = cx.new(|cx| crate::services::logs::LogTail::new(&env, None, Some("redis".into()), cx));
+        env.nav.update(cx, |n, _| {
+            n.logs = Some(all);
+            n.service_log = Some(("redis".into(), one));
+        });
+        cx.update(|cx| super::closed(&env, cx));
+        cx.update(|cx| {
+            let n = env.nav.read(cx);
+            assert!(n.logs.is_none() && n.service_log.is_none());
+        });
+    }
+
+    /// The port sheet a menu problem opens is drawn in the window, opened for it or already open.
+    #[gpui::test]
+    async fn a_port_hint_draws_its_sheet(cx: &mut TestAppContext) {
+        use yard_app_model::hint::HintAction;
+        let (_fake, env) = env(cx);
+        cx.update(|cx| cx.set_global(env.clone()));
+        for _ in 0..2 {
+            cx.update(|cx| {
+                env.nav.update(cx, |n, _| n.sheet = None);
+                env.perform(HintAction::EditPort { owner: "redis".into(), is_service: true }, cx)
+            });
+            cx.run_until_parked();
+            let handle = cx.update(|cx| cx.try_global::<super::MainHandle>().map(|h| h.0)).expect("a window");
+            let vcx = &mut gpui::VisualTestContext::from_window(handle.into(), cx);
+            vcx.run_until_parked();
+            assert!(vcx.debug_bounds("sheet:port").is_some(), "the sheet is drawn");
+        }
+    }
+
+    /// A sidebar tab's badge is read with the tab, in words.
+    #[test]
+    fn a_badge_says_what_it_counts() {
+        assert_eq!(super::badge_text(&Screen::Services(None), 2), "2 failed");
+        assert_eq!(super::badge_text(&Screen::Ports, 1), "1 held by another app");
+        assert_eq!(super::badge_text(&Screen::Activity, 3), "3 running");
+    }
+
     /// A configuration error names its file in `data.file`: the banner opens it.
     #[test]
     fn a_config_error_names_the_file_to_open() {
@@ -550,7 +628,7 @@ mod tests {
         assert!(cx.has_pending_prompt(), "and asks the question");
         cx.simulate_prompt_answer("Don't trust");
         cx.run_until_parked();
-        assert!(cx.read_entity(&env.runner, |r, _| r.prompt.is_none()));
+        assert!(cx.read_entity(&env.runner, |r, _| r.prompt().is_none()));
         assert_eq!(fake.count("sources.trust"), 0);
     }
 

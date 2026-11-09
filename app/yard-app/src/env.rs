@@ -61,8 +61,6 @@ pub enum Sheet {
 /// Where the main window is and what it should open on.
 pub struct Nav {
     pub screen: Screen,
-    /// `(owner, is_service)`: a port field to open.
-    pub edit_port: Option<(String, bool)>,
     /// A site whose settle form to open; `Some(None)` for the selected site.
     pub settle: Option<Option<String>>,
     pub sheet: Option<Sheet>,
@@ -135,7 +133,6 @@ impl AppEnv {
         let runner = ActionRunner::new(daemon.clone(), state.clone(), cx);
         let nav = cx.new(|_| Nav {
             screen: Screen::Overview,
-            edit_port: None,
             settle: None,
             sheet: None,
             service_log: None,
@@ -151,8 +148,10 @@ impl AppEnv {
             location.root_is_default,
             bridge.clone(),
         ));
-        let terminal =
-            Rc::new(TerminalLauncher { temp: std::env::temp_dir(), terminal_app: settings.terminal_app() });
+        let terminal = Rc::new(TerminalLauncher::new(std::env::temp_dir(), {
+            let settings = settings.clone();
+            move || settings.terminal_app()
+        }));
         AppEnv { daemon, state, runner, nav, cli, terminal, settings, location, locate_yard }
     }
 
@@ -167,6 +166,11 @@ impl AppEnv {
     pub fn use_yard_setting(&self, setting: Option<PathBuf>, cx: &mut App) {
         self.cli.set_yard((self.locate_yard)(setting));
         cx.refresh_windows();
+    }
+
+    /// The files of the data root the app talks to, as yard-core names them.
+    pub fn paths(&self) -> yard_core::Paths {
+        yard_core::Paths::new(self.location.root.clone())
     }
 
     pub fn global(cx: &App) -> AppEnv {
@@ -312,8 +316,25 @@ impl AppEnv {
             HintAction::GoTo(screen) => crate::window::main::open(self, screen, cx),
             HintAction::EditPort { owner, is_service } => {
                 let screen = if is_service { Screen::Services(Some(owner.clone())) } else { Screen::Ports };
-                self.nav.update(cx, |n, _| n.edit_port = Some((owner, is_service)));
-                crate::window::main::open(self, screen, cx)
+                let kind = if is_service { "port" } else { "unit-port" };
+                let port = cx.new(|cx| {
+                    crate::widgets::text_field::TextField::new(
+                        format!("sheet:{kind}:{owner}"),
+                        format!("Port for {owner}"),
+                        "a free port",
+                        cx,
+                    )
+                });
+                let sheet = if is_service {
+                    Sheet::Port { name: owner, port }
+                } else {
+                    Sheet::UnitPort { unit: owner, port }
+                };
+                crate::window::main::open(self, screen, cx);
+                self.nav.update(cx, |n, cx| {
+                    n.sheet = Some(sheet);
+                    cx.notify();
+                });
             }
             HintAction::OpenFile(file) => {
                 // A hint's file opens only as text in an editor, never with its default handler.

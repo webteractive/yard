@@ -5,8 +5,8 @@ use super::Pressable;
 use super::disabled::Disabled;
 use super::theme::Theme;
 use gpui::{
-    App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window, anchored,
-    deferred, div, prelude::*, px,
+    App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce, Role, SharedString, Styled,
+    Window, anchored, canvas, deferred, div, prelude::*, px,
 };
 use std::rc::Rc;
 
@@ -56,6 +56,12 @@ impl RenderOnce for Picker {
         let open =
             window.use_keyed_state(ElementId::Name(format!("{}:open", self.id).into()), cx, |_, _| false);
         let is_open = *open.read(cx);
+        // Where the button is, so a click on it is left to its toggle rather than closing the
+        // popup as a click elsewhere does.
+        let button =
+            window.use_keyed_state(ElementId::Name(format!("{}:bounds", self.id).into()), cx, |_, _| {
+                Bounds::<Pixels>::default()
+            });
         let current = self.selected.and_then(|i| self.options.get(i)).cloned().unwrap_or_else(|| "—".into());
         let disabled = self.disabled.clone();
         let toggle = open.clone();
@@ -80,8 +86,15 @@ impl RenderOnce for Picker {
             .bg(t.surface)
             .text_sm()
             .text_color(t.text)
+            .relative()
             .child(current)
-            .child(div().text_color(t.muted).child("▾"));
+            .child(div().text_color(t.muted).child("▾"))
+            .child({
+                let button = button.clone();
+                canvas(move |bounds, _, cx| button.update(cx, |b, _| *b = bounds), |_, _, _, _| {})
+                    .absolute()
+                    .size_full()
+            });
         if let Some(why) = &disabled {
             root = root.opacity(0.6).child(div().text_xs().text_color(t.muted).child(why.clone()));
             return Disabled(root).into_any_element();
@@ -126,6 +139,19 @@ impl RenderOnce for Picker {
                         .role(Role::Menu)
                         // Its options take their clicks: nothing under the popup is pressed.
                         .occlude()
+                        // A click anywhere else closes it, as a macOS pop-up button does.
+                        .on_mouse_down_out({
+                            let (close, button) = (open.clone(), button.clone());
+                            move |e, _, cx| {
+                                if button.read(cx).contains(&e.position) {
+                                    return;
+                                }
+                                close.update(cx, |o, cx| {
+                                    *o = false;
+                                    cx.notify();
+                                })
+                            }
+                        })
                         .mt(px(26.))
                         .py(px(4.))
                         .rounded(px(6.))

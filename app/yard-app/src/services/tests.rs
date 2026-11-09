@@ -81,3 +81,46 @@ async fn a_failed_instance_says_why(cx: &mut TestAppContext) {
     assert!(e.message.contains("held by mysqld (pid 9)"), "{}", e.message);
     assert_eq!(e.hint.as_deref(), Some("yard service port mysql-8.4 <port>"));
 }
+
+/// A port field that is not a port says so beside the sheet, which stays open, and nothing is
+/// sent (M6 final review: Move did nothing, and Add dropped the port and took an auto one).
+#[gpui::test]
+async fn a_port_that_is_not_a_port_says_so(cx: &mut TestAppContext) {
+    use crate::env::Sheet;
+    use crate::widgets::text_field::TextField;
+    use gpui::AppContext;
+    let (fake, env) = env(cx);
+    let field = |text: &str, cx: &mut TestAppContext| {
+        let f = cx.new(|cx| TextField::new("f", "Port", "", cx));
+        let text = text.to_string();
+        f.update(cx, |f, cx| f.set_value(text, cx));
+        f
+    };
+    let error = |id: &str, cx: &mut TestAppContext| {
+        env.runner.read_with(cx, |r, _| r.errors.get(&ActionId(id.into())).map(|e| e.message.clone()))
+    };
+    let port = field("abc", cx);
+    env.nav.update(cx, |n, _| n.sheet = Some(Sheet::Port { name: "redis".into(), port: port.clone() }));
+    cx.update(|cx| super::forms::move_service(&env, "redis", &port, cx));
+    assert_eq!(
+        error("service:redis:port", cx).as_deref(),
+        Some("abc is not a port: give a number from 1 to 65535")
+    );
+    assert!(env.nav.read_with(cx, |n, _| n.sheet.is_some()), "the sheet stays open");
+
+    let port = field("0", cx);
+    cx.update(|cx| super::forms::move_unit(&env, "nginx-http", &port, cx));
+    assert_eq!(
+        error("port:nginx-http:set", cx).as_deref(),
+        Some("0 is not a port: give a number from 1 to 65535")
+    );
+
+    let (line, port) = (field("", cx), field("33o7", cx));
+    cx.update(|cx| super::forms::add_service(&env, 2, &line, &port, cx));
+    assert_eq!(
+        error("service:add", cx).as_deref(),
+        Some("33o7 is not a port: give a number from 1 to 65535")
+    );
+    cx.run_until_parked();
+    assert_eq!(fake.count("services.port") + fake.count("ports.set") + fake.count("services.add"), 0);
+}

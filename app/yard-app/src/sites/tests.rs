@@ -161,3 +161,16 @@ async fn not_now_leaves_the_node_note_beside_the_site(cx: &mut TestAppContext) {
     assert_eq!(shown.message, "blog runs Node 22, which is not installed");
     assert!(crate::sites::DETAIL_VERBS.contains(&"node"), "the Sites detail shows it");
 }
+
+/// Removing a proxy says what it leaves running, not a project it does not have (M6 final review).
+#[test]
+fn removing_a_proxy_says_what_stays() {
+    assert_eq!(
+        super::detail::unlink_question("blog", false),
+        ("Unlink blog?".to_string(), "Its project stays where it is.")
+    );
+    assert_eq!(
+        super::detail::unlink_question("api", true),
+        ("Remove the proxy api?".to_string(), "What it forwards to keeps running.")
+    );
+}

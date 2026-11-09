@@ -136,7 +136,13 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   macOS table no rows; tables are now lists of groups) and VO-Space could not open the status
   menu (tray-icon gives the button no action; `platform::status_press`). R3 (the app's privileged
   switch refused, naming Herd) was dropped from M6 (maintainer, 2026-11-07): the Mac mini has no Herd,
-  and `e2e-m1.sh` checks yardd's refusal on his main Mac. M6 is done.
+  and `e2e-m1.sh` checks yardd's refusal on his main Mac. M6 is done. The review's deferred minors
+  were fixed on 2026-11-09 (the client's write deadline and socket limit, a dropped `Session`
+  ending its task, `php list --available` against an older yardd, the trust questions queued and a
+  settle resumed after one, sheets taking Enter and Escape, a picker closing on a click outside, log
+  tails reconnecting, bad port input shown, and the rest in the M6 spec's status); `checklist.sh`
+  passed 72/72 and `checklist-installs.sh` 14/14 again. `ax.js menu-click` no longer presses Escape
+  after an enabled item, which would cancel the sheet the item opened.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.

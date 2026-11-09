@@ -123,10 +123,8 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             })
             .detach();
         }))
-        .children(
-            available.map(|a| {
-                div().text_xs().text_color(t.muted).child(crate::widgets::text("node:available", a))
-            }),
-        )
+        .children(available.map(|a| {
+            div().text_xs().text_color(t.muted).child(crate::widgets::text("node:available:list", a))
+        }))
         .into_any_element()
 }

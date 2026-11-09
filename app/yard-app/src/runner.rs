@@ -3,8 +3,10 @@
 
 use crate::daemon::{Daemon, call};
 use crate::state::AppState;
+use futures::channel::oneshot;
 use gpui::{App, AppContext, Context, Entity, Task};
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,21 +19,27 @@ use yard_proto::methods::{
 };
 use yard_proto::{ErrorCode, JobStarted, SiteInfo, YardError};
 
-type Retry = Box<dyn FnOnce(&mut ActionRunner, &mut Context<ActionRunner>) -> Task<JobPhase>>;
-
 pub struct ActionRunner {
     daemon: Arc<dyn Daemon>,
     state: Entity<AppState>,
     pub errors: ActionErrors,
-    /// A question waiting for the user.
-    pub prompt: Option<Prompt>,
-    /// The work to repeat once the trust question is answered yes.
-    retry: Option<Retry>,
+    /// Questions waiting for the user, oldest first, each with the work waiting on its answer.
+    questions: VecDeque<(Prompt, oneshot::Sender<usize>)>,
 }
 
 impl ActionRunner {
     pub fn new(daemon: Arc<dyn Daemon>, state: Entity<AppState>, cx: &mut App) -> Entity<ActionRunner> {
-        cx.new(|_| ActionRunner { daemon, state, errors: ActionErrors::default(), prompt: None, retry: None })
+        cx.new(|_| ActionRunner {
+            daemon,
+            state,
+            errors: ActionErrors::default(),
+            questions: VecDeque::new(),
+        })
+    }
+
+    /// The question to ask now; the next waits until it is answered.
+    pub fn prompt(&self) -> Option<Prompt> {
+        self.questions.front().map(|(p, _)| p.clone())
     }
 
     /// Runs `work`; its error stays beside the action's control until it succeeds.
@@ -86,17 +94,43 @@ impl ActionRunner {
         cx.spawn(async move |this, cx| {
             let started = call(&*daemon, m, params.clone()).await;
             let phase = match started {
-                Err(e) => {
-                    let _ = this.update(cx, |s, cx| {
-                        if let Some(prompt) = trust_prompt(&e) {
-                            s.prompt = Some(prompt);
-                            let (id, params, title) = (id.clone(), params.clone(), title.clone());
-                            s.retry = Some(Box::new(move |s, cx| s.run_job(id, m, params, title, cx)));
-                        }
+                // brew refuses the formula until it is trusted: ask, and on yes trust it and run
+                // the job again, so whatever waits on this job (a settle) carries on.
+                Err(e) if let Some(Prompt::Trust { formula, tap }) = trust_prompt(&e) => {
+                    let (tx, answer) = oneshot::channel();
+                    let prompt = Prompt::Trust { formula: formula.clone(), tap };
+                    let asked = this.update(cx, |s, cx| {
+                        s.questions.push_back((prompt, tx));
                         cx.notify();
                     });
-                    JobPhase::Failed(e)
+                    if asked.is_err() || answer.await != Ok(0) {
+                        JobPhase::Failed(e)
+                    } else {
+                        let trust = this.update(cx, |s, cx| {
+                            s.run_job(
+                                ActionId(format!("source:{formula}:trust")),
+                                api::SOURCES_TRUST,
+                                SourceParams { target: formula.clone(), tap: false },
+                                format!("Trust {formula}"),
+                                cx,
+                            )
+                        });
+                        let trusted = match trust {
+                            Ok(trust) => matches!(trust.await, JobPhase::Succeeded(_)),
+                            Err(_) => false,
+                        };
+                        let again = trusted
+                            .then(|| {
+                                this.update(cx, |s, cx| s.run_job(id.clone(), m, params, title, cx)).ok()
+                            })
+                            .flatten();
+                        match again {
+                            Some(again) => again.await,
+                            None => JobPhase::Failed(e),
+                        }
+                    }
                 }
+                Err(e) => JobPhase::Failed(e),
                 Ok(started) => {
                     let ended = state.update(cx, |st, _| {
                         let key = st.claim(&started.job_id, title);
@@ -134,34 +168,13 @@ impl ActionRunner {
         )
     }
 
-    /// The answer to `prompt`: button 0 is yes. Yes to the trust question trusts the formula as a
-    /// job, then repeats the work that asked, once.
-    pub fn answer(&mut self, prompt: Prompt, choice: usize, cx: &mut Context<Self>) {
-        self.prompt = None;
-        let retry = self.retry.take();
-        cx.notify();
-        let Prompt::Trust { formula, .. } = prompt else { return };
-        if choice != 0 {
-            return;
+    /// The answer to the question asked now: button 0 is yes. Yes to the trust question trusts
+    /// the formula as a job, then repeats the work that asked, once.
+    pub fn answer(&mut self, choice: usize, cx: &mut Context<Self>) {
+        if let Some((_, waiting)) = self.questions.pop_front() {
+            let _ = waiting.send(choice);
         }
-        let trust = self.run_job(
-            ActionId(format!("source:{formula}:trust")),
-            api::SOURCES_TRUST,
-            SourceParams { target: formula.clone(), tap: false },
-            format!("Trust {formula}"),
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if matches!(trust.await, JobPhase::Succeeded(_))
-                && let Some(retry) = retry
-            {
-                let again = this.update(cx, |s, cx| retry(s, cx));
-                if let Ok(again) = again {
-                    again.await;
-                }
-            }
-        })
-        .detach();
+        cx.notify();
     }
 
     /// Links `folder` as `name`, sending the folder's canonical path.
@@ -260,7 +273,7 @@ mod tests {
     use crate::state::AppState;
     use crate::testing::{FakeDaemon, connected, finished, job, site, status};
     use gpui::TestAppContext;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::time::Duration;
     use yard_app_model::jobs::JobPhase;
     use yard_proto::methods::PhpParams;
@@ -316,6 +329,23 @@ mod tests {
         assert_eq!(task.await, JobPhase::Lost);
     }
 
+    /// A job whose answer arrives after the connection dropped is Lost too: claimed under the
+    /// dead connection after the sweep, it stayed running until yardd came back (M6 final review).
+    #[gpui::test]
+    async fn a_job_answered_after_yardd_went_is_lost(cx: &mut TestAppContext) {
+        let (fake, runner) = setup(cx);
+        fake.hold("php.install");
+        let task = install(&runner, cx, "8.3");
+        cx.run_until_parked();
+        fake.push(yard_client::session::Update::State(yard_client::session::ConnectionState::Disconnected(
+            YardError::new(ErrorCode::Internal, "yardd closed the connection"),
+        )));
+        cx.run_until_parked();
+        fake.release("php.install", Ok(job("php-install-1")));
+        cx.run_until_parked();
+        assert_eq!(task.await, JobPhase::Lost);
+    }
+
     #[gpui::test]
     async fn cancel_of_a_finished_job_is_ignored(cx: &mut TestAppContext) {
         let (fake, runner) = setup(cx);
@@ -333,11 +363,12 @@ mod tests {
             .with_data(json!({"formula": "shivammathur/php/php@8.3", "tap": "shivammathur/php"}));
         fake.answers("php.install", vec![Err(untrusted), Ok(job("php-install-2"))]);
         fake.answer("sources.trust", job("source-trust-1"));
-        let first = install(&runner, cx, "8.3").await;
-        assert!(matches!(first, JobPhase::Failed(ref e) if e.code == ErrorCode::FormulaUntrusted));
-        let prompt = runner.read_with(cx, |r, _| r.prompt.clone()).expect("the trust question");
+        // The install waits for the answer, and ends with the install that ran after it.
+        let first = install(&runner, cx, "8.3");
+        cx.run_until_parked();
+        let prompt = runner.read_with(cx, |r, _| r.prompt()).expect("the trust question");
         assert!(matches!(&prompt, Prompt::Trust { formula, .. } if formula == "shivammathur/php/php@8.3"));
-        runner.update(cx, |r, cx| r.answer(prompt, 0, cx));
+        runner.update(cx, |r, cx| r.answer(0, cx));
         cx.run_until_parked();
         fake.event(finished("source-trust-1", None));
         cx.run_until_parked();
@@ -345,7 +376,82 @@ mod tests {
         cx.run_until_parked();
         let names: Vec<String> = fake.calls().into_iter().map(|(n, _)| n).filter(|n| n != "status").collect();
         assert_eq!(names, ["php.install", "sources.trust", "php.install"]);
-        assert!(runner.read_with(cx, |r, _| r.prompt.is_none()));
+        assert!(runner.read_with(cx, |r, _| r.prompt().is_none()));
+        assert!(matches!(first.await, JobPhase::Succeeded(_)));
+    }
+
+    fn untrusted(v: &str) -> YardError {
+        YardError::new(ErrorCode::FormulaUntrusted, "not trusted")
+            .with_data(json!({"formula": format!("shivammathur/php/php@{v}"), "tap": "shivammathur/php"}))
+    }
+
+    fn asked(runner: &Entity<ActionRunner>, cx: &mut TestAppContext) -> Option<String> {
+        runner.read_with(cx, |r, _| match r.prompt() {
+            Some(Prompt::Trust { formula, .. }) => Some(formula),
+            _ => None,
+        })
+    }
+
+    /// Two installs refused for trust are both asked, one after the other, and each yes repeats
+    /// its own install (M6 final review: the second question replaced the first, and answering
+    /// the first repeated the second's install).
+    #[gpui::test]
+    async fn each_trust_question_is_asked_and_repeats_its_own_work(cx: &mut TestAppContext) {
+        let (fake, runner) = setup(cx);
+        fake.answers(
+            "php.install",
+            vec![Err(untrusted("8.3")), Err(untrusted("8.2")), Ok(job("php-install-3"))],
+        );
+        fake.answer("sources.trust", job("source-trust-1"));
+        let _first = install(&runner, cx, "8.3");
+        cx.run_until_parked();
+        let _second = install(&runner, cx, "8.2");
+        cx.run_until_parked();
+        assert_eq!(asked(&runner, cx).as_deref(), Some("shivammathur/php/php@8.3"));
+        assert!(runner.read_with(cx, |r, _| r.prompt()).is_some());
+        runner.update(cx, |r, cx| r.answer(0, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            asked(&runner, cx).as_deref(),
+            Some("shivammathur/php/php@8.2"),
+            "the second waits its turn"
+        );
+        fake.event(finished("source-trust-1", None));
+        cx.run_until_parked();
+        let installs: Vec<Value> = fake
+            .calls()
+            .into_iter()
+            .filter(|(n, _)| n == "php.install")
+            .map(|(_, p)| p["php"].clone())
+            .collect();
+        assert_eq!(installs, [json!("8.3"), json!("8.2"), json!("8.3")]);
+    }
+
+    /// A settle stopped by brew's trust carries on once the formula is trusted.
+    #[gpui::test]
+    async fn a_settle_waits_for_the_trust_question_and_carries_on(cx: &mut TestAppContext) {
+        let (fake, runner) = setup(cx);
+        let needs =
+            json!([{"kind": "php", "php": "7.3"}, {"kind": "extension", "name": "redis", "php": "7.3"}]);
+        let legacy: yard_proto::SiteInfo = serde_json::from_value(site("legacy", needs)).unwrap();
+        fake.answers("php.install", vec![Err(untrusted("7.3")), Ok(job("php-install-2"))]);
+        fake.answer("sources.trust", job("source-trust-1"));
+        fake.answer("ext.add", job("ext-add-1"));
+        let after_php = site("legacy", json!([{"kind": "extension", "name": "redis", "php": "7.3"}]));
+        fake.answers("sites.list", vec![Ok(json!([after_php])), Ok(json!([site("legacy", json!([]))]))]);
+        let task = runner.update(cx, |r, cx| r.settle(legacy, cx));
+        cx.run_until_parked();
+        assert!(runner.read_with(cx, |r, _| r.prompt()).is_some(), "the trust question");
+        runner.update(cx, |r, cx| r.answer(0, cx));
+        cx.run_until_parked();
+        fake.event(finished("source-trust-1", None));
+        cx.run_until_parked();
+        fake.event(finished("php-install-2", None));
+        cx.run_until_parked();
+        assert_eq!(fake.count("ext.add"), 1, "the settle went on to the extension");
+        fake.event(finished("ext-add-1", None));
+        cx.run_until_parked();
+        assert!(task.await.is_some());
     }
 
     #[gpui::test]
@@ -354,10 +460,15 @@ mod tests {
         let untrusted = YardError::new(ErrorCode::FormulaUntrusted, "not trusted")
             .with_data(json!({"formula": "shivammathur/php/php@8.3", "tap": "shivammathur/php"}));
         fake.fail("php.install", untrusted);
-        install(&runner, cx, "8.3").await;
-        let prompt = runner.read_with(cx, |r, _| r.prompt.clone()).unwrap();
-        runner.update(cx, |r, cx| r.answer(prompt, 1, cx));
+        let task = install(&runner, cx, "8.3");
         cx.run_until_parked();
+        assert!(runner.read_with(cx, |r, _| r.prompt()).is_some());
+        runner.update(cx, |r, cx| r.answer(1, cx));
+        let phase = task.await;
+        assert!(
+            matches!(phase, JobPhase::Failed(ref e) if e.code == ErrorCode::FormulaUntrusted),
+            "{phase:?}"
+        );
         assert_eq!(fake.count("php.install"), 1);
         assert_eq!(fake.count("sources.trust"), 0);
         assert!(runner.read_with(cx, |r, _| r.errors.get(&ActionId("php:8.3:install".into())).is_some()));

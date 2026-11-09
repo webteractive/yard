@@ -25,6 +25,8 @@ pub struct Button {
     label: SharedString,
     style: ButtonStyle,
     disabled: bool,
+    /// Read after the label: what the button does when its label alone does not say.
+    description: Option<SharedString>,
     on_click: Option<Handler>,
 }
 
@@ -35,6 +37,7 @@ impl Button {
             label: label.into(),
             style: ButtonStyle::Normal,
             disabled: false,
+            description: None,
             on_click: None,
         }
     }
@@ -49,13 +52,22 @@ impl Button {
         self
     }
 
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
     pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(Rc::new(f));
         self
     }
 
     pub fn a11y(&self) -> A11y {
-        A11y { disabled: self.disabled, ..A11y::new(self.id.clone(), Role::Button, self.label.clone()) }
+        A11y {
+            disabled: self.disabled,
+            description: self.description.clone(),
+            ..A11y::new(self.id.clone(), Role::Button, self.label.clone())
+        }
     }
 }
 
@@ -73,6 +85,7 @@ impl RenderOnce for Button {
             .id(ElementId::Name(a11y.id.clone()))
             .role(a11y.role)
             .aria_label(a11y.label.clone())
+            .when_some(a11y.description.clone(), |d, why| d.aria_description(why))
             .px(px(10.))
             .py(px(4.))
             .rounded(px(6.))

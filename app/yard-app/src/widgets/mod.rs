@@ -131,6 +131,61 @@ mod tests {
         assert_eq!(under.get(), 0, "a click reached the control under the sheet");
     }
 
+    /// Escape cancels a sheet and Enter presses its default button, as in a macOS sheet (M6 final
+    /// review: only the mouse closed one).
+    #[gpui::test]
+    async fn escape_cancels_a_sheet_and_enter_submits_it(cx: &mut TestAppContext) {
+        cx.update(Form::bind_keys);
+        let (submitted, cancelled) =
+            (std::rc::Rc::new(std::cell::Cell::new(0)), std::rc::Rc::new(std::cell::Cell::new(0)));
+        let (s, c) = (submitted.clone(), cancelled.clone());
+        let (_v, cx) = cx.add_window_view(move |_, _| {
+            let (s, c) = (s.clone(), c.clone());
+            Covered {
+                under: std::rc::Rc::new(std::cell::Cell::new(0)),
+                top: move || {
+                    let (s, c) = (s.clone(), c.clone());
+                    Form::new("sheet", "A sheet")
+                        .submit("OK", false, move |_, _, _| s.set(s.get() + 1))
+                        .on_cancel(move |_, _, _| c.set(c.get() + 1))
+                        .into_any_element()
+                },
+            }
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!((submitted.get(), cancelled.get()), (1, 0));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!((submitted.get(), cancelled.get()), (1, 1));
+    }
+
+    /// A click anywhere outside an open picker closes its popup, as a macOS pop-up button does.
+    #[gpui::test]
+    async fn a_click_outside_a_picker_closes_it(cx: &mut TestAppContext) {
+        let (_v, cx) = cx.add_window_view(move |_, _| Covered {
+            under: std::rc::Rc::new(std::cell::Cell::new(0)),
+            top: || {
+                div()
+                    .p(gpui::px(200.))
+                    .child(Picker::new("pick", "PHP", vec!["7.1".into(), "8.4".into()], Some(0)))
+                    .into_any_element()
+            },
+        });
+        cx.run_until_parked();
+        let picker = cx.debug_bounds("pick").expect("the picker is drawn");
+        click(cx, picker.center());
+        assert!(cx.debug_bounds("pick:option:1").is_some(), "the popup is open");
+        click(cx, gpui::point(gpui::px(4.), gpui::px(4.)));
+        assert!(cx.debug_bounds("pick:option:1").is_none(), "the popup is still open");
+        // Its own button still opens and closes it.
+        click(cx, picker.center());
+        assert!(cx.debug_bounds("pick:option:1").is_some(), "the button opens it again");
+        click(cx, picker.center());
+        assert!(cx.debug_bounds("pick:option:1").is_none(), "the button closes it");
+    }
+
     /// Choosing from a picker's popup chooses, and presses nothing under the popup (M6 final
     /// review: picking a site's PHP could press Detect docroot below it).
     #[gpui::test]
@@ -215,6 +270,18 @@ mod tests {
         for w in widgets() {
             assert!(!w.disabled && w.description.is_none(), "{w:?}");
         }
+    }
+
+    /// VoiceOver hears what Copy copies: the hint when there is one, else the message (M6 final
+    /// review: the hint was plain text, so Copy said nothing of what it took).
+    #[test]
+    fn copy_says_what_it_copies() {
+        let with_hint = YardError::new(ErrorCode::Internal, "boom").with_hint("yard trust");
+        let copy = ErrorView::new("e", &with_hint, HintAction::parse("yard trust")).copy_button().a11y();
+        assert_eq!(copy.description.as_deref(), Some("copies yard trust"));
+        let bare = YardError::new(ErrorCode::Internal, "boom");
+        let copy = ErrorView::new("e", &bare, HintAction::Copy("boom".into())).copy_button().a11y();
+        assert_eq!(copy.description.as_deref(), Some("copies boom"));
     }
 
     struct Gallery;

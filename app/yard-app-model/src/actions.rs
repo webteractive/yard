@@ -59,10 +59,37 @@ pub fn trust_prompt(e: &YardError) -> Option<Prompt> {
     Some(Prompt::Trust { formula: field("formula")?, tap: field("tap")? })
 }
 
+/// A port typed into a field: `None` when left empty (yardd picks one), else a number from 1 to
+/// 65535; anything else is an error to show rather than drop.
+pub fn port_input(text: &str) -> Result<Option<u16>, YardError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    match text.parse::<u16>() {
+        Ok(port) if port > 0 => Ok(Some(port)),
+        _ => Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("{text} is not a port: give a number from 1 to 65535"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_port_field_is_a_port_or_empty() {
+        assert_eq!(port_input(" 3307 "), Ok(Some(3307)));
+        assert_eq!(port_input(""), Ok(None));
+        for bad in ["abc", "0", "70000", "-1", "33 07"] {
+            let e = port_input(bad).unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidArgument);
+            assert_eq!(e.message, format!("{bad} is not a port: give a number from 1 to 65535"));
+        }
+    }
     use yard_proto::{ErrorCode, YardError};
 
     #[test]

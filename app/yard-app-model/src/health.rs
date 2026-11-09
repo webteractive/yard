@@ -1,7 +1,10 @@
 //! The one-glance health the menu bar icon and the window show (M6 design §10.4).
 
 use crate::hint::HintAction;
-use yard_proto::{PortInfo, PortStatus, ServiceInfo, StatusInfo, TunnelInfo, TunnelState, UnitState};
+use yard_core::present::holder_kind_name;
+use yard_proto::{
+    HolderKind, PortInfo, PortStatus, ServiceInfo, StatusInfo, TunnelInfo, TunnelState, UnitState,
+};
 
 /// The connection as health sees it; yard-app maps the session's state into this.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,9 +72,19 @@ pub fn evaluate(
         return Health::Error(errors);
     }
     let mut warnings = vec![];
+    let is_service = |unit: &str| services.unwrap_or_default().iter().any(|svc| svc.name == unit);
     for p in ports.unwrap_or_default().iter().filter(|p| p.status == PortStatus::InUse) {
-        let holder = p.holder.as_ref().map_or_else(|| "another program".to_string(), |h| h.name.clone());
-        warnings.push(problem(format!("{}'s port {} is held by {holder}", p.unit, p.port), None));
+        let holder = p.holder.as_ref().map_or_else(
+            || "another program".to_string(),
+            |h| match h.kind {
+                HolderKind::Unknown | HolderKind::Other => h.name.clone(),
+                kind => format!("{} ({})", h.name, holder_kind_name(kind)),
+            },
+        );
+        warnings.push(Problem {
+            text: format!("{}'s port {} is held by {holder}", p.unit, p.port),
+            action: Some(HintAction::EditPort { owner: p.unit.clone(), is_service: is_service(&p.unit) }),
+        });
     }
     for t in tunnels.unwrap_or_default().iter().filter(|t| t.state == TunnelState::Failed) {
         let why = t.last_error.as_deref().unwrap_or("no reason given");
@@ -136,7 +149,12 @@ mod tests {
         let Health::Warning(held) = evaluate(&UP, Some(&ok), Some(&[port("in_use")]), None, None, 1) else {
             panic!()
         };
-        assert!(held[0].text.contains("8080"), "{}", held[0].text);
+        // It names what holds the port and offers to move Yard's unit (M6 design §8.1).
+        assert_eq!(held[0].text, "nginx-http's port 8080 is held by nginx (Herd)");
+        assert_eq!(
+            held[0].action,
+            Some(HintAction::EditPort { owner: "nginx-http".into(), is_service: false })
+        );
         assert_eq!(evaluate(&UP, Some(&ok), Some(&[port("yard")]), None, None, 1), Health::Busy);
         assert_eq!(
             evaluate(&UP, Some(&ok), Some(&[port("yard")]), None, None, 0),

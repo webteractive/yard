@@ -62,6 +62,14 @@ impl ErrorView {
     pub fn a11y(&self) -> A11y {
         A11y::new(self.id.clone(), Role::Alert, self.message.clone())
     }
+
+    /// Copy: the hint, else the message, saying which for VoiceOver.
+    pub fn copy_button(&self) -> Button {
+        let text: String = self.hint.clone().unwrap_or_else(|| self.message.clone()).to_string();
+        Button::new(format!("{}:copy", self.id), "Copy")
+            .description(format!("copies {text}"))
+            .on_click(move |_, _, cx| Opener::copy(cx, &text))
+    }
 }
 
 impl RenderOnce for ErrorView {
@@ -69,7 +77,7 @@ impl RenderOnce for ErrorView {
         let t = Theme::of(window);
         let a11y = self.a11y();
         let buttons = self.buttons();
-        let copy_text: String = self.hint.clone().unwrap_or_else(|| self.message.clone()).to_string();
+        let copy = self.copy_button();
         let open =
             window.use_keyed_state(ElementId::Name(format!("{}:details", self.id).into()), cx, |_, _| false);
         let show = *open.read(cx);
@@ -85,10 +93,7 @@ impl RenderOnce for ErrorView {
                 },
             ));
         }
-        row = row.child(
-            Button::new(format!("{}:copy", self.id), "Copy")
-                .on_click(move |_, _, cx| Opener::copy(cx, &copy_text)),
-        );
+        row = row.child(copy);
         if !self.details.is_empty() {
             row = row.child(
                 Button::new(format!("{}:more", self.id), if show { "Hide details" } else { "Details" })
@@ -110,8 +115,17 @@ impl RenderOnce for ErrorView {
             .p(px(8.))
             .rounded(px(6.))
             .bg(Theme::wash(t.danger))
-            .child(div().text_sm().text_color(t.danger).child(self.message))
-            .when_some(self.hint.clone(), |d, h| d.child(div().text_xs().text_color(t.muted).child(h)))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(t.danger)
+                    .child(super::text(format!("{}:message", a11y.id), self.message)),
+            )
+            .when_some(self.hint.clone(), |d, h| {
+                d.child(
+                    div().text_xs().text_color(t.muted).child(super::text(format!("{}:hint", a11y.id), h)),
+                )
+            })
             .child(row)
             .when(show, |d| d.child(LogView::new(format!("{}:log", a11y.id), self.details)))
     }

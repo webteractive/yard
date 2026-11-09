@@ -11,7 +11,8 @@ the site detail sets the docroot by Detect and Node by Use default only. The fin
 Remove keeping data, Save settings' location and replace, Not now, a `.so` from an open panel,
 Range…, per-formula trust, a failed job's output, named shares, Copy URL and the DNS records a stop
 leaves); they are built. A named share takes its host as text; the daemon checks it is under a
-set-up domain. A picker's popup closes by choosing or by its control, not by a click elsewhere.
+set-up domain. The review's minor findings were fixed on 2026-11-09 (see §5.1, §5.6, §8.2, §8.3,
+§9.2, §11.2, §11.3).
 (What looked like wrong log lines for Activity's later job cards was System Events misreading a
 repeated structure; the AX API, which VoiceOver reads, gives each card its own.) It extends `2026-10-19-yard-design.md` (the main spec: §3.1, §6.2, §9, §10, §11,
 §12) and is planned in `docs/superpowers/plans/2026-11-05-yard-m6-app.md`.
@@ -269,8 +270,11 @@ words are now one copy of code.
 
 - The socket is `<root>/yardd.sock`; `<root>` is resolved as in §5.8.
 - `tokio::net::UnixStream`. A missing socket file or `ECONNREFUSED` is "not running"; any other
-  error is reported with its text. The path must fit `sockaddr_un.sun_path` (104 bytes); a longer
-  one is an error naming the path, never a truncation.
+  error is reported with its text. The path must fit `sockaddr_un.sun_path` (104 bytes with its
+  terminating NUL, so at most 103 bytes of path, as yardd checks); a longer one is an error naming
+  the path, never a truncation.
+- One deadline bounds a call's write and its answer: a yardd that stops reading fills the socket's
+  buffer, and a write left waiting would hold the write lock past every later call.
 - Lines are read with `read_until(b'\n')` into a buffer capped at 16 MiB; a line over the cap with
   no newline closes the connection as a protocol error (a `doctor` report or a site list is far
   smaller). Empty lines are skipped.
@@ -361,7 +365,10 @@ its sequential `Client` (moved into yard-client unchanged); it does not need pip
   epoch, and the app fetches what the menu shows and every resource it holds (§7.2). Events that arrive while those fetches
   run are applied after them; every event's effect is idempotent (§7.3), so order does not matter.
 - Job ids restart at 1 when yardd restarts (`<kind>-<n>`), so the app keys jobs by
-  `(epoch, job_id)`. A job still running when the connection dropped becomes **lost** (§9.1).
+  `(epoch, job_id)`. A job still running when the connection dropped becomes **lost** (§9.1), and
+  so does one whose `{ job_id }` answer arrives after the drop.
+- Dropping the update receiver ends the `Session`: its task closes both connections and stops,
+  connected, backing off or waiting after `Incompatible`.
 
 ### 5.7 When yardd is not running or not installed
 
@@ -556,7 +563,9 @@ GPUI is a rendering framework, not a widget kit, and Zed's own widget crates are
 builds the few widgets it needs in `yard-app::widgets` **(builder's call)**: button, toggle,
 checkbox, text field (adapted from GPUI's Apache-2.0 `examples/input.rs`), a list or table over
 `uniform_list` (after `examples/data_table.rs`), a picker (an `AnchoredPopup` menu), a banner, an
-error view with its hint button, and a form overlay for the forms below. Confirmations use GPUI's
+error view with its hint button, and a form overlay for the forms below (modal: Enter presses its
+default button, Escape cancels, and a value it cannot send, such as a port that is not one, is shown
+in it rather than dropped). A picker's popup closes on a click outside it. Confirmations use GPUI's
 `Window::prompt`, which on macOS is a native alert (`NSAlert`) with up to a few buttons.
 `gpui-component` is not used: it brings a second copy of GPUI (`gpui-pre`).
 
@@ -618,14 +627,16 @@ error view with its hint button, and a form overlay for the forms below. Confirm
   `In the browser, pick the zone <domain>.`), **Remove**.
 - **Ports:** `ports.list` as a table (unit, port, mode, preferred, status, holder and its kind).
   **Set port…**, **Pin** / **Unpin**, **Range…**, **Check** (`ports.check`), and the profile
-  (`standard` or `privileged`, with what each means). A port held by another program shows the
+  (`standard` or `privileged`, with what each means); **Check** shows the list `ports.check`
+  answers. A port held by another program shows the
   holder's name, pid and kind (Herd, DBngin, Postgres.app, Docker, brew services) and **Set
   port…**.
 - **Logs:** a live view of every unit's `log_line`s while the section is visible (the `logs`
   connection), with a unit filter, a text filter, pause, and **Open log file** for a unit (opens
-  `logs/<unit>.log` in Console). It holds the last 5,000 lines.
-- **Doctor:** **Run doctor** (`doctor`), checks grouped as fail, warn, ok, each with its message,
-  hint and action button (§10.2).
+  `logs/<unit>.log` in Console). It holds the last 5,000 lines. A tail opens a new `logs`
+  connection 2 s after yardd drops one, and closing the main window closes its tails.
+- **Doctor:** **Run doctor** (`doctor`), checks grouped as fail, warn, ok, and other (a status a
+  newer yardd added), each with its message, hint and action button (§10.2).
 - **Sources:** `sources.list` (tap, tapped, trusted, formulae) with **Trust** / **Untrust** for a
   formula or a whole tap (jobs).
 - **Activity** (a toolbar button with the count of running jobs): the job list (§9).
@@ -636,7 +647,8 @@ A small GPUI window, one at a time (**Settings…** raises it when open): the `y
 chosen in an open panel; until one is chosen, **Open in editor** asks), the terminal app (default
 Terminal), and the data root in use (read-only; it is set with `--root`). A `yard` path chosen here or in
 onboarding is run from then on, with no relaunch; Save says which `yard` is now in use, or that none
-was found. Settings, the recent
+was found. The terminal app is read at each hand-off, so a new one applies at once too, and an editor
+or terminal app that is gone is an error naming it (macOS reports that only to a completion handler). Settings, the recent
 sites and `did_onboard` live in `NSUserDefaults` under the bundle id, through `objc2-foundation`
 **(builder's call)**: they are the app's own preferences, outside Yard's data root, and a later
 signed build keeps them.
@@ -796,7 +808,8 @@ action's arguments. The script text is `yard_app_model::terminal_script(args)`, 
 `Health::evaluate(...)` is a pure function of the connection state, `status` (`config_error`, units
 `failed`), `ports` (a status `in_use`), `services` (any `failed`), `tunnels` (any `failed`) and
 running jobs. It returns `Offline`, `Error(problems)`, `Warning(problems)`, `Busy` or `Ok`, with
-each problem's text and action. A unit in `backoff` or a service `waking` is not a problem.
+each problem's text and action. A unit in `backoff` or a service `waking` is not a problem. A held
+port names its holder and the holder's kind (`nginx (Herd)`) and offers **Set port…**.
 
 ### 10.5 Service state text
 
@@ -825,7 +838,8 @@ which is not installed`.
 
 When a call or job fails with `FORMULA_UNTRUSTED` and `data` names `formula` and `tap`, the app
 asks **Trust <formula> (from the <tap> tap)?**; yes runs the `sources.trust` job and then repeats
-the original call once. A skipped settle never answers trust for the user, as `--yes` never does.
+the original call once. Questions queue, oldest first, each repeating its own work; the job waits
+for its answer and ends with the repeat, so a settle stopped by trust carries on after a yes. A skipped settle never answers trust for the user, as `--yes` never does.
 The main window asks; when no window is open (an install started from the menu bar), the main window
 opens on Activity to ask it.
 
@@ -835,7 +849,8 @@ opens on Activity to ask it.
   instance; `used_by` not empty → `SERVICE_IN_USE` naming the sites, hint the `.yard` to edit),
   then ask **Delete <i> and its data?** with the buttons **Delete**, **Remove, keep its data**
   (`keep_data`) and **Cancel**.
-- **Unlink / remove proxy:** **Stop serving <site>?** A named tunnel's `SITE_TUNNELLED` is shown
+- **Unlink / remove proxy:** **Unlink <site>?** (its project stays where it is) or **Remove the
+  proxy <site>?** (what it forwards to keeps running). A named tunnel's `SITE_TUNNELLED` is shown
   with its hint.
 - **Save settings to .yard** over another directory's site: `SITE_NAME_TAKEN` asks **Replace it
   with this directory?** and repeats with `replace`.
@@ -850,7 +865,7 @@ opens on Activity to ask it.
   `PROTOCOL_MISMATCH` answer ends the connection; answers are matched by id when the fake answers
   out of order; an event that arrives before an answer is delivered as an event; a missing socket
   is `DAEMON_NOT_RUNNING`; a call the fake never answers times out (the timeout is a parameter,
-  50 ms in tests); a path over 104 bytes is refused; a 300 KB line split across reads arrives
+  50 ms in tests); a path of 103 bytes or more is refused; a write yardd never reads times out; a 300 KB line split across reads arrives
   whole; an over-long line closes the connection.
 - `Session`: subscribes before the first call; a stale minor subscribes without `state`; stopping
   the fake fails pending calls with the lost-connection error and reports `Disconnected`; starting
@@ -989,7 +1004,7 @@ packaging tool would be one more dependency with its own signing config to verif
 | `yard` cannot be found | CLI actions disabled with the hint to set its path; RPC still works |
 | Another program holds a service's port | the service shows failed with `PORT_IN_USE` naming the holder, and **Port…** |
 | A hint the app does not know | shown with **Copy** |
-| The socket path is too long (a deep `--root`) | an error naming the path and the 104-byte limit |
+| The socket path is too long (a deep `--root`) | an error naming the path and the 103-byte limit |
 | A build on a Mac without the Metal toolchain | `cargo build` fails in GPUI's build script naming `metal`; the hint (AGENTS.md) is `xcodebuild -downloadComponent MetalToolchain`, or build with `--features runtime-shaders` |
 
 ## 16. Builder check

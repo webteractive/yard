@@ -94,12 +94,14 @@ fn doctor_checks_group_by_status_with_hint_buttons() {
     let report: yard_proto::DoctorReport = serde_json::from_value(json!({"checks": [
         {"id": "units", "status": "ok", "message": "no unit has failed"},
         {"id": "helper", "status": "fail", "message": "the helper is not installed", "hint": "sudo yard helper install"},
-        {"id": "ini", "status": "warn", "message": "a stale ini", "hint": "rm /x/20-redis.ini"}
+        {"id": "ini", "status": "warn", "message": "a stale ini", "hint": "rm /x/20-redis.ini"},
+        {"id": "future", "status": "skipped", "message": "a status this app does not know"}
     ]}))
     .unwrap();
     let groups = super::doctor::groups(&report);
     let names: Vec<&str> = groups.iter().map(|g| g.0).collect();
-    assert_eq!(names, ["Failing", "Warnings", "OK"]);
+    // A check of a status a newer yardd added is shown under Other, not dropped (M6 final review).
+    assert_eq!(names, ["Failing", "Warnings", "OK", "Other"]);
     assert_eq!(groups[0].1[0].1, ["Open in Terminal", "Copy"], "a sudo hint offers Terminal and Copy");
     assert_eq!(groups[1].1[0].1, ["Copy"], "an rm hint is only copied");
 }
@@ -269,4 +271,35 @@ impl Render for Blank {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui::div()
     }
+}
+
+/// The files the screens open are named by yard-core's `Paths`, as yardd writes them (M6 design
+/// §5.8; the final review found them spelled out by hand).
+#[gpui::test]
+async fn opened_files_are_yard_cores_paths(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    let paths = env.paths();
+    let v84 = "8.4".parse().unwrap();
+    assert_eq!(super::php::overrides_file(&env, "8.4"), Some(paths.php_overrides(v84)));
+    assert_eq!(super::logs::log_file(&paths, Some("nginx")), paths.log("nginx"));
+    assert_eq!(super::logs::log_file(&paths, None), paths.logs_dir());
+}
+
+/// Check now shows what the check found: its answer is the port list (M6 final review: the
+/// answer was dropped and the list refetched before the check had run).
+#[gpui::test]
+async fn check_now_shows_the_checks_answer(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    fake.answer(
+        "ports.check",
+        json!([
+            {"unit": "nginx-http", "port": 8080, "mode": "pinned", "preferred": null, "status": "in_use",
+             "holder": {"pid": 9, "name": "nginx", "path": "/x/nginx", "ppid": 1, "kind": "herd"}}
+        ]),
+    );
+    cx.update(|cx| super::ports::check_now(&env, cx));
+    cx.run_until_parked();
+    let status = env.state.read_with(cx, |s, _| s.ports.value.as_ref().map(|p| p[0].status));
+    assert_eq!(status, Some(yard_proto::PortStatus::InUse));
+    assert_eq!(fake.count("ports.list"), 0, "nothing refetched over it");
 }

@@ -21,6 +21,9 @@ struct Inner {
     held: HashMap<String, Vec<oneshot::Sender<Answer>>>,
     calls: Vec<(String, Value)>,
     no_events: bool,
+    /// The open log streams; `logs_opened` counts every one ever opened.
+    log_streams: Vec<mpsc::UnboundedSender<Event>>,
+    logs_opened: usize,
 }
 
 pub struct FakeDaemon {
@@ -72,6 +75,21 @@ impl FakeDaemon {
         self.push(Update::Event(event));
     }
 
+    /// Sends a `log_line` to every open log stream.
+    pub fn log_line(&self, unit: &str, line: &str) {
+        let event = Event::LogLine { unit: unit.into(), line: line.into() };
+        self.inner.lock().unwrap().log_streams.retain(|tx| tx.send(event.clone()).is_ok());
+    }
+
+    /// Closes every log stream, as yardd restarting does.
+    pub fn drop_logs(&self) {
+        self.inner.lock().unwrap().log_streams.clear();
+    }
+
+    pub fn logs_opened(&self) -> usize {
+        self.inner.lock().unwrap().logs_opened
+    }
+
     pub fn calls(&self) -> Vec<(String, Value)> {
         self.inner.lock().unwrap().calls.clone()
     }
@@ -109,7 +127,10 @@ impl Daemon for FakeDaemon {
     }
 
     fn logs(&self) -> BoxFuture<'static, Result<mpsc::UnboundedReceiver<Event>, YardError>> {
-        let (_tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut inner = self.inner.lock().unwrap();
+        inner.log_streams.push(tx);
+        inner.logs_opened += 1;
         Box::pin(async move { Ok(rx) })
     }
 }

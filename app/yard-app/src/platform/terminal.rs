@@ -44,15 +44,24 @@ pub fn clean_stale(dir: &Path) {
 }
 
 pub struct TerminalLauncher {
-    pub temp: PathBuf,
-    pub terminal_app: Option<PathBuf>,
+    temp: PathBuf,
+    /// The terminal app chosen in Settings, read at each launch.
+    terminal_app: Box<dyn Fn() -> Option<PathBuf>>,
 }
 
 impl TerminalLauncher {
+    pub fn new(temp: PathBuf, terminal_app: impl Fn() -> Option<PathBuf> + 'static) -> TerminalLauncher {
+        TerminalLauncher { temp, terminal_app: Box::new(terminal_app) }
+    }
+
+    pub fn terminal_app(&self) -> Option<PathBuf> {
+        (self.terminal_app)()
+    }
+
     /// Writes the command file and opens it with the terminal app (Terminal.app when unset).
     pub fn launch(&self, args: &[String]) -> Result<(), YardError> {
         let file = write_command(&self.temp, args)?;
-        Opener::open_with(&file, self.terminal_app.as_deref())
+        Opener::open_with(&file, self.terminal_app().as_deref())
     }
 }
 
@@ -60,6 +69,17 @@ impl TerminalLauncher {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    /// The terminal app is read at each launch, so a new one chosen in Settings is used at once.
+    #[test]
+    fn the_terminal_app_is_read_when_launching() {
+        let chosen = std::rc::Rc::new(std::cell::RefCell::new(None::<PathBuf>));
+        let c = chosen.clone();
+        let launcher = TerminalLauncher::new(std::env::temp_dir(), move || c.borrow().clone());
+        assert_eq!(launcher.terminal_app(), None);
+        *chosen.borrow_mut() = Some(PathBuf::from("/Applications/Ghostty.app"));
+        assert_eq!(launcher.terminal_app(), Some(PathBuf::from("/Applications/Ghostty.app")));
+    }
 
     #[test]
     fn command_file_is_0700_and_quoted() {

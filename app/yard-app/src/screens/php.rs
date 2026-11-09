@@ -17,6 +17,11 @@ use yard_proto::methods::{ExtAddParams, ExtParams, PhpConfigParams, PhpParams};
 /// The table's column titles, each read out by VoiceOver.
 pub const COLUMNS: [&str; 4] = ["Version", "Default", "Sites", "Pool"];
 
+/// The ini Yard leaves to the user for PHP `version` (as yardd names it, so it parses).
+pub fn overrides_file(env: &AppEnv, version: &str) -> Option<PathBuf> {
+    version.parse().ok().map(|v| env.paths().php_overrides(v))
+}
+
 pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let versions = env.state.read(cx).php.value.clone().unwrap_or_default();
     let default = versions.iter().find(|v| v.default).map(|v| v.version.clone());
@@ -188,7 +193,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
     let val = Nav::field(env, "php:config:value", "Value", "512M", cx);
     let (e4, k4, val4, v4) = (env.clone(), key.clone(), val.clone(), v.to_string());
     let (e5, k5, v5) = (env.clone(), key.clone(), v.to_string());
-    let (e6, root, v6) = (env.clone(), env.location.root.clone(), v.to_string());
+    let (e6, v6) = (env.clone(), v.to_string());
     div()
         .flex()
         .flex_col()
@@ -256,12 +261,9 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                 })),
         )
         .child(Button::new("php:overrides:open", "Open 99-overrides.ini").on_click(move |_, _, cx| {
-            e6.perform(
-                HintAction::OpenFile(
-                    PathBuf::from(&root).join("php").join(&v6).join("conf.d/99-overrides.ini"),
-                ),
-                cx,
-            )
+            if let Some(file) = overrides_file(&e6, &v6) {
+                e6.perform(HintAction::OpenFile(file), cx)
+            }
         }))
         .into_any_element()
 }

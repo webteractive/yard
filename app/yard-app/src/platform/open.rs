@@ -4,7 +4,7 @@ use gpui::{App, ClipboardItem};
 use objc2_app_kit::{NSWorkspace, NSWorkspaceOpenConfiguration};
 use objc2_foundation::{NSArray, NSString, NSURL};
 use std::path::Path;
-use yard_proto::YardError;
+use yard_proto::{ErrorCode, YardError};
 
 /// Where a hinted file opens when no editor is set: a text editor, never the default handler.
 const TEXT_EDIT: &str = "/System/Applications/TextEdit.app";
@@ -139,11 +139,16 @@ impl Opener {
         }
     }
 
-    /// Opens `file` with `app` (an `.app` bundle path), or with its default app.
+    /// Opens `file` with `app` (an `.app` bundle path), or with its default app. An app that is
+    /// not there is an error here: macOS reports that only to a completion handler.
     pub fn open_with(file: &Path, app: Option<&Path>) -> Result<(), YardError> {
         let url = NSURL::fileURLWithPath(&NSString::from_str(&file.display().to_string()));
         let workspace = NSWorkspace::sharedWorkspace();
         match app {
+            Some(app) if !app.is_dir() => {
+                Err(YardError::new(ErrorCode::InvalidArgument, format!("{} is not there", app.display()))
+                    .with_hint("choose another app in Yard's Settings"))
+            }
             Some(app) => {
                 let app_url = NSURL::fileURLWithPath(&NSString::from_str(&app.display().to_string()));
                 let urls = NSArray::from_retained_slice(&[url]);
@@ -163,6 +168,18 @@ impl Opener {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    /// An app chosen in Settings that is gone says so; macOS would fail without a word (M6 final
+    /// review: a missing editor or terminal app did nothing).
+    #[test]
+    fn a_missing_app_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.conf");
+        std::fs::write(&file, "x").unwrap();
+        let e = Opener::open_with(&file, Some(Path::new("/Applications/Gone Editor.app"))).unwrap_err();
+        assert_eq!(e.message, "/Applications/Gone Editor.app is not there");
+        assert_eq!(e.hint.as_deref(), Some("choose another app in Yard's Settings"));
+    }
 
     #[test]
     fn a_hinted_file_opens_only_as_text() {

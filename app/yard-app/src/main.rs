@@ -37,10 +37,11 @@ fn main() {
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_activation_policy(ActivationPolicy::Accessory);
         widgets::text_field::TextField::bind_keys(cx);
+        widgets::form::Form::bind_keys(cx);
         platform::terminal::clean_stale(&std::env::temp_dir());
         let settings = platform::settings::Settings::default();
         let location = platform::locator::location(root.clone(), settings.yard_path());
-        let socket = location.root.join("yardd.sock");
+        let socket = yard_core::Paths::new(location.root.clone()).daemon_socket();
         let daemon = daemon::SessionDaemon::start(SessionConfig::new(socket, client_name()), bridge.clone());
         let root_arg = root.clone();
         let locate_yard: env::LocateYard =
@@ -51,7 +52,11 @@ fn main() {
         // the runtime under every session lives as long as the app (found 2026-11-06, when a
         // session stopped noticing yardd the moment start-up finished).
         cx.set_global(env.clone());
-        cx.on_window_closed(|cx, _| platform::activation::window_closed(cx)).detach();
+        cx.on_window_closed(|cx, _| {
+            platform::activation::window_closed(cx);
+            window::main::closed(&env::AppEnv::global(cx), cx);
+        })
+        .detach();
         if let Err(e) = menubar::install(&env, cx) {
             eprintln!("Yard.app: no menu bar item: {e}");
         }

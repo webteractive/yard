@@ -170,9 +170,9 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
             t.site.clone(),
             vec![
                 t.site.clone().into(),
-                format!("{:?}", t.kind).to_lowercase().into(),
+                yard_core::present::wire_name(&t.kind).into(),
                 url.into(),
-                format!("{:?}", t.state).to_lowercase().into(),
+                yard_core::present::wire_name(&t.state).into(),
             ],
         )
         .extra(actions)

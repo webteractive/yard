@@ -12,6 +12,11 @@ use crate::widgets::toggle::Toggle;
 use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use yard_app_model::hint::Screen;
 
+/// A unit's log file, or the logs folder for every unit.
+pub fn log_file(paths: &yard_core::Paths, unit: Option<&str>) -> std::path::PathBuf {
+    unit.map_or_else(|| paths.logs_dir(), |u| paths.log(u))
+}
+
 pub fn logs(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let start_unit = match &env.nav.read(cx).screen {
         Screen::Logs(u) => u.clone(),
@@ -58,13 +63,9 @@ pub fn logs(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         })
     });
     let file_unit = buffer.unit_filter.clone();
-    let root = env.location.root.clone();
+    let paths = env.paths();
     let open_file = Button::new("logs:file", "Show log file").on_click(move |_, _, cx| {
-        let file = match &file_unit {
-            Some(u) => root.join("logs").join(format!("{u}.log")),
-            None => root.join("logs"),
-        };
-        Opener::reveal(cx, &file);
+        Opener::reveal(cx, &log_file(&paths, file_unit.as_deref()));
     });
     div()
         .flex()

@@ -152,9 +152,21 @@ impl AppState {
         cx.notify();
     }
 
+    /// A port list yardd answered to something other than `ports.list` (`ports.check`).
+    pub fn set_ports(&mut self, ports: Vec<yard_proto::PortInfo>) {
+        self.ports.value = Some(ports);
+        self.ports.error = None;
+        self.ports.updated_at = Some(OffsetDateTime::now_utc());
+    }
+
     /// Records a job this app started, so its events and the answer make one record.
     pub fn claim(&mut self, job_id: &str, title: String) -> JobKey {
-        self.jobs.claim(job_id, self.epoch, title, OffsetDateTime::now_utc());
+        let now = OffsetDateTime::now_utc();
+        self.jobs.claim(job_id, self.epoch, title, now);
+        // Its answer came after the connection dropped: its end will never arrive either.
+        if !matches!(self.connection, ConnectionState::Connected(_)) {
+            self.jobs.epoch_changed(self.epoch + 1, now);
+        }
         JobKey { epoch: self.epoch, id: job_id.to_string() }
     }
 
@@ -328,6 +340,23 @@ impl AppState {
             ResourceKey::Extensions(v) => self.extensions.entry(v.clone()).or_default().put(answer),
             ResourceKey::SiteDetail(n) => self.site_detail.entry(n.clone()).or_default().put(answer),
         }
+        self.prune(key);
+    }
+
+    /// Drops the details of sites and PHP versions a fresh list no longer names, so events stop
+    /// refetching them.
+    fn prune(&mut self, key: &ResourceKey) {
+        match key {
+            ResourceKey::Sites if self.sites.error.is_none() => {
+                let Some(sites) = &self.sites.value else { return };
+                self.site_detail.retain(|n, _| sites.iter().any(|s| &s.name == n));
+            }
+            ResourceKey::Php if self.php.error.is_none() => {
+                let Some(php) = &self.php.value else { return };
+                self.extensions.retain(|v, _| php.iter().any(|p| p.installed && &p.version == v));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -356,6 +385,34 @@ mod tests {
         fake.push(connected(1));
         settle(cx);
         state
+    }
+
+    /// An unlinked site's detail and an uninstalled PHP's extensions are dropped with the lists
+    /// that no longer name them, so no event asks yardd for them again (M6 final review: each
+    /// reconcile asked sites.info for every site ever opened, and the gone ones failed).
+    #[gpui::test]
+    async fn details_of_what_is_gone_are_dropped(cx: &mut TestAppContext) {
+        let fake = FakeDaemon::new();
+        let state = started(cx, &fake);
+        fake.answer(
+            "php.list",
+            json!([
+                {"version": "8.4", "default": true, "installed": true, "sites": [], "pool": "running"},
+                {"version": "7.1", "default": false, "installed": false, "sites": [], "pool": null}
+            ]),
+        );
+        fake.answer("ext.list", json!([]));
+        state.update(cx, |s, cx| {
+            s.site_detail.entry("gone".into()).or_default();
+            s.site_detail.entry("blog".into()).or_default();
+            s.extensions.entry("7.1".into()).or_default();
+            s.refresh(vec![ResourceKey::Sites, ResourceKey::Php], cx);
+        });
+        settle(cx);
+        state.read_with(cx, |s, _| {
+            assert!(!s.site_detail.contains_key("gone") && s.site_detail.contains_key("blog"));
+            assert!(!s.extensions.contains_key("7.1") && s.extensions.contains_key("8.4"));
+        });
     }
 
     /// The menu bar menu is always on screen: a connect fetches what it and the icon read (sites,
