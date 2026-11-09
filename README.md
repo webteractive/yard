@@ -61,6 +61,29 @@ says which of these is missing.
 
 ## Install
 
+One release, two ways to get it; both install Yard.app (which carries the `yard` CLI, yardd,
+the root helper and the shims) and put `yard` on your PATH. Yard needs an Apple Silicon Mac on
+macOS 14 or later, and Homebrew.
+
+```sh
+brew install --cask webteractive/tap/yard
+# or
+curl -fsSL https://raw.githubusercontent.com/webteractive/yard/main/install.sh | sh
+```
+
+Then:
+
+```sh
+yard start                  # installs nginx and dnsmasq if they are missing, then starts yardd
+sudo yard helper install    # once, in a terminal
+yard doctor                 # every check should say ok
+```
+
+Update with `brew upgrade --cask yard` (brew) or `yard self-update` (curl), or let Yard.app do
+it (Settings → Install updates automatically). Remove everything with `yard uninstall`.
+
+### From source
+
 ```sh
 cargo build --release
 ln -sf "$PWD/target/release/yard" ~/.local/bin/yard   # any directory on PATH
