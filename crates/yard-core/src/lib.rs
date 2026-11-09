@@ -6,6 +6,7 @@ pub mod constraint;
 pub mod emailulator;
 pub mod generated;
 pub mod ini;
+pub mod install;
 pub mod node;
 pub mod paths;
 pub mod php;
