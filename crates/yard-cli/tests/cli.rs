@@ -2570,3 +2570,32 @@ fn start_and_stop_leave_another_roots_agent_alone() {
     assert_eq!(std::fs::read(&file).unwrap(), plist, "the agent's plist is untouched");
     assert!(!log.exists(), "launchctl ran: {:?}", std::fs::read_to_string(&log).ok());
 }
+
+#[test]
+fn self_update_refuses_a_development_build() {
+    let root = short_root();
+    let out = yard_at(root.path()).args(["self-update", "--yes"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("development build"), "{err}");
+    assert!(err.contains("hint: cargo build --release"), "{err}");
+}
+
+#[test]
+fn self_update_check_reads_the_feed() {
+    let root = short_root();
+    let feed = tempfile::tempdir().unwrap();
+    let latest = json!({"version": "9.9.9", "zip": "file:///nowhere/Yard-9.9.9-arm64.zip", "sha256": "00", "notes_url": "https://example.invalid/n"});
+    std::fs::write(feed.path().join("latest.json"), latest.to_string()).unwrap();
+    let out = yard_at(root.path())
+        .env("YARD_RELEASE_URL", format!("file://{}", feed.path().display()))
+        .args(["self-update", "--check", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["latest"], "9.9.9");
+    assert_eq!(v["installed"], "0.1.0");
+    assert_eq!(v["available"], true);
+    assert_eq!(v["kind"], "dev");
+}

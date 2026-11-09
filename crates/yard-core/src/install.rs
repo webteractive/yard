@@ -23,6 +23,12 @@ pub fn release_url_from(var: Option<String>) -> String {
     }
 }
 
+/// Lower-case hex SHA-256, as `shasum -a 256` and `latest.json` write it.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// A release version, `MAJOR.MINOR.PATCH`, with an optional leading `v`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version {

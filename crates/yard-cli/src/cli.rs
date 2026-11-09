@@ -42,6 +42,15 @@ pub enum Command {
     Status,
     /// Show the CLI, daemon, helper and protocol versions.
     Version,
+    /// Replace Yard.app, the CLI and yardd with the latest release (Homebrew installs: brew upgrade).
+    SelfUpdate {
+        /// Only say whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+        /// Update without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Check the installation and print the command that fixes each problem.
     Doctor,
     /// List the sites Yard serves.

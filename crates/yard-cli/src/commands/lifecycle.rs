@@ -133,12 +133,12 @@ fn sibling_of(exe: &Path, name: &str) -> Result<PathBuf, YardError> {
     }
 }
 
-fn agent_plist() -> Result<PathBuf, YardError> {
+pub fn agent_plist() -> Result<PathBuf, YardError> {
     let home = std::env::var_os("HOME").ok_or_else(|| YardError::internal("HOME is not set"))?;
     Ok(PathBuf::from(home).join(format!("Library/LaunchAgents/{DAEMON_LABEL}.plist")))
 }
 
-fn uid() -> u32 {
+pub fn uid() -> u32 {
     // SAFETY: getuid cannot fail.
     unsafe { libc::getuid() }
 }
