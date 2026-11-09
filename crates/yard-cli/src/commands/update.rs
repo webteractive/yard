@@ -98,14 +98,7 @@ pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
     }
     run("ditto", &["-x", "-k", &zip.display().to_string(), &work.display().to_string()])?;
     let staged = work.join("Yard.app");
-    run("codesign", &["--verify", "--deep", "--strict", &staged.display().to_string()])?;
-    let (ours, theirs) = (team_id(&app)?, team_id(&staged)?);
-    if ours != theirs {
-        return Err(YardError::internal(format!(
-            "Yard {newest} is signed by team {theirs}, not {ours} like this Yard; not installing it"
-        ))
-        .into());
-    }
+    verify(&app, &staged, newest, installed)?;
 
     swap(&app, &staged)?;
 
@@ -198,26 +191,70 @@ fn run(program: &str, args: &[&str]) -> Result<(), YardError> {
     )))
 }
 
-/// The team that signed `app`, read from its signature, so no Team ID is compiled in.
-fn team_id(app: &Path) -> Result<String, YardError> {
+/// The new app must satisfy this app's own designated requirement (the same bundle id, a
+/// Developer ID, the same team), which `codesign` checks itself rather than Yard reading its
+/// human output; Gatekeeper must accept it (notarized); and it must be the release the feed
+/// named, newer than this one.
+fn verify(app: &Path, staged: &Path, newest: Version, installed: Version) -> Result<(), YardError> {
+    let refuse = |why: String| {
+        YardError::internal(format!("the downloaded Yard {newest} {why}; not installing it"))
+            .with_hint("yard self-update --check")
+    };
+    let requirement = designated_requirement(app)?;
+    let staged_arg = staged.display().to_string();
+    run("codesign", &["--verify", "--deep", "--strict", &format!("-R={requirement}"), &staged_arg])
+        .map_err(|e| refuse(format!("is not signed like this Yard ({})", e.message)))?;
+    run("spctl", &["--assess", "--type", "execute", &staged_arg])
+        .map_err(|e| refuse(format!("is not accepted by Gatekeeper ({})", e.message)))?;
+    let plist = staged.join("Contents/Info.plist");
+    let o = Command::new("plutil")
+        .args(["-extract", "CFBundleShortVersionString", "raw", "-o", "-"])
+        .arg(&plist)
+        .output()
+        .map_err(|e| YardError::internal(format!("cannot run plutil: {e}")))?;
+    let version: Version = String::from_utf8_lossy(&o.stdout).trim().parse()?;
+    if !staged_version_ok(version, newest, installed) {
+        return Err(refuse(format!("says it is {version}")));
+    }
+    Ok(())
+}
+
+fn staged_version_ok(staged: Version, newest: Version, installed: Version) -> bool {
+    staged == newest && staged > installed
+}
+
+/// This app's designated requirement, from `codesign -d -r-`.
+fn designated_requirement(app: &Path) -> Result<String, YardError> {
     let o = Command::new("codesign")
-        .args(["-dv", "--verbose=2"])
+        .args(["-d", "-r-"])
         .arg(app)
         .output()
         .map_err(|e| YardError::internal(format!("cannot run codesign: {e}")))?;
-    team_id_in(&String::from_utf8_lossy(&o.stderr))
+    let text = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    designated_requirement_in(&text)
         .map_err(|e| YardError::internal(format!("{}: {}", app.display(), e.message)))
 }
 
-fn team_id_in(codesign: &str) -> Result<String, YardError> {
-    codesign
-        .lines()
-        .find_map(|l| l.strip_prefix("TeamIdentifier="))
-        .map(str::trim)
-        .filter(|t| !t.is_empty() && *t != "not set")
-        .map(str::to_string)
-        .ok_or_else(|| YardError::internal("it is not signed by a team"))
+/// The explicit `designated => …` line (an ad hoc signature's implicit one starts with `#`),
+/// accepted only when it pins a Developer ID team and Yard.app's bundle id.
+fn designated_requirement_in(codesign: &str) -> Result<String, YardError> {
+    let req =
+        codesign.lines().find_map(|l| l.strip_prefix("designated => ")).map(str::trim).ok_or_else(|| {
+            YardError::internal("it has no explicit designated requirement (not Developer ID signed)")
+        })?;
+    let pins = req.contains("anchor apple generic")
+        && req.contains("certificate leaf[subject.OU] = ")
+        && req.contains(&format!("identifier \"{BUNDLE_ID}\""));
+    if !pins {
+        return Err(YardError::internal(format!(
+            "its requirement does not pin a Developer ID team and {BUNDLE_ID}"
+        )));
+    }
+    Ok(req.to_string())
 }
+
+/// Yard.app's bundle id (M6 spec §14.1).
+const BUNDLE_ID: &str = "dev.more.yard.app";
 
 /// Replaces `app` with `staged`, which sits beside it (one volume, so both moves are renames).
 /// If the new one cannot move into place, the old one is put back.
@@ -310,10 +347,25 @@ mod tests {
     }
 
     #[test]
-    fn team_id_is_read_from_codesign_output() {
-        let sample = "Executable=/Applications/Yard.app/Contents/MacOS/Yard\nIdentifier=dev.more.yard.app\nFormat=app bundle with Mach-O thin (arm64)\nAuthority=Apple Root CA\nTeamIdentifier=ABCDE12345\nRuntime Version=26.0.0\n";
-        assert_eq!(team_id_in(sample).unwrap(), "ABCDE12345");
-        assert!(team_id_in("Signature=adhoc\nTeamIdentifier=not set\n").is_err());
-        assert!(team_id_in("Identifier=x\n").is_err());
+    fn the_designated_requirement_must_pin_a_developer_id_and_the_app() {
+        let good = "Executable=/Applications/Yard.app/Contents/MacOS/Yard\ndesignated => anchor apple generic and identifier \"dev.more.yard.app\" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ABCDE12345)\n";
+        let req = designated_requirement_in(good).unwrap();
+        assert!(req.starts_with("anchor apple generic and identifier"), "{req}");
+        assert!(req.ends_with("= ABCDE12345)"), "{req}");
+        let adhoc = "# designated => cdhash H\"b3424d9e5b2f1e2873fe305782768722501c6b94\"\n";
+        assert!(designated_requirement_in(adhoc).is_err());
+        let other_app = good.replace("dev.more.yard.app", "com.example.other");
+        assert!(designated_requirement_in(&other_app).is_err());
+        let no_team = "designated => identifier \"dev.more.yard.app\" and anchor apple\n";
+        assert!(designated_requirement_in(no_team).is_err());
+    }
+
+    #[test]
+    fn the_staged_app_must_be_the_newer_release_the_feed_names() {
+        let v = |s: &str| s.parse::<Version>().unwrap();
+        assert!(staged_version_ok(v("0.2.0"), v("0.2.0"), v("0.1.0")));
+        assert!(!staged_version_ok(v("0.1.5"), v("0.2.0"), v("0.1.0")), "not what the feed named");
+        assert!(!staged_version_ok(v("0.1.0"), v("0.1.0"), v("0.1.0")), "not newer");
+        assert!(!staged_version_ok(v("0.0.9"), v("0.0.9"), v("0.1.0")), "a downgrade");
     }
 }
