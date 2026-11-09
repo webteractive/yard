@@ -24,8 +24,8 @@ use yard_proto::{ErrorCode, Event, PROTOCOL_VERSION, Topic, YardError};
 /// The longest line yardd may send: a large site list is a few hundred KB.
 pub const MAX_LINE: usize = 16 << 20;
 
-/// `sun_path` on macOS.
-const SOCKET_PATH_MAX: usize = 104;
+/// `sun_path` on macOS is 104 bytes, its terminating NUL included.
+const SOCKET_PATH_MAX: usize = 103;
 
 type Answer = Result<Value, YardError>;
 
@@ -119,15 +119,24 @@ impl Connection {
             None => return Err(self.inner.why()),
         };
         let line = encode_line(&Request::new(id, method, params));
-        let written = match self.inner.write.lock().await.as_mut() {
-            Some(w) => w.write_all(&line).await.map_err(lost),
-            None => Err(self.inner.why()),
+        // One deadline covers the write too: a yardd that stops reading fills the socket's buffer,
+        // and a write left waiting would hold the write lock past every later call's timeout.
+        let deadline = tokio::time::Instant::now() + self.inner.timeout;
+        let write = async {
+            match self.inner.write.lock().await.as_mut() {
+                Some(w) => w.write_all(&line).await.map_err(lost),
+                None => Err(self.inner.why()),
+            }
         };
-        if let Err(e) = written {
-            self.inner.shut(e);
-            return Err(self.inner.why());
-        }
-        match tokio::time::timeout(self.inner.timeout, rx).await {
+        let answered = match tokio::time::timeout_at(deadline, write).await {
+            Ok(Ok(())) => tokio::time::timeout_at(deadline, rx).await,
+            Ok(Err(e)) => {
+                self.inner.shut(e);
+                return Err(self.inner.why());
+            }
+            Err(elapsed) => Err(elapsed),
+        };
+        match answered {
             Ok(Ok(answer)) => {
                 let protocol = self.inner.hello.get().map_or("", |h| h.protocol.as_str());
                 answer.map_err(|e| stale(e, method, protocol))

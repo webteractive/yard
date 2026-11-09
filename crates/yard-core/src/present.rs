@@ -1,12 +1,34 @@
-//! How the CLI and Yard.app word a service's state, its sleep setting and a missing Node.
+//! How the CLI and Yard.app word a service's state, its sleep setting, a missing Node, a port's
+//! holder and the wire's own names.
 
 use crate::services::sleep::SleepAfter;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use yard_proto::{EnvBlock, ServiceInfo, ServiceManager, ServiceState, SiteNode};
+use yard_proto::{EnvBlock, HolderKind, ServiceInfo, ServiceManager, ServiceState, SiteNode};
 
 /// `yard node install 22`, quoted where the shell would read the spec.
 pub use crate::node::install_hint;
+
+/// An enum value as yardd sends it (`quick`, `connecting`), or `-` for one that is not a string.
+pub fn wire_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "-".into())
+}
+
+/// What holds a port, as people know it.
+pub fn holder_kind_name(kind: HolderKind) -> &'static str {
+    match kind {
+        HolderKind::Herd => "Herd",
+        HolderKind::BrewServices => "brew services",
+        HolderKind::Docker => "Docker",
+        HolderKind::Dbngin => "DBngin",
+        HolderKind::PostgresApp => "Postgres.app",
+        HolderKind::Yard => "Yard",
+        HolderKind::Unknown | HolderKind::Other => "unknown",
+    }
+}
 
 /// The state's own name: `running`, `starting`, `stopped`, `failed`, or `unknown`.
 pub fn state_name(state: &ServiceState) -> &'static str {
@@ -104,6 +126,23 @@ mod tests {
     use super::*;
     use time::macros::datetime;
     use yard_proto::{Account, ServiceInfo, ServiceManager, ServiceState};
+
+    #[test]
+    fn a_value_is_named_as_on_the_wire() {
+        use yard_proto::{TunnelKind, TunnelState};
+        assert_eq!(wire_name(&TunnelKind::Quick), "quick");
+        assert_eq!(wire_name(&TunnelState::Connecting), "connecting");
+        assert_eq!(wire_name(&TunnelState::Other), "other");
+    }
+
+    #[test]
+    fn a_port_holder_is_named_as_people_know_it() {
+        use yard_proto::HolderKind;
+        assert_eq!(holder_kind_name(HolderKind::BrewServices), "brew services");
+        assert_eq!(holder_kind_name(HolderKind::PostgresApp), "Postgres.app");
+        assert_eq!(holder_kind_name(HolderKind::Dbngin), "DBngin");
+        assert_eq!(holder_kind_name(HolderKind::Other), "unknown");
+    }
 
     fn service(state: ServiceState, sleeping_since: Option<&str>) -> ServiceInfo {
         ServiceInfo {

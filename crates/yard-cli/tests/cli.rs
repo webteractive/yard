@@ -1041,6 +1041,18 @@ fn commands_that_edit_a_managed_file_name_it() {
 }
 
 #[test]
+fn php_list_available_refuses_a_yardd_that_would_ignore_it() {
+    let old = json!({"protocol": "2.10", "daemon_version": "0.1.0", "commit": "old"});
+    let d = MockDaemon::start(&[("hello", Ok(old)), ("php.list", Ok(json!([])))]);
+    let out = d.yard().args(["php", "list", "--available"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("yardd speaks protocol 2.10, which lists only installed PHP versions"), "{err}");
+    assert!(err.contains("hint: yard stop && yard start"), "{err}");
+    assert!(d.params("php.list").is_empty(), "nothing is sent to the old yardd");
+}
+
+#[test]
 fn init_refuses_a_yardd_that_would_write_into_the_project() {
     let old = json!({"protocol": "2.5", "daemon_version": "0.1.0", "commit": "old"});
     let d = MockDaemon::start(&[("hello", Ok(old.clone()))]);

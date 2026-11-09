@@ -3,10 +3,11 @@
 use super::sources::with_trust;
 use super::{Ctx, Outcome, run_job};
 use crate::cli::ConfigAction;
+use crate::client::protocol_version;
 use crate::output::{for_agents, table};
 use serde_json::Value;
-use yard_proto::PhpInfo;
 use yard_proto::methods::{self, PhpConfigParams, PhpListParams, PhpParams};
+use yard_proto::{ErrorCode, PhpInfo, YardError};
 
 pub async fn list(ctx: &Ctx, available: bool) -> Outcome {
     // Without the flag the params stay null, which every yardd answers.
@@ -15,7 +16,18 @@ pub async fn list(ctx: &Ctx, available: bool) -> Outcome {
     } else {
         Value::Null
     };
-    let versions: Vec<PhpInfo> = ctx.client().await?.call(methods::PHP_LIST, params).await?;
+    let mut client = ctx.client().await?;
+    // A yardd before 2.11 ignores the params and would answer the installed versions alone.
+    let protocol = &client.hello.protocol;
+    if available && protocol_version(protocol) < Some((2, 11)) {
+        return Err(YardError::new(
+            ErrorCode::ProtocolMismatch,
+            format!("yardd speaks protocol {protocol}, which lists only installed PHP versions"),
+        )
+        .with_hint("yard stop && yard start")
+        .into());
+    }
+    let versions: Vec<PhpInfo> = client.call(methods::PHP_LIST, params).await?;
     ctx.emit(&versions, || {
         let rows: Vec<Vec<String>> = versions.iter().map(row).collect();
         let mut out = table(&["VERSION", "DEFAULT", "SITES", "POOL"], &rows);

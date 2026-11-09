@@ -33,6 +33,8 @@ struct State {
     requests: Vec<(usize, String, Value)>,
     conns: Vec<Conn>,
     next_conn: usize,
+    /// Connections the client has not closed yet.
+    open: usize,
 }
 
 pub struct FakeYardd {
@@ -126,6 +128,23 @@ impl FakeYardd {
         }
     }
 
+    /// How many connections the client still holds open.
+    pub fn open_connections(&self) -> usize {
+        self.state.lock().unwrap().open
+    }
+
+    /// Stops reading every open connection, as a yardd stuck in a handler: the socket stays open
+    /// and the client's writes pile up until its buffer is full.
+    pub fn stop_reading(&self) {
+        for c in &mut self.state.lock().unwrap().conns {
+            if let Some(reader) = c.tasks.pop() {
+                reader.abort();
+                // An aborted task keeps its read half until it is dropped; leak nothing, close nothing.
+                std::mem::forget(reader);
+            }
+        }
+    }
+
     /// Stops accepting, closes every connection and removes the socket, as a yardd that quit.
     pub fn stop(&self) {
         if let Some(a) = self.accept.lock().unwrap().take() {
@@ -178,6 +197,7 @@ fn serve(state: Arc<Mutex<State>>, stream: UnixStream) {
     let id = {
         let mut s = state.lock().unwrap();
         s.next_conn += 1;
+        s.open += 1;
         s.next_conn - 1
     };
     let reader_state = state.clone();
@@ -188,6 +208,7 @@ fn serve(state: Arc<Mutex<State>>, stream: UnixStream) {
             let Ok(req) = serde_json::from_str::<Request>(&line) else { continue };
             handle(&reader_state, id, &reader_out, req);
         }
+        reader_state.lock().unwrap().open -= 1;
     });
     state.lock().unwrap().conns.push(Conn { id, out, topics: HashSet::new(), tasks: vec![writer, reader] });
 }

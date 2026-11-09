@@ -1195,7 +1195,7 @@ fn resolver(view: &View, dir: &Path, daemon_running: bool, root: &Path, helper_r
         return warn(
             "resolver",
             format!(
-                "the helper serves {}, so .{tld} names on this Mac resolve through that root's dnsmasq, not this one's; installing the helper for this root moves it here",
+                "the helper serves {}, so .{tld} names on this Mac resolve through that root's dnsmasq, not this one's; install the helper for this root only if this root should own the Mac's resolver",
                 theirs.display()
             ),
             format!("sudo yard --root {} helper install", root.display()),

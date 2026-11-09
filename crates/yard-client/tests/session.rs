@@ -103,6 +103,54 @@ async fn reconnect_now_while_connected_keeps_the_connection() {
     assert!(quiet.is_err(), "epoch 2 stays up: {quiet:?}");
 }
 
+/// Waits up to 2 s for the fake to see no connection left open.
+async fn all_closed(fake: &FakeYardd) {
+    for _ in 0..200 {
+        if fake.open_connections() == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{} connections still open", fake.open_connections());
+}
+
+#[tokio::test]
+async fn dropping_the_session_closes_a_quiet_connection() {
+    let fake = FakeYardd::start_new();
+    let (session, mut updates) = Session::start(config(&fake));
+    connected(&mut updates).await;
+    assert_eq!(fake.open_connections(), 2);
+    drop(session);
+    drop(updates);
+    all_closed(&fake).await;
+}
+
+#[tokio::test]
+async fn dropping_an_incompatible_session_ends_its_task() {
+    let fake = FakeYardd::start_new();
+    fake.refuse_hello(YardError::new(ErrorCode::ProtocolMismatch, "yardd speaks protocol 3.0"));
+    let alive = || tokio::runtime::Handle::current().metrics().num_alive_tasks();
+    let (session, mut updates) = Session::start(config(&fake));
+    loop {
+        if let ConnectionState::Incompatible(_) = next_state(&mut updates).await {
+            break;
+        }
+    }
+    // Once the refused connection's tasks have ended, the fake's that remain stay; only the
+    // session's should end.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = alive() - 1;
+    drop(session);
+    drop(updates);
+    for _ in 0..200 {
+        if alive() <= before {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the session's task still waits: {} tasks alive, {before} before", alive());
+}
+
 #[tokio::test]
 async fn pending_calls_fail_on_disconnect() {
     let fake = FakeYardd::start_new();

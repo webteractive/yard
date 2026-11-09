@@ -176,6 +176,20 @@ async fn a_silent_call_times_out() {
 }
 
 #[tokio::test]
+async fn a_write_yardd_never_reads_times_out() {
+    let fake = FakeYardd::start_new();
+    let (conn, _events) = Connection::open(&fake.socket(), NAME, Duration::from_millis(200)).await.unwrap();
+    fake.stop_reading();
+    // Far more than a socket buffer holds, so the write cannot finish.
+    let big = json!({"pad": "x".repeat(8 << 20)});
+    let e = tokio::time::timeout(SECOND * 5, conn.call_value("status", big))
+        .await
+        .expect("the write hung")
+        .unwrap_err();
+    assert!(e.message.starts_with("yardd did not answer status within"), "{}", e.message);
+}
+
+#[tokio::test]
 async fn stale_method_not_found_names_the_restart() {
     let fake = FakeYardd::start_new();
     fake.protocol("2.10");
@@ -216,7 +230,17 @@ async fn long_path_is_refused() {
     let path = Path::new("/tmp").join("y".repeat(110)).join("yardd.sock");
     let e = Connection::open(&path, NAME, SECOND).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidArgument);
-    assert!(e.message.ends_with("is longer than a unix socket path may be (104 bytes)"), "{}", e.message);
+    assert!(e.message.ends_with("is longer than a unix socket path may be (103 bytes)"), "{}", e.message);
+}
+
+#[tokio::test]
+async fn a_path_of_exactly_the_limit_is_refused() {
+    // sun_path holds 104 bytes with its terminating NUL, so 104 bytes of path do not fit.
+    let path =
+        Path::new("/tmp").join("y".repeat(104 - "/tmp/".len() - "/yardd.sock".len())).join("yardd.sock");
+    assert_eq!(path.as_os_str().len(), 104);
+    let e = Connection::open(&path, NAME, SECOND).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument, "{}", e.message);
 }
 
 #[tokio::test]

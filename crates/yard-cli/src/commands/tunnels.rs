@@ -7,6 +7,7 @@ use crate::client::{CliError, Client};
 use crate::output::{for_agents, print_error, print_json_line, table};
 use serde_json::Value;
 use std::io::{BufRead, Write};
+use yard_core::present::wire_name;
 use yard_core::tunnel::domain_for;
 use yard_proto::methods::{
     self, TunnelAddParams, TunnelDomainAddParams, TunnelDomainParams, TunnelRemoveParams,
@@ -228,8 +229,8 @@ pub async fn list(ctx: &Ctx) -> Outcome {
                     vec![
                         t.site.clone(),
                         t.url.clone().unwrap_or_else(|| "-".into()),
-                        name_of(&t.kind),
-                        name_of(&t.state),
+                        wire_name(&t.kind),
+                        wire_name(&t.state),
                         t.tunnel.as_ref().map_or_else(|| "-".into(), |t| t.name.clone()),
                     ]
                 })
@@ -244,13 +245,6 @@ pub async fn list(ctx: &Ctx) -> Outcome {
 }
 
 /// An enum's wire name, as `--json` shows it.
-fn name_of<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| "-".into())
-}
-
 pub async fn domains(ctx: &Ctx) -> Outcome {
     let domains: Vec<TunnelDomain> = ctx.client().await?.call(methods::TUNNELS_DOMAINS, Value::Null).await?;
     ctx.emit(&domains, || {
@@ -261,7 +255,7 @@ pub async fn domains(ctx: &Ctx) -> Outcome {
                 .iter()
                 .map(|d| {
                     let signed_in = if d.logged_in { "yes" } else { "no" };
-                    vec![d.domain.clone(), name_of(&d.provider), signed_in.into()]
+                    vec![d.domain.clone(), wire_name(&d.provider), signed_in.into()]
                 })
                 .collect();
             table(&["DOMAIN", "PROVIDER", "SIGNED IN"], &rows)

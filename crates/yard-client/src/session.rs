@@ -102,6 +102,7 @@ impl Drop for LogStream {
 
 impl Session {
     /// Starts connecting on the current tokio runtime and returns the updates as they happen.
+    /// Dropping the receiver ends the session: its task closes both connections and stops.
     pub fn start(config: SessionConfig) -> (Session, mpsc::UnboundedReceiver<Update>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
@@ -190,6 +191,13 @@ async fn run(inner: Arc<Inner>, tx: mpsc::UnboundedSender<Update>) {
                             None => break events.closed().await,
                         },
                         why = calls.closed() => break why,
+                        // No one holds the updates: close both connections and end.
+                        () = tx.closed() => {
+                            lock(&inner.calls).take();
+                            events.close();
+                            calls.close();
+                            return;
+                        }
                     }
                 };
                 inner.following.store(false, Ordering::SeqCst);
@@ -204,8 +212,10 @@ async fn run(inner: Arc<Inner>, tx: mpsc::UnboundedSender<Update>) {
                 if !send(ConnectionState::Incompatible(e)) {
                     return;
                 }
-                inner.wake.notified().await;
-                continue;
+                tokio::select! {
+                    () = inner.wake.notified() => continue,
+                    () = tx.closed() => return,
+                }
             }
             Err(e) => {
                 if !send(ConnectionState::Disconnected(e)) {
@@ -219,9 +229,7 @@ async fn run(inner: Arc<Inner>, tx: mpsc::UnboundedSender<Update>) {
         tokio::select! {
             () = tokio::time::sleep(wait) => {}
             () = inner.wake.notified() => {}
-        }
-        if tx.is_closed() {
-            return;
+            () = tx.closed() => return,
         }
     }
 }

@@ -196,6 +196,11 @@ async fn a_helper_installed_for_another_root_is_left_alone() {
             .any(|w| w.contains("the helper serves") && w.contains(&elsewhere.path().display().to_string())),
         "{report:?}"
     );
+    // Its hint would move the Mac's resolver here, so the message says when to follow it.
+    assert!(
+        report.warnings.iter().any(|w| w.contains("only if this root should own the Mac's resolver")),
+        "{report:?}"
+    );
     e.unit("nginx", running).await;
     e.sup.shutdown().await;
 }

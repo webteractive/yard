@@ -59,7 +59,7 @@ impl HelperClient {
             (Some(theirs), Some((root, _))) => Err(YardError::new(
                 ErrorCode::HelperRefused,
                 format!(
-                    "the helper serves {}, not {}, so this yardd leaves the resolver and ports 80 and 443 to that root's yardd",
+                    "the helper serves {}, not {}, so this yardd leaves the resolver and ports 80 and 443 to that root's yardd; install the helper for this root only if this root should own the Mac's resolver",
                     theirs.display(),
                     root.display()
                 ),

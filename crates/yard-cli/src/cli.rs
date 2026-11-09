@@ -369,7 +369,8 @@ pub enum PortsAction {
 pub enum PhpAction {
     /// The installed versions, the default, the sites on each and its pool.
     List {
-        /// Also list the supported versions that are not installed.
+        /// Also list the supported versions that are not installed (refused by a yardd older
+        /// than protocol 2.11, which would list the installed ones alone).
         #[arg(long)]
         available: bool,
     },
