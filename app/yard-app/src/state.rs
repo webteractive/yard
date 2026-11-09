@@ -70,6 +70,8 @@ pub struct AppState {
     pub site_detail: HashMap<String, Resource<SiteDetail>>,
     pub doctor: Resource<DoctorReport>,
     pub jobs: JobsStore,
+    /// The last `yard self-update --check` answer (M7 spec §6.3); none until one succeeds.
+    pub update: Option<yard_app_model::update::Check>,
     queue: RefreshQueue,
     flush: Option<Task<()>>,
     waiters: Vec<(JobKey, oneshot::Sender<JobPhase>)>,
@@ -119,6 +121,7 @@ impl AppState {
                 site_detail: HashMap::new(),
                 doctor: Resource::default(),
                 jobs: JobsStore::default(),
+                update: None,
                 queue: RefreshQueue::default(),
                 flush: None,
                 waiters: vec![],

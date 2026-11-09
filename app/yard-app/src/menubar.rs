@@ -185,6 +185,10 @@ pub fn menu_model(env: &AppEnv, recent: &[String], cx: &App) -> Vec<MenuEntry> {
         xdebug.sort_by_key(MenuEntry::describe);
         out.push(MenuEntry::Submenu { title: "Xdebug".into(), entries: xdebug });
     }
+    if let Some(item) = s.update.as_ref().and_then(yard_app_model::update::item) {
+        out.push(MenuEntry::Separator);
+        out.push(MenuEntry::Action { id: "update".into(), title: item.title });
+    }
     out.push(MenuEntry::Separator);
     out.push(MenuEntry::Action { id: "open".into(), title: "Open Yard".into() });
     out.push(MenuEntry::Action { id: "settings".into(), title: "Settings…".into() });
@@ -461,6 +465,7 @@ fn on_click(id: &str, cx: &mut App) {
         ["open"] => crate::window::main::open(&env, env.nav.read(cx).screen.clone(), cx),
         ["settings"] => crate::settings_window::open(&env, cx),
         ["setup"] => crate::onboarding::open(&env, cx),
+        ["update"] => env.update_now(cx),
         ["start-yardd"] => env.start_daemon(cx),
         ["restart-yardd"] => env.restart_daemon(cx),
         ["problem", _] => {
@@ -603,6 +608,24 @@ mod tests {
 
     /// With no yardd and no LaunchAgent for the root, the menu's Set up Yard… is the onboarding
     /// checklist, not the main window (M6 final review; design §8.1).
+    #[gpui::test]
+    async fn an_available_update_shows_in_the_menu(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let before = cx.update(|cx| menu_model(&env, &[], cx));
+        assert!(!before.iter().any(|e| matches!(e, MenuEntry::Action { id, .. } if id == "update")));
+        env.state.update(cx, |s, _| {
+            s.update = Some(yard_app_model::update::Check {
+                installed: "0.1.0".into(),
+                latest: "0.2.0".into(),
+                available: true,
+                kind: "bundle".into(),
+                notes_url: "x".into(),
+            })
+        });
+        let entries = cx.update(|cx| menu_model(&env, &[], cx));
+        assert!(entries.contains(&action("update", "Update to 0.2.0…")), "{entries:?}");
+    }
+
     #[gpui::test]
     async fn set_up_yard_opens_onboarding(cx: &mut TestAppContext) {
         let (_fake, env) = env(cx);

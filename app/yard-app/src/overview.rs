@@ -63,6 +63,18 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         });
         facts = facts.child(line("CA", value).child(button));
     }
+    if let Some(item) = s.update.as_ref().and_then(yard_app_model::update::item) {
+        let env2 = env.clone();
+        let latest = s.update.as_ref().map(|c| c.latest.clone()).unwrap_or_default();
+        let button = Button::new("update:install", item.title)
+            .description(format!("installs Yard {latest} and relaunches Yard.app"))
+            .on_click(move |_, _, cx| env2.update_now(cx));
+        facts = facts.child(
+            line("Update", format!("Yard {latest} is available"))
+                .child(button)
+                .debug_selector(|| "update".into()),
+        );
+    }
     facts = facts
         .child(line("Yard.app", format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("YARD_BUILD_COMMIT"))))
         .child(line("Data root", env.location.root.display().to_string()));
@@ -209,6 +221,23 @@ mod tests {
         cx.executor().advance_clock(std::time::Duration::from_secs(1));
         cx.run_until_parked();
         assert_eq!(fake.count("ca.info"), before + 1);
+    }
+
+    #[gpui::test]
+    async fn an_available_update_shows_on_the_overview(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        env.state.update(cx, |s, _| {
+            s.update = Some(yard_app_model::update::Check {
+                installed: "0.1.0".into(),
+                latest: "0.2.0".into(),
+                available: true,
+                kind: "bundle".into(),
+                notes_url: "x".into(),
+            })
+        });
+        let (_v, vcx) = cx.add_window_view(|_, _| Host(env));
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("update").is_some(), "the update line is drawn");
     }
 
     #[gpui::test]

@@ -4,6 +4,7 @@
 use crate::env::AppEnv;
 use crate::platform::activation;
 use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::checkbox::Checkbox;
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Theme;
 use gpui::{
@@ -98,6 +99,14 @@ impl Render for SettingsView {
             ))
             .child(row("Editor app", self.editor.clone()))
             .child(row("Terminal app", self.terminal.clone()))
+            .child({
+                let settings = self.env.settings.clone();
+                Checkbox::new("settings:auto-update", "Install updates automatically", settings.auto_update())
+                    .on_toggle(move |on, window, _| {
+                        settings.set_auto_update(on);
+                        window.refresh();
+                    })
+            })
             .child(div().text_xs().text_color(t.muted).child(crate::widgets::text(
                 "data-root",
                 format!("Data root: {}", self.env.location.root.display()),
@@ -119,6 +128,13 @@ impl Render for SettingsView {
                         )),
                     ),
             )
+            .child({
+                let env = self.env.clone();
+                Button::new("settings:uninstall", "Uninstall Yard…")
+                    .style(ButtonStyle::Destructive)
+                    .description("opens Terminal to run yard uninstall, which asks before removing anything")
+                    .on_click(move |_, _, cx| env.uninstall(cx))
+            })
     }
 }
 

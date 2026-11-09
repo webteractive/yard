@@ -20,6 +20,17 @@ pub fn helper_install_args(yard: &Path, root: &Path, root_is_default: bool) -> V
     args
 }
 
+/// `<yard> [--root <root>] uninstall`, handed to Terminal: it asks for the typed confirmation
+/// and for sudo there (M7 spec §10).
+pub fn uninstall_args(yard: &Path, root: &Path, root_is_default: bool) -> Vec<String> {
+    let mut args = vec![yard.display().to_string()];
+    if !root_is_default {
+        args.extend(["--root".to_string(), root.display().to_string()]);
+    }
+    args.push("uninstall".to_string());
+    args
+}
+
 /// Writes `yard-<id>.command` in `dir`, mode `0700`, running `args`.
 pub fn write_command(dir: &Path, args: &[String]) -> Result<PathBuf, YardError> {
     let nanos =
@@ -79,6 +90,15 @@ mod tests {
         assert_eq!(launcher.terminal_app(), None);
         *chosen.borrow_mut() = Some(PathBuf::from("/Applications/Ghostty.app"));
         assert_eq!(launcher.terminal_app(), Some(PathBuf::from("/Applications/Ghostty.app")));
+    }
+
+    #[test]
+    fn uninstall_args_name_the_root_only_when_it_is_not_the_default() {
+        assert_eq!(uninstall_args(Path::new("/A/yard"), Path::new("/r"), true), ["/A/yard", "uninstall"]);
+        assert_eq!(
+            uninstall_args(Path::new("/A/yard"), Path::new("/r"), false),
+            ["/A/yard", "--root", "/r", "uninstall"]
+        );
     }
 
     #[test]

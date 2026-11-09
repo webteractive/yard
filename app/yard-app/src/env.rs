@@ -6,7 +6,7 @@ use crate::daemon::{Daemon, call};
 use crate::platform::cli::CliRunner;
 use crate::platform::open::Opener;
 use crate::platform::settings::Settings;
-use crate::platform::terminal::{TerminalLauncher, helper_install_args};
+use crate::platform::terminal::{TerminalLauncher, helper_install_args, uninstall_args};
 use crate::runner::{ActionId, ActionRunner};
 use crate::state::AppState;
 use gpui::{App, AppContext, Entity, Global};
@@ -220,8 +220,96 @@ impl AppEnv {
         .detach();
     }
 
+    /// Asks `yard self-update --check` and keeps the answer; with Settings' switch on, an
+    /// install.sh bundle then updates itself (M7 spec §6.3). A failed check shows nothing: the
+    /// next one comes in a day.
+    pub fn check_for_update(&self, cx: &mut App) {
+        let (cli, env) = (self.cli.clone(), self.clone());
+        cx.spawn(async move |cx| {
+            let Ok(check) = cli.run::<yard_app_model::update::Check>(&["self-update", "--check"]).await
+            else {
+                return;
+            };
+            let auto = cx.update(|cx| {
+                env.state.update(cx, |s, cx| {
+                    s.update = Some(check.clone());
+                    cx.notify();
+                });
+                env.settings.auto_update()
+            });
+            if yard_app_model::update::auto_install(&check, auto) {
+                cx.update(|cx| env.install_update(cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Checks now and then every [`CHECK_EVERY`](yard_app_model::update::CHECK_EVERY).
+    pub fn check_for_updates_daily(&self, cx: &mut App) {
+        let env = self.clone();
+        cx.spawn(async move |cx| {
+            loop {
+                cx.update(|cx| env.check_for_update(cx));
+                cx.background_executor().timer(yard_app_model::update::CHECK_EVERY).await;
+            }
+        })
+        .detach();
+    }
+
+    /// What the menu item and the Overview button do.
+    pub fn update_now(&self, cx: &mut App) {
+        let Some(item) = self.state.read(cx).update.as_ref().and_then(yard_app_model::update::item) else {
+            return;
+        };
+        match item.action {
+            yard_app_model::update::UpdateAction::Install => self.install_update(cx),
+            yard_app_model::update::UpdateAction::CopyBrewCommand => {
+                Opener::copy(cx, yard_app_model::update::BREW_UPGRADE)
+            }
+        }
+    }
+
+    /// `yard self-update --yes` as an action (its error shows beside `update:install`), then the
+    /// app relaunches from the same path, which now holds the new bundle.
+    pub fn install_update(&self, cx: &mut App) {
+        let cli = self.cli.clone();
+        let task = self.runner.update(cx, |r, cx| {
+            r.perform(
+                ActionId("update:install".into()),
+                async move { cli.run::<Value>(&["self-update", "--yes"]).await.map(|_| ()) },
+                cx,
+            )
+        });
+        cx.spawn(async move |cx| {
+            if task.await.is_some() {
+                cx.update(relaunch);
+            }
+        })
+        .detach();
+    }
+
+    /// Hands `yard uninstall` to Terminal, which asks for the typed confirmation and sudo, then
+    /// quits: the app is one of the things it removes.
+    pub fn uninstall(&self, cx: &mut App) {
+        let Some(yard) = self.cli.yard() else {
+            return self.record(
+                "settings:uninstall",
+                YardError::new(yard_proto::ErrorCode::InvalidArgument, "yard was not found")
+                    .with_hint("set its path in Settings"),
+                cx,
+            );
+        };
+        let args = uninstall_args(&yard, &self.location.root, self.location.root_is_default);
+        match self.terminal.launch(&args) {
+            Ok(()) => cx.quit(),
+            Err(e) => self.record("settings:uninstall", e, cx),
+        }
+    }
+
     pub fn start_daemon(&self, cx: &mut App) {
-        self.run_cli("yardd:start", vec!["start".into()], true, cx);
+        // A click on Start yardd is the go-ahead to install a missing nginx or dnsmasq, which
+        // `yard start` would otherwise ask for on a terminal the app does not have (M7 spec §5.4).
+        self.run_cli("yardd:start", vec!["start".into(), "--yes".into()], true, cx);
     }
 
     pub fn stop_daemon(&self, cx: &mut App) {
@@ -236,7 +324,7 @@ impl AppEnv {
                 ActionId("yardd:restart".into()),
                 async move {
                     cli.run::<Value>(&["stop"]).await?;
-                    let started = cli.run::<Value>(&["start"]).await.map(|_| ());
+                    let started = cli.run::<Value>(&["start", "--yes"]).await.map(|_| ());
                     daemon.reconnect_now();
                     started
                 },
@@ -397,4 +485,17 @@ impl AppEnv {
             cx.notify();
         });
     }
+}
+
+/// Opens this app again a second after it quits, from its own path, which an update has just
+/// replaced. A run outside a bundle (`cargo run`) only quits.
+fn relaunch(cx: &mut App) {
+    let app = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.parent()?.to_path_buf()))
+        .filter(|app| app.extension().is_some_and(|e| e == "app"));
+    if let Some(app) = app {
+        let _ = std::process::Command::new("/bin/sh").args(["-c", "sleep 1; open \"$0\""]).arg(&app).spawn();
+    }
+    cx.quit();
 }

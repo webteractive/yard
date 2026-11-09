@@ -9,6 +9,7 @@ const EDITOR_APP: &str = "EditorApp";
 const TERMINAL_APP: &str = "TerminalApp";
 const RECENT_SITES: &str = "RecentSites";
 const DID_ONBOARD: &str = "DidOnboard";
+const AUTO_UPDATE: &str = "AutoUpdate";
 
 /// The app's own settings, in its `NSUserDefaults` domain (`dev.more.yard.app`); nothing of
 /// Yard's data root.
@@ -81,6 +82,15 @@ impl Settings {
 
     pub fn did_onboard(&self) -> bool {
         self.defaults.boolForKey(&NSString::from_str(DID_ONBOARD))
+    }
+
+    /// Settings' "Install updates automatically"; off unless turned on (M7 spec §6.3).
+    pub fn auto_update(&self) -> bool {
+        self.defaults.boolForKey(&NSString::from_str(AUTO_UPDATE))
+    }
+
+    pub fn set_auto_update(&self, on: bool) {
+        self.defaults.setBool_forKey(on, &NSString::from_str(AUTO_UPDATE));
     }
 
     pub fn set_did_onboard(&self) {

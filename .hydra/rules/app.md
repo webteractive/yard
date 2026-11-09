@@ -42,6 +42,12 @@ triggers:
   `visible_keys` returns for the screen, the menu's (`MENU`, plus each installed PHP's extensions),
   the events that invalidate them, and the actions that change them. A refresh from `render` loops
   as soon as the fetch fails.
+- **Updating and uninstalling go through the CLI** (M7 spec §6.3, §10). The app runs `yard
+  self-update --check` at launch and daily, shows the item `yard_app_model::update::item` gives,
+  and installs with `yard self-update --yes` (on its own only with Settings' switch on and an
+  install.sh bundle), then relaunches; a brew install gets `brew upgrade --cask yard` copied,
+  never run. **Uninstall Yard…** hands `yard uninstall` to Terminal and quits. Start yardd runs
+  `yard start --yes`: the click is the go-ahead to install nginx and dnsmasq.
 - **One window per kind.** The main window, Settings and onboarding keep their handle in a global
   and raise the open window rather than open another (`window::is_open`, `window::raise`).
 - **Check a UI change on the real app.** After the tests, `app/scripts/checklist.sh` and

@@ -13,3 +13,4 @@ pub mod settle;
 pub mod setup;
 pub mod shell_words;
 pub mod terminal;
+pub mod update;

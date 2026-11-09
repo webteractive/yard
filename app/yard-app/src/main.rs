@@ -61,6 +61,7 @@ fn main() {
             eprintln!("Yard.app: no menu bar item: {e}");
         }
         window::main::ask_without_a_window(&env, cx);
+        env.check_for_updates_daily(cx);
         onboarding::open_if_needed(&env, cx);
         // Started for a scratch root: open the window, as a developer running it wants.
         if root.is_some() {
