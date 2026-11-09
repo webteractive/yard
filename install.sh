@@ -11,6 +11,10 @@ set -eu
 
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
+# file:// is allowed only for a release served from a local directory (YARD_RELEASE_URL,
+# which install.sh's tests set); the published ones come over https only.
+protos='=https'
+[ -n "${YARD_RELEASE_URL:-}" ] && protos='=https,file'
 if [ -n "${YARD_VERSION:-}" ]; then
   base="https://github.com/webteractive/yard/releases/download/v$YARD_VERSION"
 else
@@ -47,12 +51,18 @@ link="$HOME/.local/bin/yard"
 # 4. The release: its checksum, its signature, and Gatekeeper's word on it.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-fetch() { curl -fsSL --proto '=https,file' "$1" -o "$2" || die "cannot download $1"; }
+fetch() { curl -fsSL --proto "$protos" "$1" -o "$2" || die "cannot download $1"; }
 fetch "$base/latest.json" "$tmp/latest.json"
 field() { plutil -extract "$1" raw -o - "$tmp/latest.json" 2>/dev/null || die "the release feed has no $1"; }
 version="$(field version)"
 zip_url="$(field zip)"
 sha="$(field sha256)"
+if [ -z "${YARD_RELEASE_URL:-}" ]; then
+  case "$zip_url" in
+    https://github.com/webteractive/yard/releases/download/*) ;;
+    *) die "the release feed points somewhere else ($zip_url); not installing it" ;;
+  esac
+fi
 echo "Installing Yard $version..."
 fetch "$zip_url" "$tmp/Yard.zip"
 got="$(shasum -a 256 "$tmp/Yard.zip" | awk '{print $1}')"
@@ -60,7 +70,11 @@ got="$(shasum -a 256 "$tmp/Yard.zip" | awk '{print $1}')"
 ditto -x -k "$tmp/Yard.zip" "$tmp/unpacked"
 app="$tmp/unpacked/Yard.app"
 [ -x "$app/Contents/Helpers/yard" ] || die "the download holds no Yard.app"
-codesign --verify --deep --strict "$app" 2>/dev/null || die "Yard $version is not signed properly; not installing it"
+# Developer ID signed (anchor apple generic) as Yard.app; the team is not named here, since this
+# script comes from the same repository as the release (yard self-update pins the team, read
+# from the installed app).
+codesign --verify --deep --strict -R='anchor apple generic and identifier "dev.more.yard.app"' "$app" 2>/dev/null \
+  || die "Yard $version is not signed properly; not installing it"
 spctl --assess --type execute "$app" 2>/dev/null || die "Gatekeeper does not accept Yard $version; not installing it"
 
 # 5. Into place: staged beside the target, so the swap is two renames on one volume. A yardd
