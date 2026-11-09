@@ -17,6 +17,7 @@ mod sites;
 mod sources;
 mod trust;
 mod tunnels;
+mod uninstall;
 mod units;
 mod update;
 mod version;
@@ -92,6 +93,7 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Stop => lifecycle::stop(&ctx).await,
         Command::Status => units::status(&ctx).await,
         Command::Version => version::version(&ctx).await,
+        Command::Uninstall { keep_data, yes } => uninstall::uninstall(&ctx, keep_data, yes).await,
         Command::SelfUpdate { check, yes } => update::self_update(&ctx, check, yes).await,
         Command::Doctor => doctor::doctor(&ctx).await,
         Command::Sites => sites::list(&ctx).await,

@@ -47,6 +47,16 @@ pub enum Command {
     Status,
     /// Show the CLI, daemon, helper and protocol versions.
     Version,
+    /// Take Yard off this Mac: yardd, the CA's trust, the helper, ~/.yard (unless --keep-data),
+    /// the app's settings and Yard.app. Homebrew and what it installed stay.
+    Uninstall {
+        /// Keep ~/.yard (sites, service data, the CA) for a reinstall.
+        #[arg(long)]
+        keep_data: bool,
+        /// Uninstall without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Replace Yard.app, the CLI and yardd with the latest release (Homebrew installs: brew upgrade).
     SelfUpdate {
         /// Only say whether a newer release exists.

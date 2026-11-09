@@ -71,6 +71,23 @@ fn code(status: ExitStatus) -> String {
     status.code().map_or_else(|| status.to_string(), |c| c.to_string())
 }
 
+/// Removes the CA from the login keychain without yardd (for `yard uninstall`, which may run
+/// with yardd stopped): the fingerprint comes from the certificate file, and the trust check
+/// from `security` itself.
+pub async fn untrust_offline(ctx: &Ctx) -> Result<(), YardError> {
+    let ca = ctx.paths.ca_cert();
+    let sha = yard_daemon::tls::ca_sha256(&ctx.paths)?;
+    let mut delete = Command::new(&ctx.security);
+    delete.args(["delete-certificate", "-Z", &sha, "-t"]).arg(login_keychain()?);
+    let deleted = run(delete, &ctx.security);
+    if yard_daemon::tls::trusted(&ctx.security, &ca).await == Some(true) {
+        let why = deleted.err().unwrap_or_else(|| "its trust is set outside your login keychain".into());
+        return Err(YardError::new(ErrorCode::CaStillTrusted, format!("the CA is still trusted: {why}"))
+            .with_hint(format!("sudo security remove-trusted-cert -d {}", ca.display())));
+    }
+    Ok(())
+}
+
 fn login_keychain() -> Result<PathBuf, YardError> {
     let home = std::env::var_os("HOME").ok_or_else(|| YardError::internal("HOME is not set"))?;
     Ok(PathBuf::from(home).join("Library/Keychains/login.keychain-db"))

@@ -2624,3 +2624,55 @@ fn start_without_nginx_asks_for_yes_when_not_interactive() {
     assert!(err.contains("hint: yard start --yes"), "{err}");
     assert!(!home.path().join("Library/LaunchAgents").exists(), "the agent was written");
 }
+
+/// A scratch root with a few files in its data, for `yard uninstall`.
+fn uninstall_root() -> (TempDir, TempDir) {
+    let root = short_root();
+    std::fs::create_dir_all(root.path().join("data/redis")).unwrap();
+    std::fs::write(root.path().join("data/redis/dump.rdb"), "x").unwrap();
+    std::fs::write(root.path().join("sites.toml"), "").unwrap();
+    (root, TempDir::new().unwrap())
+}
+
+#[test]
+fn uninstall_refuses_without_yes_when_not_interactive() {
+    let (root, home) = uninstall_root();
+    let out = yard_at(root.path()).env("HOME", home.path()).arg("uninstall").output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains("hint: yard uninstall --yes"), "{}", stderr(&out));
+    assert!(root.path().join("data/redis/dump.rdb").exists());
+}
+
+#[test]
+fn uninstall_yes_on_a_scratch_root_removes_it() {
+    let (root, home) = uninstall_root();
+    let out = yard_at(root.path())
+        .env("HOME", home.path())
+        .env("YARD_SECURITY", "/usr/bin/false")
+        .args(["uninstall", "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(!root.path().exists(), "the scratch root is still there");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let steps: Vec<(String, String)> = v["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["step"].as_str().unwrap().to_string(), s["outcome"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(steps, [("remove_data".to_string(), "done".to_string())]);
+}
+
+#[test]
+fn uninstall_keep_data_keeps_the_root() {
+    let (root, home) = uninstall_root();
+    let out = yard_at(root.path())
+        .env("HOME", home.path())
+        .env("YARD_SECURITY", "/usr/bin/false")
+        .args(["uninstall", "--yes", "--keep-data"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(root.path().join("data/redis/dump.rdb").exists());
+}

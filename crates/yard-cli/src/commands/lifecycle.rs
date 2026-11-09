@@ -61,6 +61,15 @@ pub async fn start(ctx: &Ctx, yes: bool) -> Outcome {
 }
 
 pub async fn stop(ctx: &Ctx) -> Outcome {
+    let was_running = stop_agent(ctx).await?;
+    ctx.emit(&serde_json::json!({ "stopped": was_running }), || {
+        if was_running { "yardd stopped.\n".into() } else { "yardd was not running.\n".into() }
+    });
+    Ok(0)
+}
+
+/// Unloads yardd's agent; whether it was loaded. Refused for another root's agent, as `stop` is.
+pub async fn stop_agent(ctx: &Ctx) -> Result<bool, YardError> {
     leaves_other_roots_agent(ctx)?;
     let service = format!("gui/{}/{DAEMON_LABEL}", uid());
     let out = Command::new("launchctl")
@@ -72,17 +81,18 @@ pub async fn stop(ctx: &Ctx) -> Outcome {
     // 3 (ESRCH) and 113 mean the agent was not loaded.
     if !was_running && !matches!(out.status.code(), Some(3 | 113)) {
         return Err(YardError::internal(format!("launchctl bootout {service} failed: {}", stderr.trim()))
-            .with_hint(format!("launchctl print {service}"))
-            .into());
+            .with_hint(format!("launchctl print {service}")));
     }
     if was_running {
         // Otherwise a `yard start` straight after finds the agent still loaded and only kicks it.
         unloaded(&service).await;
     }
-    ctx.emit(&serde_json::json!({ "stopped": was_running }), || {
-        if was_running { "yardd stopped.\n".into() } else { "yardd was not running.\n".into() }
-    });
-    Ok(0)
+    Ok(was_running)
+}
+
+/// Whether this root's yardd agent is installed (another root's agent is not ours to remove).
+pub fn agent_installed_here(ctx: &Ctx) -> bool {
+    agent_plist().is_ok_and(|f| f.exists()) && leaves_other_roots_agent(ctx).is_ok()
 }
 
 /// Refuses when the installed agent serves another data root. It has one label, so starting it

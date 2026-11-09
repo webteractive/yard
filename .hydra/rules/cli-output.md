@@ -31,7 +31,7 @@ triggers:
   `crates/yard-cli/build.rs`, never typed in.
 - Profiles are `yard ports profile <standard|privileged>`; M1's `trial` and `default`
   stay accepted as aliases (`ProfileArg`), and output always uses the new names.
-- Offline commands (no daemon needed): `start`, `stop`, `version`, `self-update`, `doctor`,
+- Offline commands (no daemon needed): `start`, `stop`, `version`, `self-update`, `uninstall`, `doctor`,
   `ports check`, `install-shims`, `helper install|uninstall`. Everything else talks to `yardd`.
 - A command that would install something asks first (`yard init`, and `yard link` for a
   project whose `.yard` needs a PHP, extension or service, or whose pinned Node is missing): it lists each need as
