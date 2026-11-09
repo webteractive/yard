@@ -9,6 +9,7 @@ members = ["yard-app-model", "yard-app"]
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "MIT"
 
 [workspace.lints.clippy]
 # GPUI's tree turns on serde_json's preserve_order, so Value's objects are IndexMaps and

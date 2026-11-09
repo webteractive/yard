@@ -122,8 +122,8 @@ Rust daemon.
   such as `/tmp` aside).
 - The helper is installed by `sudo yard helper install` (binary to
   `/Library/PrivilegedHelperTools/`, plist to `/Library/LaunchDaemons/`), which is
-  the only path until M7: Yard.app in M6 hands that command to Terminal, and registers the
-  same helper through `SMAppService` from M7, which needs a signed app (M6 design §18 Q1). Upgrading from M1, whose helper ran
+  the only path: Yard.app hands that command to Terminal. M7 dropped `SMAppService`, which
+  would register the same label a second way (M7 spec §7). Upgrading from M1, whose helper ran
   nginx as root, the install first asks the old helper to stop that nginx and
   then removes the two files it left owned by root (`logs/nginx-error.log`,
   `run/nginx.pid`); it removes rather than chowns them, so a hard link planted
@@ -897,10 +897,10 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 - **Client:** the app speaks JSON-RPC over the socket with `yard-proto`'s own types, through a
   client shared with the CLI; its state updates from event subscriptions — no polling.
 - **Onboarding:** check Homebrew → locate `yard` and start `yardd` → install the helper
-  (M6: `sudo yard helper install` handed to Terminal; M7: `SMAppService`) → offer the
+  (`sudo yard helper install` handed to Terminal) → offer the
   `privileged` profile (80/443) when nothing else holds those ports.
-- From M7 the app bundle carries `yard`, `yardd`, `yard-helper` and the shim binary in
-  `Contents/Helpers/`; M6 uses the installed `yard` (M6 design §18 Q6).
+- From M7 the app bundle carries `yard`, `yardd`, `yard-helper` and `yard-shim` in
+  `Contents/Helpers/`, `yard` on PATH links there, and the app runs that `yard` first (M7 spec §4).
 
 ## 10. Testing
 
@@ -945,12 +945,15 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
 
 ## 11. Distribution
 
-- Developer ID signed, notarized `.dmg` of Yard.app (arm64), from `app/scripts/bundle.sh`, which
-  M6 left sealing ad hoc for the local Mac. Helper registered with `SMAppService`.
-- Team updates via appdater; public updates via Sparkle if/when public.
-- Homebrew tap formula for CLI-only installs (`yard`, `yardd`, helper, shims).
-- Details follow the existing macOS release-signing and appdater conventions at
-  the time of M7.
+Designed in `docs/superpowers/specs/2026-11-09-yard-m7-distribution-design.md` (M7):
+
+- One Yard.app (arm64) carries the CLI, yardd, the helper and the shim; the CLI is the required
+  part and the app its companion. Developer ID signed, notarized, stapled, by
+  `scripts/release.sh` on the maintainer's Mac, published to GitHub Releases (zip, DMG,
+  `SHA256SUMS`, `latest.json`). The repository is public, MIT.
+- Installed by a cask in `webteractive/homebrew-tap` or by `install.sh`; updated by `brew
+  upgrade --cask yard`, `yard self-update` or the app (no Sparkle or appdater); removed by
+  `yard uninstall`. The helper stays `sudo yard helper install`; no `SMAppService`.
 
 ## 12. Milestones
 
@@ -1016,7 +1019,8 @@ Each milestone is usable on its own and gets its own implementation plan.
 6. **M6 Yard.app:** client, menu bar, main window, onboarding. Built 2026-11-06 (`app/`); done
    2026-11-07 after its final review and checklist (M6 plan Task 17: `app/scripts/checklist.sh`,
    `checklist-installs.sh`, `checklist-real.sh` and VoiceOver; R3 dropped by the maintainer).
-7. **M7 Distribution:** signing, notarization, appdater, brew tap.
+7. **M7 Distribution:** signing, notarization, the cask and `install.sh`, `yard self-update` and
+   the app's updates, `yard uninstall`, going public (M7 spec).
 
 The maintainer reordered M4–M7 on 2026-10-21: Node and services first, then tunnels, then the
 app, then distribution (they were app, Node and services, distribution).

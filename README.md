@@ -10,54 +10,31 @@ the daemon over a unix socket.
 
 The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/superpowers/specs/2026-10-19-yard-design.md).
 
-## Status
+## What it does
 
-Milestone 1 (core serving, CLI only) is done and verified end to end beside a running
-Herd: linked PHP sites, proxies, the port registry, `yard doctor` and the commands
-below. M1.1 moved nginx from root to the user. M2 is done too: sites are explicit
-(`yard link`, no parking), PHP 7.0–8.5 install from brew and run side by side, a site
-can be isolated to its own version, extensions come from brew, pecl or a `.so`, and
-the `php`/`composer`/`pecl` shims follow the site's version and never reach Herd's
-PHP. M3 adds HTTPS: `yard secure` serves a site with a certificate from a local CA,
-and `yard trust` puts that CA in your login keychain. M4a adds the `.yard` project file:
-a project commits the PHP, docroot, HTTPS and extensions it needs, `yard init` writes it,
-and a site whose file asks for something not installed serves a setup page naming the
-fix. M4a.1 keeps that file out of the project when you want: `yard init` writes it to
-Yard's data root (`sites/<name>/.yard`), `yard init --local` into the project, and a
-committed `.yard` always wins. M4b adds services: MySQL, PostgreSQL, Redis and MinIO instances Yard runs from
-brew's kegs (`yard service add`), a `[services]` table in `.yard`, `yard env` for the
-`.env` lines, `yard info` for what one site runs on, and `yard source` for the brew
-taps you trust. M4c adds Node: `node`, `npm` and `npx` shims that run the version a
-project pins (`.yard`'s `node`, `yard node use`, `.nvmrc` or `.node-version`), installed with
-brew's fnm into Yard's own `~/.yard/node` and never nvm's or Herd's. M4e lets service
-instances sleep when idle and wake on use (after 15 minutes unused, unless you turn it off). M4d points Yard at
-[emailulator](https://github.com/webteractive/emailulator), the mail catcher, which keeps
-running as its own LaunchAgent: `mail.<tld>` shows its web UI, `yard env` prints its `MAIL_*`
-lines, and a `.yard` can say `emailulator = true`. M5 shares a site at a public HTTPS URL
-through cloudflared: `yard tunnel` gives a random `trycloudflare.com` URL with no account, or
-with `--host` a stable name on a Cloudflare domain you set up with `yard tunnels domain add`
-(a quick tunnel is verified end to end; a named one awaits a check on a real domain). M6 adds
-Yard.app, a menu bar app and window written in Rust with GPUI, built from `app/` with
-`app/scripts/bundle.sh` (signed for this Mac only until M7).
+- **PHP 7.0–8.5 side by side**, from Homebrew's `shivammathur/php` tap; each site runs the
+  version it asks for, and the `php`, `composer` and `pecl` shims follow it (never Herd's PHP).
+- **Explicit sites**: `yard link` serves a directory as `<name>.yard`; nothing is written into
+  the project unless you ask (`yard init --local`).
+- **A `.yard` project file** a project can commit: its PHP, docroot, HTTPS, extensions,
+  services and Node. A site whose file asks for something not installed serves a page that
+  names the fix.
+- **HTTPS** from a local CA (`yard secure`, `yard trust`).
+- **Extensions** from brew, pecl or a `.so`.
+- **Services**: MySQL, PostgreSQL, Redis and MinIO instances on 127.0.0.1, which sleep when
+  unused and wake on use; `yard env` prints their `.env` lines.
+- **Node** per project (`.yard`, `.nvmrc`, `.node-version`), installed with brew's fnm into
+  Yard's own directory.
+- **Mail** through [emailulator](https://github.com/webteractive/emailulator) at `mail.yard`.
+- **Tunnels**: `yard tunnel` shares a site at a public HTTPS URL through cloudflared.
+- **Yard.app**, a menu bar app and window (Rust and GPUI) over the same daemon; everything it
+  does, the CLI does too.
+- **Runs beside Laravel Herd**: Yard never changes Herd's files, ports or resolver.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
 `http://<site>.yard:8080`. Herd keeps its `.test` domain,
 ports 80/443 and `/etc/resolver/test` untouched. `yard ports profile privileged` moves
 nginx to 80/443 through the helper, once nothing else holds them.
-
-## Prerequisites
-
-- An Apple Silicon Mac with Homebrew at `/opt/homebrew`.
-- Rust 1.92 from rustup (`rust-toolchain.toml` pins it). Homebrew's `rust` formula ignores
-  the pin, so use rustup instead of it.
-- nginx, dnsmasq and PHP from Homebrew; Yard runs them itself. `yard start` installs nginx
-  and dnsmasq when they are missing, after asking (`--yes` does not ask), and `yard link`
-  installs the PHP a project needs. `yard tunnel` also needs `brew install cloudflared`.
-
-Yard only uses the installed binaries; do not start them with `brew services`.
-
-A `dnsmasq` keg with no files in it needs `brew reinstall dnsmasq` instead. `yard doctor`
-says which of these is missing.
 
 ## Install
 
@@ -66,9 +43,19 @@ the root helper and the shims) and put `yard` on your PATH. Yard needs an Apple 
 macOS 14 or later, and Homebrew.
 
 ```sh
+brew tap webteractive/tap && brew trust --tap webteractive/tap
 brew install --cask webteractive/tap/yard
 # or
 curl -fsSL https://raw.githubusercontent.com/webteractive/yard/main/install.sh | sh
+```
+
+Homebrew loads a cask from a tap other than its own only once you trust the tap, which is
+what `brew trust` does; Yard never trusts anything on your behalf. The same goes for the taps
+PHP comes from, once, before your first `yard link`:
+
+```sh
+brew tap shivammathur/php && brew tap shivammathur/extensions
+brew trust --tap shivammathur/php shivammathur/extensions
 ```
 
 Then:
@@ -83,6 +70,8 @@ Update with `brew upgrade --cask yard` (brew) or `yard self-update` (curl), or l
 it (Settings → Install updates automatically). Remove everything with `yard uninstall`.
 
 ### From source
+
+See [Building from source](#building-from-source) for what it needs.
 
 ```sh
 cargo build --release
@@ -122,6 +111,22 @@ visitor's address, and `yard untunnel` leaves nothing behind. It looks the new n
 `yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
 `yardd` from beside the `yard` binary. Data lives in
 `~/.yard` (or `YARD_ROOT`, or `--root <path>`).
+
+## Building from source
+
+Prerequisites:
+
+- An Apple Silicon Mac with Homebrew at `/opt/homebrew`.
+- Rust 1.92 from rustup (`rust-toolchain.toml` pins it). Homebrew's `rust` formula ignores
+  the pin, so use rustup instead of it.
+- nginx, dnsmasq and PHP from Homebrew; Yard runs them itself. `yard start` installs nginx
+  and dnsmasq when they are missing, after asking (`--yes` does not ask), and `yard link`
+  installs the PHP a project needs. `yard tunnel` also needs `brew install cloudflared`.
+
+Yard only uses the installed binaries; do not start them with `brew services`.
+
+A `dnsmasq` keg with no files in it needs `brew reinstall dnsmasq` instead. `yard doctor`
+says which of these is missing.
 
 ## HTTPS
 
@@ -234,3 +239,7 @@ error, 3 `yardd` is not running.
 See [`AGENTS.md`](AGENTS.md) for the build, test and lint commands and the conventions. Yard.app is
 a second workspace in `app/` on its own toolchain (Rust 1.98.1, from `app/rust-toolchain.toml`):
 `cd app && cargo test --workspace --locked`, and `scripts/bundle.sh` builds `app/target/Yard.app`.
+
+## License
+
+MIT; see [`LICENSE`](LICENSE).

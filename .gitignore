@@ -1,3 +1,6 @@
 /target
 /app/target/
 /dist/
+/.release-scrub
+/.release-scrub-words
+/AGENTS.local.md

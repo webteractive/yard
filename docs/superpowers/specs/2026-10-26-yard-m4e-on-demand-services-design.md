@@ -17,7 +17,7 @@ records the maintainer's answers to the questions the draft left open.
 
 ## 1. Intent
 
-the maintainer's Mac has 8 GB of RAM and swaps hard (7.7 GB of 9.2 GB swap in use on 2026-10-26).
+The maintainer's Mac has 8 GB of RAM and swaps hard (7.7 GB of 9.2 GB swap in use on 2026-10-26).
 Herd keeps a PHP-FPM master per version resident all day, and DBngin's mysqld alone sits at
 about 800 MB. Yard replaces both, but as built after M4b it would cost the same: every
 service instance starts when yardd starts, at login, and runs until the user stops it.
@@ -542,7 +542,7 @@ An instance is idle when **all three** hold for the whole of `sleep_after`:
 - **Sleeping PHP-FPM masters.** Saves a few MB per version against a 502 risk (§3). Later, if
   ever.
 
-## 13. the maintainer's answers (2026-10-26)
+## 13. The maintainer's answers (2026-10-26)
 
 Each was the yard session's recommendation, and the maintainer took them all ("Proceed").
 

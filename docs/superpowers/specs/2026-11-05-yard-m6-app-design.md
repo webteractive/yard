@@ -945,6 +945,11 @@ seen from their next line on) and structured hint actions in `YardError` (§10.2
 
 ## 14. What M7 must be able to do, and how M6 keeps it open
 
+M7 is designed in `docs/superpowers/specs/2026-11-09-yard-m7-distribution-design.md`, which
+decided against two of the options below: there is no `SMAppService` (the helper stays `sudo yard
+helper install`, M7 spec §7) and no Sparkle or appdater (the app runs `yard self-update`, M7 spec
+§6). The bundle layout of §14.3 is what M7 ships.
+
 ### 14.1 Identity
 
 - **Bundle id** `dev.more.yard.app` **(builder's call)**, beside the launchd labels
