@@ -35,7 +35,12 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Install yardd's LaunchAgent and start it (refused while the agent serves another data root).
-    Start,
+    /// Installs nginx and dnsmasq from Homebrew first when they are missing, after asking.
+    Start {
+        /// Install a missing nginx or dnsmasq without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Stop yardd and unload its LaunchAgent; sites stop being served (refused for another root's agent).
     Stop,
     /// Show the profile, TLD, units and site count.

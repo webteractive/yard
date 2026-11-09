@@ -2599,3 +2599,28 @@ fn self_update_check_reads_the_feed() {
     assert_eq!(v["available"], true);
     assert_eq!(v["kind"], "dev");
 }
+
+#[test]
+fn start_without_nginx_asks_for_yes_when_not_interactive() {
+    let root = short_root();
+    let home = TempDir::new().unwrap();
+    let brew = TempDir::new().unwrap();
+    // A fake launchctl first on PATH, so a regression here can never load a real agent.
+    use std::os::unix::fs::PermissionsExt;
+    let fake = brew.path().join("launchctl");
+    std::fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", brew.path().display());
+    let out = yard_at(root.path())
+        .env("HOME", home.path())
+        .env("PATH", path)
+        .env("YARD_BREW_PREFIX", brew.path())
+        .arg("start")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("nginx and dnsmasq"), "{err}");
+    assert!(err.contains("hint: yard start --yes"), "{err}");
+    assert!(!home.path().join("Library/LaunchAgents").exists(), "the agent was written");
+}

@@ -1,9 +1,10 @@
 //! `yard start` and `yard stop`: yardd's LaunchAgent in the user's launchd domain.
 
-use super::{Ctx, Outcome};
+use super::{Ctx, Outcome, confirm, interactive};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+use yard_core::brew::Brew;
 use yard_core::paths::DAEMON_LABEL;
 use yard_core::paths::Paths;
 use yard_core::render::launchd::{agent_root_conflict, daemon_plist};
@@ -11,8 +12,9 @@ use yard_proto::{ErrorCode, YardError};
 
 const START_WAIT: Duration = Duration::from_secs(5);
 
-pub async fn start(ctx: &Ctx) -> Outcome {
+pub async fn start(ctx: &Ctx, yes: bool) -> Outcome {
     leaves_other_roots_agent(ctx)?;
+    install_missing_formulas(ctx, yes)?;
     let yardd = sibling("yardd")?;
     let log = ctx.paths.log("yardd");
     std::fs::create_dir_all(ctx.paths.logs_dir()).map_err(|e| io(&ctx.paths.logs_dir(), e))?;
@@ -105,6 +107,61 @@ fn leaves_other_roots_agent(ctx: &Ctx) -> Result<(), YardError> {
     .with_hint(format!("{yardd} --root {}", ctx.paths.root().display())))
 }
 
+/// The brew formulas Yard itself runs that are not installed: nginx, then dnsmasq. Both are
+/// Homebrew core formulas, so installing them needs no trust (M7 spec §5.4).
+fn missing_formulas(brew: &Brew, exists: &dyn Fn(&Path) -> bool) -> Vec<&'static str> {
+    let mut missing = vec![];
+    if !exists(&brew.nginx_bin()) {
+        missing.push("nginx");
+    }
+    if !exists(&brew.dnsmasq_bin()) {
+        missing.push("dnsmasq");
+    }
+    missing
+}
+
+/// Installs nginx and dnsmasq when they are missing, after asking (or with `--yes`), so a bare
+/// install needs nothing from brew by hand. Brew itself missing is left to yardd's own error.
+fn install_missing_formulas(ctx: &Ctx, yes: bool) -> Result<(), YardError> {
+    let exists = |p: &Path| p.exists();
+    let Ok(brew) = Brew::from_env(&exists) else { return Ok(()) };
+    let missing = missing_formulas(&brew, &exists);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let list = missing.join(" and ");
+    if !yes {
+        if !interactive(ctx) {
+            return Err(YardError::new(
+                ErrorCode::FormulaMissing,
+                format!("Yard needs {list} from Homebrew"),
+            )
+            .with_hint("yard start --yes"));
+        }
+        if !confirm(&format!("Yard needs {list} from Homebrew. Install now? [y/N] ")) {
+            return Err(YardError::new(
+                ErrorCode::FormulaMissing,
+                format!("Yard needs {list} from Homebrew"),
+            )
+            .with_hint(format!("brew install {}", missing.join(" "))));
+        }
+    }
+    let status = Command::new(brew.brew_bin())
+        .arg("install")
+        .args(&missing)
+        .envs(Brew::job_env())
+        .status()
+        .map_err(|e| YardError::internal(format!("cannot run brew: {e}")))?;
+    if !status.success() {
+        return Err(YardError::new(
+            ErrorCode::FormulaMissing,
+            format!("brew install {} failed ({status})", missing.join(" ")),
+        )
+        .with_hint(format!("brew install {}", missing.join(" "))));
+    }
+    Ok(())
+}
+
 /// `bootout` returns before launchd lets go of the label; a `bootstrap` in that window fails.
 pub async fn unloaded(service: &str) {
     let deadline = Instant::now() + START_WAIT;
@@ -164,7 +221,16 @@ fn io(path: &std::path::Path, e: std::io::Error) -> YardError {
 
 #[cfg(test)]
 mod tests {
-    use super::sibling_of;
+    use super::*;
+
+    #[test]
+    fn missing_formulas_lists_nginx_then_dnsmasq() {
+        let brew = Brew::new("/opt/homebrew");
+        assert_eq!(missing_formulas(&brew, &|_: &Path| false), ["nginx", "dnsmasq"]);
+        let nginx = brew.nginx_bin();
+        assert_eq!(missing_formulas(&brew, &|p: &Path| p == nginx), ["dnsmasq"]);
+        assert!(missing_formulas(&brew, &|_: &Path| true).is_empty());
+    }
     use std::os::unix::fs::symlink;
 
     #[test]

@@ -50,12 +50,9 @@ nginx to 80/443 through the helper, once nothing else holds them.
 - An Apple Silicon Mac with Homebrew at `/opt/homebrew`.
 - Rust 1.92 from rustup (`rust-toolchain.toml` pins it). Homebrew's `rust` formula ignores
   the pin, so use rustup instead of it.
-- nginx, dnsmasq and PHP from Homebrew; Yard runs them itself. `yard tunnel` also needs
-  `brew install cloudflared`.
-
-```sh
-brew install nginx dnsmasq shivammathur/php/php@8.4
-```
+- nginx, dnsmasq and PHP from Homebrew; Yard runs them itself. `yard start` installs nginx
+  and dnsmasq when they are missing, after asking (`--yes` does not ask), and `yard link`
+  installs the PHP a project needs. `yard tunnel` also needs `brew install cloudflared`.
 
 Yard only uses the installed binaries; do not start them with `brew services`.
 
@@ -161,7 +158,7 @@ error, 3 `yardd` is not running.
 
 | Command | Needs yardd | What it does |
 |---|---|---|
-| `yard start` | no | Installs yardd's LaunchAgent and starts it. The agent has one label, so it is refused while the agent serves another data root that still exists; run a scratch root's `yardd --root <path>` directly. |
+| `yard start [--yes]` | no | Installs nginx and dnsmasq from Homebrew when they are missing, after asking (`--yes` does not ask; without a terminal it is refused with that hint), then installs yardd's LaunchAgent and starts it. The agent has one label, so it is refused while the agent serves another data root that still exists; run a scratch root's `yardd --root <path>` directly. |
 | `yard stop` | no | Stops yardd and unloads its LaunchAgent; refused, as `start` is, for another root's agent. |
 | `yard status` | yes | Profile, TLD, units and site count; a sleeping service instance is a row of its own (`sleeping`). |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions; `--json` also gives the helper revision this `yard` needs. |

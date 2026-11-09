@@ -88,7 +88,7 @@ pub async fn run(cli: Cli) -> i32 {
         }
     };
     let outcome = match command {
-        Command::Start => lifecycle::start(&ctx).await,
+        Command::Start { yes } => lifecycle::start(&ctx, yes).await,
         Command::Stop => lifecycle::stop(&ctx).await,
         Command::Status => units::status(&ctx).await,
         Command::Version => version::version(&ctx).await,

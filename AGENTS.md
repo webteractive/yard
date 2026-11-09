@@ -233,7 +233,8 @@ spec's milestone notes and in older rules means the maintainer's main Mac, where
    official installer (`sh.rustup.rs`, `--no-modify-path` when the shell already sources
    `~/.cargo/env`), then `rustup toolchain install 1.92 --component clippy,rustfmt`, and
    `brew uninstall rust` if it is there. `rustc --version` in the repo must print 1.92.
-3. `brew install nginx dnsmasq shivammathur/php/php@8.4`, plus `fnm` (Node), `cloudflared`
+3. `brew install shivammathur/php/php@8.4` (`yard start` installs nginx and dnsmasq when they
+   are missing, after asking), plus `fnm` (Node), `cloudflared`
    (tunnels), and `jq` and `shellcheck` for the e2e scripts. Ask the maintainer before each install
    (homebrew rule). Never start them with `brew services`.
 4. `cargo build --release`. The maintainer runs `sudo ./target/release/yard helper install` in a real
