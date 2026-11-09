@@ -487,7 +487,11 @@ impl AppEnv {
     }
 }
 
-/// Opens this app again a second after it quits, from its own path, which an update has just
+/// Run by `/bin/sh -c` with the app's path as `$0`: waits until this app (the shell's parent)
+/// has quit, then opens the app again.
+const RELAUNCH: &str = "while kill -0 $PPID 2>/dev/null; do sleep 0.2; done; open \"$0\"";
+
+/// Opens this app again once it has quit, from its own path, which an update has just
 /// replaced. A run outside a bundle (`cargo run`) only quits.
 fn relaunch(cx: &mut App) {
     let app = std::env::current_exe()
@@ -495,7 +499,18 @@ fn relaunch(cx: &mut App) {
         .and_then(|exe| Some(exe.parent()?.parent()?.parent()?.to_path_buf()))
         .filter(|app| app.extension().is_some_and(|e| e == "app"));
     if let Some(app) = app {
-        let _ = std::process::Command::new("/bin/sh").args(["-c", "sleep 1; open \"$0\""]).arg(&app).spawn();
+        let _ = std::process::Command::new("/bin/sh").args(["-c", RELAUNCH]).arg(&app).spawn();
     }
     cx.quit();
+}
+
+#[cfg(test)]
+mod tests {
+    /// The relaunch waits for this app to be gone, or `open` would only bring the quitting one
+    /// forward (M7 final review).
+    #[test]
+    fn the_relaunch_waits_for_this_app_to_quit() {
+        assert!(super::RELAUNCH.contains("while kill -0 $PPID"), "{}", super::RELAUNCH);
+        assert!(super::RELAUNCH.ends_with("open \"$0\""), "{}", super::RELAUNCH);
+    }
 }

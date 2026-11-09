@@ -2676,3 +2676,75 @@ fn uninstall_keep_data_keeps_the_root() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(root.path().join("data/redis/dump.rdb").exists());
 }
+
+/// A PATH whose `launchctl` succeeds at everything but `print` (so an unloaded agent reads as
+/// gone at once), logging its arguments.
+fn fake_launchctl(dir: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let fake = dir.join("launchctl");
+    let log = dir.join("launchctl.log");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\necho \"$@\" >> '{}'\n[ \"$1\" = print ] && exit 1\nexit 0\n", log.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", dir.display())
+}
+
+#[test]
+fn uninstall_removes_this_roots_agent_plist() {
+    let (root, home) = uninstall_root();
+    let agents = home.path().join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let plist = agents.join("dev.more.yard.daemon.plist");
+    let bytes = yard_core::render::launchd::daemon_plist(
+        Path::new("/y/yardd"),
+        Some(root.path()),
+        Path::new("/l.log"),
+    );
+    std::fs::write(&plist, bytes).unwrap();
+    let bin = TempDir::new().unwrap();
+    let out = yard_at(root.path())
+        .env("HOME", home.path())
+        .env("PATH", fake_launchctl(bin.path()))
+        .env("YARD_SECURITY", "/usr/bin/false")
+        .args(["uninstall", "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(!plist.exists(), "the LaunchAgent plist is still there: launchd would start yardd at login");
+}
+
+#[test]
+fn uninstall_of_a_root_that_is_not_there_skips_its_data() {
+    let home = TempDir::new().unwrap();
+    let parent = short_root();
+    let gone = parent.path().join("never-made");
+    let out = yard_at(&gone)
+        .env("HOME", home.path())
+        .env("YARD_SECURITY", "/usr/bin/false")
+        .args(["uninstall", "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["steps"], json!([]), "{v}");
+}
+
+#[test]
+fn uninstall_untrusts_a_ca_it_cannot_check() {
+    let (root, home) = uninstall_root();
+    let paths = yard_core::Paths::new(root.path().to_path_buf());
+    yard_daemon::tls::ensure_ca(&paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    // A security that cannot run: whether the CA is trusted is unknown, so it is still removed.
+    let out = yard_at(root.path())
+        .env("HOME", home.path())
+        .env("YARD_SECURITY", "/nonexistent/security")
+        .args(["uninstall", "--yes", "--json"])
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let untrust = v["steps"].as_array().unwrap().iter().find(|s| s["step"] == "untrust");
+    assert!(untrust.is_some(), "the CA was not untrusted before its file was deleted: {v}");
+}

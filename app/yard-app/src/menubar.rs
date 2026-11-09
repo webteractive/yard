@@ -186,8 +186,16 @@ pub fn menu_model(env: &AppEnv, recent: &[String], cx: &App) -> Vec<MenuEntry> {
         out.push(MenuEntry::Submenu { title: "Xdebug".into(), entries: xdebug });
     }
     if let Some(item) = s.update.as_ref().and_then(yard_app_model::update::item) {
+        // An update can start from here or by itself with no window open, so its failure is
+        // said here too.
+        let failed =
+            env.runner.read(cx).errors.get(&crate::runner::ActionId("update:install".into())).cloned();
+        let title = match failed {
+            Some(e) => format!("{} (failed: {})", item.title, e.message),
+            None => item.title,
+        };
         out.push(MenuEntry::Separator);
-        out.push(MenuEntry::Action { id: "update".into(), title: item.title });
+        out.push(MenuEntry::Action { id: "update".into(), title });
     }
     out.push(MenuEntry::Separator);
     out.push(MenuEntry::Action { id: "open".into(), title: "Open Yard".into() });
@@ -624,6 +632,36 @@ mod tests {
         });
         let entries = cx.update(|cx| menu_model(&env, &[], cx));
         assert!(entries.contains(&action("update", "Update to 0.2.0…")), "{entries:?}");
+    }
+
+    /// An update started from the menu or by itself, with no window open, says why it failed
+    /// on the menu item (M7 final review).
+    #[gpui::test]
+    async fn a_failed_update_says_so_in_the_menu(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        env.state.update(cx, |s, _| {
+            s.update = Some(yard_app_model::update::Check {
+                installed: "0.1.0".into(),
+                latest: "0.2.0".into(),
+                available: true,
+                kind: "bundle".into(),
+                notes_url: "x".into(),
+            })
+        });
+        env.runner.update(cx, |r, _| {
+            r.errors.record(
+                crate::runner::ActionId("update:install".into()),
+                yard_proto::YardError::internal("the download does not match its checksum"),
+            )
+        });
+        let entries = cx.update(|cx| menu_model(&env, &[], cx));
+        assert!(
+            entries.contains(&action(
+                "update",
+                "Update to 0.2.0… (failed: the download does not match its checksum)"
+            )),
+            "{entries:?}"
+        );
     }
 
     #[gpui::test]

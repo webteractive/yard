@@ -10,7 +10,7 @@ use yard_core::install::{
     InstallKind, Latest, Update, Version, install_kind, release_url, sha256_hex, update,
 };
 use yard_core::paths::{DAEMON_LABEL, HELPER_SOCKET};
-use yard_core::render::launchd::read_agent;
+use yard_core::render::launchd::{AgentFacts, read_agent};
 use yard_daemon::helper_client::HelperClient;
 use yard_proto::{ErrorCode, VersionInfo, YardError};
 
@@ -30,7 +30,11 @@ pub struct Updated {
     pub from: String,
     pub to: String,
     pub restarted_yardd: bool,
+    /// The yardd the agent runs instead of this app's (a dev build), left alone.
+    pub yardd_left: Option<PathBuf>,
     pub helper_changed: bool,
+    /// What went wrong after the new app was in place; the update itself stands.
+    pub warnings: Vec<String>,
 }
 
 pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
@@ -100,24 +104,38 @@ pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
     let staged = work.join("Yard.app");
     verify(&app, &staged, newest, installed)?;
 
-    swap(&app, &staged)?;
-
-    let restarted = restart_yardd_in(&app)?;
+    // From here on the new app is in place: nothing below fails the update.
+    let mut warnings: Vec<String> = swap(&app, &staged)?.into_iter().collect();
+    let (yardd, warning) = restart_yardd_in(&app);
+    warnings.extend(warning);
     let helper_changed = helper_changed(&app).await;
     let done = Updated {
         from: installed.to_string(),
         to: newest.to_string(),
-        restarted_yardd: restarted.is_none(),
+        restarted_yardd: yardd == YarddAfterUpdate::Restart && done_restart(&warnings),
+        yardd_left: match &yardd {
+            YarddAfterUpdate::LeftAlone(p) => Some(p.clone()),
+            _ => None,
+        },
         helper_changed,
+        warnings,
     };
     ctx.emit(&done, || {
         let mut out = format!("Updated Yard {installed} to {newest}.\n");
-        match &restarted {
-            None => out.push_str("yardd restarted on the new build.\n"),
-            Some(Some(other)) => {
+        match &yardd {
+            YarddAfterUpdate::Restart if done.restarted_yardd => {
+                out.push_str("yardd restarted on the new build.\n")
+            }
+            YarddAfterUpdate::LeftAlone(other) => {
                 out.push_str(&format!("yardd runs {}, so it was left alone.\n", other.display()))
             }
-            Some(None) => {}
+            YarddAfterUpdate::NotRunning => {
+                out.push_str("yardd is not running; yard start runs the new build.\n")
+            }
+            _ => {}
+        }
+        for w in &done.warnings {
+            out.push_str(&format!("warning: {w}\n"));
         }
         if helper_changed {
             out.push_str("The new helper needs installing: sudo yard helper install\n");
@@ -256,9 +274,15 @@ fn designated_requirement_in(codesign: &str) -> Result<String, YardError> {
 /// Yard.app's bundle id (M6 spec §14.1).
 const BUNDLE_ID: &str = "dev.more.yard.app";
 
+/// Whether the restart went through: its failure is the one warning that starts "yardd could not".
+fn done_restart(warnings: &[String]) -> bool {
+    !warnings.iter().any(|w| w.starts_with("yardd could not"))
+}
+
 /// Replaces `app` with `staged`, which sits beside it (one volume, so both moves are renames).
-/// If the new one cannot move into place, the old one is put back.
-fn swap(app: &Path, staged: &Path) -> Result<(), YardError> {
+/// If the new one cannot move into place, the old one is put back; a warning when the old one
+/// cannot be removed afterwards.
+fn swap(app: &Path, staged: &Path) -> Result<Option<String>, YardError> {
     let name = app.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let old = app.with_file_name(format!("{name}.old-{}", std::process::id()));
     std::fs::rename(app, &old).map_err(|e| io(app, e))?;
@@ -266,21 +290,46 @@ fn swap(app: &Path, staged: &Path) -> Result<(), YardError> {
         let _ = std::fs::rename(&old, app);
         return Err(io(staged, e));
     }
-    std::fs::remove_dir_all(&old).map_err(|e| io(&old, e))?;
-    Ok(())
+    Ok(std::fs::remove_dir_all(&old)
+        .err()
+        .map(|e| format!("the old app is left at {} ({e}): delete it", old.display())))
 }
 
-/// Restarts the LaunchAgent's yardd when it runs from `app`. `None` when restarted;
-/// `Some(Some(path))` when the agent runs another yardd (a dev build), left alone; `Some(None)`
-/// when no agent is installed.
-fn restart_yardd_in(app: &Path) -> Result<Option<Option<PathBuf>>, YardError> {
-    let Ok(bytes) = std::fs::read(agent_plist()?) else { return Ok(Some(None)) };
-    let agent = read_agent(&bytes)?;
-    if !agent.program.starts_with(app) {
-        return Ok(Some(Some(agent.program)));
+/// What happens to yardd after an update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum YarddAfterUpdate {
+    /// The loaded agent runs this app's yardd: restart it on the new build.
+    Restart,
+    /// The agent runs another yardd (a dev build), left alone.
+    LeftAlone(PathBuf),
+    /// The agent runs this app's yardd but is not loaded (`yard stop`): nothing to restart.
+    NotRunning,
+    /// No agent is installed.
+    NoAgent,
+}
+
+fn restart_decision(app: &Path, agent: Option<AgentFacts>, loaded: bool) -> YarddAfterUpdate {
+    match agent {
+        None => YarddAfterUpdate::NoAgent,
+        Some(a) if !a.program.starts_with(app) => YarddAfterUpdate::LeftAlone(a.program),
+        Some(_) if loaded => YarddAfterUpdate::Restart,
+        Some(_) => YarddAfterUpdate::NotRunning,
     }
-    launchctl(&["kickstart", "-k", &format!("gui/{}/{DAEMON_LABEL}", uid())])?;
-    Ok(None)
+}
+
+/// Restarts yardd when its loaded agent runs this app. The update itself is done by then, so a
+/// failure here is a warning, never the command's failure.
+fn restart_yardd_in(app: &Path) -> (YarddAfterUpdate, Option<String>) {
+    let agent = agent_plist().ok().and_then(|f| std::fs::read(f).ok()).and_then(|b| read_agent(&b).ok());
+    let service = format!("gui/{}/{DAEMON_LABEL}", uid());
+    let loaded =
+        Command::new("launchctl").args(["print", &service]).output().is_ok_and(|o| o.status.success());
+    let decision = restart_decision(app, agent, loaded);
+    let warning = (decision == YarddAfterUpdate::Restart)
+        .then(|| launchctl(&["kickstart", "-k", &service]).err())
+        .flatten()
+        .map(|e| format!("yardd could not be restarted ({}): yard stop && yard start", e.message));
+    (decision, warning)
 }
 
 /// Whether the new bundle's yard needs another helper revision than the one installed. No
@@ -330,7 +379,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = app_with(dir.path(), "Yard.app", "old");
         let staged = app_with(dir.path(), ".Yard.app.new-1", "new");
-        swap(&app, &staged).unwrap();
+        assert_eq!(swap(&app, &staged).unwrap(), None);
         assert_eq!(std::fs::read_to_string(app.join("marker")).unwrap(), "new");
         assert!(!staged.exists());
         assert!(leftovers(dir.path()).is_empty());
@@ -358,6 +407,20 @@ mod tests {
         assert!(designated_requirement_in(&other_app).is_err());
         let no_team = "designated => identifier \"dev.more.yard.app\" and anchor apple\n";
         assert!(designated_requirement_in(no_team).is_err());
+    }
+
+    #[test]
+    fn yardd_is_restarted_only_when_its_loaded_agent_runs_this_app() {
+        let app = Path::new("/Applications/Yard.app");
+        let ours = || AgentFacts { program: app.join("Contents/Helpers/yardd"), root: None };
+        assert_eq!(restart_decision(app, Some(ours()), true), YarddAfterUpdate::Restart);
+        assert_eq!(restart_decision(app, Some(ours()), false), YarddAfterUpdate::NotRunning);
+        let dev = AgentFacts { program: "/repo/target/release/yardd".into(), root: None };
+        assert_eq!(
+            restart_decision(app, Some(dev), true),
+            YarddAfterUpdate::LeftAlone("/repo/target/release/yardd".into())
+        );
+        assert_eq!(restart_decision(app, None, false), YarddAfterUpdate::NoAgent);
     }
 
     #[test]

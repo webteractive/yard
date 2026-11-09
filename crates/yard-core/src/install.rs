@@ -142,6 +142,8 @@ pub struct UninstallFacts {
     pub ca_exists: bool,
     pub helper_installed: bool,
     pub keep_data: bool,
+    /// The data root is there: one never made, or already removed, is not a step.
+    pub data_exists: bool,
 }
 
 pub fn uninstall_plan(f: &UninstallFacts) -> Vec<UninstallStep> {
@@ -156,7 +158,7 @@ pub fn uninstall_plan(f: &UninstallFacts) -> Vec<UninstallStep> {
     if f.helper_installed {
         steps.push(HelperUninstall);
     }
-    if !f.keep_data {
+    if !f.keep_data && f.data_exists {
         steps.push(RemoveData);
     }
     steps.push(RemovePrefs);
@@ -225,6 +227,7 @@ mod tests {
             ca_exists: true,
             helper_installed: true,
             keep_data: false,
+            data_exists: true,
         };
         assert_eq!(
             uninstall_plan(&full),
@@ -239,8 +242,11 @@ mod tests {
             ca_exists: false,
             helper_installed: false,
             keep_data: true,
+            data_exists: true,
         };
         assert_eq!(uninstall_plan(&bare), [RemovePrefs]);
+        let no_data = UninstallFacts { data_exists: false, keep_data: false, ..bare };
+        assert_eq!(uninstall_plan(&no_data), [RemovePrefs], "a data root that is not there is skipped");
     }
 
     #[test]

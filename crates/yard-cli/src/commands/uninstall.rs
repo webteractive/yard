@@ -1,6 +1,6 @@
 //! `yard uninstall`: takes Yard off the Mac, its data included unless `--keep-data` (M7 spec §10).
 
-use super::lifecycle::{agent_installed_here, stop_agent};
+use super::lifecycle::{agent_installed_here, agent_plist, stop_agent};
 use super::{Ctx, Outcome, interactive};
 use serde::Serialize;
 use std::io::{BufRead, Write};
@@ -29,9 +29,12 @@ pub async fn uninstall(ctx: &Ctx, keep_data: bool, yes: bool) -> Outcome {
     let facts = UninstallFacts {
         kind: install_kind(&exe, caskroom),
         agent_installed: agent_installed_here(ctx),
-        ca_exists: ca.exists() && yard_daemon::tls::trusted(&ctx.security, &ca).await == Some(true),
+        // Planned whenever the CA file is there unless security says it is not trusted: an
+        // unanswered check must not skip it, since the file is about to be deleted with the data.
+        ca_exists: ca.exists() && yard_daemon::tls::trusted(&ctx.security, &ca).await != Some(false),
         helper_installed: Path::new(HELPER_BINARY).exists(),
         keep_data,
+        data_exists: ctx.paths.root().exists(),
     };
     let mut plan = uninstall_plan(&facts);
     // A scratch root (`--root`) owns only its data and its agent: the helper, the app and the
@@ -137,6 +140,16 @@ async fn run_step(
     match step {
         UninstallStep::StopDaemon => {
             stop_agent(ctx).await?;
+            // Unloaded is not removed: a plist left behind starts yardd again at the next login.
+            let plist = agent_plist()?;
+            match std::fs::remove_file(&plist) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(YardError::internal(format!("cannot delete {}: {e}", plist.display()))
+                        .with_hint(format!("rm {}", plist.display())));
+                }
+            }
             Ok("stopped yardd and removed its LaunchAgent".into())
         }
         UninstallStep::Untrust => {
