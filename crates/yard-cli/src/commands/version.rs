@@ -23,6 +23,7 @@ pub async fn version(ctx: &Ctx) -> Outcome {
         protocol: PROTOCOL_VERSION.into(),
         commit: env!("YARD_BUILD_COMMIT").into(),
         build_date: env!("YARD_BUILD_DATE").into(),
+        needs_helper_revision: Some(yard_proto::helper::HELPER_REVISION),
     };
     ctx.emit(&info, || {
         let daemon = daemon.map_or("yardd is not running".to_string(), |(_, line)| format!("yardd {line}"));

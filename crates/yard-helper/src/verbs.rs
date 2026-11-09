@@ -1,6 +1,6 @@
 //! Dispatch for the fixed verb set. Anything else is `METHOD_NOT_FOUND`.
 
-use crate::{HelperConfig, VERSION, ports, resolver};
+use crate::{HELPER_REVISION, HelperConfig, VERSION, ports, resolver};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -47,7 +47,7 @@ impl Helper {
                 let BindParams { port } = params_of(params)?;
                 self.bind(port)
             }
-            helper::STATUS => Reply::of(HelperStatus { version: VERSION.into() }),
+            helper::STATUS => Reply::of(HelperStatus { version: VERSION.into(), revision: HELPER_REVISION }),
             _ => Err(YardError::new(ErrorCode::MethodNotFound, format!("the helper has no verb {method:?}"))),
         }
     }

@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn install_output_lists_removed_files_and_the_next_step() {
-        let status = HelperStatus { version: "0.1.0".into() };
+        let status = HelperStatus { version: "0.1.0".into(), revision: 1 };
         let removed = [PathBuf::from("/r/logs/nginx-error.log")];
         let (report, text) = install_output(&status, &removed, "me", Path::new("/r"), false);
         assert_eq!(

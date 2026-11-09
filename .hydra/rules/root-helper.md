@@ -60,9 +60,12 @@ triggers:
 - Install path (M1–M3): `sudo yard helper install` copies the binary to
   `/Library/PrivilegedHelperTools/dev.more.yard.helper` and writes
   `/Library/LaunchDaemons/dev.more.yard.helper.plist`, both root:wheel.
-  `uninstall` removes the plist, the binary and Yard's resolver files. In M6 Yard.app hands
-  `sudo yard helper install` to Terminal; from M7 it registers the same helper with
-  `SMAppService`.
+  `uninstall` removes the plist, the binary and Yard's resolver files. Yard.app hands
+  `sudo yard helper install` to Terminal; there is no `SMAppService` (M7 spec §7).
+- Every release bumps the helper's version with everything else, so doctor judges the helper by
+  `yard_proto::helper::HELPER_REVISION`, which `status` reports. Bump it in the same change
+  whenever the helper's code, a verb, a verb's checks or its plist change, and never otherwise:
+  a bump makes every user run `sudo yard helper install` after updating.
 - Agents cannot type a sudo password. Ask the maintainer to run privileged commands with
   sudo in a real terminal (the `!` prefix has no tty for the password). Tests run the helper in-process as the current user, with a temp
   `resolver_dir` and free ports standing in for 80 and 443

@@ -44,14 +44,30 @@ pub struct HelperInstall {
     pub removed: Vec<String>,
 }
 
+/// Bumped only when the helper's code, verbs, their checks or its plist change, never for a
+/// release that leaves the helper as it was: every release bumps the version, and doctor asks for
+/// `sudo yard helper install` only when this differs (M7 spec §8.2). It lives here, beside the
+/// verbs, because yardd and the CLI compare it without linking the helper.
+pub const HELPER_REVISION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HelperStatus {
     pub version: String,
+    /// What the helper does (its verbs, their checks, its plist), as a number `yard` compares
+    /// to decide whether the helper must be reinstalled. An older helper sends none: `0`.
+    #[serde(default)]
+    pub revision: u32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_status_without_revision_reads_as_zero() {
+        let s: HelperStatus = serde_json::from_str(r#"{"version":"0.1.0"}"#).unwrap();
+        assert_eq!(s.revision, 0);
+    }
 
     #[test]
     fn verbs_are_the_fixed_set() {

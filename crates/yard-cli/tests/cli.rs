@@ -95,6 +95,7 @@ fn version_json_has_stable_shape() {
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());
     assert!(v["helper"].is_null());
+    assert_eq!(v["needs_helper_revision"], yard_helper::HELPER_REVISION);
 }
 
 #[test]

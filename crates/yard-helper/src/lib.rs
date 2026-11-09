@@ -24,6 +24,7 @@ use yard_proto::rpc::{Request, Response, encode_line};
 use yard_proto::{ErrorCode, YardError};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use yard_proto::helper::HELPER_REVISION;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HelperConfig {

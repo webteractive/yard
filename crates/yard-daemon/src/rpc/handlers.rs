@@ -251,6 +251,7 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
             protocol: PROTOCOL_VERSION.into(),
             commit: COMMIT.into(),
             build_date: BUILD_DATE.into(),
+            needs_helper_revision: None,
         },
         profile,
         tld: snapshot.as_ref().map_or_else(

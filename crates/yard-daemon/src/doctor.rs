@@ -3,7 +3,6 @@
 //! yardd runs them against its state. The CLI runs them in-process when yardd is down,
 //! and then every check that needs config re-reads the TOML files itself.
 
-use crate::daemon::VERSION;
 use crate::emailulator::{OFFLINE_TIMEOUT, Probe, find_and_probe, is_exec, next_step, serving_agent};
 use crate::helper_client::HelperClient;
 use crate::reconcile::serves_mail;
@@ -32,6 +31,7 @@ use yard_core::sources::{tap_dir, tap_of};
 use yard_core::tunnel::cloudflared::cert_path;
 use yard_core::tunnel::facts::Facts;
 use yard_core::{Paths, PhpVersion, sites};
+use yard_proto::helper::{HELPER_REVISION, HelperStatus};
 use yard_proto::{
     Check, CheckStatus, DoctorReport, Holder, HolderKind, IgnoredBecause, Need, PortInfo, PortMode,
     PortStatus, SettingSource, SiteInfo, SiteKind, TunnelInfo, TunnelState, UnitInfo, UnitState, YardError,
@@ -216,18 +216,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         fail("daemon", "yardd is not running", "yard start")
     });
 
-    checks.push(match input.helper.status().await {
-        Ok(s) if s.version == VERSION => ok("helper", format!("the helper {VERSION} is running")),
-        Ok(s) => warn(
-            "helper",
-            format!("the helper is {}, but yard is {VERSION}", s.version),
-            "sudo yard helper install",
-        ),
-        Err(e) => {
-            let hint = e.hint.clone().unwrap_or_else(|| "sudo yard helper install".into());
-            fail("helper", e.message, hint)
-        }
-    });
+    checks.push(helper_check(input.helper.status().await));
 
     let helper_root = input.helper.other_root();
     checks.push(resolver(
@@ -1350,6 +1339,25 @@ fn units(units: &[UnitInfo], daemon_running: bool) -> Vec<Check> {
     checks
 }
 
+/// The helper is judged by its revision, not its version: every release bumps the version, and
+/// only a changed helper needs `sudo yard helper install` (M7 spec §8.2).
+fn helper_check(status: Result<HelperStatus, YardError>) -> Check {
+    match status {
+        Ok(s) if s.revision == HELPER_REVISION => {
+            ok("helper", format!("the helper {} (revision {}) is running", s.version, s.revision))
+        }
+        Ok(s) => warn(
+            "helper",
+            format!("the helper is revision {}, but yard needs revision {HELPER_REVISION}", s.revision),
+            "sudo yard helper install",
+        ),
+        Err(e) => {
+            let hint = e.hint.clone().unwrap_or_else(|| "sudo yard helper install".into());
+            fail("helper", e.message, hint)
+        }
+    }
+}
+
 fn ok(id: &str, message: impl Into<String>) -> Check {
     Check { id: id.into(), status: CheckStatus::Ok, message: message.into(), hint: None }
 }
@@ -1370,6 +1378,26 @@ fn from_error(id: &str, e: &YardError) -> Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::VERSION;
+
+    #[test]
+    fn a_helper_of_another_version_but_this_revision_is_ok() {
+        let c = helper_check(Ok(HelperStatus { version: "0.0.9".into(), revision: HELPER_REVISION }));
+        assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+        assert!(c.message.contains("0.0.9"), "{c:?}");
+    }
+
+    #[test]
+    fn a_helper_of_another_revision_asks_for_install() {
+        let r = HELPER_REVISION + 1;
+        let c = helper_check(Ok(HelperStatus { version: VERSION.into(), revision: r }));
+        assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+        assert_eq!(c.hint.as_deref(), Some("sudo yard helper install"));
+        assert_eq!(
+            c.message,
+            format!("the helper is revision {r}, but yard needs revision {HELPER_REVISION}")
+        );
+    }
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()

@@ -441,6 +441,11 @@ pub struct VersionInfo {
     pub protocol: String,
     pub commit: String,
     pub build_date: String,
+    /// The helper revision this `yard` was built for (`HELPER_REVISION`), which `yard
+    /// self-update` reads from a new bundle to tell whether the helper must be reinstalled. Only
+    /// the CLI's `version` fills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_helper_revision: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
