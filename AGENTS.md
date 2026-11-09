@@ -398,6 +398,16 @@ holds 80 or 443, since with both free the switch would go through.
   /tmp/yard-dev` runs it against a scratch yardd (`cargo run -p yard-daemon --bin yardd -- --root
   /tmp/yard-dev` at the root). Without `--root` it finds the real LaunchAgent and talks to the real
   yardd. A GPUI build fills `app/target` with several GB: remove it when done.
+- `scripts/release.sh X.Y.Z [--no-publish | --adhoc]` — a release (M7 spec §8.1): builds the
+  root binaries and `app/scripts/bundle.sh --release` (the app with `yard`, `yardd`, `yard-helper`
+  and `yard-shim` in `Contents/Helpers/`), signs inside out with the keychain's Developer ID by
+  SHA-1 (`YARD_SIGN_IDENTITY` overrides), notarizes through the `notary` keychain profile, staples,
+  and writes `dist/X.Y.Z/` (zip, DMG, `SHA256SUMS`, `latest.json`). `--no-publish` and `--adhoc`
+  put the version bump back; `--adhoc` seals ad hoc, skips Apple, and names every file `-adhoc`.
+  Submitting to Apple or publishing needs the maintainer's approval. `packaging/yard.rb.tmpl` is
+  the cask it renders for `webteractive/homebrew-tap`. Remove `dist/` afterwards.
+- `install.sh` — the curl installer (M7 spec §5.2); `scripts/test-install.sh` checks its refusals
+  against a fake release over `file://` and installs nothing.
 - `app/scripts/checklist.sh [--keep]` — the M6 checklist a script can see: a scratch yardd on
   `/tmp/yard-check` (nginx and dnsmasq pinned to 28080/28443/28053, its instances to 28379-28381
   and 28900, auto ports 29000-29099), three linked sites (one with a committed `.yard` that needs
