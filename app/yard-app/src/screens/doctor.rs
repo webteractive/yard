@@ -4,8 +4,8 @@ use super::heading;
 use crate::env::AppEnv;
 use crate::platform::open::Opener;
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::text;
 use crate::widgets::theme::Theme;
+use crate::widgets::{bar, text};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_app_model::hint::HintAction;
 use yard_proto::{Check, CheckStatus};
@@ -61,10 +61,12 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let running = s.doctor.loading;
     let run = env.clone();
     let mut page = div().flex().flex_col().gap(px(10.)).child(heading("Doctor")).child(
-        Button::new("doctor:run", if running { "Running…" } else { "Run doctor" })
-            .style(ButtonStyle::Primary)
-            .disabled(running)
-            .on_click(move |_, _, cx| run.state.update(cx, |s, cx| s.run_doctor(cx))),
+        bar().child(
+            Button::new("doctor:run", if running { "Running…" } else { "Run doctor" })
+                .style(ButtonStyle::Primary)
+                .disabled(running)
+                .on_click(move |_, _, cx| run.state.update(cx, |s, cx| s.run_doctor(cx))),
+        ),
     );
     if let Some(e) = &s.doctor.error {
         page = page.child(div().text_sm().text_color(t.danger).child(text("error", e.message.clone())));
@@ -86,7 +88,10 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 .rounded(px(6.))
                 .border_1()
                 .border_color(t.border)
-                .child(div().text_sm().child(text(format!("{}:message", c.id), c.message.clone())));
+                .min_w(px(0.))
+                .child(
+                    div().min_w(px(0.)).text_sm().child(text(format!("{}:message", c.id), c.message.clone())),
+                );
             if let Some(hint) = c.hint.clone() {
                 let action = HintAction::parse(&hint);
                 let mut controls = div().flex().gap(px(6.)).items_center().child(

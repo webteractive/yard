@@ -237,6 +237,7 @@ impl Render for MainWindow {
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.))
                     .flex()
                     .flex_col()
                     .children(banner(&env, cx))
@@ -244,6 +245,8 @@ impl Render for MainWindow {
                     .child(
                         div()
                             .id("content")
+                            .debug_selector(|| "content".into())
+                            .min_w(px(0.))
                             .flex_1()
                             .overflow_y_scroll()
                             .p(px(16.))
@@ -299,6 +302,9 @@ fn badge_text(screen: &Screen, n: usize) -> String {
     }
 }
 
+/// The sidebar's width (spec §3.3).
+pub(crate) const SIDEBAR_WIDTH: gpui::Pixels = px(200.);
+
 fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let items = PAGES.iter().map(|(label, page)| {
@@ -335,9 +341,11 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
     });
     div()
         .id("sidebar")
+        .debug_selector(|| "sidebar".into())
         .role(Role::TabList)
         .aria_label("Screens")
-        .w(px(170.))
+        .w(SIDEBAR_WIDTH)
+        .flex_shrink_0()
         .p(px(8.))
         .gap(px(2.))
         .flex()
@@ -660,5 +668,48 @@ mod tests {
         assert_eq!(cx.windows().len(), 1, "no second main window");
         assert_eq!(cx.read_entity(&env.nav, |n, _| n.screen.clone()), Screen::Sites(Some("chk1".into())));
         assert!(cx.update(super::is_open), "and it is still the one open");
+    }
+
+    /// Opens the main window on Doctor with one check whose message is 300 characters long.
+    fn doctor_with_a_long_message(cx: &mut TestAppContext) -> gpui::VisualTestContext {
+        use yard_proto::{Check, CheckStatus, DoctorReport};
+        let (_fake, env) = env(cx);
+        cx.update(|cx| cx.set_global(env.clone()));
+        let check =
+            Check { id: "long".into(), status: CheckStatus::Fail, message: "x ".repeat(150), hint: None };
+        env.state.update(cx, |s, _| s.doctor.value = Some(DoctorReport { checks: vec![check] }));
+        cx.update(|cx| super::open(&env, Screen::Doctor, cx));
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.try_global::<super::MainHandle>().map(|h| h.0)).expect("a window");
+        let vcx = gpui::VisualTestContext::from_window(handle.into(), cx);
+        vcx.run_until_parked();
+        vcx
+    }
+
+    /// The sidebar keeps its width and the content stays inside the window, however wide the
+    /// content's text is (G3, G4: a long Doctor message squeezed the sidebar and pushed the page
+    /// past the window's right edge).
+    #[gpui::test]
+    async fn sidebar_keeps_its_width_beside_wide_content(cx: &mut TestAppContext) {
+        let mut vcx = doctor_with_a_long_message(cx);
+        let sidebar = vcx.debug_bounds("sidebar").expect("the sidebar is drawn");
+        let content = vcx.debug_bounds("content").expect("the content is drawn");
+        let window = vcx.update(|w, _| w.viewport_size());
+        assert_eq!(sidebar.size.width, super::SIDEBAR_WIDTH);
+        assert!(
+            content.right() <= window.width,
+            "content ends at {:?}, window at {:?}",
+            content.right(),
+            window.width
+        );
+    }
+
+    /// A button on its own sizes to its label rather than stretching across the pane (G7).
+    #[gpui::test]
+    async fn a_lone_button_sizes_to_its_label(cx: &mut TestAppContext) {
+        let mut vcx = doctor_with_a_long_message(cx);
+        let run = vcx.debug_bounds("doctor:run").expect("Run doctor is drawn");
+        let content = vcx.debug_bounds("content").expect("the content is drawn");
+        assert!(run.size.width < content.size.width / 2., "Run doctor is {:?} wide", run.size.width);
     }
 }

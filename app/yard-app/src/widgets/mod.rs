@@ -21,6 +21,12 @@ use std::rc::Rc;
 /// tree and never a plain string, so every visible line that is not a control's own label goes
 /// through here. `id` must be unique among the elements under the nearest ancestor with an id, and
 /// stable across frames, so a refresh does not announce unchanged text again.
+/// A row of controls: centred, spaced, wrapping, and never stretching them across the pane (G7).
+pub fn bar() -> gpui::Div {
+    use gpui::Styled;
+    gpui::div().flex().flex_row().flex_wrap().items_center().gap(gpui::px(8.))
+}
+
 pub fn text(id: impl Into<ElementId>, s: impl Into<SharedString>) -> gpui::Text {
     gpui::Text::new(id.into(), s.into())
 }

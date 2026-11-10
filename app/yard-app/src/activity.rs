@@ -98,11 +98,13 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 .when(!log.is_empty(), |d| d.child(LogView::new(format!("{id}:failure"), log)))
             })
             .when(running, |d| {
-                d.child(Button::new(format!("{id}:cancel"), format!("Cancel {}", j.title)).on_click(
-                    move |_, _, cx| {
-                        let job = job_id.clone();
-                        env.runner.update(cx, |r, cx| r.cancel_job(job, cx).detach());
-                    },
+                d.child(crate::widgets::bar().child(
+                    Button::new(format!("{id}:cancel"), format!("Cancel {}", j.title)).on_click(
+                        move |_, _, cx| {
+                            let job = job_id.clone();
+                            env.runner.update(cx, |r, cx| r.cancel_job(job, cx).detach());
+                        },
+                    ),
                 ))
             })
     });

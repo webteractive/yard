@@ -83,9 +83,14 @@ impl RenderOnce for Button {
         let a11y = self.a11y();
         let button = div()
             .id(ElementId::Name(a11y.id.clone()))
+            .debug_selector({
+                let id = a11y.id.to_string();
+                move || id
+            })
             .role(a11y.role)
             .aria_label(a11y.label.clone())
             .when_some(a11y.description.clone(), |d, why| d.aria_description(why))
+            .flex_none()
             .px(px(10.))
             .py(px(4.))
             .rounded(px(6.))

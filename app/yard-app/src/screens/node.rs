@@ -86,43 +86,45 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 }
             }),
         ))
-        .child(Button::new("node:available", "Show available").on_click(move |_, _, cx| {
-            let (env, daemon) = (e4.clone(), e4.daemon.clone());
-            let task = env.runner.update(cx, |r, cx| {
-                r.perform(
-                    crate::runner::ActionId("node:available".into()),
-                    async move {
-                        crate::daemon::call(
-                            &*daemon,
-                            api::NODE_LIST_AVAILABLE,
-                            NodeListParams { available: true, major: None },
-                        )
-                        .await
-                    },
-                    cx,
-                )
-            });
-            cx.spawn(async move |cx| {
-                if let Some(list) = task.await {
-                    let text = list
-                        .available
-                        .iter()
-                        .map(|r| match &r.lts {
-                            Some(lts) => format!("{} ({lts})", r.version),
-                            None => r.version.clone(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    cx.update(|cx| {
-                        env.nav.update(cx, |n, cx| {
-                            n.node_available = Some(text);
-                            cx.notify();
-                        })
-                    });
-                }
-            })
-            .detach();
-        }))
+        .child(crate::widgets::bar().child(Button::new("node:available", "Show available").on_click(
+            move |_, _, cx| {
+                let (env, daemon) = (e4.clone(), e4.daemon.clone());
+                let task = env.runner.update(cx, |r, cx| {
+                    r.perform(
+                        crate::runner::ActionId("node:available".into()),
+                        async move {
+                            crate::daemon::call(
+                                &*daemon,
+                                api::NODE_LIST_AVAILABLE,
+                                NodeListParams { available: true, major: None },
+                            )
+                            .await
+                        },
+                        cx,
+                    )
+                });
+                cx.spawn(async move |cx| {
+                    if let Some(list) = task.await {
+                        let text = list
+                            .available
+                            .iter()
+                            .map(|r| match &r.lts {
+                                Some(lts) => format!("{} ({lts})", r.version),
+                                None => r.version.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        cx.update(|cx| {
+                            env.nav.update(cx, |n, cx| {
+                                n.node_available = Some(text);
+                                cx.notify();
+                            })
+                        });
+                    }
+                })
+                .detach();
+            },
+        )))
         .children(available.map(|a| {
             div().text_xs().text_color(t.muted).child(crate::widgets::text("node:available:list", a))
         }))

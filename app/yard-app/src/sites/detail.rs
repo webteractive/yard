@@ -193,22 +193,24 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
             let selected = php_options.iter().position(|v| v == php).map(|i| i + 1);
             let (e, n, versions) = (env.clone(), name.to_string(), php_options.clone());
             pane = pane.child(
-                Picker::new(format!("site:{name}:php"), format!("PHP for {name}"), options, selected)
-                    .disabled_because(project_lock(&site).map(Into::into))
-                    .on_select(move |i, _, cx| {
-                        let php = if i == 0 { None } else { versions.get(i - 1).cloned() };
-                        let (daemon, site) = (e.daemon.clone(), n.clone());
-                        quick(
-                            &e,
-                            format!("site:{n}:php"),
-                            async move {
-                                call(&*daemon, api::SITES_ISOLATE, IsolateParams { site, php })
-                                    .await
-                                    .map(|_| ())
-                            },
-                            cx,
-                        )
-                    }),
+                crate::widgets::bar().child(
+                    Picker::new(format!("site:{name}:php"), format!("PHP for {name}"), options, selected)
+                        .disabled_because(project_lock(&site).map(Into::into))
+                        .on_select(move |i, _, cx| {
+                            let php = if i == 0 { None } else { versions.get(i - 1).cloned() };
+                            let (daemon, site) = (e.daemon.clone(), n.clone());
+                            quick(
+                                &e,
+                                format!("site:{n}:php"),
+                                async move {
+                                    call(&*daemon, api::SITES_ISOLATE, IsolateParams { site, php })
+                                        .await
+                                        .map(|_| ())
+                                },
+                                cx,
+                            )
+                        }),
+                ),
             );
             if let (Some(_), Some(file)) = (project_lock(&site), site.project_file.clone()) {
                 let e = env.clone();
