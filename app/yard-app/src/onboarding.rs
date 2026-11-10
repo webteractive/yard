@@ -8,9 +8,11 @@ use crate::screens::quick;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::theme::Theme;
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, IntoElement, ParentElement, PathPromptOptions, Pixels,
-    Render, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
+    AnyElement, App, AppContext, Bounds, Context, Image, ImageFormat, IntoElement, ParentElement,
+    PathPromptOptions, Pixels, Render, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
+    img, prelude::*, px, size,
 };
+use std::sync::Arc;
 use yard_app_model::hint::{HintAction, TerminalCommand};
 use yard_app_model::refresh::ResourceKey;
 use yard_app_model::setup::{SetupFacts, SetupStep, SetupStepId, needs_onboarding, steps};
@@ -106,6 +108,16 @@ fn action(env: &AppEnv, step: &SetupStep) -> Option<AnyElement> {
     Some(button.into_any_element())
 }
 
+/// Yard's icon, 112 px for the 56 pt heading. The title beside it says the name, so the image adds
+/// nothing for VoiceOver (an `img` has no accessibility role).
+fn logo() -> Arc<Image> {
+    static LOGO: std::sync::OnceLock<Arc<Image>> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| {
+        Arc::new(Image::from_bytes(ImageFormat::Png, include_bytes!("../macos/AppIcon-112.png").to_vec()))
+    })
+    .clone()
+}
+
 /// The checklist for `facts`, with each step's action while it is to do.
 pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
@@ -119,7 +131,15 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
         } else {
             t.text
         };
-        let mut row = div()
+        let note = (s.id == SetupStepId::Helper && !s.done && !s.blocked).then(|| {
+            div().debug_selector(|| "helper:note".into()).text_xs().text_color(t.muted).child(
+                crate::widgets::text(
+                    "helper:note",
+                    "macOS asks for your password in Terminal: the helper writes /etc/resolver.",
+                ),
+            )
+        });
+        div()
             .flex()
             .items_center()
             .justify_between()
@@ -128,12 +148,16 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
             .rounded(px(6.))
             .border_1()
             .border_color(t.border)
+            .min_w(px(0.))
             .child(
                 div()
                     .flex()
                     .flex_col()
+                    .flex_1()
+                    .min_w(px(0.))
                     .child(
                         div()
+                            .debug_selector(move || format!("step:{:?}:title", s.id))
                             .text_sm()
                             .text_color(color)
                             .child(crate::widgets::text(format!("step:{:?}:title", s.id), title(s.id))),
@@ -143,27 +167,30 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
                             .text_xs()
                             .text_color(t.muted)
                             .child(crate::widgets::text(format!("step:{:?}:state", s.id), state(s))),
-                    ),
+                    )
+                    .children(note),
             )
-            .children(action(env, s));
-        if s.id == SetupStepId::Helper && !s.done && !s.blocked {
-            row = row.child(div().text_xs().text_color(t.muted).child(crate::widgets::text(
-                "helper:note",
-                "macOS asks for your password in Terminal: the helper writes /etc/resolver.",
-            )));
-        }
-        row
+            .children(action(env, s))
     });
     let check = env.clone();
     div()
+        .id("onboarding")
         .size_full()
+        .overflow_y_scroll()
         .flex()
         .flex_col()
         .gap(px(8.))
         .p(px(16.))
         .bg(t.background)
         .text_color(t.text)
-        .child(div().text_xl().child(crate::widgets::text("heading", "Set up Yard")))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(14.))
+                .child(img(logo()).size(px(56.)).flex_none())
+                .child(div().text_xl().child(crate::widgets::text("heading", "Set up Yard"))),
+        )
         .child(div().text_sm().text_color(t.muted).child(crate::widgets::text(
             "summary",
             if ready {
@@ -357,5 +384,49 @@ mod tests {
             r.errors.record(crate::runner::ActionId("yardd:start".into()), e)
         });
         assert_eq!(cx.update(|cx| super::step_errors(&env, cx).len()), 1);
+    }
+
+    /// The helper step pending, with the room a 620×640 window gives.
+    fn helper_pending() -> SetupFacts {
+        SetupFacts { daemon_answers: true, ..stopped() }
+    }
+
+    fn onboarding_window(cx: &mut TestAppContext) -> &mut gpui::VisualTestContext {
+        let (_fake, env) = env(cx);
+        let (_v, vcx) = cx.add_window_view(|_, _| Host(env, helper_pending()));
+        vcx.simulate_resize(gpui::size(gpui::px(620.), gpui::px(320.)));
+        vcx.run_until_parked();
+        vcx
+    }
+
+    /// The window scrolls, so Check again can be reached however short it is (G8: it was cut off).
+    #[gpui::test]
+    async fn onboarding_scrolls_to_check_again(cx: &mut TestAppContext) {
+        let vcx = onboarding_window(cx);
+        let height = vcx.update(|w, _| w.viewport_size().height);
+        let before = vcx.debug_bounds("setup:check").expect("Check again is laid out");
+        assert!(before.bottom() > height, "the test needs Check again below the fold");
+        vcx.simulate_event(gpui::ScrollEvent {
+            position: gpui::point(gpui::px(300.), gpui::px(100.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-2000.))),
+            ..Default::default()
+        });
+        vcx.run_until_parked();
+        let after = vcx.debug_bounds("setup:check").expect("Check again is laid out");
+        assert!(
+            after.bottom() <= height,
+            "Check again ends at {:?}, the window at {height:?}",
+            after.bottom()
+        );
+    }
+
+    /// The helper's note sits under its step's title, not in a third column (G8: it ran out of its card).
+    #[gpui::test]
+    async fn the_helper_note_sits_under_its_title(cx: &mut TestAppContext) {
+        let vcx = onboarding_window(cx);
+        let title = vcx.debug_bounds("step:Helper:title").expect("the helper's title");
+        let note = vcx.debug_bounds("helper:note").expect("the helper's note");
+        assert_eq!(note.left(), title.left());
+        assert!(note.top() >= title.bottom());
     }
 }
