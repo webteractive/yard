@@ -324,7 +324,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .py(px(5.))
             .rounded(px(6.))
             .cursor_pointer()
-            .when(selected, |d| d.bg(Theme::wash(t.accent)))
+            .when(selected, |d| d.bg(Theme::wash(t.accent, 0.14)))
             .on_press(move |_, _, cx| open(&env, page.clone(), cx))
             .child(*label)
             .when_some(count, |d, n| {

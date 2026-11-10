@@ -606,7 +606,7 @@ impl Element for TextElement {
                         point(bounds.left() + line.x_for_index(selected_range.start), bounds.top()),
                         point(bounds.left() + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
-                    super::theme::Theme::wash(super::theme::Theme::of(window).accent),
+                    super::theme::Theme::wash(super::theme::Theme::of(window).accent, 0.14),
                 )),
                 None,
             )

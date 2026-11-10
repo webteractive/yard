@@ -114,7 +114,7 @@ impl RenderOnce for ErrorView {
             .gap(px(4.))
             .p(px(8.))
             .rounded(px(6.))
-            .bg(Theme::wash(t.danger))
+            .bg(Theme::wash(t.danger, 0.14))
             .child(
                 div()
                     .text_sm()

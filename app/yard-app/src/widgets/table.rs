@@ -103,7 +103,7 @@ impl RenderOnce for Table {
                     .py(px(5.))
                     .border_b_1()
                     .border_color(t.border)
-                    .when(selected, |d| d.bg(Theme::wash(t.accent)))
+                    .when(selected, |d| d.bg(Theme::wash(t.accent, 0.14)))
                     .when_some(handler, |d, h| d.cursor_pointer().on_press(move |_, w, cx| h(&key, w, cx)))
                     .children(row.cells.into_iter().enumerate().map(|(i, c)| {
                         div().flex_1().text_sm().text_color(t.text).child(text(format!("cell:{i}"), c))

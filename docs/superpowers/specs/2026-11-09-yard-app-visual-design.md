@@ -195,7 +195,7 @@ signal.
 | `warning` / `warning_text` | #FF9500 / #A15C00 | #FF9F0A / #FFB340 | needs setup, warnings, waiting |
 | `danger` / `danger_text` | #FF3B30 / #C4281C | #FF453A / #FF6961 | failed, error, destructive labels |
 | `danger_fill` | #D93025 | #C9372C | the sidebar's failure badge only |
-| `neutral` / `neutral_text` | #8E8E93 / #6E6E73 | #98989D / #AEAEB2 | stopped, sleeping, off, free, cancelled |
+| `neutral` / `neutral_text` | #8E8E93 / #6A6A6F (#6E6E73 was 4.38:1 on its wash) | #98989D / #AEAEB2 | stopped, sleeping, off, free, cancelled |
 
 A pill's background is its state colour at .15 alpha (`Theme::wash`, with the alpha as a parameter).
 A wash under danger text at .15 keeps 4.5:1 for both themes' `*_text`.

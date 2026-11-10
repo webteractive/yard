@@ -56,7 +56,7 @@ impl RenderOnce for Banner {
             .gap(px(8.))
             .px(px(12.))
             .py(px(6.))
-            .bg(Theme::wash(color))
+            .bg(Theme::wash(color, 0.14))
             .border_b_1()
             .border_color(color)
             .child(div().flex_1().text_sm().text_color(t.text).child(self.text))

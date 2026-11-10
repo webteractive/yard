@@ -120,7 +120,7 @@ impl RenderOnce for Picker {
                     .px(px(10.))
                     .py(px(4.))
                     .cursor_pointer()
-                    .when(self.selected == Some(i), |d| d.bg(Theme::wash(t.accent)))
+                    .when(self.selected == Some(i), |d| d.bg(Theme::wash(t.accent, 0.14)))
                     .on_press(move |_, w, cx| {
                         close.update(cx, |o, cx| {
                             *o = false;
