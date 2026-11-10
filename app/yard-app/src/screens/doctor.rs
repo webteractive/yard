@@ -76,14 +76,15 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let _ = (&run, running);
     let mut page = div().flex().flex_col().gap(px(10.));
     if let Some(e) = &s.doctor.error {
-        page = page.child(div().type_body().text_color(t.danger).child(text("error", e.message.clone())));
+        page =
+            page.child(div().type_body().text_color(t.c.danger_text).child(text("error", e.message.clone())));
     }
     let Some(report) = report else { return page.into_any_element() };
     for (title, status, checks) in grouped(&report) {
         let color = match status {
-            CheckStatus::Fail => t.danger,
-            CheckStatus::Warn => t.warning,
-            _ => t.muted,
+            CheckStatus::Fail => t.c.danger_text,
+            CheckStatus::Warn => t.c.warning_text,
+            _ => t.c.text_secondary,
         };
         page =
             page.child(div().type_section().text_color(color).child(text(format!("group:{title}"), title)));
@@ -95,7 +96,7 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 .p(px(8.))
                 .rounded(px(6.))
                 .border_1()
-                .border_color(t.border)
+                .border_color(t.c.separator)
                 .min_w(px(0.))
                 .child(
                     div()
@@ -108,7 +109,7 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 let mut controls = div().flex().gap(px(6.)).items_center().child(
                     div()
                         .type_secondary()
-                        .text_color(t.muted)
+                        .text_color(t.c.text_secondary)
                         .child(text(format!("{}:hint", c.id), hint.clone())),
                 );
                 for label in buttons(Some(&hint)) {

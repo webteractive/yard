@@ -163,7 +163,12 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .children(errors)
         .child(units)
         .when(!sleeping.is_empty(), |d| {
-            d.child(div().type_body().text_color(t.muted).child(format!("Sleeping: {}", sleeping.join(", "))))
+            d.child(
+                div()
+                    .type_body()
+                    .text_color(t.c.text_secondary)
+                    .child(format!("Sleeping: {}", sleeping.join(", "))),
+            )
         })
         .into_any_element()
 }

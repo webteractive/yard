@@ -9,7 +9,7 @@ use crate::widgets::Pressable;
 use crate::widgets::banner::{Banner, BannerKind};
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
-use crate::widgets::theme::{Theme, Typography, size};
+use crate::widgets::theme::{Theme, Typography, size, space};
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Global, IntoElement, ParentElement, Pixels,
     Render, Role, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
@@ -280,8 +280,8 @@ impl Render for MainWindow {
             .size_full()
             .relative()
             .flex()
-            .bg(t.background)
-            .text_color(t.text)
+            .bg(t.c.window_bg)
+            .text_color(t.c.text)
             .type_body()
             .child(sidebar(&env, &screen, window, cx))
             .child(
@@ -290,6 +290,9 @@ impl Render for MainWindow {
                     .min_w(px(0.))
                     .flex()
                     .flex_col()
+                    .bg(t.c.content_bg)
+                    .border_l_1()
+                    .border_color(t.c.separator)
                     .child(toolbar(&env, &screen, cx))
                     .children(banner(&env, cx))
                     .child(
@@ -299,7 +302,9 @@ impl Render for MainWindow {
                             .min_w(px(0.))
                             .flex_1()
                             .overflow_y_scroll()
-                            .p(px(16.))
+                            .px(space::XL)
+                            .pt(space::LG)
+                            .pb(space::XXL)
                             .children(issues(&env, &screen, window, cx))
                             .child(content(&env, &screen, window, cx)),
                     ),
@@ -354,9 +359,6 @@ fn badge_text(screen: &Screen, n: usize) -> String {
     }
 }
 
-/// The sidebar's width (spec §3.3).
-pub(crate) const SIDEBAR_WIDTH: gpui::Pixels = px(200.);
-
 fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let item = |label: &'static str, page: &Screen, cx: &App| {
@@ -384,7 +386,8 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .rounded(px(6.))
             .cursor_pointer()
             .when(selected, |d| d.type_body_strong())
-            .when(selected, |d| d.bg(Theme::wash(t.accent, 0.14)))
+            .when(selected, |d| d.bg(t.c.selection))
+            .when(!selected, |d| d.hover(|s| s.bg(t.c.hover)))
             .on_press(move |_, _, cx| open(&env, page.clone(), cx))
             .child(label)
             .when_some(count, |d, n| {
@@ -434,7 +437,8 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .debug_selector(|| "sidebar".into())
         .role(Role::TabList)
         .aria_label("Screens")
-        .w(SIDEBAR_WIDTH)
+        .w(size::SIDEBAR)
+        .bg(t.c.sidebar_bg)
         .flex_shrink_0()
         .pt(size::TOOLBAR)
         .on_mouse_down(gpui::MouseButton::Left, |e, window, _| {
@@ -448,7 +452,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .flex()
         .flex_col()
         .border_r_1()
-        .border_color(t.border)
+        .border_color(t.c.separator)
         .type_body()
         .children(items)
         .into_any_element()
@@ -842,7 +846,7 @@ mod tests {
         let sidebar = vcx.debug_bounds("sidebar").expect("the sidebar is drawn");
         let content = vcx.debug_bounds("content").expect("the content is drawn");
         let window = vcx.update(|w, _| w.viewport_size());
-        assert_eq!(sidebar.size.width, super::SIDEBAR_WIDTH);
+        assert_eq!(sidebar.size.width, crate::widgets::theme::size::SIDEBAR);
         assert!(
             content.right() <= window.width,
             "content ends at {:?}, window at {:?}",

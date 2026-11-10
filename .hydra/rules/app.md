@@ -21,6 +21,11 @@ triggers:
   argument (`terminal_script`); a hint's text never reaches a shell. Files and folders open through
   `Opener` (one `O_NOFOLLOW` open, nothing executable or launchable, a package revealed), never
   `open` on a path a hint named.
+- **Looks come from the tokens.** Colours, spacing, radii, sizes and type come from
+  `widgets::theme` (`Theme::c`, `space`, `radius`, `size`, `Typography`), the visual design spec §3;
+  no colour literal outside `theme.rs` (the tray icon's black on clear excepted). A row keeps at most
+  one or two small buttons; the rest go in the selected item's detail, an accessibility group named
+  for the item so its controls read (and `ax press <label> <item>` finds them) as the item's.
 - **Every widget reads aloud.** Each control has an `A11y` id, role and label; text goes through
   `widgets::text` (a `Role::Label` with only `aria_label` gives VoiceOver nothing); a control is
   pressed with `on_press` (GPUI turns an accessibility press into a click at the centre, which

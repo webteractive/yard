@@ -44,9 +44,9 @@ impl RenderOnce for Banner {
         let t = Theme::of(window);
         let a11y = self.a11y();
         let color = match self.kind {
-            BannerKind::Info => t.accent,
-            BannerKind::Warning => t.warning,
-            BannerKind::Error => t.danger,
+            BannerKind::Info => t.c.accent,
+            BannerKind::Warning => t.c.warning_text,
+            BannerKind::Error => t.c.danger_text,
         };
         div()
             .id(ElementId::Name(a11y.id))
@@ -60,7 +60,7 @@ impl RenderOnce for Banner {
             .bg(Theme::wash(color, 0.14))
             .border_b_1()
             .border_color(color)
-            .child(div().flex_1().type_body().text_color(t.text).child(self.text))
+            .child(div().flex_1().type_body().text_color(t.c.text).child(self.text))
             .children(self.actions)
     }
 }

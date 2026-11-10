@@ -132,12 +132,14 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
             if s.done { ("✓".to_string(), Tone::Success) } else { ((n + 1).to_string(), Tone::Neutral) };
         let (_, mark_fg, mark_bg) = t.state(tone);
         let note = (s.id == SetupStepId::Helper && !s.done && !s.blocked).then(|| {
-            div().debug_selector(|| "helper:note".into()).type_secondary().text_color(t.muted).child(
-                crate::widgets::text(
+            div()
+                .debug_selector(|| "helper:note".into())
+                .type_secondary()
+                .text_color(t.c.text_secondary)
+                .child(crate::widgets::text(
                     "helper:note",
                     "macOS asks for your password in Terminal: the helper writes /etc/resolver.",
-                ),
-            )
+                ))
         });
         div()
             .flex()
@@ -147,7 +149,7 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
             .p(px(8.))
             .rounded(px(6.))
             .border_1()
-            .border_color(t.border)
+            .border_color(t.c.separator)
             .min_w(px(0.))
             .child(
                 div()
@@ -189,8 +191,8 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
         .flex_col()
         .gap(px(8.))
         .p(px(16.))
-        .bg(t.background)
-        .text_color(t.text)
+        .bg(t.c.window_bg)
+        .text_color(t.c.text)
         .type_body()
         .child(
             div()
@@ -200,7 +202,7 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
                 .child(img(logo()).size(px(56.)).flex_none())
                 .child(div().type_title().child(crate::widgets::text("heading", "Set up Yard"))),
         )
-        .child(div().type_body().text_color(t.muted).child(crate::widgets::text(
+        .child(div().type_body().text_color(t.c.text_secondary).child(crate::widgets::text(
             "summary",
             if ready {
                 "Yard is set up. The optional steps can wait."

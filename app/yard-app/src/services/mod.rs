@@ -63,7 +63,7 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                     .child(
                         div()
                             .type_body()
-                            .text_color(t.muted)
+                            .text_color(t.c.text_secondary)
                             .child(crate::widgets::text("service:log:title", format!("{name}'s log"))),
                     )
                     .child(Button::new("service:log:close", "Close log").on_click(move |_, _, cx| {

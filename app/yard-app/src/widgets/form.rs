@@ -119,52 +119,44 @@ impl RenderOnce for Form {
         }
         let on_cancel = self.on_cancel;
         // Modal: occluded, so no click on the backdrop or the sheet reaches what is under it.
-        div()
-            .absolute()
-            .inset_0()
-            .occlude()
-            .flex()
-            .items_start()
-            .justify_center()
-            .bg(gpui::hsla(0., 0., 0., 0.25))
-            .child(
-                div()
-                    .id(ElementId::Name(a11y.id.clone()))
-                    .track_focus(&focus)
-                    .key_context(CONTEXT)
-                    .on_action(move |_: &Submit, w, cx| {
-                        if let Some(h) = &on_submit {
-                            h(&ClickEvent::default(), w, cx);
-                        }
-                    })
-                    .on_action(move |_: &Cancel, w, cx| {
-                        if let Some(h) = &on_cancel {
-                            h(&ClickEvent::default(), w, cx);
-                        }
-                    })
-                    .debug_selector(|| a11y.id.to_string())
-                    .role(Role::Dialog)
-                    .aria_label(a11y.label)
-                    .w(size::SHEET)
-                    .p(px(16.))
-                    .gap(px(10.))
-                    .flex()
-                    .flex_col()
-                    .rounded_b(radius::XL)
-                    .border_1()
-                    .border_t_0()
-                    .border_color(t.c.separator)
-                    .bg(t.c.surface)
-                    .shadow_lg()
-                    .child(div().type_section().text_color(t.text).child(self.title))
-                    .children(self.fields)
-                    .children(self.error.map(|e| {
-                        div()
-                            .type_body()
-                            .text_color(t.c.danger_text)
-                            .child(super::text(format!("{}:error", a11y.id), e))
-                    }))
-                    .child(div().flex().justify_end().gap(px(8.)).child(cancel).child(submit)),
-            )
+        div().absolute().inset_0().occlude().flex().items_start().justify_center().bg(t.c.backdrop).child(
+            div()
+                .id(ElementId::Name(a11y.id.clone()))
+                .track_focus(&focus)
+                .key_context(CONTEXT)
+                .on_action(move |_: &Submit, w, cx| {
+                    if let Some(h) = &on_submit {
+                        h(&ClickEvent::default(), w, cx);
+                    }
+                })
+                .on_action(move |_: &Cancel, w, cx| {
+                    if let Some(h) = &on_cancel {
+                        h(&ClickEvent::default(), w, cx);
+                    }
+                })
+                .debug_selector(|| a11y.id.to_string())
+                .role(Role::Dialog)
+                .aria_label(a11y.label)
+                .w(size::SHEET)
+                .p(px(16.))
+                .gap(px(10.))
+                .flex()
+                .flex_col()
+                .rounded_b(radius::XL)
+                .border_1()
+                .border_t_0()
+                .border_color(t.c.separator)
+                .bg(t.c.surface)
+                .shadow_lg()
+                .child(div().type_section().text_color(t.c.text).child(self.title))
+                .children(self.fields)
+                .children(self.error.map(|e| {
+                    div()
+                        .type_body()
+                        .text_color(t.c.danger_text)
+                        .child(super::text(format!("{}:error", a11y.id), e))
+                }))
+                .child(div().flex().justify_end().gap(px(8.)).child(cancel).child(submit)),
+        )
     }
 }

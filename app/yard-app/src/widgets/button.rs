@@ -6,7 +6,7 @@ use super::disabled::Disabled;
 use super::theme::{Theme, Typography, radius, size};
 use gpui::{
     App, BoxShadow, ClickEvent, ElementId, Hsla, IntoElement, ParentElement, RenderOnce, Role, SharedString,
-    Styled, Window, div, hsla, point, prelude::*, px,
+    Styled, Window, div, point, prelude::*, px,
 };
 use std::rc::Rc;
 
@@ -117,7 +117,7 @@ impl RenderOnce for Button {
             .border_color(if bordered { t.c.control_border } else { gpui::transparent_black() })
             .when(shadow, |d| {
                 d.shadow(vec![BoxShadow {
-                    color: hsla(0., 0., 0., 0.05),
+                    color: t.c.control_shadow,
                     offset: point(px(0.), px(1.)),
                     blur_radius: px(0.),
                     spread_radius: px(0.),

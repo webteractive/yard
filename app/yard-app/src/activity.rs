@@ -69,8 +69,8 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             .p(px(10.))
             .rounded(px(8.))
             .border_1()
-            .border_color(t.border)
-            .bg(t.surface)
+            .border_color(t.c.separator)
+            .bg(t.c.surface)
             .child(
                 div()
                     .flex()

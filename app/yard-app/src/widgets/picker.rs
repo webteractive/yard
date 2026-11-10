@@ -101,7 +101,9 @@ impl RenderOnce for Picker {
                     .size_full()
             });
         if let Some(why) = &disabled {
-            root = root.opacity(0.6).child(div().type_secondary().text_color(t.muted).child(why.clone()));
+            root = root
+                .opacity(0.6)
+                .child(div().type_secondary().text_color(t.c.text_secondary).child(why.clone()));
             return Disabled(root).into_any_element();
         } else {
             root = root.cursor_pointer().on_press(move |_, _, cx| {

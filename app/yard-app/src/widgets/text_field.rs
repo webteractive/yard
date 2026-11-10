@@ -53,7 +53,7 @@ pub struct TextField {
 }
 
 /// A field's default width (spec §3.3).
-pub const FIELD_WIDTH: Pixels = px(180.);
+pub const FIELD_WIDTH: Pixels = super::theme::size::FIELD;
 /// The field's height and its text's line height: one pair, so the text and caret sit centred (G21).
 const FIELD_HEIGHT: Pixels = px(24.);
 const FIELD_LINE: Pixels = px(18.);
@@ -557,11 +557,7 @@ impl Element for TextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), {
-                let mut c = style.color;
-                c.a *= 0.4;
-                c
-            })
+            (input.placeholder.clone(), { super::theme::Theme::of(window).c.text_tertiary })
         } else {
             (content, style.color)
         };
@@ -607,7 +603,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    super::theme::Theme::of(window).accent,
+                    super::theme::Theme::of(window).c.accent,
                 )),
             )
         } else {
@@ -617,7 +613,7 @@ impl Element for TextElement {
                         point(bounds.left() + line.x_for_index(selected_range.start), bounds.top()),
                         point(bounds.left() + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
-                    super::theme::Theme::wash(super::theme::Theme::of(window).accent, 0.14),
+                    super::theme::Theme::wash(super::theme::Theme::of(window).c.accent, 0.14),
                 )),
                 None,
             )
@@ -699,7 +695,11 @@ impl Render for TextField {
             .bg(theme.c.control_bg)
             .text_color(theme.c.text)
             .border_1()
-            .border_color(theme.c.control_border)
+            .border_color(if self.focus_handle.is_focused(window) {
+                theme.c.focus_ring
+            } else {
+                theme.c.control_border
+            })
             .rounded(px(6.))
             .line_height(FIELD_LINE)
             .text_size(px(13.))

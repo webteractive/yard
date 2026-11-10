@@ -1,7 +1,5 @@
 //! Colours, spacing, sizes and type for light and dark, following the window's appearance. The
 //! values are the visual design's tokens (`2026-11-09-yard-app-visual-design.md` §3).
-// Tokens land before the widgets that use them; Task 19 of the visual design plan removes this.
-#![allow(dead_code)]
 
 #[cfg(test)]
 use gpui::Rgba;
@@ -13,17 +11,6 @@ pub struct Theme {
     pub c: Colors,
     /// The dark appearance, where controls have no shadow.
     pub dark: bool,
-    // The names the screens used before the tokens, kept with their old values until every screen
-    // has moved to `c` (spec §3.6).
-    pub background: Hsla,
-    pub surface: Hsla,
-    pub text: Hsla,
-    pub muted: Hsla,
-    pub border: Hsla,
-    pub accent: Hsla,
-    pub on_accent: Hsla,
-    pub danger: Hsla,
-    pub warning: Hsla,
 }
 
 /// Every colour token of spec §3.4, named for its role.
@@ -56,6 +43,12 @@ pub struct Colors {
     pub danger_fill: Hsla,
     pub neutral: Hsla,
     pub neutral_text: Hsla,
+    /// A switch's track while off.
+    pub switch_off: Hsla,
+    /// Behind a sheet.
+    pub backdrop: Hsla,
+    /// A control's 1 px bottom shadow (light only).
+    pub control_shadow: Hsla,
 }
 
 /// What a state means, for its colour: a pill, a badge, an error bar.
@@ -119,17 +112,11 @@ impl Theme {
                 neutral: c(0x8e8e93),
                 // The spec's #6E6E73 is 4.38:1 on its own pill wash; this is the nearest that passes.
                 neutral_text: c(0x6a6a6f),
+                switch_off: c(0xd1d1d6),
+                backdrop: a(0x000000, 0.25),
+                control_shadow: a(0x000000, 0.05),
             },
             dark: false,
-            background: c(0xf6f6f4),
-            surface: c(0xffffff),
-            text: c(0x1d1d1f),
-            muted: c(0x6e6e73),
-            border: c(0xd8d8d4),
-            accent,
-            on_accent: c(0xffffff),
-            danger: c(0xc62828),
-            warning: c(0xa86400),
         }
     }
 
@@ -164,17 +151,11 @@ impl Theme {
                 danger_fill: c(0xc9372c),
                 neutral: c(0x98989d),
                 neutral_text: c(0xaeaeb2),
+                switch_off: c(0x48484a),
+                backdrop: a(0x000000, 0.25),
+                control_shadow: a(0x000000, 0.0),
             },
             dark: true,
-            background: c(0x1c1c1e),
-            surface: c(0x2a2a2d),
-            text: c(0xf2f2f2),
-            muted: c(0x9a9aa0),
-            border: c(0x3d3d41),
-            accent: c(0x3fb37a),
-            on_accent: c(0x0b1f14),
-            danger: c(0xff6b6b),
-            warning: c(0xf0b44c),
         }
     }
 

@@ -28,7 +28,7 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
                 .field(
                     div()
                         .type_body()
-                        .text_color(t.muted)
+                        .text_color(t.c.text_secondary)
                         .child(crate::widgets::text("sheet:link:folder", folder.display().to_string())),
                 )
                 .field(name.clone())
@@ -86,10 +86,12 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
                 );
             }
             for (i, need) in plan.manual.iter().enumerate() {
-                form = form.field(div().type_secondary().text_color(t.muted).child(crate::widgets::text(
-                    format!("sheet:settle:manual:{i}"),
-                    format!("Not installed by Yard: {}", need.describe()),
-                )));
+                form = form.field(div().type_secondary().text_color(t.c.text_secondary).child(
+                    crate::widgets::text(
+                        format!("sheet:settle:manual:{i}"),
+                        format!("Not installed by Yard: {}", need.describe()),
+                    ),
+                ));
             }
             let submit = env.clone();
             let form = form.submit("Install", false, move |_, _, cx| {

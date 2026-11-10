@@ -142,7 +142,9 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   settle resumed after one, sheets taking Enter and Escape, a picker closing on a click outside, log
   tails reconnecting, bad port input shown, and the rest in the M6 spec's status); `checklist.sh`
   passed 72/72 and `checklist-installs.sh` 14/14 again. `ax.js menu-click` no longer presses Escape
-  after an enabled item, which would cancel the sheet the item opened.
+  after an enabled item, which would cancel the sheet the item opened. The visual design
+  (`docs/superpowers/specs/2026-11-09-yard-app-visual-design.md`, the D3 logo in its §6) was built on
+  2026-11-10; its Status says what is left and that the checklists have yet to run on it.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.

@@ -1,7 +1,13 @@
 # Yard.app: visual design and glitch survey
 
 Status: proposal of 2026-11-09, approved 2026-11-10 (the maintainer: implement the design, then the
-release); planned in `docs/superpowers/plans/2026-11-10-yard-app-visual-design.md`. It changes how Yard.app looks and lays out,
+release); planned in `docs/superpowers/plans/2026-11-10-yard-app-visual-design.md` and built on
+2026-11-10 (45aa1b5..a3a3d27 and the commit after it), steps 1–17 of §5 and the logo of §6. Not
+built: step 18, the blurred sidebar (it needs a look at both appearances first); "Open in…" as one
+menu on the site detail (the editor, Finder and Terminal stay three buttons); Ports' controls stay
+in its page rather than the toolbar. Light `neutral_text` is #6A6A6F, not #6E6E73, which failed
+4.5:1 on its own pill wash. The unit tests cover the layout fixes; `checklist.sh` and
+`checklist-installs.sh` were updated for the moved controls but not yet run on this build. It changes how Yard.app looks and lays out,
 not what it does: every screen, action, error path, sheet key and accessibility rule in the M6 design
 (`2026-11-05-yard-m6-app-design.md` §8) and `.hydra/rules/app.md` still holds. The menu bar menu stays
 a native `NSMenu` (muda) and its content is out of scope; its icon, and the app icon, change to the
@@ -523,7 +529,7 @@ as `app.md` requires.
 
 A green tile holding a light disc; on the disc, two requests (the upper nodes) join and land on a
 site (the lower node). It replaces the green "Y" `AppIcon.icns` and the plain circle the menu bar
-draws (`menubar.rs` `icon`). The canvas board "Logo: D3, the light disc" shows every size.
+drew (`menubar.rs` `icon`, now `menubar/icon.rs`). The canvas board "Logo: D3, the light disc" shows every size.
 
 **App icon** (viewBox 100; the source is `app/yard-app/macos/AppIcon.svg`, 1024 px):
 

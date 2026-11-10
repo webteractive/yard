@@ -48,11 +48,7 @@ impl Toggle {
 
 /// The switch's track colour.
 pub fn track(on: bool, t: &Theme) -> gpui::Hsla {
-    match (on, t.dark) {
-        (true, _) => t.c.accent,
-        (false, false) => gpui::rgb(0xd1d1d6).into(),
-        (false, true) => gpui::rgb(0x48484a).into(),
-    }
+    if on { t.c.accent } else { t.c.switch_off }
 }
 
 impl RenderOnce for Toggle {

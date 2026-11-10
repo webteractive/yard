@@ -71,7 +71,7 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex_col()
         .gap(px(12.))
         .children(errors(env, "node:", cx))
-        .child(div().type_body().text_color(t.muted).child(crate::widgets::text(
+        .child(div().type_body().text_color(t.c.text_secondary).child(crate::widgets::text(
             "node:default",
             format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
         )))
@@ -116,7 +116,10 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             },
         )))
         .children(available.map(|a| {
-            div().type_secondary().text_color(t.muted).child(crate::widgets::text("node:available:list", a))
+            div()
+                .type_secondary()
+                .text_color(t.c.text_secondary)
+                .child(crate::widgets::text("node:available:list", a))
         }))
         .into_any_element()
 }

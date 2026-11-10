@@ -52,15 +52,15 @@ impl RenderOnce for Checkbox {
                     .size(px(14.))
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(t.border)
-                    .bg(if checked { t.accent } else { t.surface })
-                    .text_color(t.on_accent)
+                    .border_color(t.c.separator)
+                    .bg(if checked { t.c.accent } else { t.c.surface })
+                    .text_color(t.c.on_accent)
                     .type_secondary()
                     .flex()
                     .items_center()
                     .justify_center()
                     .when(checked, |d| d.child("✓")),
             )
-            .child(div().type_body().text_color(t.text).child(self.label))
+            .child(div().type_body().text_color(t.c.text).child(self.label))
     }
 }
