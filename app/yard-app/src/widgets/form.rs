@@ -2,8 +2,8 @@
 
 use super::A11y;
 use super::button::{Button, ButtonStyle};
-use super::theme::Theme;
 use super::theme::Typography;
+use super::theme::{Theme, radius, size};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FocusHandle, IntoElement, KeyBinding, ParentElement, RenderOnce,
     Role, SharedString, Styled, Window, actions, div, prelude::*, px,
@@ -124,9 +124,9 @@ impl RenderOnce for Form {
             .inset_0()
             .occlude()
             .flex()
-            .items_center()
+            .items_start()
             .justify_center()
-            .bg(gpui::hsla(0., 0., 0., 0.35))
+            .bg(gpui::hsla(0., 0., 0., 0.25))
             .child(
                 div()
                     .id(ElementId::Name(a11y.id.clone()))
@@ -145,20 +145,23 @@ impl RenderOnce for Form {
                     .debug_selector(|| a11y.id.to_string())
                     .role(Role::Dialog)
                     .aria_label(a11y.label)
-                    .w(px(440.))
+                    .w(size::SHEET)
                     .p(px(16.))
                     .gap(px(10.))
                     .flex()
                     .flex_col()
-                    .rounded(px(10.))
-                    .bg(t.surface)
+                    .rounded_b(radius::XL)
+                    .border_1()
+                    .border_t_0()
+                    .border_color(t.c.separator)
+                    .bg(t.c.surface)
                     .shadow_lg()
                     .child(div().type_section().text_color(t.text).child(self.title))
                     .children(self.fields)
                     .children(self.error.map(|e| {
                         div()
                             .type_body()
-                            .text_color(t.danger)
+                            .text_color(t.c.danger_text)
                             .child(super::text(format!("{}:error", a11y.id), e))
                     }))
                     .child(div().flex().justify_end().gap(px(8.)).child(cancel).child(submit)),

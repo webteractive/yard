@@ -5,6 +5,7 @@
 
 use std::ops::Range;
 
+use super::theme::Typography;
 use gpui::{
     App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
@@ -650,10 +651,14 @@ impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = super::theme::Theme::of(window);
         let a11y = self.a11y();
-        div()
+        // A sheet's field shows its label above it (G20); the placeholder alone left once typed in.
+        let labelled = a11y.id.starts_with("sheet:");
+        let label = self.label.clone();
+        let id = a11y.id.to_string();
+        let boxed = div()
             .id(a11y.id.clone())
             .debug_selector({
-                let id = a11y.id.to_string();
+                let id = if labelled { format!("{id}:box") } else { id.clone() };
                 move || id
             })
             .role(a11y.role)
@@ -681,10 +686,10 @@ impl Render for TextField {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .bg(theme.surface)
-            .text_color(theme.text)
+            .bg(theme.c.control_bg)
+            .text_color(theme.c.text)
             .border_1()
-            .border_color(theme.border)
+            .border_color(theme.c.control_border)
             .rounded(px(6.))
             .line_height(FIELD_LINE)
             .text_size(px(13.))
@@ -700,7 +705,25 @@ impl Render for TextField {
                     .px(px(6.))
                     .py((FIELD_HEIGHT - px(2.) - FIELD_LINE) / 2.)
                     .child(TextElement { input: cx.entity() }),
+            );
+        if !labelled {
+            return boxed.into_any_element();
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .w_full()
+            .child(
+                div()
+                    .debug_selector(move || format!("{id}:label"))
+                    .type_secondary()
+                    .text_color(theme.c.text_secondary)
+                    // Plain text: VoiceOver reads the field's own label, not this one again.
+                    .child(label),
             )
+            .child(boxed)
+            .into_any_element()
     }
 }
 

@@ -46,6 +46,15 @@ impl Toggle {
     }
 }
 
+/// The switch's track colour.
+pub fn track(on: bool, t: &Theme) -> gpui::Hsla {
+    match (on, t.dark) {
+        (true, _) => t.c.accent,
+        (false, false) => gpui::rgb(0xd1d1d6).into(),
+        (false, true) => gpui::rgb(0x48484a).into(),
+    }
+}
+
 impl RenderOnce for Toggle {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let t = Theme::of(window);
@@ -65,16 +74,17 @@ impl RenderOnce for Toggle {
             .when_some(handler, |d, h| d.cursor_pointer().on_press(move |_, w, cx| h(!on, w, cx)))
             .child(
                 div()
-                    .w(px(28.))
-                    .h(px(16.))
-                    .rounded(px(8.))
-                    .bg(if on { t.accent } else { t.border })
+                    .flex_none()
+                    .w(px(32.))
+                    .h(px(18.))
+                    .rounded_full()
+                    .bg(track(on, &t))
                     .flex()
                     .when(on, |d| d.justify_end())
                     .p(px(2.))
-                    .child(div().size(px(12.)).rounded(px(6.)).bg(t.surface)),
+                    .child(div().size(px(14.)).rounded_full().bg(gpui::white()).shadow_sm()),
             )
-            .child(div().type_body().text_color(t.text).child(self.label));
+            .child(div().type_body().text_color(t.c.text).child(self.label));
         if a11y.disabled { Disabled(switch).into_any_element() } else { switch.into_any_element() }
     }
 }

@@ -560,4 +560,85 @@ mod tests {
         assert!(cell.contains(&pill.center()));
         assert_eq!(pill.size.height, gpui::px(18.));
     }
+
+    /// A picker's popup opens just under its button, wherever the button is (G19: a fixed offset).
+    #[gpui::test]
+    async fn the_picker_popup_starts_under_its_button(cx: &mut TestAppContext) {
+        let (_v, cx) = cx.add_window_view(move |_, _| Covered {
+            under: std::rc::Rc::new(std::cell::Cell::new(0)),
+            top: || {
+                div()
+                    .p(gpui::px(120.))
+                    .child(Picker::new("pick", "PHP", vec!["7.1".into(), "8.4".into()], Some(0)))
+                    .into_any_element()
+            },
+        });
+        cx.run_until_parked();
+        let picker = cx.debug_bounds("pick").expect("the picker is drawn");
+        click(cx, picker.center());
+        let menu = cx.debug_bounds("pick:menu").expect("the popup is open");
+        let gap = menu.top() - picker.bottom();
+        assert!(gap >= gpui::px(0.) && gap <= gpui::px(6.), "the popup is {gap:?} below its button");
+        assert_eq!(menu.left(), picker.left());
+    }
+
+    /// The off switch's track can be seen on white (G15).
+    #[test]
+    fn the_off_switch_track_is_visible() {
+        use crate::widgets::theme::{Theme, contrast};
+        use crate::widgets::toggle::track;
+        for t in [Theme::light(), Theme::dark()] {
+            let r = contrast(track(false, &t), t.c.surface);
+            assert!(r >= 1.3, "the off track is {r:.2}:1 on surface");
+            assert_eq!(track(true, &t), t.c.accent);
+        }
+    }
+
+    struct Logs {
+        lines: Vec<SharedString>,
+    }
+
+    impl Render for Logs {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(gpui::px(400.)).child(LogView::new("log", self.lines.clone()))
+        }
+    }
+
+    #[gpui::test]
+    async fn an_empty_log_says_so(cx: &mut TestAppContext) {
+        let (_v, vcx) = cx.add_window_view(|_, _| Logs { lines: vec![] });
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("log:empty").is_some(), "No log lines yet is drawn");
+        assert!(vcx.debug_bounds("log:copy").is_some(), "Copy all is a button");
+    }
+
+    /// A long line wraps inside the log view rather than running past it (G10).
+    #[gpui::test]
+    async fn a_long_log_line_wraps_inside_the_view(cx: &mut TestAppContext) {
+        let (_v, vcx) = cx.add_window_view(|_, _| Logs { lines: vec!["word ".repeat(120).into()] });
+        vcx.run_until_parked();
+        let view = vcx.debug_bounds("log").expect("the log view");
+        let line = vcx.debug_bounds("log:line:0").expect("the line");
+        assert!(
+            line.right() <= view.right(),
+            "the line ends at {:?}, the view at {:?}",
+            line.right(),
+            view.right()
+        );
+        assert!(line.size.height > gpui::px(17.), "a 600-character line takes more than one row");
+    }
+
+    /// A sheet's text field shows its label above it; a placeholder alone vanished once typed in (G20).
+    #[gpui::test]
+    async fn sheet_fields_show_their_labels(cx: &mut TestAppContext) {
+        let (_v, vcx) = cx
+            .add_window_view(|_, cx| TextField::new("sheet:port:redis", "Port for redis", "a free port", cx));
+        vcx.run_until_parked();
+        let label = vcx.debug_bounds("sheet:port:redis:label").expect("the label is drawn");
+        let field = vcx.debug_bounds("sheet:port:redis:box").expect("the field");
+        assert!(label.bottom() <= field.top());
+        let (_v, vcx) = cx.add_window_view(|_, cx| TextField::new("spec", "Node version", "22", cx));
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("spec:label").is_none(), "a field outside a sheet has its label beside it");
+    }
 }

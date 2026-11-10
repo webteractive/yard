@@ -288,7 +288,7 @@ fn over(top: Hsla, under: Hsla) -> Hsla {
 }
 
 #[cfg(test)]
-fn contrast(fg: Hsla, bg: Hsla) -> f32 {
+pub(crate) fn contrast(fg: Hsla, bg: Hsla) -> f32 {
     let (a, b) = (luminance(fg), luminance(bg));
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }

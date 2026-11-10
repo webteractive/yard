@@ -3,11 +3,10 @@
 use super::A11y;
 use super::Pressable;
 use super::disabled::Disabled;
-use super::theme::Theme;
-use super::theme::Typography;
+use super::theme::{Theme, Typography, radius, size};
 use gpui::{
-    App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce, Role, SharedString, Styled,
-    Window, anchored, canvas, deferred, div, prelude::*, px,
+    AnchoredPositionMode, App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce, Role,
+    SharedString, Styled, Window, anchored, canvas, deferred, div, point, prelude::*, px,
 };
 use std::rc::Rc;
 
@@ -77,23 +76,28 @@ impl RenderOnce for Picker {
             .aria_expanded(is_open)
             .when_some(a11y.description.clone(), |d, why| d.aria_description(why))
             .flex()
+            .flex_none()
             .items_center()
+            .justify_between()
             .gap(px(6.))
+            .h(size::CONTROL)
+            .min_w(size::PICKER_MIN)
             .px(px(8.))
-            .py(px(3.))
-            .rounded(px(6.))
+            .rounded(radius::MD)
             .border_1()
-            .border_color(t.border)
-            .bg(t.surface)
+            .border_color(t.c.control_border)
+            .bg(t.c.control_bg)
             .type_body()
-            .text_color(t.text)
+            .text_color(t.c.text)
             .relative()
-            .child(current)
-            .child(div().text_color(t.muted).child("▾"))
+            .child(div().min_w(px(0.)).truncate().child(current))
+            .child(div().text_color(t.c.text_secondary).child("⌄"))
             .child({
                 let button = button.clone();
                 canvas(move |bounds, _, cx| button.update(cx, |b, _| *b = bounds), |_, _, _, _| {})
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full()
             });
         if let Some(why) = &disabled {
@@ -118,10 +122,21 @@ impl RenderOnce for Picker {
                     .role(Role::MenuItem)
                     .aria_label(o.clone())
                     .aria_selected(self.selected == Some(i))
-                    .px(px(10.))
-                    .py(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(24.))
+                    .px(px(8.))
+                    .rounded(radius::SM)
                     .cursor_pointer()
-                    .when(self.selected == Some(i), |d| d.bg(Theme::wash(t.accent, 0.14)))
+                    .hover(|s| s.bg(t.c.row_selected))
+                    .child(
+                        div()
+                            .w(px(12.))
+                            .flex_none()
+                            .text_color(t.c.accent)
+                            .child(if self.selected == Some(i) { "✓" } else { "" }),
+                    )
                     .on_press(move |_, w, cx| {
                         close.update(cx, |o, cx| {
                             *o = false;
@@ -133,35 +148,50 @@ impl RenderOnce for Picker {
                     })
                     .child(o.clone())
             });
+            // The canvas fills the button inside its 1 px border; the popup lines up with the border.
+            let inner = *button.read(cx);
+            let at = Bounds::new(
+                point(inner.left() - px(1.), inner.top() - px(1.)),
+                gpui::size(inner.size.width + px(2.), inner.size.height + px(2.)),
+            );
             root = root.child(deferred(
-                anchored().child(
-                    div()
-                        .id(ElementId::Name(format!("{}:menu", self.id).into()))
-                        .role(Role::Menu)
-                        // Its options take their clicks: nothing under the popup is pressed.
-                        .occlude()
-                        // A click anywhere else closes it, as a macOS pop-up button does.
-                        .on_mouse_down_out({
-                            let (close, button) = (open.clone(), button.clone());
-                            move |e, _, cx| {
-                                if button.read(cx).contains(&e.position) {
-                                    return;
+                anchored()
+                    .position_mode(AnchoredPositionMode::Window)
+                    .position(point(at.left(), at.bottom() + px(2.)))
+                    .child(
+                        div()
+                            .id(ElementId::Name(format!("{}:menu", self.id).into()))
+                            .debug_selector({
+                                let s = format!("{}:menu", self.id);
+                                move || s
+                            })
+                            .role(Role::Menu)
+                            // Its options take their clicks: nothing under the popup is pressed.
+                            .occlude()
+                            // A click anywhere else closes it, as a macOS pop-up button does.
+                            .on_mouse_down_out({
+                                let (close, button) = (open.clone(), button.clone());
+                                move |e, _, cx| {
+                                    if button.read(cx).contains(&e.position) {
+                                        return;
+                                    }
+                                    close.update(cx, |o, cx| {
+                                        *o = false;
+                                        cx.notify();
+                                    })
                                 }
-                                close.update(cx, |o, cx| {
-                                    *o = false;
-                                    cx.notify();
-                                })
-                            }
-                        })
-                        .mt(px(26.))
-                        .py(px(4.))
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(t.border)
-                        .bg(t.surface)
-                        .shadow_md()
-                        .children(items),
-                ),
+                            })
+                            .min_w(at.size.width)
+                            .p(px(4.))
+                            .rounded(radius::XL)
+                            .border_1()
+                            .border_color(t.c.separator)
+                            .bg(t.c.surface)
+                            .type_body()
+                            .text_color(t.c.text)
+                            .shadow_md()
+                            .children(items),
+                    ),
             ));
         }
         root.into_any_element()
