@@ -8,8 +8,8 @@ use crate::screens::quick;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::theme::Theme;
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, IntoElement, ParentElement, PathPromptOptions, Render,
-    Styled, Window, WindowBounds, WindowOptions, div, px, size,
+    AnyElement, App, AppContext, Bounds, Context, IntoElement, ParentElement, PathPromptOptions, Pixels,
+    Render, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
 };
 use yard_app_model::hint::{HintAction, TerminalCommand};
 use yard_app_model::refresh::ResourceKey;
@@ -53,6 +53,15 @@ fn state(step: &SetupStep) -> &'static str {
         (true, _) => "done",
         (false, true) => "waiting on an earlier step",
         (false, false) => "to do",
+    }
+}
+
+/// The window's options: its title (for Mission Control and the Window menu) and its size.
+pub(crate) fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions { title: Some("Set up Yard".into()), ..Default::default() }),
+        ..Default::default()
     }
 }
 
@@ -215,7 +224,7 @@ pub fn open(env: &AppEnv, cx: &mut App) {
         return;
     }
     let bounds = Bounds::centered(None, size(px(620.), px(640.)), cx);
-    let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+    let options = window_options(bounds);
     let env = env.clone();
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {

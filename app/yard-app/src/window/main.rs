@@ -10,8 +10,9 @@ use crate::widgets::banner::{Banner, BannerKind};
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::theme::Theme;
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, ElementId, Global, IntoElement, ParentElement, Render,
-    Role, SharedString, Styled, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
+    AnyElement, App, AppContext, Bounds, Context, ElementId, Global, IntoElement, ParentElement, Pixels,
+    Render, Role, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    div, prelude::*, px, size,
 };
 use yard_app_model::health::Link;
 use yard_app_model::hint::HintAction;
@@ -77,7 +78,7 @@ pub fn open(env: &AppEnv, screen: Screen, cx: &mut App) {
         return;
     }
     let bounds = Bounds::centered(None, size(px(980.), px(660.)), cx);
-    let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+    let options = window_options(bounds);
     let env = env.clone();
     if let Ok(handle) = cx.open_window(options, |_, cx| cx.new(|cx| MainWindow::new(env, cx))) {
         cx.set_global(MainHandle(handle));
@@ -375,6 +376,16 @@ fn shown_on(screen: &Screen, id: &str, services: &[String]) -> bool {
         Screen::Ports => prefixed(&["port:"]),
         Screen::Sources => prefixed(&["source:"]),
         Screen::Logs(_) | Screen::Doctor | Screen::Activity => false,
+    }
+}
+
+/// The window's options: its title (for Mission Control and the Window menu) and its size.
+pub(crate) fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions { title: Some("Yard".into()), ..Default::default() }),
+        window_min_size: Some(size(px(760.), px(480.))),
+        ..Default::default()
     }
 }
 

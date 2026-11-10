@@ -8,8 +8,8 @@ use crate::widgets::checkbox::Checkbox;
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Theme;
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, Global, IntoElement, ParentElement, Render, Styled, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Context, Entity, Global, IntoElement, ParentElement, Pixels, Render, Styled,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
 };
 use std::path::Path;
 
@@ -163,7 +163,7 @@ pub fn open(env: &AppEnv, cx: &mut App) {
         return;
     }
     let bounds = Bounds::centered(None, size(px(560.), px(360.)), cx);
-    let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+    let options = window_options(bounds);
     let env = env.clone();
     if let Ok(handle) = cx.open_window(options, |_, cx| cx.new(|cx| SettingsView::new(env, cx))) {
         cx.set_global(SettingsHandle(handle));
@@ -171,6 +171,14 @@ pub fn open(env: &AppEnv, cx: &mut App) {
     }
 }
 
+/// The window's options: its title (for Mission Control and the Window menu) and its size.
+pub(crate) fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions { title: Some("Yard Settings".into()), ..Default::default() }),
+        ..Default::default()
+    }
+}
 #[cfg(test)]
 mod tests {
     use crate::testing::env;
