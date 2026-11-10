@@ -13,7 +13,7 @@ use yard_proto::methods::{NodeInstallParams, NodeListParams, NodeSpecParams, Nod
 /// The table's column titles, each read out by VoiceOver.
 /// The table's columns, with their widths.
 pub fn columns() -> Vec<Column> {
-    vec![Column::fixed("Version", 110.), Column::fixed("Default", 80.), Column::flex("Sites")]
+    vec![Column::fixed("Version", 110.), Column::fixed("Default", 90.).pill(), Column::flex("Sites")]
 }
 
 pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {

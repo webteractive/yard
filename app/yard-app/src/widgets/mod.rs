@@ -9,6 +9,7 @@ pub mod error_view;
 pub mod form;
 pub mod log_view;
 pub mod picker;
+pub mod pill;
 pub mod table;
 pub mod text_field;
 pub mod theme;
@@ -522,5 +523,41 @@ mod tests {
         assert_eq!(shown(&"".into()).as_ref(), EMPTY);
         assert_eq!(shown(&"  ".into()).as_ref(), "—");
         assert_eq!(shown(&"8.4".into()).as_ref(), "8.4");
+    }
+
+    #[test]
+    fn states_map_to_tones() {
+        use crate::widgets::pill::tone_for;
+        use crate::widgets::theme::Tone;
+        for w in ["running", "serving", "ready", "done", "listening", "trusted"] {
+            assert_eq!(tone_for(w), Tone::Success, "{w}");
+        }
+        for w in ["needs setup", "waiting for Install PHP 7.1", "starting"] {
+            assert_eq!(tone_for(w), Tone::Warning, "{w}");
+        }
+        for w in ["failed", "failed: pecl failed", "in use", "lost: yardd's connection was lost"] {
+            assert_eq!(tone_for(w), Tone::Danger, "{w}");
+        }
+        for w in ["stopped", "sleeping", "cancelled", "free", "not trusted", "to do", "installed"] {
+            assert_eq!(tone_for(w), Tone::Neutral, "{w}");
+        }
+    }
+
+    /// A state column draws pills, and keeps each cell's text id, so VoiceOver reads the word.
+    #[gpui::test]
+    async fn a_state_column_draws_pills(cx: &mut TestAppContext) {
+        fn states() -> Table {
+            use crate::widgets::table::Column;
+            let rows = vec![
+                Row::new("a", vec!["nginx".into(), "running".into()]),
+                Row::new("b", vec!["php".into(), "".into()]),
+            ];
+            Table::new("units", [Column::flex("Unit"), Column::fixed("State", 100.).pill()], rows)
+        }
+        let vcx = draw_table(cx, states);
+        let cell = vcx.debug_bounds("units:row:a:cell:1").unwrap();
+        let pill = vcx.debug_bounds("pill:cell:1").expect("a pill is drawn");
+        assert!(cell.contains(&pill.center()));
+        assert_eq!(pill.size.height, gpui::px(18.));
     }
 }

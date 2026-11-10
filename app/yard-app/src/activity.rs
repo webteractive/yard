@@ -5,6 +5,7 @@ use crate::env::AppEnv;
 use crate::widgets::button::Button;
 use crate::widgets::error_view::ErrorView;
 use crate::widgets::log_view::LogView;
+use crate::widgets::pill::Pill;
 use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
@@ -73,16 +74,18 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             .child(
                 div()
                     .flex()
+                    .items_center()
                     .justify_between()
-                    .child(
-                        div().type_body().child(crate::widgets::text(format!("{id}:title"), j.title.clone())),
-                    )
-                    .child(
+                    .gap(px(8.))
+                    .child({
+                        let selector = format!("{id}:title");
                         div()
-                            .type_secondary()
-                            .text_color(t.muted)
-                            .child(crate::widgets::text(format!("{id}:phase"), phase_text(&j.phase))),
-                    ),
+                            .debug_selector(move || selector)
+                            .min_w(px(0.))
+                            .type_body_strong()
+                            .child(crate::widgets::text(format!("{id}:title"), j.title.clone()))
+                    })
+                    .child(Pill::of(format!("{id}:phase"), phase_text(&j.phase))),
             )
             .when(!tail.is_empty(), |d| d.child(LogView::new(format!("{id}:log"), tail)))
             .when_some(failure.clone(), |d, e| {
@@ -160,5 +163,19 @@ mod tests {
         );
         let (_v, cx) = cx.add_window_view(|_, _| Host(env));
         cx.run_until_parked();
+    }
+
+    /// A job's status pill is centred on its title (G17: "done" sat higher than its title).
+    #[gpui::test]
+    async fn a_job_status_is_centred_on_its_title(cx: &mut TestAppContext) {
+        let (fake, env) = env(cx);
+        fake.event(Event::JobProgress { job_id: "php-install-1".into(), line: "==> Downloading".into() });
+        cx.run_until_parked();
+        let (_v, vcx) = cx.add_window_view(|_, _| Host(env));
+        vcx.run_until_parked();
+        let title = vcx.debug_bounds("job:1:php-install-1:title").expect("the title");
+        let pill = vcx.debug_bounds("pill:job:1:php-install-1:phase").expect("the status pill");
+        let (a, b) = (title.center().y, pill.center().y);
+        assert!((a - b).abs() <= gpui::px(1.), "title centre {a:?}, pill centre {b:?}");
     }
 }

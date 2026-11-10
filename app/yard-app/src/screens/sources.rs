@@ -15,8 +15,8 @@ use yard_proto::methods::SourceParams;
 pub fn columns() -> Vec<Column> {
     vec![
         Column::flex("Tap or formula").grow(2.),
-        Column::fixed("Tapped or installed", 150.),
-        Column::fixed("Trusted by brew", 130.),
+        Column::fixed("Tapped or installed", 150.).pill(),
+        Column::fixed("Trusted by brew", 130.).pill(),
     ]
 }
 

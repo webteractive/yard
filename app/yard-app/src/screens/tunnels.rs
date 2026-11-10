@@ -124,7 +124,7 @@ pub fn columns() -> Vec<Column> {
         Column::flex("Site"),
         Column::fixed("Kind", 70.),
         Column::flex("URL").grow(3.),
-        Column::fixed("State", 90.),
+        Column::fixed("State", 100.).pill(),
     ]
 }
 

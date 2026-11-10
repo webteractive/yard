@@ -145,7 +145,7 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         "units",
         [
             Column::flex("Unit").grow(2.),
-            Column::flex("State"),
+            Column::fixed("State", 110.).pill(),
             Column::fixed("PID", 70.).end(),
             Column::fixed("Restarts", 70.).end(),
         ],

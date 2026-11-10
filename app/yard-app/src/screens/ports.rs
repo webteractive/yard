@@ -22,7 +22,7 @@ pub fn columns() -> Vec<Column> {
         Column::flex("Unit").grow(2.),
         Column::fixed("Port", 70.).end(),
         Column::fixed("Mode", 80.),
-        Column::fixed("Status", 100.),
+        Column::fixed("Status", 100.).pill(),
         Column::flex("Held by"),
     ]
 }

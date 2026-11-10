@@ -20,7 +20,7 @@ use yard_proto::methods::{ExtAddParams, ExtParams, PhpConfigParams, PhpParams};
 pub fn columns() -> Vec<Column> {
     vec![
         Column::fixed("Version", 80.),
-        Column::fixed("Default", 80.),
+        Column::fixed("Default", 90.).pill(),
         Column::flex("Sites").grow(2.),
         Column::flex("Pool"),
     ]

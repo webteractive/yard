@@ -6,8 +6,9 @@ use crate::platform::open::Opener;
 use crate::platform::setup_probe::brew_installed;
 use crate::screens::quick;
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::theme::Theme;
+use crate::widgets::pill::Pill;
 use crate::widgets::theme::Typography;
+use crate::widgets::theme::{Theme, Tone};
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, Image, ImageFormat, IntoElement, ParentElement,
     PathPromptOptions, Pixels, Render, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
@@ -124,14 +125,12 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
     let t = Theme::of(window);
     let all = steps(facts);
     let ready = all.iter().filter(|s| !s.optional).all(|s| s.done);
-    let rows = all.iter().map(|s| {
-        let color = if s.done {
-            t.accent
-        } else if s.blocked {
-            t.muted
-        } else {
-            t.text
-        };
+    let rows = all.iter().enumerate().map(|(n, s)| {
+        let color = if s.blocked { t.c.text_secondary } else { t.c.text };
+        // Done is a glyph and a pill, not a colour alone (spec §4, Onboarding).
+        let (mark, tone) =
+            if s.done { ("✓".to_string(), Tone::Success) } else { ((n + 1).to_string(), Tone::Neutral) };
+        let (_, mark_fg, mark_bg) = t.state(tone);
         let note = (s.id == SetupStepId::Helper && !s.done && !s.blocked).then(|| {
             div().debug_selector(|| "helper:note".into()).type_secondary().text_color(t.muted).child(
                 crate::widgets::text(
@@ -152,6 +151,19 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
             .min_w(px(0.))
             .child(
                 div()
+                    .size(px(20.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(mark_bg)
+                    .text_color(mark_fg)
+                    .type_caption()
+                    .child(mark),
+            )
+            .child(
+                div()
                     .flex()
                     .flex_col()
                     .flex_1()
@@ -163,14 +175,9 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
                             .text_color(color)
                             .child(crate::widgets::text(format!("step:{:?}:title", s.id), title(s.id))),
                     )
-                    .child(
-                        div()
-                            .type_secondary()
-                            .text_color(t.muted)
-                            .child(crate::widgets::text(format!("step:{:?}:state", s.id), state(s))),
-                    )
                     .children(note),
             )
+            .child(Pill::of(format!("step:{:?}:state", s.id), state(s)))
             .children(action(env, s))
     });
     let check = env.clone();

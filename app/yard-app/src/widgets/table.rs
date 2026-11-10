@@ -6,6 +6,7 @@
 //! rather than paint into their neighbour (G2), and an empty value reads as a dash (G18).
 
 use super::Pressable;
+use super::pill::Pill;
 use super::theme::{Theme, Typography, size, space};
 use super::{A11y, text};
 use gpui::{
@@ -35,20 +36,28 @@ pub struct Column {
     pub title: SharedString,
     pub width: Width,
     pub align: Align,
+    /// Its values are states, drawn as pills (spec §3.5).
+    pub pill: bool,
 }
 
 impl Column {
     pub fn flex(title: impl Into<SharedString>) -> Column {
-        Column { title: title.into(), width: Width::Flex(1.), align: Align::Start }
+        Column { title: title.into(), width: Width::Flex(1.), align: Align::Start, pill: false }
     }
 
     pub fn fixed(title: impl Into<SharedString>, width: f32) -> Column {
-        Column { title: title.into(), width: Width::Fixed(px(width)), align: Align::Start }
+        Column { title: title.into(), width: Width::Fixed(px(width)), align: Align::Start, pill: false }
     }
 
     /// A larger share of the room left (`flex` is 1).
     pub fn grow(mut self, share: f32) -> Column {
         self.width = Width::Flex(share);
+        self
+    }
+
+    /// A state column: each value is a pill.
+    pub fn pill(mut self) -> Column {
+        self.pill = true;
         self
     }
 
@@ -202,9 +211,14 @@ impl RenderOnce for Table {
             let selector = row_id.to_string();
             let cells = self.columns.iter().enumerate().map(|(i, c)| {
                 let value = row.cells.get(i).map(shown).unwrap_or_else(|| EMPTY.into());
-                cell(c, format!("{selector}:cell:{i}"))
-                    .when(i == 0, |d| d.type_body_strong())
-                    .child(text(format!("cell:{i}"), value))
+                let pill = c.pill && value.as_ref() != EMPTY;
+                cell(c, format!("{selector}:cell:{i}")).when(i == 0, |d| d.type_body_strong()).map(|d| {
+                    if pill {
+                        d.child(Pill::of(format!("cell:{i}"), value))
+                    } else {
+                        d.child(text(format!("cell:{i}"), value))
+                    }
+                })
             });
             let cells: Vec<_> = cells.collect();
             let extra = row.extra;

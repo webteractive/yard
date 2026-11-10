@@ -85,7 +85,7 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             Column::flex("URL").grow(2.),
             Column::fixed("PHP or target", 110.),
             Column::fixed("HTTPS", 60.),
-            Column::fixed("Status", 110.),
+            Column::fixed("Status", 120.).pill(),
         ],
         rows.collect(),
     )

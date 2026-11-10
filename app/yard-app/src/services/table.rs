@@ -266,7 +266,7 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         [
             Column::flex("Instance"),
             Column::flex("Engine"),
-            Column::fixed("State", 100.),
+            Column::fixed("State", 110.).pill(),
             Column::fixed("Ports", 90.),
             Column::fixed("Sleep", 70.),
             Column::fixed("Run by", 70.),
