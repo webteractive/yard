@@ -72,7 +72,7 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
         )))
         .child(table)
-        .child(div().flex().gap(px(6.)).child(spec.clone()).child(
+        .child(crate::widgets::bar().child(spec.clone()).child(
             Button::new("node:install", "Install").style(ButtonStyle::Primary).on_click(move |_, _, cx| {
                 if let Some(spec) = value(&s3, cx) {
                     job(

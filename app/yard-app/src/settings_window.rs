@@ -32,6 +32,7 @@ impl SettingsView {
             cx.new(|cx| {
                 let mut f = TextField::new(id.to_string(), label.to_string(), placeholder.to_string(), cx);
                 f.set_value(value, cx);
+                f.full_width();
                 f
             })
         };

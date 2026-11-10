@@ -105,18 +105,18 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .child(heading("Ports"))
         .children(errors(env, "port:", cx))
         .child(
-            div().flex().gap(px(8.)).items_center().child(profile_picker).child(
+            crate::widgets::bar().child(profile_picker).child(
                 Button::new("ports:check", "Check now").on_click(move |_, _, cx| check_now(&check, cx)),
             ),
         )
         .child(table)
-        .child(div().flex().gap(px(8.)).items_center().child(range).child(
-            Button::new("port:range:set", "Set range").on_click(move |_, _, cx| {
+        .child(crate::widgets::bar().child(range).child(Button::new("port:range:set", "Set range").on_click(
+            move |_, _, cx| {
                 if let Some(r) = super::value(&field, cx) {
                     set_range(&set, r, cx);
                 }
-            }),
-        ))
+            },
+        )))
         .into_any_element()
 }
 

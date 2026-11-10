@@ -354,4 +354,54 @@ mod tests {
             ["yard start", "Copy"]
         );
     }
+
+    /// A field in a row of controls beside a button.
+    struct FieldRow {
+        field: gpui::Entity<TextField>,
+    }
+
+    impl Render for FieldRow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(super::bar().child(self.field.clone()).child(Button::new("after", "Install")))
+        }
+    }
+
+    fn field_row<'a>(cx: &'a mut TestAppContext, value: &str) -> &'a mut gpui::VisualTestContext {
+        let value = value.to_string();
+        let (_view, vcx) = cx.add_window_view(move |_, cx| {
+            let field = gpui::AppContext::new(cx, |cx| {
+                let mut f = TextField::new("spec", "Node version", "22", cx);
+                f.set_value(value.clone(), cx);
+                f
+            });
+            FieldRow { field }
+        });
+        vcx.run_until_parked();
+        vcx
+    }
+
+    /// A field in a row keeps its width rather than collapsing to its padding (G5).
+    #[gpui::test]
+    async fn a_field_in_a_row_keeps_its_width(cx: &mut TestAppContext) {
+        let vcx = field_row(cx, "");
+        let field = vcx.debug_bounds("spec").expect("the field is drawn");
+        assert_eq!(field.size.width, gpui::px(180.));
+    }
+
+    /// A long value stays inside its field: the button after it starts at or past its right edge.
+    #[gpui::test]
+    async fn a_long_value_stays_inside_the_field(cx: &mut TestAppContext) {
+        let vcx = field_row(cx, &"x".repeat(200));
+        let field = vcx.debug_bounds("spec").expect("the field is drawn");
+        let after = vcx.debug_bounds("after").expect("the button is drawn");
+        assert!(
+            after.left() >= field.right(),
+            "button at {:?}, field ends at {:?}",
+            after.left(),
+            field.right()
+        );
+        assert_eq!(field.size.width, gpui::px(180.));
+    }
 }

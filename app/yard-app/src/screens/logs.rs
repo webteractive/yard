@@ -72,16 +72,7 @@ pub fn logs(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .flex_col()
         .gap(px(10.))
         .child(heading("Logs"))
-        .child(
-            div()
-                .flex()
-                .gap(px(8.))
-                .items_center()
-                .child(unit_picker)
-                .child(filter.clone())
-                .child(pause)
-                .child(open_file),
-        )
+        .child(crate::widgets::bar().child(unit_picker).child(filter.clone()).child(pause).child(open_file))
         .child(LogView::new("logs:view", lines))
         .into_any_element()
 }

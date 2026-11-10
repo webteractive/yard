@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Role, ShapedLine, SharedString,
     Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, prelude::*, px,
@@ -45,7 +45,15 @@ pub struct TextField {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    /// `None` fills its container (Settings); otherwise a fixed width.
+    width: Option<Pixels>,
 }
+
+/// A field's default width (spec §3.3).
+pub const FIELD_WIDTH: Pixels = px(180.);
+/// The field's height and its text's line height: one pair, so the text and caret sit centred (G21).
+const FIELD_HEIGHT: Pixels = px(24.);
+const FIELD_LINE: Pixels = px(18.);
 
 impl TextField {
     /// A field with a stable `id` and the `label` assistive technology reads.
@@ -55,8 +63,11 @@ impl TextField {
         placeholder: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let id: SharedString = id.into();
+        // A sheet's fields (ids `sheet:…`) fill the sheet; any other field is 180 pt.
+        let width = if id.starts_with("sheet:") { None } else { Some(FIELD_WIDTH) };
         TextField {
-            id: id.into(),
+            id,
             label: label.into(),
             focus_handle: cx.focus_handle(),
             content: "".into(),
@@ -67,7 +78,13 @@ impl TextField {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            width,
         }
+    }
+
+    /// Fills its container's width.
+    pub fn full_width(&mut self) {
+        self.width = None;
     }
 
     /// The editing keys, bound once at start-up for every field (key context `TextField`).
@@ -509,7 +526,7 @@ impl Element for TextElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        style.size.height = FIELD_LINE.into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -613,13 +630,14 @@ impl Element for TextElement {
             window.paint_quad(selection)
         }
         let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), gpui::TextAlign::Left, None, window, cx).unwrap();
-
-        if focus_handle.is_focused(window)
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+        let cursor = prepaint.cursor.take().filter(|_| focus_handle.is_focused(window));
+        // Clipped to the field, so a long value or placeholder never draws over what is beside it (G5).
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            line.paint(bounds.origin, FIELD_LINE, gpui::TextAlign::Left, None, window, cx).unwrap();
+            if let Some(cursor) = cursor {
+                window.paint_quad(cursor);
+            }
+        });
 
         self.input.update(cx, |input, _cx| {
             input.last_layout = Some(line);
@@ -633,7 +651,11 @@ impl Render for TextField {
         let theme = super::theme::Theme::of(window);
         let a11y = self.a11y();
         div()
-            .id(a11y.id)
+            .id(a11y.id.clone())
+            .debug_selector({
+                let id = a11y.id.to_string();
+                move || id
+            })
             .role(a11y.role)
             .aria_label(a11y.label)
             .aria_value(self.content.clone())
@@ -664,14 +686,19 @@ impl Render for TextField {
             .border_1()
             .border_color(theme.border)
             .rounded(px(6.))
-            .line_height(px(20.))
+            .line_height(FIELD_LINE)
             .text_size(px(13.))
+            .overflow_hidden()
+            .map(|d| match self.width {
+                Some(w) => d.w(w).flex_none(),
+                None => d.w_full(),
+            })
             .child(
                 div()
-                    .h(px(20. + 4. * 2.))
+                    .h(FIELD_HEIGHT - px(2.))
                     .w_full()
                     .px(px(6.))
-                    .py(px(4.))
+                    .py((FIELD_HEIGHT - px(2.) - FIELD_LINE) / 2.)
                     .child(TextElement { input: cx.entity() }),
             )
     }

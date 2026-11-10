@@ -213,7 +213,7 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .children(errors(env, "tunnel:", cx))
         .children(errors(env, "domain:", cx))
         .child(table)
-        .child(div().flex().gap(px(6.)).child(site.clone()).child(
+        .child(crate::widgets::bar().child(site.clone()).child(
             Button::new("tunnel:share", "Share (quick tunnel)").style(ButtonStyle::Primary).on_click(
                 move |_, window, cx| {
                     if let Some(site) = value(&site1, cx) {
@@ -222,7 +222,7 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                 },
             ),
         ))
-        .child(div().flex().gap(px(6.)).child(host.clone()).child(
+        .child(crate::widgets::bar().child(host.clone()).child(
             Button::new("tunnel:share:named", "Share on my domain").on_click(move |_, window, cx| {
                 if let (Some(site), Some(host)) = (value(&site3, cx), value(&host3, cx)) {
                     share(&e3, site, Some(host), false, window, cx);
@@ -231,7 +231,7 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         ))
         .child(div().text_lg().child(crate::widgets::text("domains:heading", "Domains for named tunnels")))
         .child(domain_table)
-        .child(div().flex().gap(px(6.)).child(domain.clone()).child(
+        .child(crate::widgets::bar().child(domain.clone()).child(
             Button::new("domain:add", "Add domain").on_click(move |_, _, cx| {
                 if let Some(d) = value(&domain2, cx) {
                     job(
