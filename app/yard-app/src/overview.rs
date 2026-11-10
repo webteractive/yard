@@ -121,7 +121,7 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 u.restarts.to_string().into(),
             ],
         )
-        .extra(Button::new(format!("unit:{}:restart", u.name), "Restart").on_click(
+        .extra(Button::new(format!("unit:{}:restart", u.name), "Restart").small().on_click(
             move |_, _, cx| {
                 let daemon = env.daemon.clone();
                 let unit = unit.clone();

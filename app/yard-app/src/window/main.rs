@@ -8,7 +8,7 @@ use crate::runner::ActionId;
 use crate::widgets::Pressable;
 use crate::widgets::banner::{Banner, BannerKind};
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::theme::Theme;
+use crate::widgets::theme::{Theme, Typography};
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Global, IntoElement, ParentElement, Pixels,
     Render, Role, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
@@ -312,13 +312,19 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         let env = env.clone();
         let page = page.clone();
         let count = badge(&env, &page, cx);
+        let quiet = matches!(page, Screen::Activity);
         div()
             .id(ElementId::Name(format!("nav:{label}").into()))
             .role(Role::Tab)
             .aria_label(SharedString::from(*label))
             .when_some(count, |d, n| d.aria_description(badge_text(&page, n)))
             .aria_selected(selected)
+            .debug_selector({
+                let id = format!("nav:{label}");
+                move || id
+            })
             .flex()
+            .items_center()
             .justify_between()
             .px(px(10.))
             .py(px(5.))
@@ -328,13 +334,26 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .on_press(move |_, _, cx| open(&env, page.clone(), cx))
             .child(*label)
             .when_some(count, |d, n| {
+                // A failure is a red pill with white text; running jobs a quiet one (spec §3.5).
+                let (bg, fg) = if quiet {
+                    (Theme::wash(t.c.neutral, 0.15), t.c.neutral_text)
+                } else {
+                    (t.c.danger_fill, t.c.on_accent)
+                };
                 d.child(
                     div()
+                        .debug_selector({
+                            let id = format!("nav:{label}:badge");
+                            move || id
+                        })
+                        .flex()
+                        .items_center()
+                        .h(px(16.))
                         .px(px(6.))
-                        .rounded(px(8.))
-                        .bg(t.danger)
-                        .text_color(t.on_accent)
-                        .text_xs()
+                        .rounded_full()
+                        .bg(bg)
+                        .text_color(fg)
+                        .type_caption()
                         .child(n.to_string()),
                 )
             })
@@ -711,5 +730,24 @@ mod tests {
         let run = vcx.debug_bounds("doctor:run").expect("Run doctor is drawn");
         let content = vcx.debug_bounds("content").expect("the content is drawn");
         assert!(run.size.width < content.size.width / 2., "Run doctor is {:?} wide", run.size.width);
+    }
+
+    /// The sidebar's badge is centred on its item's label (G16: it sat high).
+    #[gpui::test]
+    async fn the_badge_is_centred_on_its_label(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        cx.update(|cx| cx.set_global(env.clone()));
+        let services = serde_json::from_value(crate::testing::services()).unwrap();
+        env.state.update(cx, |s, _| s.services.value = Some(services));
+        cx.update(|cx| super::open(&env, Screen::Overview, cx));
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.try_global::<super::MainHandle>().map(|h| h.0)).expect("a window");
+        let mut vcx = gpui::VisualTestContext::from_window(handle.into(), cx);
+        vcx.run_until_parked();
+        let item = vcx.debug_bounds("nav:Services").expect("the Services item");
+        let badge = vcx.debug_bounds("nav:Services:badge").expect("its badge");
+        let (a, b) = (item.center().y, badge.center().y);
+        assert!((a - b).abs() <= gpui::px(1.), "item centre {a:?}, badge centre {b:?}");
+        assert_eq!(badge.size.height, gpui::px(16.));
     }
 }

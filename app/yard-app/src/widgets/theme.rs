@@ -11,6 +11,8 @@ use gpui::{FontWeight, Hsla, Styled, Window, WindowAppearance, hsla, px, rgb};
 pub struct Theme {
     /// The design's tokens.
     pub c: Colors,
+    /// The dark appearance, where controls have no shadow.
+    pub dark: bool,
     // The names the screens used before the tokens, kept with their old values until every screen
     // has moved to `c` (spec §3.6).
     pub background: Hsla,
@@ -118,6 +120,7 @@ impl Theme {
                 // The spec's #6E6E73 is 4.38:1 on its own pill wash; this is the nearest that passes.
                 neutral_text: c(0x6a6a6f),
             },
+            dark: false,
             background: c(0xf6f6f4),
             surface: c(0xffffff),
             text: c(0x1d1d1f),
@@ -162,6 +165,7 @@ impl Theme {
                 neutral: c(0x98989d),
                 neutral_text: c(0xaeaeb2),
             },
+            dark: true,
             background: c(0x1c1c1e),
             surface: c(0x2a2a2d),
             text: c(0xf2f2f2),
@@ -177,6 +181,11 @@ impl Theme {
     /// `color` at `alpha`: a banner's or a pill's background, a selected row.
     pub fn wash(color: Hsla, alpha: f32) -> Hsla {
         hsla(color.h, color.s, color.l, alpha)
+    }
+
+    /// `color` darkened by `by` (0.04 for a hover, 0.08 for a press).
+    pub fn darker(color: Hsla, by: f32) -> Hsla {
+        hsla(color.h, color.s, (color.l - by).max(0.), color.a)
     }
 
     /// A state's dot, text and wash (the wash at .15, spec §3.4).

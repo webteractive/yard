@@ -404,4 +404,34 @@ mod tests {
         );
         assert_eq!(field.size.width, gpui::px(180.));
     }
+
+    struct TwoButtons;
+
+    impl Render for TwoButtons {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                super::bar().child(Button::new("normal", "Open")).child(Button::new("small", "Stop").small()),
+            )
+        }
+    }
+
+    /// A button's height is fixed, not its padding plus GPUI's line height (G13: 32 pt buttons).
+    #[gpui::test]
+    async fn buttons_have_fixed_heights(cx: &mut TestAppContext) {
+        let (_v, vcx) = cx.add_window_view(|_, _| TwoButtons);
+        vcx.run_until_parked();
+        assert_eq!(vcx.debug_bounds("normal").unwrap().size.height, gpui::px(24.));
+        assert_eq!(vcx.debug_bounds("small").unwrap().size.height, gpui::px(20.));
+    }
+
+    /// A destructive button is a normal one with red text: the prompt that follows carries the red.
+    #[test]
+    fn destructive_is_not_filled() {
+        use crate::widgets::button::{ButtonStyle, colors};
+        use crate::widgets::theme::Theme;
+        for t in [Theme::light(), Theme::dark()] {
+            assert_eq!(colors(ButtonStyle::Destructive, &t), (t.c.control_bg, t.c.danger_text));
+            assert_eq!(colors(ButtonStyle::Primary, &t), (t.c.accent_fill, t.c.on_accent));
+        }
+    }
 }
