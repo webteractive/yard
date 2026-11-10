@@ -1,6 +1,6 @@
 //! Node (M6 design §8.2): installed versions, the default, installing and removing.
 
-use super::{errors, heading, job, quick};
+use super::{errors, job, quick};
 use crate::env::AppEnv;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::table::{Column, Row, Table};
@@ -70,19 +70,12 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(12.))
-        .child(heading("Node"))
         .children(errors(env, "node:", cx))
         .child(div().type_body().text_color(t.muted).child(crate::widgets::text(
             "node:default",
             format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
         )))
         .child(table)
-        .child(crate::widgets::bar().child(
-            Button::new("node:install:open", "Install…").style(ButtonStyle::Primary).on_click({
-                let env = env.clone();
-                move |_, _, cx| super::forms::open(&env, super::forms::Inline::NodeInstall, cx)
-            }),
-        ))
         .child(crate::widgets::bar().child(Button::new("node:available", "Show available").on_click(
             move |_, _, cx| {
                 let (env, daemon) = (e4.clone(), e4.daemon.clone());
@@ -126,4 +119,15 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             div().type_secondary().text_color(t.muted).child(crate::widgets::text("node:available:list", a))
         }))
         .into_any_element()
+}
+
+/// The Node toolbar's button.
+pub fn actions(env: &AppEnv) -> Vec<AnyElement> {
+    let env = env.clone();
+    vec![
+        Button::new("node:install:open", "Install…")
+            .style(ButtonStyle::Primary)
+            .on_click(move |_, _, cx| super::forms::open(&env, super::forms::Inline::NodeInstall, cx))
+            .into_any_element(),
+    ]
 }

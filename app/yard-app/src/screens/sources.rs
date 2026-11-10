@@ -1,7 +1,7 @@
 //! Sources (M6 design §8.2): the brew taps Yard installs from, and whether brew trusts each tap
 //! and each formula in it.
 
-use super::{errors, heading, job};
+use super::{errors, job};
 use crate::env::AppEnv;
 use crate::widgets::button::Button;
 use crate::widgets::table::{Column, Row, Table};
@@ -70,12 +70,5 @@ pub fn sources(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     });
     let table =
         Table::new("sources", columns(), rows.collect()).actions(90.).empty("No third-party taps.", None);
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .child(heading("Sources"))
-        .children(errors(env, "source:", cx))
-        .child(table)
-        .into_any_element()
+    div().flex().flex_col().gap(px(12.)).children(errors(env, "source:", cx)).child(table).into_any_element()
 }

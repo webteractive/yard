@@ -142,6 +142,47 @@ const SIDEBAR: [(&str, &[Page]); 4] = [
     ),
 ];
 
+/// The page's name, as the sidebar and the toolbar show it.
+pub(crate) fn page_title(screen: &Screen) -> &'static str {
+    SIDEBAR
+        .iter()
+        .flat_map(|(_, pages)| pages.iter())
+        .find(|(_, p)| same_page(p, screen))
+        .map(|(l, _)| *l)
+        .unwrap_or("Yard")
+}
+
+/// The toolbar strip at the top of the content: the page's title, read as its heading, and its
+/// primary actions. Its empty space moves the window, as a title bar does (spec §3.1).
+fn toolbar(env: &AppEnv, screen: &Screen, cx: &mut App) -> AnyElement {
+    let actions: Vec<AnyElement> = match screen {
+        Screen::Overview => crate::overview::actions(env, cx),
+        Screen::Sites(_) => crate::sites::actions(env),
+        Screen::Services(_) => crate::services::actions(env),
+        Screen::Tunnels => crate::screens::tunnels::actions(env),
+        Screen::Node => crate::screens::node::actions(env),
+        Screen::Doctor => crate::screens::doctor::actions(env, cx),
+        _ => vec![],
+    };
+    let drag =
+        |d: gpui::Div| d.on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move());
+    div()
+        .debug_selector(|| "toolbar".into())
+        .h(size::TOOLBAR)
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(20.))
+        .child(
+            drag(div().debug_selector(|| "toolbar:title".into()).flex_none().type_title())
+                .child(crate::widgets::text("heading", page_title(screen))),
+        )
+        .child(drag(div().flex_1().h_full()))
+        .child(crate::widgets::bar().flex_none().children(actions))
+        .into_any_element()
+}
+
 fn same_page(a: &Screen, b: &Screen) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }
@@ -244,17 +285,24 @@ impl Render for MainWindow {
             .type_body()
             .child(sidebar(&env, &screen, window, cx))
             .child(
-                div().flex_1().min_w(px(0.)).flex().flex_col().children(banner(&env, cx)).child(
-                    div()
-                        .id("content")
-                        .debug_selector(|| "content".into())
-                        .min_w(px(0.))
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .p(px(16.))
-                        .children(issues(&env, &screen, window, cx))
-                        .child(content(&env, &screen, window, cx)),
-                ),
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .child(toolbar(&env, &screen, cx))
+                    .children(banner(&env, cx))
+                    .child(
+                        div()
+                            .id("content")
+                            .debug_selector(|| "content".into())
+                            .min_w(px(0.))
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .p(px(16.))
+                            .children(issues(&env, &screen, window, cx))
+                            .child(content(&env, &screen, window, cx)),
+                    ),
             )
             .children(sheet)
     }
@@ -388,6 +436,13 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .aria_label("Screens")
         .w(SIDEBAR_WIDTH)
         .flex_shrink_0()
+        .pt(size::TOOLBAR)
+        .on_mouse_down(gpui::MouseButton::Left, |e, window, _| {
+            // Its top strip, beside the traffic lights, moves the window as a title bar does.
+            if e.position.y < size::TOOLBAR {
+                window.start_window_move();
+            }
+        })
         .p(px(8.))
         .gap(px(2.))
         .flex()
@@ -433,7 +488,12 @@ fn shown_on(screen: &Screen, id: &str, services: &[String]) -> bool {
 pub(crate) fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions { title: Some("Yard".into()), ..Default::default() }),
+        // The sidebar runs to the top edge under the traffic lights (spec §3.1).
+        titlebar: Some(TitlebarOptions {
+            title: Some("Yard".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(px(16.), px(18.))),
+        }),
         window_min_size: Some(size(px(760.), px(480.))),
         ..Default::default()
     }
@@ -951,5 +1011,33 @@ mod tests {
                 "Sources"
             ]
         );
+    }
+
+    /// Every page's title is in the toolbar strip, read as the heading (spec §3.1).
+    #[gpui::test]
+    async fn each_screen_has_its_title_in_the_toolbar(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let mut vcx = main_window_on(&env, Screen::Overview, cx);
+        for (_, pages) in super::SIDEBAR {
+            for (label, page) in pages {
+                vcx.update(|_, cx| super::open(&env, page.clone(), cx));
+                vcx.run_until_parked();
+                let toolbar = vcx.debug_bounds("toolbar").expect("the toolbar");
+                let title = vcx.debug_bounds("toolbar:title").expect("its title");
+                assert!(toolbar.contains(&title.center()), "{label}'s title is in the toolbar");
+                assert_eq!(vcx.update(|_, cx| super::page_title(&env.nav.read(cx).screen)), *label);
+            }
+        }
+    }
+
+    /// A page's primary actions sit in the toolbar, not in the scrolling content.
+    #[gpui::test]
+    async fn primary_actions_sit_in_the_toolbar(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let mut vcx = main_window_on(&env, Screen::Sites(None), cx);
+        let toolbar = vcx.debug_bounds("toolbar").expect("the toolbar");
+        let link = vcx.debug_bounds("site:link").expect("Link a folder…");
+        assert!(toolbar.contains(&link.center()));
+        assert_eq!(toolbar.size.height, gpui::px(52.));
     }
 }

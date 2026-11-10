@@ -96,47 +96,6 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             value("Yard.app", format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("YARD_BUILD_COMMIT"))),
         )
         .row("Data root", "Data root", value("Data root", env.location.root.display().to_string()));
-    // Start while yardd cannot be reached, Restart and Stop while it answers (G12).
-    let offline = matches!(crate::menubar::link(&s.connection), yard_app_model::health::Link::Offline(_));
-    let (start, stop, restart, setup) = (env.clone(), env.clone(), env.clone(), env.clone());
-    let controls = crate::widgets::bar()
-        .when(offline, |d| {
-            d.child(
-                Button::new("yardd:start", "Start yardd")
-                    .style(ButtonStyle::Primary)
-                    .on_click(move |_, _, cx| start.start_daemon(cx)),
-            )
-        })
-        .when(!offline, |d| {
-            d.child(
-                Button::new("yardd:restart", "Restart yardd")
-                    .on_click(move |_, _, cx| restart.restart_daemon(cx)),
-            )
-        })
-        .child(
-            Button::new("setup:open", "Set up Yard…")
-                .on_click(move |_, _, cx| crate::onboarding::open(&setup, cx)),
-        )
-        .when(!offline, |d| {
-            d.child(Button::new("yardd:stop", "Stop yardd…").style(ButtonStyle::Destructive).on_click(
-                move |_, window, cx| {
-                    let answer = window.prompt(
-                        PromptLevel::Warning,
-                        "Stop yardd?",
-                        Some("Every site stops answering until yardd starts again."),
-                        &["Stop yardd", "Cancel"],
-                        cx,
-                    );
-                    let env = stop.clone();
-                    cx.spawn(async move |cx| {
-                        if answer.await == Ok(0) {
-                            cx.update(|cx| env.stop_daemon(cx));
-                        }
-                    })
-                    .detach();
-                },
-            ))
-        });
     let rows = s.status.value.iter().flat_map(|st| st.units.iter()).map(|u| {
         let env = env.clone();
         let unit = u.name.clone();
@@ -201,13 +160,60 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(14.))
         .child(div().type_title().child("Overview"))
         .child(facts)
-        .child(controls)
         .children(errors)
         .child(units)
         .when(!sleeping.is_empty(), |d| {
             d.child(div().type_body().text_color(t.muted).child(format!("Sleeping: {}", sleeping.join(", "))))
         })
         .into_any_element()
+}
+
+/// The Overview toolbar's buttons: Start yardd while it cannot be reached, Restart and Stop while
+/// it answers (G12), and Set up Yard….
+pub fn actions(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
+    let s = env.state.read(cx);
+    // Start while yardd cannot be reached, Restart and Stop while it answers (G12).
+    let offline = matches!(crate::menubar::link(&s.connection), yard_app_model::health::Link::Offline(_));
+    let (start, stop, restart, setup) = (env.clone(), env.clone(), env.clone(), env.clone());
+    let controls = crate::widgets::bar()
+        .when(offline, |d| {
+            d.child(
+                Button::new("yardd:start", "Start yardd")
+                    .style(ButtonStyle::Primary)
+                    .on_click(move |_, _, cx| start.start_daemon(cx)),
+            )
+        })
+        .when(!offline, |d| {
+            d.child(
+                Button::new("yardd:restart", "Restart yardd")
+                    .on_click(move |_, _, cx| restart.restart_daemon(cx)),
+            )
+        })
+        .child(
+            Button::new("setup:open", "Set up Yard…")
+                .on_click(move |_, _, cx| crate::onboarding::open(&setup, cx)),
+        )
+        .when(!offline, |d| {
+            d.child(Button::new("yardd:stop", "Stop yardd…").style(ButtonStyle::Destructive).on_click(
+                move |_, window, cx| {
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        "Stop yardd?",
+                        Some("Every site stops answering until yardd starts again."),
+                        &["Stop yardd", "Cancel"],
+                        cx,
+                    );
+                    let env = stop.clone();
+                    cx.spawn(async move |cx| {
+                        if answer.await == Ok(0) {
+                            cx.update(|cx| env.stop_daemon(cx));
+                        }
+                    })
+                    .detach();
+                },
+            ))
+        });
+    vec![controls.into_any_element()]
 }
 
 #[cfg(test)]
@@ -286,8 +292,14 @@ mod tests {
     /// answers (G12: Start was enabled while yardd ran).
     #[gpui::test]
     async fn start_is_offered_only_while_offline(cx: &mut TestAppContext) {
+        struct Toolbar(crate::env::AppEnv);
+        impl Render for Toolbar {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                gpui::ParentElement::children(gpui::div(), super::actions(&self.0, cx))
+            }
+        }
         let (fake, env) = env(cx);
-        let (_v, vcx) = cx.add_window_view(|_, _| Host(env));
+        let (_v, vcx) = cx.add_window_view(|_, _| Toolbar(env));
         vcx.run_until_parked();
         assert!(vcx.debug_bounds("yardd:start").is_none(), "Start while yardd answers");
         assert!(vcx.debug_bounds("yardd:stop").is_some() && vcx.debug_bounds("yardd:restart").is_some());

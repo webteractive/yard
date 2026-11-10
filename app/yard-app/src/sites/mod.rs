@@ -9,7 +9,6 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
 use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::text_field::TextField;
-use crate::widgets::theme::Typography;
 use gpui::{
     AnyElement, App, AppContext, IntoElement, ParentElement, PathPromptOptions, Styled, Window, div, px,
 };
@@ -94,32 +93,6 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     .on_select(move |key, _, cx| {
         crate::window::main::open(&select, Screen::Sites(Some(key.to_string())), cx)
     });
-    let (link, proxy) = (env.clone(), env.clone());
-    let header = div()
-        .flex()
-        .justify_between()
-        .items_center()
-        .child(div().type_title().child(crate::widgets::text("heading", "Sites")))
-        .child(
-            div()
-                .flex()
-                .gap(px(6.))
-                .child(
-                    Button::new("site:link", "Link a folder…")
-                        .style(ButtonStyle::Primary)
-                        .on_click(move |_, _, cx| link_folder(&link, cx)),
-                )
-                .child(Button::new("site:proxy", "Add a proxy…").on_click(move |_, _, cx| {
-                    let name = cx.new(|cx| TextField::new("sheet:proxy:name", "Name", "api", cx));
-                    let url = cx.new(|cx| {
-                        TextField::new("sheet:proxy:url", "Target URL", "http://127.0.0.1:3000", cx)
-                    });
-                    proxy.nav.update(cx, |n, cx| {
-                        n.sheet = Some(Sheet::Proxy { name, url });
-                        cx.notify();
-                    });
-                })),
-        );
     let runner = env.runner.read(cx);
     let mut ids: Vec<String> = vec!["site:link".into(), "site:proxy".into()];
     if let Some(n) = &selected {
@@ -137,15 +110,29 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         })
         .collect();
     let detail = selected.map(|n| detail::detail(env, &n, window, cx));
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .child(header)
-        .children(errors)
-        .child(table)
-        .children(detail)
-        .into_any_element()
+    div().flex().flex_col().gap(px(12.)).children(errors).child(table).children(detail).into_any_element()
+}
+
+/// The Sites toolbar's buttons.
+pub fn actions(env: &AppEnv) -> Vec<AnyElement> {
+    let (link, proxy) = (env.clone(), env.clone());
+    vec![
+        Button::new("site:proxy", "Add a proxy…")
+            .on_click(move |_, _, cx| {
+                let name = cx.new(|cx| TextField::new("sheet:proxy:name", "Name", "api", cx));
+                let url =
+                    cx.new(|cx| TextField::new("sheet:proxy:url", "Target URL", "http://127.0.0.1:3000", cx));
+                proxy.nav.update(cx, |n, cx| {
+                    n.sheet = Some(Sheet::Proxy { name, url });
+                    cx.notify();
+                });
+            })
+            .into_any_element(),
+        Button::new("site:link", "Link a folder…")
+            .style(ButtonStyle::Primary)
+            .on_click(move |_, _, cx| link_folder(&link, cx))
+            .into_any_element(),
+    ]
 }
 
 #[cfg(test)]

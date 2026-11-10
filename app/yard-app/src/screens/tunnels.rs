@@ -1,6 +1,6 @@
 //! Tunnels (M6 design §8.2): sites shared through Cloudflare, and the domains for named tunnels.
 
-use super::{errors, heading, quick};
+use super::{errors, quick};
 use crate::env::AppEnv;
 use crate::platform::open::Opener;
 use crate::runner::ActionId;
@@ -215,12 +215,6 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(12.))
-        .child(gpui::div().flex().items_center().justify_between().child(heading("Tunnels")).child(
-            Button::new("tunnels:share", "Share…").style(ButtonStyle::Primary).on_click({
-                let env = env.clone();
-                move |_, _, cx| super::forms::open(&env, super::forms::Inline::Share, cx)
-            }),
-        ))
         .children(errors(env, "tunnel:", cx))
         .children(errors(env, "domain:", cx))
         .child(table)
@@ -241,4 +235,15 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .child(domain_table)
         .into_any_element()
+}
+
+/// The Tunnels toolbar's button.
+pub fn actions(env: &AppEnv) -> Vec<AnyElement> {
+    let env = env.clone();
+    vec![
+        Button::new("tunnels:share", "Share…")
+            .style(ButtonStyle::Primary)
+            .on_click(move |_, _, cx| super::forms::open(&env, super::forms::Inline::Share, cx))
+            .into_any_element(),
+    ]
 }

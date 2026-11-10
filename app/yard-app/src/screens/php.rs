@@ -1,7 +1,7 @@
 //! PHP (M6 design §8.2): every supported version, installing, removing and choosing the default,
 //! a version's extensions, and its php.ini overrides.
 
-use super::{errors, heading, job, quick, value};
+use super::{errors, job, quick, value};
 use crate::env::{AppEnv, Nav};
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::checkbox::Checkbox;
@@ -159,13 +159,7 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .and_then(|s| versions.iter().find(|v| &v.version == s))
         .map(|v| version_controls(env, v))
         .unwrap_or_default();
-    let mut page = div()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .child(heading("PHP"))
-        .children(errors(env, "php:", cx))
-        .child(table);
+    let mut page = div().flex().flex_col().gap(px(12.)).children(errors(env, "php:", cx)).child(table);
     if let Some(v) = shown {
         page = page
             .child(

@@ -1,7 +1,6 @@
 //! Logs (M6 design §8.2): every unit's live lines with filters, on a connection that is open only
 //! while the screen is shown.
 
-use super::heading;
 use crate::env::{AppEnv, Nav};
 use crate::platform::open::Opener;
 use crate::services::logs::LogTail;
@@ -71,7 +70,6 @@ pub fn logs(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(10.))
-        .child(heading("Logs"))
         .child(crate::widgets::bar().child(unit_picker).child(filter.clone()).child(pause).child(open_file))
         .child(LogView::new("logs:view", lines))
         .into_any_element()

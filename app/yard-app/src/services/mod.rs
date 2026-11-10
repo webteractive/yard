@@ -21,40 +21,10 @@ pub const VERBS: [&str; 8] = ["start", "stop", "restart", "remove", "port", "sle
 
 pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
-    let add = env.clone();
     let selected = match &env.nav.read(cx).screen {
         yard_app_model::hint::Screen::Services(n) => n.clone(),
         _ => None,
     };
-    let header = div()
-        .flex()
-        .justify_between()
-        .items_center()
-        .child(div().type_title().child(crate::widgets::text("heading", "Services")))
-        .child(Button::new("service:add", "Add service…").style(ButtonStyle::Primary).on_click(
-            move |_, _, cx| {
-                let line = cx.new(|cx| {
-                    TextField::new(
-                        "sheet:add-service:line",
-                        "Line (optional), such as 8.4",
-                        "the engine's default",
-                        cx,
-                    )
-                });
-                let port = cx.new(|cx| {
-                    TextField::new(
-                        "sheet:add-service:port",
-                        "Port (optional)",
-                        "the usual port, else the next free one",
-                        cx,
-                    )
-                });
-                add.nav.update(cx, |n, cx| {
-                    n.sheet = Some(Sheet::AddService { engine: 0, line, port, lines: vec![] });
-                    cx.notify();
-                });
-            },
-        ));
     let runner = env.runner.read(cx);
     let names: Vec<String> =
         env.state.read(cx).services.value.iter().flatten().map(|s| s.name.clone()).collect();
@@ -118,7 +88,6 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(12.))
-        .child(header)
         .children(errors)
         .child(table::table(env, selected.clone(), window, cx))
         .children(selected.and_then(|n| table::detail(env, &n, cx)))
@@ -132,6 +101,38 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
 pub fn failures(env: &AppEnv, cx: &App) -> Vec<(String, yard_proto::YardError)> {
     let services = env.state.read(cx).services.value.clone().unwrap_or_default();
     services.into_iter().filter_map(|s| s.state.failure(&s.name).map(|e| (s.name, e))).collect()
+}
+
+/// The Services toolbar's button.
+pub fn actions(env: &AppEnv) -> Vec<AnyElement> {
+    let add = env.clone();
+    vec![
+        Button::new("service:add", "Add service…")
+            .style(ButtonStyle::Primary)
+            .on_click(move |_, _, cx| {
+                let line = cx.new(|cx| {
+                    TextField::new(
+                        "sheet:add-service:line",
+                        "Line (optional), such as 8.4",
+                        "the engine's default",
+                        cx,
+                    )
+                });
+                let port = cx.new(|cx| {
+                    TextField::new(
+                        "sheet:add-service:port",
+                        "Port (optional)",
+                        "the usual port, else the next free one",
+                        cx,
+                    )
+                });
+                add.nav.update(cx, |n, cx| {
+                    n.sheet = Some(Sheet::AddService { engine: 0, line, port, lines: vec![] });
+                    cx.notify();
+                });
+            })
+            .into_any_element(),
+    ]
 }
 
 #[cfg(test)]

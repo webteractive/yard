@@ -1,6 +1,6 @@
 //! Ports (M6 design §8.2): the registry, who holds each port, pinning, moving, and the profile.
 
-use super::{errors, heading, quick};
+use super::{errors, quick};
 use crate::daemon::call;
 use crate::env::{AppEnv, Sheet};
 use crate::runner::ActionId;
@@ -111,7 +111,6 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(12.))
-        .child(heading("Ports"))
         .children(errors(env, "port:", cx))
         .child(
             crate::widgets::bar()

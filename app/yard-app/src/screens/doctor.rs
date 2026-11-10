@@ -1,12 +1,11 @@
 //! Doctor (M6 design §8.2): yardd's checks grouped by status, each hint as the button it can be.
 
-use super::heading;
 use crate::env::AppEnv;
 use crate::platform::open::Opener;
 use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::text;
 use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
-use crate::widgets::{bar, text};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_app_model::hint::HintAction;
 use yard_proto::{Check, CheckStatus};
@@ -41,6 +40,19 @@ fn grouped(report: &yard_proto::DoctorReport) -> Vec<(&'static str, CheckStatus,
 }
 
 /// A check as the screen lists it: its message and the buttons its hint becomes.
+/// The Doctor toolbar's button.
+pub fn actions(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
+    let running = env.state.read(cx).doctor.loading;
+    let run = env.clone();
+    vec![
+        Button::new("doctor:run", if running { "Running…" } else { "Run doctor" })
+            .style(ButtonStyle::Primary)
+            .disabled(running)
+            .on_click(move |_, _, cx| run.state.update(cx, |s, cx| s.run_doctor(cx)))
+            .into_any_element(),
+    ]
+}
+
 #[cfg(test)]
 pub type Line = (String, Vec<&'static str>);
 
@@ -61,14 +73,8 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let report = s.doctor.value.clone();
     let running = s.doctor.loading;
     let run = env.clone();
-    let mut page = div().flex().flex_col().gap(px(10.)).child(heading("Doctor")).child(
-        bar().child(
-            Button::new("doctor:run", if running { "Running…" } else { "Run doctor" })
-                .style(ButtonStyle::Primary)
-                .disabled(running)
-                .on_click(move |_, _, cx| run.state.update(cx, |s, cx| s.run_doctor(cx))),
-        ),
-    );
+    let _ = (&run, running);
+    let mut page = div().flex().flex_col().gap(px(10.));
     if let Some(e) = &s.doctor.error {
         page = page.child(div().type_body().text_color(t.danger).child(text("error", e.message.clone())));
     }

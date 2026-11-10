@@ -112,13 +112,7 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 ))
             })
     });
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .child(div().type_title().child(crate::widgets::text("heading", "Activity")))
-        .children(cards)
-        .into_any_element()
+    div().flex().flex_col().gap(px(10.)).children(cards).into_any_element()
 }
 
 #[cfg(test)]
