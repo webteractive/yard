@@ -50,13 +50,7 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, _window: &mut Window, cx: &mut App) ->
     let form = match kind {
         Inline::Share => {
             let site = field(env, "tunnel:share:site", "Site to share", "blog", cx);
-            let host = field(
-                env,
-                "tunnel:share:host",
-                "Host on your domain",
-                "blog.example.com",
-                cx,
-            );
+            let host = field(env, "tunnel:share:host", "Host on your domain", "blog.example.com", cx);
             let (e1, s1) = (env.clone(), site.clone());
             let (e2, s2, h2) = (env.clone(), site.clone(), host.clone());
             Form::new("sheet:share", "Share a site")

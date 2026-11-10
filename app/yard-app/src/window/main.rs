@@ -121,18 +121,25 @@ pub fn ask_without_a_window(env: &AppEnv, cx: &mut App) {
     .detach();
 }
 
-const PAGES: [(&str, Screen); 11] = [
-    ("Overview", Screen::Overview),
-    ("Sites", Screen::Sites(None)),
-    ("Services", Screen::Services(None)),
-    ("PHP", Screen::Php),
-    ("Node", Screen::Node),
-    ("Tunnels", Screen::Tunnels),
-    ("Ports", Screen::Ports),
-    ("Logs", Screen::Logs(None)),
-    ("Doctor", Screen::Doctor),
-    ("Sources", Screen::Sources),
-    ("Activity", Screen::Activity),
+type Page = (&'static str, Screen);
+
+/// The sidebar's groups and their pages, top to bottom (spec §3.1).
+const SIDEBAR: [(&str, &[Page]); 4] = [
+    ("Yard", &[("Overview", Screen::Overview), ("Activity", Screen::Activity)]),
+    (
+        "Serve",
+        &[("Sites", Screen::Sites(None)), ("Services", Screen::Services(None)), ("Tunnels", Screen::Tunnels)],
+    ),
+    ("Runtimes", &[("PHP", Screen::Php), ("Node", Screen::Node)]),
+    (
+        "System",
+        &[
+            ("Ports", Screen::Ports),
+            ("Logs", Screen::Logs(None)),
+            ("Doctor", Screen::Doctor),
+            ("Sources", Screen::Sources),
+        ],
+    ),
 ];
 
 fn same_page(a: &Screen, b: &Screen) -> bool {
@@ -304,7 +311,7 @@ pub(crate) const SIDEBAR_WIDTH: gpui::Pixels = px(200.);
 
 fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
-    let items = PAGES.iter().map(|(label, page)| {
+    let item = |label: &'static str, page: &Screen, cx: &App| {
         let selected = same_page(current, page);
         let env = env.clone();
         let page = page.clone();
@@ -313,7 +320,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         div()
             .id(ElementId::Name(format!("nav:{label}").into()))
             .role(Role::Tab)
-            .aria_label(SharedString::from(*label))
+            .aria_label(SharedString::from(label))
             .when_some(count, |d, n| d.aria_description(badge_text(&page, n)))
             .aria_selected(selected)
             .debug_selector({
@@ -331,7 +338,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .when(selected, |d| d.type_body_strong())
             .when(selected, |d| d.bg(Theme::wash(t.accent, 0.14)))
             .on_press(move |_, _, cx| open(&env, page.clone(), cx))
-            .child(*label)
+            .child(label)
             .when_some(count, |d, n| {
                 // A failure is a red pill with white text; running jobs a quiet one (spec §3.5).
                 let (bg, fg) = if quiet {
@@ -356,7 +363,24 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
                         .child(n.to_string()),
                 )
             })
-    });
+    };
+    let mut items: Vec<AnyElement> = vec![];
+    for (i, (group, pages)) in SIDEBAR.iter().enumerate() {
+        // A group's label is plain text, not a tab (spec §3.1).
+        items.push(
+            div()
+                .px(px(10.))
+                .pt(if i == 0 { px(4.) } else { px(14.) })
+                .pb(px(4.))
+                .type_caption()
+                .text_color(t.c.text_secondary)
+                .child(crate::widgets::text(format!("nav-group:{group}"), *group))
+                .into_any_element(),
+        );
+        for (label, page) in pages.iter() {
+            items.push(item(label, page, cx).into_any_element());
+        }
+    }
     div()
         .id("sidebar")
         .debug_selector(|| "sidebar".into())
@@ -896,5 +920,36 @@ mod tests {
             });
             cx.run_until_parked();
         }
+    }
+
+    /// The sidebar is four groups in the design's order; a group's label is text, not a tab.
+    #[test]
+    fn the_sidebar_is_grouped() {
+        let order: Vec<String> = super::SIDEBAR
+            .iter()
+            .flat_map(|(group, pages)| {
+                std::iter::once(format!("[{group}]")).chain(pages.iter().map(|(label, _)| label.to_string()))
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "[Yard]",
+                "Overview",
+                "Activity",
+                "[Serve]",
+                "Sites",
+                "Services",
+                "Tunnels",
+                "[Runtimes]",
+                "PHP",
+                "Node",
+                "[System]",
+                "Ports",
+                "Logs",
+                "Doctor",
+                "Sources"
+            ]
+        );
     }
 }
