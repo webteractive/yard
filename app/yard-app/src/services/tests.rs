@@ -124,3 +124,43 @@ async fn a_port_that_is_not_a_port_says_so(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(fake.count("services.port") + fake.count("ports.set") + fake.count("services.add"), 0);
 }
+
+fn services_on(env: &AppEnv, selected: Option<&str>, cx: &mut TestAppContext) {
+    env.state.update(cx, |s, _| s.services.value = serde_json::from_value(services()).ok());
+    let screen = yard_app_model::hint::Screen::Services(selected.map(str::to_string));
+    env.nav.update(cx, |n, _| n.screen = screen);
+}
+
+/// A row keeps one control; Port…, Sleep after…, Remove… and the rest are in the selected
+/// instance's detail, with their ids as before (spec §4: 8 buttons on one row).
+#[gpui::test]
+async fn service_actions_live_in_the_detail(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    services_on(&env, None, cx);
+    let (_v, vcx) = cx.add_window_view(|_, _| Host(env.clone()));
+    vcx.run_until_parked();
+    assert!(vcx.debug_bounds("service:redis:toggle").is_some(), "the row keeps Stop");
+    assert!(vcx.debug_bounds("service:redis:port").is_none(), "Port… waits for a selection");
+    vcx.update(|_, cx| {
+        env.nav.update(cx, |n, cx| {
+            n.screen = yard_app_model::hint::Screen::Services(Some("redis".into()));
+            cx.notify();
+        })
+    });
+    vcx.run_until_parked();
+    for id in ["service:redis:port", "service:redis:sleep", "service:redis:remove", "service:redis:restart"] {
+        assert!(vcx.debug_bounds(id).is_some(), "{id} is in the detail");
+    }
+    assert!(vcx.debug_bounds("service:mysql-8.4:port").is_none(), "only the selected instance's");
+}
+
+/// A selected instance that is gone leaves no detail acting on nothing.
+#[gpui::test]
+async fn a_removed_selection_falls_back_to_none(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    services_on(&env, Some("gone"), cx);
+    let (_v, vcx) = cx.add_window_view(|_, _| Host(env.clone()));
+    vcx.run_until_parked();
+    assert!(vcx.debug_bounds("service:gone:detail").is_none());
+    assert!(vcx.debug_bounds("service:redis:toggle").is_some(), "the table still draws");
+}

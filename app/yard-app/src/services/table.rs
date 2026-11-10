@@ -5,13 +5,16 @@ use crate::env::{AppEnv, Sheet};
 use crate::runner::ActionId;
 use crate::services::logs::LogTail;
 use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::group::Group;
 use crate::widgets::table::{Column, Row, Table};
+use crate::widgets::text;
 use crate::widgets::text_field::TextField;
 use gpui::{
     AnyElement, App, AppContext, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div,
-    px,
+    prelude::*, px,
 };
 use time::OffsetDateTime;
+use yard_app_model::hint::Screen;
 use yard_client::api;
 use yard_core::present::{sleep_text, state_text};
 use yard_proto::methods::{EnvParams, ServiceParams, ServiceRemoveParams};
@@ -121,67 +124,88 @@ fn open_sheet(env: &AppEnv, sheet: impl FnOnce(&mut App) -> Sheet, cx: &mut App)
     });
 }
 
-pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
-    let now = OffsetDateTime::now_utc();
-    let services: Vec<ServiceInfo> = env.state.read(cx).services.value.clone().unwrap_or_default();
-    let rows = services.iter().map(|s| {
-        let n = s.name.clone();
-        let mut row = Row::new(s.name.clone(), cells(s, now).into_iter().map(SharedString::from).collect());
-        let mut actions = div().flex().gap(px(4.));
-        if s.managed_by == ServiceManager::Yard {
-            let running = s.state == ServiceState::Running;
-            let (e1, n1) = (env.clone(), n.clone());
-            actions = actions.child(
-                Button::new(format!("service:{n}:toggle"), if running { "Stop" } else { "Start" }).on_click(
-                    move |_, _, cx| {
-                        let m = if running { api::SERVICES_STOP } else { api::SERVICES_START };
-                        simple(
-                            &e1,
-                            format!("service:{n1}:{}", if running { "stop" } else { "start" }),
-                            m,
-                            n1.clone(),
-                            cx,
-                        )
-                    },
-                ),
-            );
-            let (e2, n2) = (env.clone(), n.clone());
-            actions = actions.child(Button::new(format!("service:{n}:restart"), "Restart").on_click(
-                move |_, _, cx| {
+/// An instance's controls, keyed by verb (`toggle`, `restart`, `logs`, `env`, `console`, `port`,
+/// `sleep`, `remove`), with their ids and labels as before. The row keeps one; the rest are in the
+/// selected instance's detail.
+fn controls(env: &AppEnv, s: &ServiceInfo, cx: &mut App) -> Vec<(&'static str, AnyElement)> {
+    let _ = &cx;
+    let n = s.name.clone();
+    let mut out: Vec<(&'static str, AnyElement)> = vec![];
+    if s.managed_by == ServiceManager::Yard {
+        let running = s.state == ServiceState::Running;
+        let (e1, n1) = (env.clone(), n.clone());
+        out.push((
+            "toggle",
+            Button::new(format!("service:{n}:toggle"), if running { "Stop" } else { "Start" })
+                .on_click(move |_, _, cx| {
+                    let m = if running { api::SERVICES_STOP } else { api::SERVICES_START };
+                    simple(
+                        &e1,
+                        format!("service:{n1}:{}", if running { "stop" } else { "start" }),
+                        m,
+                        n1.clone(),
+                        cx,
+                    )
+                })
+                .small()
+                .into_any_element(),
+        ));
+        let (e2, n2) = (env.clone(), n.clone());
+        out.push((
+            "restart",
+            Button::new(format!("service:{n}:restart"), "Restart")
+                .on_click(move |_, _, cx| {
                     simple(&e2, format!("service:{n2}:restart"), api::SERVICES_RESTART, n2.clone(), cx)
-                },
-            ));
-        }
-        let (e3, n3) = (env.clone(), n.clone());
-        actions =
-            actions.child(Button::new(format!("service:{n}:logs"), "Logs").on_click(move |_, _, cx| {
+                })
+                .small()
+                .into_any_element(),
+        ));
+    }
+    let (e3, n3) = (env.clone(), n.clone());
+    out.push((
+        "logs",
+        Button::new(format!("service:{n}:logs"), "Logs")
+            .on_click(move |_, _, cx| {
                 let (env, name) = (e3.clone(), n3.clone());
                 let tail = cx.new(|cx| LogTail::new(&env, Some(name.clone()), Some(name.clone()), cx));
                 env.nav.update(cx, |nav, cx| {
                     nav.service_log = Some((name, tail));
                     cx.notify();
                 });
-            }));
-        let (e4, n4) = (env.clone(), n.clone());
-        actions =
-            actions.child(Button::new(format!("service:{n}:env"), "Copy .env").on_click(move |_, _, cx| {
+            })
+            .small()
+            .into_any_element(),
+    ));
+    let (e4, n4) = (env.clone(), n.clone());
+    out.push((
+        "env",
+        Button::new(format!("service:{n}:env"), "Copy .env")
+            .on_click(move |_, _, cx| {
                 copy_env(
                     &e4,
                     EnvParams { path: None, site: None, service: Some(n4.clone()) },
                     format!("service:{n4}:env"),
                     cx,
                 )
-            }));
-        if let Some(console) = s.console.clone() {
-            actions = actions.child(
-                Button::new(format!("service:{n}:console"), "Open console")
-                    .on_click(move |_, _, cx| cx.open_url(&console)),
-            );
-        }
-        if s.managed_by == ServiceManager::Yard {
-            let (e5, n5) = (env.clone(), n.clone());
-            actions =
-                actions.child(Button::new(format!("service:{n}:port"), "Port…").on_click(move |_, _, cx| {
+            })
+            .small()
+            .into_any_element(),
+    ));
+    if let Some(console) = s.console.clone() {
+        out.push((
+            "console",
+            Button::new(format!("service:{n}:console"), "Open console")
+                .on_click(move |_, _, cx| cx.open_url(&console))
+                .small()
+                .into_any_element(),
+        ));
+    }
+    if s.managed_by == ServiceManager::Yard {
+        let (e5, n5) = (env.clone(), n.clone());
+        out.push((
+            "port",
+            Button::new(format!("service:{n}:port"), "Port…")
+                .on_click(move |_, _, cx| {
                     let name = n5.clone();
                     open_sheet(
                         &e5,
@@ -198,10 +222,15 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                         },
                         cx,
                     )
-                }));
-            let (e6, n6) = (env.clone(), n.clone());
-            actions = actions.child(Button::new(format!("service:{n}:sleep"), "Sleep after…").on_click(
-                move |_, _, cx| {
+                })
+                .small()
+                .into_any_element(),
+        ));
+        let (e6, n6) = (env.clone(), n.clone());
+        out.push((
+            "sleep",
+            Button::new(format!("service:{n}:sleep"), "Sleep after…")
+                .on_click(move |_, _, cx| {
                     let name = n6.clone();
                     open_sheet(
                         &e6,
@@ -218,47 +247,124 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                         },
                         cx,
                     )
-                },
-            ));
-            let (e7, n7) = (env.clone(), n.clone());
-            actions = actions.child(
-                Button::new(format!("service:{n}:remove"), "Remove…")
-                    .style(ButtonStyle::Destructive)
-                    .on_click(move |_, window, cx| {
-                        if refuse_in_use(&e7, &n7, cx) {
-                            return;
+                })
+                .small()
+                .into_any_element(),
+        ));
+        let (e7, n7) = (env.clone(), n.clone());
+        out.push((
+            "remove",
+            Button::new(format!("service:{n}:remove"), "Remove…")
+                .style(ButtonStyle::Destructive)
+                .on_click(move |_, window, cx| {
+                    if refuse_in_use(&e7, &n7, cx) {
+                        return;
+                    }
+                    let (title, buttons) = remove_question(&n7);
+                    let answer = window.prompt(PromptLevel::Critical, &title, None, &buttons, cx);
+                    let (env, name) = (e7.clone(), n7.clone());
+                    cx.spawn(async move |cx| {
+                        if let Some(keep_data) = answer.await.ok().and_then(keep_data) {
+                            cx.update(|cx| {
+                                let daemon = env.daemon.clone();
+                                env.runner.update(cx, |r, cx| {
+                                    r.perform(
+                                        ActionId(format!("service:{name}:remove")),
+                                        async move {
+                                            call(
+                                                &*daemon,
+                                                api::SERVICES_REMOVE,
+                                                ServiceRemoveParams { name, keep_data },
+                                            )
+                                            .await
+                                            .map(|_| ())
+                                        },
+                                        cx,
+                                    )
+                                    .detach()
+                                })
+                            });
                         }
-                        let (title, buttons) = remove_question(&n7);
-                        let answer = window.prompt(PromptLevel::Critical, &title, None, &buttons, cx);
-                        let (env, name) = (e7.clone(), n7.clone());
-                        cx.spawn(async move |cx| {
-                            if let Some(keep_data) = answer.await.ok().and_then(keep_data) {
-                                cx.update(|cx| {
-                                    let daemon = env.daemon.clone();
-                                    env.runner.update(cx, |r, cx| {
-                                        r.perform(
-                                            ActionId(format!("service:{name}:remove")),
-                                            async move {
-                                                call(
-                                                    &*daemon,
-                                                    api::SERVICES_REMOVE,
-                                                    ServiceRemoveParams { name, keep_data },
-                                                )
-                                                .await
-                                                .map(|_| ())
-                                            },
-                                            cx,
-                                        )
-                                        .detach()
-                                    })
-                                });
-                            }
-                        })
-                        .detach();
-                    }),
-            );
+                    })
+                    .detach();
+                })
+                .small()
+                .into_any_element(),
+        ));
+    }
+    out
+}
+
+/// The selected instance's detail: its port and sleep with the sheets that change them, and its
+/// other controls (spec §4, Services). `None` when `name` is no longer an instance.
+pub fn detail(env: &AppEnv, name: &str, cx: &mut App) -> Option<AnyElement> {
+    let now = OffsetDateTime::now_utc();
+    let s = env.state.read(cx).services.value.iter().flatten().find(|s| s.name == name).cloned()?;
+    let cells = cells(&s, now);
+    let mut controls = controls(env, &s, cx);
+    let mut take = |key: &str| controls.iter().position(|(k, _)| *k == key).map(|i| controls.remove(i).1);
+    let (port, sleep, remove) = (take("port"), take("sleep"), take("remove"));
+    // The row keeps Start or Stop, so the detail leaves it out.
+    let _ = take("toggle");
+    let rest: Vec<AnyElement> = controls.into_iter().map(|(_, e)| e).collect();
+    let cell = |i: usize| {
+        crate::widgets::table::shown(&SharedString::from(cells.get(i).cloned().unwrap_or_default()))
+    };
+    let id = format!("service:{name}:detail");
+    let selector = id.clone();
+    Some(
+        // An accessibility group named for the instance, so its controls are read (and found by
+        // the checklist's `ax press <label> <instance>`) as that instance's, as they were in its row.
+        div()
+            .id(gpui::ElementId::Name(id.clone().into()))
+            .role(gpui::Role::Group)
+            .aria_label(SharedString::from(name.to_string()))
+            .debug_selector(move || selector)
+            .child(
+                Group::new(id, Some(name.to_string().into()))
+                    .row(
+                        "ports",
+                        "Ports",
+                        crate::widgets::bar()
+                            .child(text(format!("service:{name}:ports"), cell(3)))
+                            .children(port),
+                    )
+                    .row(
+                        "sleep",
+                        "Sleeps after",
+                        crate::widgets::bar()
+                            .child(text(format!("service:{name}:sleep-after"), cell(4)))
+                            .children(sleep),
+                    )
+                    .row("run-by", "Run by", text(format!("service:{name}:run-by"), cell(5)))
+                    .footer(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(crate::widgets::bar().children(rest))
+                            .children(remove),
+                    ),
+            )
+            .into_any_element(),
+    )
+}
+
+pub fn table(env: &AppEnv, selected: Option<String>, _window: &mut Window, cx: &mut App) -> AnyElement {
+    let now = OffsetDateTime::now_utc();
+    let services: Vec<ServiceInfo> = env.state.read(cx).services.value.clone().unwrap_or_default();
+    let rows = services.iter().map(|s| {
+        let n = s.name.clone();
+        let mut row = Row::new(s.name.clone(), cells(s, now).into_iter().map(SharedString::from).collect());
+        // The row keeps Start or Stop (Logs for an instance Yard does not run); the rest is in
+        // the selected instance's detail.
+        let mut controls = controls(env, s, cx);
+        let keep = if controls.iter().any(|(k, _)| *k == "toggle") { "toggle" } else { "logs" };
+        if let Some(i) = controls.iter().position(|(k, _)| *k == keep) {
+            row = row.extra(controls.remove(i).1);
         }
-        row = row.extra(actions);
+        let _ = n;
         row
     });
     Table::new(
@@ -274,5 +380,12 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         ],
         rows.collect(),
     )
+    .actions(90.)
+    .empty("No services. Add one to run MySQL, PostgreSQL, Redis or MinIO for your sites.", None)
+    .selected(selected.map(SharedString::from))
+    .on_select({
+        let env = env.clone();
+        move |key, _, cx| crate::window::main::open(&env, Screen::Services(Some(key.to_string())), cx)
+    })
     .into_any_element()
 }

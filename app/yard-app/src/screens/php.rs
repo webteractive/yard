@@ -8,7 +8,10 @@ use crate::widgets::checkbox::Checkbox;
 use crate::widgets::picker::Picker;
 use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::theme::Typography;
-use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
+use gpui::{
+    AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, prelude::*,
+    px,
+};
 use std::path::PathBuf;
 use yard_app_model::hint::HintAction;
 use yard_app_model::refresh::ResourceKey;
@@ -29,6 +32,63 @@ pub fn columns() -> Vec<Column> {
 /// The ini Yard leaves to the user for PHP `version` (as yardd names it, so it parses).
 pub fn overrides_file(env: &AppEnv, version: &str) -> Option<PathBuf> {
     version.parse().ok().map(|v| env.paths().php_overrides(v))
+}
+
+/// The selected installed version's controls: Make default and Uninstall… (spec §4, PHP: they
+/// repeated on every row).
+fn version_controls(env: &AppEnv, v: &yard_proto::PhpInfo) -> Vec<AnyElement> {
+    let n = v.version.clone();
+    let mut out: Vec<AnyElement> = vec![];
+    if !v.default {
+        let (e, n1) = (env.clone(), n.clone());
+        out.push(
+            Button::new(format!("php:{n}:default"), "Make default")
+                .small()
+                .on_click(move |_, _, cx| {
+                    quick(
+                        &e,
+                        format!("php:{n1}:default"),
+                        api::PHP_DEFAULT,
+                        PhpParams { php: n1.clone() },
+                        cx,
+                    )
+                })
+                .into_any_element(),
+        );
+    }
+    let (e, n2) = (env.clone(), n.clone());
+    out.push(
+        Button::new(format!("php:{n}:uninstall"), "Uninstall…")
+            .small()
+            .style(ButtonStyle::Destructive)
+            .on_click(move |_, window, cx| {
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    &format!("Uninstall PHP {n2}?"),
+                    Some("brew removes its keg."),
+                    &["Uninstall", "Cancel"],
+                    cx,
+                );
+                let (env, v) = (e.clone(), n2.clone());
+                cx.spawn(async move |cx| {
+                    if answer.await == Ok(0) {
+                        cx.update(|cx| {
+                            job(
+                                &env,
+                                format!("php:{v}:uninstall"),
+                                api::PHP_UNINSTALL,
+                                PhpParams { php: v.clone() },
+                                format!("Uninstall PHP {v}"),
+                                cx,
+                            )
+                        });
+                    }
+                })
+                .detach();
+            })
+            .into_any_element(),
+    );
+    out
 }
 
 pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -52,54 +112,7 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             (true, None) => "-".to_string(),
         };
         let mut actions = div().flex().gap(px(4.));
-        if v.installed {
-            if !v.default {
-                let (e, n1) = (env.clone(), n.clone());
-                actions =
-                    actions.child(Button::new(format!("php:{n}:default"), "Make default").small().on_click(
-                        move |_, _, cx| {
-                            quick(
-                                &e,
-                                format!("php:{n1}:default"),
-                                api::PHP_DEFAULT,
-                                PhpParams { php: n1.clone() },
-                                cx,
-                            )
-                        },
-                    ));
-            }
-            let (e, n2) = (env.clone(), n.clone());
-            actions = actions.child(
-                Button::new(format!("php:{n}:uninstall"), "Uninstall…")
-                    .small()
-                    .style(ButtonStyle::Destructive)
-                    .on_click(move |_, window, cx| {
-                        let answer = window.prompt(
-                            PromptLevel::Warning,
-                            &format!("Uninstall PHP {n2}?"),
-                            Some("brew removes its keg."),
-                            &["Uninstall", "Cancel"],
-                            cx,
-                        );
-                        let (env, v) = (e.clone(), n2.clone());
-                        cx.spawn(async move |cx| {
-                            if answer.await == Ok(0) {
-                                cx.update(|cx| {
-                                    job(
-                                        &env,
-                                        format!("php:{v}:uninstall"),
-                                        api::PHP_UNINSTALL,
-                                        PhpParams { php: v.clone() },
-                                        format!("Uninstall PHP {v}"),
-                                        cx,
-                                    )
-                                });
-                            }
-                        })
-                        .detach();
-                    }),
-            );
-        } else {
+        if !v.installed {
             let (e, n3) = (env.clone(), n.clone());
             actions = actions.child(
                 Button::new(format!("php:{n}:install"), "Install")
@@ -128,7 +141,24 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new("php", columns(), rows.collect()).actions(200.);
+    let pick = env.clone();
+    let installed_rows = installed.clone();
+    let table = Table::new("php", columns(), rows.collect())
+        .actions(90.)
+        .selected(shown.clone().map(SharedString::from))
+        .on_select(move |key, _, cx| {
+            if installed_rows.iter().any(|v| v == key.as_ref()) {
+                pick.nav.update(cx, |n, cx| {
+                    n.php_version = Some(key.to_string());
+                    cx.notify();
+                });
+            }
+        });
+    let controls = shown
+        .as_ref()
+        .and_then(|s| versions.iter().find(|v| &v.version == s))
+        .map(|v| version_controls(env, v))
+        .unwrap_or_default();
     let mut page = div()
         .flex()
         .flex_col()
@@ -137,7 +167,25 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .children(errors(env, "php:", cx))
         .child(table);
     if let Some(v) = shown {
-        page = page.child(extensions(env, &v, &installed, window, cx));
+        page = page
+            .child(
+                // Named for the version, so its controls read as that version's, as on its row.
+                div()
+                    .id("php:selected")
+                    .role(gpui::Role::Group)
+                    .aria_label(SharedString::from(v.clone()))
+                    .debug_selector(|| "php:selected".into())
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .type_section()
+                            .child(crate::widgets::text("php:selected:title", format!("PHP {v}"))),
+                    )
+                    .child(crate::widgets::bar().children(controls)),
+            )
+            .child(extensions(env, &v, &installed, window, cx));
     }
     page.into_any_element()
 }

@@ -512,7 +512,9 @@ else
   note "V1 skipped: no brew minio keg"
 fi
 
-# V3: Port… moves an instance
+# V3: Port… moves an instance. An instance's controls other than Start and Stop are in its detail,
+# which selecting its row opens.
+ax row redis >/dev/null
 ax press "Port…" redis >/dev/null
 ax type "Port for redis" 28380 >/dev/null
 ax press Move >/dev/null
@@ -558,6 +560,7 @@ else
   ax answer Cancel >/dev/null 2>&1 || true
 fi
 if svc minio | grep -q minio; then
+  ax row minio >/dev/null
   ax press "Remove…" minio >/dev/null
   sleep 0.5
   d="$(ax dialog)"
@@ -641,6 +644,7 @@ fi
 ax close-window TextEdit 99-overrides.ini >/dev/null
 $textedit_was_running || pkill -x TextEdit || true
 default_php="$(y php list --json | jq -r '.[] | select(.default) | .version')"
+ax row "$default_php" >/dev/null
 ax press "Uninstall…" "$default_php" >/dev/null
 sleep 0.5
 if ax dialog | jq -e '.buttons | index("Uninstall")' >/dev/null 2>&1; then ax answer Uninstall >/dev/null; fi

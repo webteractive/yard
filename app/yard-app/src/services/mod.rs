@@ -22,6 +22,10 @@ pub const VERBS: [&str; 8] = ["start", "stop", "restart", "remove", "port", "sle
 pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let add = env.clone();
+    let selected = match &env.nav.read(cx).screen {
+        yard_app_model::hint::Screen::Services(n) => n.clone(),
+        _ => None,
+    };
     let header = div()
         .flex()
         .justify_between()
@@ -116,7 +120,8 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(12.))
         .child(header)
         .children(errors)
-        .child(table::table(env, window, cx))
+        .child(table::table(env, selected.clone(), window, cx))
+        .children(selected.and_then(|n| table::detail(env, &n, cx)))
         .children(failed)
         .children(log)
         .into_any_element()

@@ -303,3 +303,32 @@ async fn check_now_shows_the_checks_answer(cx: &mut TestAppContext) {
     assert_eq!(status, Some(yard_proto::PortStatus::InUse));
     assert_eq!(fake.count("ports.list"), 0, "nothing refetched over it");
 }
+
+/// Make default and Uninstall… are the selected version's, not repeated on every row (spec §4,
+/// PHP: 22 buttons, 11 of them red); a version that is not installed keeps Install on its row.
+#[gpui::test]
+async fn php_actions_live_in_the_selected_version(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    env.state.update(cx, |s, _| {
+        s.php.value = serde_json::from_value(json!([
+            {"version": "7.0", "default": false, "installed": false, "sites": [], "pool": null},
+            {"version": "7.1", "default": false, "installed": true, "sites": [], "pool": null},
+            {"version": "8.4", "default": true, "installed": true, "sites": ["blog"], "pool": "running"}
+        ]))
+        .ok();
+    });
+    let (_v, vcx) = cx.add_window_view(|_, _| Host(env.clone(), super::php::php));
+    vcx.run_until_parked();
+    assert!(vcx.debug_bounds("php:8.4:uninstall").is_some(), "the default version is shown first");
+    assert!(vcx.debug_bounds("php:7.1:uninstall").is_none(), "7.1 is not selected");
+    assert!(vcx.debug_bounds("php:7.0:install").is_some(), "Install stays on its row");
+    vcx.update(|_, cx| {
+        env.nav.update(cx, |n, cx| {
+            n.php_version = Some("7.1".into());
+            cx.notify();
+        })
+    });
+    vcx.run_until_parked();
+    assert!(vcx.debug_bounds("php:7.1:uninstall").is_some() && vcx.debug_bounds("php:7.1:default").is_some());
+    assert!(vcx.debug_bounds("php:8.4:uninstall").is_none());
+}
