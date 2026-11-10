@@ -6,6 +6,7 @@ use crate::widgets::button::Button;
 use crate::widgets::error_view::ErrorView;
 use crate::widgets::log_view::LogView;
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
 use yard_app_model::hint::HintAction;
 use yard_app_model::jobs::{JobPhase, JobRecord};
@@ -74,11 +75,11 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                     .flex()
                     .justify_between()
                     .child(
-                        div().text_sm().child(crate::widgets::text(format!("{id}:title"), j.title.clone())),
+                        div().type_body().child(crate::widgets::text(format!("{id}:title"), j.title.clone())),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .type_secondary()
                             .text_color(t.muted)
                             .child(crate::widgets::text(format!("{id}:phase"), phase_text(&j.phase))),
                     ),
@@ -112,7 +113,7 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(10.))
-        .child(div().text_xl().child(crate::widgets::text("heading", "Activity")))
+        .child(div().type_title().child(crate::widgets::text("heading", "Activity")))
         .children(cards)
         .into_any_element()
 }

@@ -7,6 +7,7 @@ use crate::platform::setup_probe::brew_installed;
 use crate::screens::quick;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, Image, ImageFormat, IntoElement, ParentElement,
     PathPromptOptions, Pixels, Render, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
@@ -132,7 +133,7 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
             t.text
         };
         let note = (s.id == SetupStepId::Helper && !s.done && !s.blocked).then(|| {
-            div().debug_selector(|| "helper:note".into()).text_xs().text_color(t.muted).child(
+            div().debug_selector(|| "helper:note".into()).type_secondary().text_color(t.muted).child(
                 crate::widgets::text(
                     "helper:note",
                     "macOS asks for your password in Terminal: the helper writes /etc/resolver.",
@@ -158,13 +159,13 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
                     .child(
                         div()
                             .debug_selector(move || format!("step:{:?}:title", s.id))
-                            .text_sm()
+                            .type_body()
                             .text_color(color)
                             .child(crate::widgets::text(format!("step:{:?}:title", s.id), title(s.id))),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .type_secondary()
                             .text_color(t.muted)
                             .child(crate::widgets::text(format!("step:{:?}:state", s.id), state(s))),
                     )
@@ -183,15 +184,16 @@ pub fn checklist(env: &AppEnv, facts: &SetupFacts, window: &mut Window, cx: &mut
         .p(px(16.))
         .bg(t.background)
         .text_color(t.text)
+        .type_body()
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(14.))
                 .child(img(logo()).size(px(56.)).flex_none())
-                .child(div().text_xl().child(crate::widgets::text("heading", "Set up Yard"))),
+                .child(div().type_title().child(crate::widgets::text("heading", "Set up Yard"))),
         )
-        .child(div().text_sm().text_color(t.muted).child(crate::widgets::text(
+        .child(div().type_body().text_color(t.muted).child(crate::widgets::text(
             "summary",
             if ready {
                 "Yard is set up. The optional steps can wait."

@@ -3,6 +3,7 @@
 
 use super::Pressable;
 use super::theme::Theme;
+use super::theme::Typography;
 use super::{A11y, text};
 use gpui::{
     AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window,
@@ -77,7 +78,7 @@ impl RenderOnce for Table {
             .py(px(4.))
             .border_b_1()
             .border_color(t.border)
-            .text_xs()
+            .type_secondary()
             .text_color(t.muted)
             .children(
                 self.columns
@@ -106,7 +107,7 @@ impl RenderOnce for Table {
                     .when(selected, |d| d.bg(Theme::wash(t.accent, 0.14)))
                     .when_some(handler, |d, h| d.cursor_pointer().on_press(move |_, w, cx| h(&key, w, cx)))
                     .children(row.cells.into_iter().enumerate().map(|(i, c)| {
-                        div().flex_1().text_sm().text_color(t.text).child(text(format!("cell:{i}"), c))
+                        div().flex_1().type_body().text_color(t.text).child(text(format!("cell:{i}"), c))
                     }))
                     .children(row.extra),
             );

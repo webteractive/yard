@@ -2,6 +2,7 @@
 
 use super::A11y;
 use super::theme::Theme;
+use super::theme::Typography;
 use gpui::{
     AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window,
     div, prelude::*, px,
@@ -59,7 +60,7 @@ impl RenderOnce for Banner {
             .bg(Theme::wash(color, 0.14))
             .border_b_1()
             .border_color(color)
-            .child(div().flex_1().text_sm().text_color(t.text).child(self.text))
+            .child(div().flex_1().type_body().text_color(t.text).child(self.text))
             .children(self.actions)
     }
 }

@@ -8,6 +8,7 @@ use crate::widgets::error_view::ErrorView;
 use crate::widgets::table::{Row, Table};
 use crate::widgets::text;
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, prelude::*,
     px,
@@ -44,7 +45,7 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             )
             .child(text(format!("{label}:value"), value))
     };
-    let mut facts = div().flex().flex_col().gap(px(4.)).text_sm();
+    let mut facts = div().flex().flex_col().gap(px(4.)).type_body();
     if let Some(st) = &s.status.value {
         facts = facts
             .child(line(
@@ -164,13 +165,13 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(14.))
-        .child(div().text_xl().child("Overview"))
+        .child(div().type_title().child("Overview"))
         .child(facts)
         .child(controls)
         .children(errors)
         .child(units)
         .when(!sleeping.is_empty(), |d| {
-            d.child(div().text_sm().text_color(t.muted).child(format!("Sleeping: {}", sleeping.join(", "))))
+            d.child(div().type_body().text_color(t.muted).child(format!("Sleeping: {}", sleeping.join(", "))))
         })
         .into_any_element()
 }

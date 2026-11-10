@@ -4,6 +4,7 @@ use super::A11y;
 use super::Pressable;
 use super::disabled::Disabled;
 use super::theme::Theme;
+use super::theme::Typography;
 use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Toggled, Window, div,
     prelude::*, px,
@@ -73,7 +74,7 @@ impl RenderOnce for Toggle {
                     .p(px(2.))
                     .child(div().size(px(12.)).rounded(px(6.)).bg(t.surface)),
             )
-            .child(div().text_sm().text_color(t.text).child(self.label));
+            .child(div().type_body().text_color(t.text).child(self.label));
         if a11y.disabled { Disabled(switch).into_any_element() } else { switch.into_any_element() }
     }
 }

@@ -3,6 +3,7 @@
 use super::A11y;
 use super::button::{Button, ButtonStyle};
 use super::theme::Theme;
+use super::theme::Typography;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FocusHandle, IntoElement, KeyBinding, ParentElement, RenderOnce,
     Role, SharedString, Styled, Window, actions, div, prelude::*, px,
@@ -152,11 +153,11 @@ impl RenderOnce for Form {
                     .rounded(px(10.))
                     .bg(t.surface)
                     .shadow_lg()
-                    .child(div().text_lg().text_color(t.text).child(self.title))
+                    .child(div().type_section().text_color(t.text).child(self.title))
                     .children(self.fields)
                     .children(self.error.map(|e| {
                         div()
-                            .text_sm()
+                            .type_body()
                             .text_color(t.danger)
                             .child(super::text(format!("{}:error", a11y.id), e))
                     }))

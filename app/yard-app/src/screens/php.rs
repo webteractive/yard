@@ -7,6 +7,7 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::checkbox::Checkbox;
 use crate::widgets::picker::Picker;
 use crate::widgets::table::{Row, Table};
+use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
 use std::path::PathBuf;
 use yard_app_model::hint::HintAction;
@@ -203,7 +204,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                 .flex()
                 .gap(px(8.))
                 .items_center()
-                .child(div().text_lg().child(crate::widgets::text("extensions:heading", "Extensions")))
+                .child(div().type_section().child(crate::widgets::text("extensions:heading", "Extensions")))
                 .child(picker),
         )
         .child(table)
@@ -230,7 +231,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                     }
                 })),
         )
-        .child(div().text_lg().child(crate::widgets::text("overrides:heading", "php.ini overrides")))
+        .child(div().type_section().child(crate::widgets::text("overrides:heading", "php.ini overrides")))
         .child(
             div()
                 .flex()

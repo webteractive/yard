@@ -5,6 +5,7 @@ use crate::env::{AppEnv, Nav};
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::table::{Row, Table};
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use yard_client::api;
 use yard_proto::methods::{NodeInstallParams, NodeListParams, NodeSpecParams, NodeVersionParams};
@@ -67,7 +68,7 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(12.))
         .child(heading("Node"))
         .children(errors(env, "node:", cx))
-        .child(div().text_sm().text_color(t.muted).child(crate::widgets::text(
+        .child(div().type_body().text_color(t.muted).child(crate::widgets::text(
             "node:default",
             format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
         )))
@@ -126,7 +127,7 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             },
         )))
         .children(available.map(|a| {
-            div().text_xs().text_color(t.muted).child(crate::widgets::text("node:available:list", a))
+            div().type_secondary().text_color(t.muted).child(crate::widgets::text("node:available:list", a))
         }))
         .into_any_element()
 }

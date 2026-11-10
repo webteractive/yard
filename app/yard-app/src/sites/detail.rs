@@ -9,6 +9,7 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::picker::Picker;
 use crate::widgets::text;
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use crate::widgets::toggle::Toggle;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
 use std::path::{Path, PathBuf};
@@ -177,15 +178,16 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         .border_1()
         .border_color(t.border)
         .bg(t.surface);
-    pane = pane.child(div().text_lg().child(text(format!("site:{name}:name"), site.name.clone()))).child(
-        div().text_sm().text_color(t.accent).child(text(format!("site:{name}:url"), site.url.clone())),
-    );
+    pane =
+        pane.child(div().type_section().child(text(format!("site:{name}:name"), site.name.clone()))).child(
+            div().type_body().text_color(t.accent).child(text(format!("site:{name}:url"), site.url.clone())),
+        );
     if let Some(d) = &detail {
         pane = pane.children(
             source_lines(d)
                 .into_iter()
                 .enumerate()
-                .map(|(i, l)| div().text_sm().child(text(format!("site:{name}:source:{i}"), l))),
+                .map(|(i, l)| div().type_body().child(text(format!("site:{name}:source:{i}"), l))),
         );
         if let SiteKind::Php { php, .. } = &site.kind {
             let mut options: Vec<SharedString> = vec!["Default".into()];
@@ -223,7 +225,7 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         for svc in &d.services {
             let met = if svc.service.is_some() { "met" } else { "missing" };
             let want = svc.want.as_deref().map(|w| format!(" {w}")).unwrap_or_default();
-            pane = pane.child(div().text_sm().child(text(
+            pane = pane.child(div().type_body().child(text(
                 format!("site:{name}:service:{}", svc.engine),
                 format!("{}{want} — {met}", yard_proto::engine_display(&svc.engine)),
             )));
@@ -274,7 +276,10 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
     }
     if let Some(e) = &site.project_error {
         pane = pane.child(
-            div().text_sm().text_color(t.danger).child(text(format!("site:{name}:error"), e.message.clone())),
+            div()
+                .type_body()
+                .text_color(t.danger)
+                .child(text(format!("site:{name}:error"), e.message.clone())),
         );
     }
     let mut actions = div().flex().flex_wrap().gap(px(6.));

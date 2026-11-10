@@ -12,7 +12,8 @@ use crate::daemon::call;
 use crate::env::AppEnv;
 use crate::runner::ActionId;
 use crate::widgets::error_view::ErrorView;
-use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, div};
+use crate::widgets::theme::Typography;
+use gpui::{AnyElement, App, IntoElement, ParentElement, div};
 use serde::Serialize;
 use yard_app_model::hint::HintAction;
 use yard_client::api::Method;
@@ -20,7 +21,7 @@ use yard_proto::JobStarted;
 
 /// The screen's title.
 pub fn heading(title: &str) -> AnyElement {
-    div().text_xl().child(crate::widgets::text("heading", title.to_string())).into_any_element()
+    div().type_title().child(crate::widgets::text("heading", title.to_string())).into_any_element()
 }
 
 /// Every action error whose id starts with `prefix`, each with its hint's action.

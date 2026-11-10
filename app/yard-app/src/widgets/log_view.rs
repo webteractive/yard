@@ -3,6 +3,7 @@
 use super::A11y;
 use super::Pressable;
 use super::theme::Theme;
+use super::theme::Typography;
 use crate::platform::open::Opener;
 use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window, div,
@@ -63,8 +64,7 @@ impl RenderOnce for LogView {
             .p(px(8.))
             .rounded(px(6.))
             .bg(t.background)
-            .font_family("Menlo")
-            .text_xs()
+            .type_mono()
             .text_color(t.text)
             .child(
                 div()

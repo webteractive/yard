@@ -11,6 +11,7 @@ use crate::widgets::error_view::ErrorView;
 use crate::widgets::log_view::LogView;
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use yard_app_model::hint::HintAction;
 
@@ -25,7 +26,7 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .justify_between()
         .items_center()
-        .child(div().text_xl().child(crate::widgets::text("heading", "Services")))
+        .child(div().type_title().child(crate::widgets::text("heading", "Services")))
         .child(Button::new("service:add", "Add service…").style(ButtonStyle::Primary).on_click(
             move |_, _, cx| {
                 let line = cx.new(|cx| {
@@ -87,7 +88,7 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                     .justify_between()
                     .child(
                         div()
-                            .text_sm()
+                            .type_body()
                             .text_color(t.muted)
                             .child(crate::widgets::text("service:log:title", format!("{name}'s log"))),
                     )

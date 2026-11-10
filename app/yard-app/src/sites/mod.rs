@@ -9,6 +9,7 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
 use crate::widgets::table::{Row, Table};
 use crate::widgets::text_field::TextField;
+use crate::widgets::theme::Typography;
 use gpui::{
     AnyElement, App, AppContext, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Window,
     div, px,
@@ -92,7 +93,7 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .justify_between()
         .items_center()
-        .child(div().text_xl().child(crate::widgets::text("heading", "Sites")))
+        .child(div().type_title().child(crate::widgets::text("heading", "Sites")))
         .child(
             div()
                 .flex()

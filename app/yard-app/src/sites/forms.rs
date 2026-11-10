@@ -5,6 +5,7 @@ use crate::env::{AppEnv, Sheet};
 use crate::runner::ActionId;
 use crate::widgets::form::Form;
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div};
 use yard_app_model::settle::SettlePlan;
 use yard_client::api;
@@ -26,7 +27,7 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
             Form::new("sheet:link", "Link a folder")
                 .field(
                     div()
-                        .text_sm()
+                        .type_body()
                         .text_color(t.muted)
                         .child(crate::widgets::text("sheet:link:folder", folder.display().to_string())),
                 )
@@ -80,12 +81,12 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
             for (i, line) in plan.lines.iter().enumerate() {
                 form = form.field(
                     div()
-                        .text_sm()
+                        .type_body()
                         .child(crate::widgets::text(format!("sheet:settle:line:{i}"), line.clone())),
                 );
             }
             for (i, need) in plan.manual.iter().enumerate() {
-                form = form.field(div().text_xs().text_color(t.muted).child(crate::widgets::text(
+                form = form.field(div().type_secondary().text_color(t.muted).child(crate::widgets::text(
                     format!("sheet:settle:manual:{i}"),
                     format!("Not installed by Yard: {}", need.describe()),
                 )));

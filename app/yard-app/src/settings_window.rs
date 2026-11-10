@@ -7,6 +7,7 @@ use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::checkbox::Checkbox;
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Theme;
+use crate::widgets::theme::Typography;
 use gpui::{
     App, AppContext, Bounds, Context, Entity, Global, IntoElement, ParentElement, Pixels, Render, Styled,
     TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
@@ -82,7 +83,7 @@ impl Render for SettingsView {
                 .flex()
                 .flex_col()
                 .gap(px(4.))
-                .child(div().text_xs().text_color(t.muted).child(label.to_string()))
+                .child(div().type_secondary().text_color(t.muted).child(label.to_string()))
                 .child(field)
         };
         div()
@@ -93,7 +94,8 @@ impl Render for SettingsView {
             .flex_col()
             .bg(t.background)
             .text_color(t.text)
-            .child(div().text_lg().child(crate::widgets::text("heading", "Settings")))
+            .type_body()
+            .child(div().type_section().child(crate::widgets::text("heading", "Settings")))
             .child(row(
                 "yard (a path, or empty to find it beside the LaunchAgent's yardd)",
                 self.yard.clone(),
@@ -108,7 +110,7 @@ impl Render for SettingsView {
                         window.refresh();
                     })
             })
-            .child(div().text_xs().text_color(t.muted).child(crate::widgets::text(
+            .child(div().type_secondary().text_color(t.muted).child(crate::widgets::text(
                 "data-root",
                 format!("Data root: {}", self.env.location.root.display()),
             )))
@@ -123,7 +125,7 @@ impl Render for SettingsView {
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     )
                     .child(
-                        div().text_xs().text_color(t.muted).child(crate::widgets::text(
+                        div().type_secondary().text_color(t.muted).child(crate::widgets::text(
                             "saved",
                             saved_text(self.saved, self.env.cli.yard()),
                         )),

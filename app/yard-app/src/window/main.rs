@@ -8,7 +8,7 @@ use crate::runner::ActionId;
 use crate::widgets::Pressable;
 use crate::widgets::banner::{Banner, BannerKind};
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::theme::{Theme, Typography};
+use crate::widgets::theme::{Theme, Typography, size};
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Global, IntoElement, ParentElement, Pixels,
     Render, Role, SharedString, Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
@@ -233,6 +233,7 @@ impl Render for MainWindow {
             .flex()
             .bg(t.background)
             .text_color(t.text)
+            .type_body()
             .child(sidebar(&env, &screen, window, cx))
             .child(
                 div()
@@ -326,10 +327,12 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
             .flex()
             .items_center()
             .justify_between()
+            .h(size::SIDEBAR_ITEM)
+            .flex_none()
             .px(px(10.))
-            .py(px(5.))
             .rounded(px(6.))
             .cursor_pointer()
+            .when(selected, |d| d.type_body_strong())
             .when(selected, |d| d.bg(Theme::wash(t.accent, 0.14)))
             .on_press(move |_, _, cx| open(&env, page.clone(), cx))
             .child(*label)
@@ -371,7 +374,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .flex_col()
         .border_r_1()
         .border_color(t.border)
-        .text_sm()
+        .type_body()
         .children(items)
         .into_any_element()
 }
@@ -749,5 +752,18 @@ mod tests {
         let (a, b) = (item.center().y, badge.center().y);
         assert!((a - b).abs() <= gpui::px(1.), "item centre {a:?}, badge centre {b:?}");
         assert_eq!(badge.size.height, gpui::px(16.));
+    }
+
+    /// A sidebar item is 28 pt high (G13: φ line heights made it taller and uneven).
+    #[gpui::test]
+    async fn sidebar_items_are_28_high(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        cx.update(|cx| cx.set_global(env.clone()));
+        cx.update(|cx| super::open(&env, Screen::Overview, cx));
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.try_global::<super::MainHandle>().map(|h| h.0)).expect("a window");
+        let mut vcx = gpui::VisualTestContext::from_window(handle.into(), cx);
+        vcx.run_until_parked();
+        assert_eq!(vcx.debug_bounds("nav:Overview").unwrap().size.height, gpui::px(28.));
     }
 }

@@ -5,6 +5,7 @@ use super::A11y;
 use super::button::Button;
 use super::log_view::LogView;
 use super::theme::Theme;
+use super::theme::Typography;
 use crate::platform::open::Opener;
 use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Window, div,
@@ -117,13 +118,16 @@ impl RenderOnce for ErrorView {
             .bg(Theme::wash(t.danger, 0.14))
             .child(
                 div()
-                    .text_sm()
+                    .type_body()
                     .text_color(t.danger)
                     .child(super::text(format!("{}:message", a11y.id), self.message)),
             )
             .when_some(self.hint.clone(), |d, h| {
                 d.child(
-                    div().text_xs().text_color(t.muted).child(super::text(format!("{}:hint", a11y.id), h)),
+                    div()
+                        .type_secondary()
+                        .text_color(t.muted)
+                        .child(super::text(format!("{}:hint", a11y.id), h)),
                 )
             })
             .child(row)

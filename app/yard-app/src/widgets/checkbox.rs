@@ -3,6 +3,7 @@
 use super::A11y;
 use super::Pressable;
 use super::theme::Theme;
+use super::theme::Typography;
 use gpui::{
     App, ElementId, IntoElement, ParentElement, RenderOnce, Role, SharedString, Styled, Toggled, Window, div,
     prelude::*, px,
@@ -54,12 +55,12 @@ impl RenderOnce for Checkbox {
                     .border_color(t.border)
                     .bg(if checked { t.accent } else { t.surface })
                     .text_color(t.on_accent)
-                    .text_xs()
+                    .type_secondary()
                     .flex()
                     .items_center()
                     .justify_center()
                     .when(checked, |d| d.child("✓")),
             )
-            .child(div().text_sm().text_color(t.text).child(self.label))
+            .child(div().type_body().text_color(t.text).child(self.label))
     }
 }

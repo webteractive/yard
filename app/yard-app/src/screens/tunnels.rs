@@ -6,6 +6,7 @@ use crate::platform::open::Opener;
 use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::table::{Row, Table};
+use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
 use yard_app_model::jobs::JobPhase;
 use yard_client::api;
@@ -229,7 +230,9 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
                 }
             }),
         ))
-        .child(div().text_lg().child(crate::widgets::text("domains:heading", "Domains for named tunnels")))
+        .child(
+            div().type_section().child(crate::widgets::text("domains:heading", "Domains for named tunnels")),
+        )
         .child(domain_table)
         .child(crate::widgets::bar().child(domain.clone()).child(
             Button::new("domain:add", "Add domain").on_click(move |_, _, cx| {

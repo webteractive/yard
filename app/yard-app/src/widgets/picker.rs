@@ -4,6 +4,7 @@ use super::A11y;
 use super::Pressable;
 use super::disabled::Disabled;
 use super::theme::Theme;
+use super::theme::Typography;
 use gpui::{
     App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce, Role, SharedString, Styled,
     Window, anchored, canvas, deferred, div, prelude::*, px,
@@ -84,7 +85,7 @@ impl RenderOnce for Picker {
             .border_1()
             .border_color(t.border)
             .bg(t.surface)
-            .text_sm()
+            .type_body()
             .text_color(t.text)
             .relative()
             .child(current)
@@ -96,7 +97,7 @@ impl RenderOnce for Picker {
                     .size_full()
             });
         if let Some(why) = &disabled {
-            root = root.opacity(0.6).child(div().text_xs().text_color(t.muted).child(why.clone()));
+            root = root.opacity(0.6).child(div().type_secondary().text_color(t.muted).child(why.clone()));
             return Disabled(root).into_any_element();
         } else {
             root = root.cursor_pointer().on_press(move |_, _, cx| {
