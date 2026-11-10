@@ -5,8 +5,7 @@ release); planned in `docs/superpowers/plans/2026-11-10-yard-app-visual-design.m
 2026-11-10 (45aa1b5..a3a3d27 and the commit after it), steps 1–17 of §5 and the logo of §6. Not
 built: step 18, the blurred sidebar (it needs a look at both appearances first); "Open in…" as one
 menu on the site detail (the editor, Finder and Terminal stay three buttons); Ports' controls stay
-in its page rather than the toolbar. Light `neutral_text` is #6A6A6F, not #6E6E73, which failed
-4.5:1 on its own pill wash. The unit tests cover the layout fixes; `checklist.sh` and
+in its page rather than the toolbar. Several text colours moved a little to pass 4.5:1 where pills and group labels sit (§3.4). The unit tests cover the layout fixes; `checklist.sh` and
 `checklist-installs.sh` were updated for the moved controls but not yet run on this build. It changes how Yard.app looks and lays out,
 not what it does: every screen, action, error path, sheet key and accessibility rule in the M6 design
 (`2026-11-05-yard-m6-app-design.md` §8) and `.hydra/rules/app.md` still holds. The menu bar menu stays
@@ -188,7 +187,7 @@ signal.
 | `control_border` | rgba(0,0,0,.14) | rgba(255,255,255,.10) | buttons, pickers, fields |
 | `separator` | rgba(0,0,0,.09) | rgba(255,255,255,.09) | row lines, panel edges |
 | `text` | #1D1D1F | #F2F2F4 | primary text |
-| `text_secondary` | #6E6E73 | #98989D | headers, hints, facts' labels |
+| `text_secondary` | #6A6A6F | #98989D | headers, hints, facts' labels |
 | `text_tertiary` | #A1A1A6 | #6C6C70 | placeholders, disabled labels |
 | `accent` | #1F7A4D | #4CC38A | links, switch on, focus ring, selected-row wash |
 | `accent_fill` | #1F7A4D | #23794F | primary button fill |
@@ -197,13 +196,16 @@ signal.
 | `row_selected` | accent at .14 | accent at .20 | selected table row |
 | `hover` | rgba(0,0,0,.04) | rgba(255,255,255,.05) | row and sidebar hover |
 | `focus_ring` | accent at .40, 3 px | accent at .50, 3 px | focused field or control |
-| `success` / `success_text` | #34C759 / #1E7B34 | #30D158 / #4CD964 | running, serving, done, trusted |
-| `warning` / `warning_text` | #FF9500 / #A15C00 | #FF9F0A / #FFB340 | needs setup, warnings, waiting |
-| `danger` / `danger_text` | #FF3B30 / #C4281C | #FF453A / #FF6961 | failed, error, destructive labels |
+| `success` / `success_text` | #34C759 / #137029 | #30D158 / #4CD964 | running, serving, done, trusted |
+| `warning` / `warning_text` | #FF9500 / #944F00 | #FF9F0A / #FFB340 | needs setup, warnings, waiting |
+| `danger` / `danger_text` | #FF3B30 / #B5190D | #FF453A / #FF8E86 | failed, error, destructive labels |
 | `danger_fill` | #D93025 | #C9372C | the sidebar's failure badge only |
-| `neutral` / `neutral_text` | #8E8E93 / #6A6A6F (#6E6E73 was 4.38:1 on its wash) | #98989D / #AEAEB2 | stopped, sleeping, off, free, cancelled |
+| `neutral` / `neutral_text` | #8E8E93 / #5F5F64 | #98989D / #B8B8BC | stopped, sleeping, off, free, cancelled |
 
-A pill's background is its state colour at .15 alpha (`Theme::wash`, with the alpha as a parameter).
+The `*_text` values and `accent_text` (#0E693C light, #5BD299 dark, for an accent pill's text) were
+made darker in light and lighter in dark when built (2026-11-10), so that each passes 4.5:1 on its pill
+wash both on the content and on a selected row, and `text_secondary` on `sidebar_bg`; the test
+`text_tokens_meet_contrast` checks every pair. A pill's background is its state colour at .15 alpha (`Theme::wash`, with the alpha as a parameter).
 A wash under danger text at .15 keeps 4.5:1 for both themes' `*_text`.
 
 ### 3.5 Components

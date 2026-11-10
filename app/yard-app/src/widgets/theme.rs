@@ -29,6 +29,8 @@ pub struct Colors {
     pub text_tertiary: Hsla,
     pub accent: Hsla,
     pub accent_fill: Hsla,
+    /// An accent pill's text (`accent` itself is too light on its wash).
+    pub accent_text: Hsla,
     pub on_accent: Hsla,
     pub selection: Hsla,
     pub row_selected: Hsla,
@@ -93,25 +95,25 @@ impl Theme {
                 control_border: a(0x000000, 0.14),
                 separator: a(0x000000, 0.09),
                 text: c(0x1d1d1f),
-                text_secondary: c(0x6e6e73),
+                text_secondary: c(0x6a6a6f),
                 text_tertiary: c(0xa1a1a6),
                 accent,
                 accent_fill: accent,
+                accent_text: c(0x0e693c),
                 on_accent: c(0xffffff),
                 selection: a(0x000000, 0.08),
                 row_selected: Theme::wash(accent, 0.14),
                 hover: a(0x000000, 0.04),
                 focus_ring: Theme::wash(accent, 0.40),
                 success: c(0x34c759),
-                success_text: c(0x1e7b34),
+                success_text: c(0x137029),
                 warning: c(0xff9500),
-                warning_text: c(0xa15c00),
+                warning_text: c(0x944f00),
                 danger: c(0xff3b30),
-                danger_text: c(0xc4281c),
+                danger_text: c(0xb5190d),
                 danger_fill: c(0xd93025),
                 neutral: c(0x8e8e93),
-                // The spec's #6E6E73 is 4.38:1 on its own pill wash; this is the nearest that passes.
-                neutral_text: c(0x6a6a6f),
+                neutral_text: c(0x5f5f64),
                 switch_off: c(0xd1d1d6),
                 backdrop: a(0x000000, 0.25),
                 control_shadow: a(0x000000, 0.05),
@@ -137,6 +139,7 @@ impl Theme {
                 text_tertiary: c(0x6c6c70),
                 accent,
                 accent_fill: c(0x23794f),
+                accent_text: c(0x5bd299),
                 on_accent: c(0xffffff),
                 selection: a(0xffffff, 0.10),
                 row_selected: Theme::wash(accent, 0.20),
@@ -147,10 +150,10 @@ impl Theme {
                 warning: c(0xff9f0a),
                 warning_text: c(0xffb340),
                 danger: c(0xff453a),
-                danger_text: c(0xff6961),
+                danger_text: c(0xff8e86),
                 danger_fill: c(0xc9372c),
                 neutral: c(0x98989d),
-                neutral_text: c(0xaeaeb2),
+                neutral_text: c(0xb8b8bc),
                 switch_off: c(0x48484a),
                 backdrop: a(0x000000, 0.25),
                 control_shadow: a(0x000000, 0.0),
@@ -177,7 +180,7 @@ impl Theme {
             Tone::Warning => (c.warning, c.warning_text),
             Tone::Danger => (c.danger, c.danger_text),
             Tone::Neutral => (c.neutral, c.neutral_text),
-            Tone::Accent => (c.accent, c.accent),
+            Tone::Accent => (c.accent, c.accent_text),
         };
         (dot, text, Theme::wash(dot, 0.15))
     }
@@ -296,11 +299,17 @@ mod tests {
                 let r = contrast(fg, bg);
                 assert!(r >= 4.5, "{name} {token} on content_bg is {r:.2}");
             }
-            for tone in [Tone::Success, Tone::Warning, Tone::Danger, Tone::Neutral] {
+            // A pill sits on the content, or on a selected row's wash (the PHP table always has one).
+            let selected = over(c.row_selected, bg);
+            for tone in [Tone::Success, Tone::Warning, Tone::Danger, Tone::Neutral, Tone::Accent] {
                 let (_, text, wash) = t.state(tone);
-                let r = contrast(text, over(wash, bg));
-                assert!(r >= 4.5, "{name} {tone:?} text on its wash is {r:.2}");
+                for (under, on) in [("content", bg), ("a selected row", selected)] {
+                    let r = contrast(text, over(wash, on));
+                    assert!(r >= 4.5, "{name} {tone:?} text on its wash over {under} is {r:.2}");
+                }
             }
+            let r = contrast(c.text_secondary, c.sidebar_bg);
+            assert!(r >= 4.5, "{name} text_secondary on sidebar_bg (group labels) is {r:.2}");
             let r = contrast(c.on_accent, c.accent_fill);
             assert!(r >= 4.5, "{name} on_accent on accent_fill is {r:.2}");
             let r = contrast(c.on_accent, c.danger_fill);

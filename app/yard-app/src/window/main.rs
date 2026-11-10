@@ -440,20 +440,20 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .w(size::SIDEBAR)
         .bg(t.c.sidebar_bg)
         .flex_shrink_0()
-        .pt(size::TOOLBAR)
-        .on_mouse_down(gpui::MouseButton::Left, |e, window, _| {
-            // Its top strip, beside the traffic lights, moves the window as a title bar does.
-            if e.position.y < size::TOOLBAR {
-                window.start_window_move();
-            }
-        })
-        .p(px(8.))
+        .px(px(8.))
+        .pb(px(8.))
         .gap(px(2.))
         .flex()
         .flex_col()
-        .border_r_1()
-        .border_color(t.c.separator)
         .type_body()
+        // The strip beside the traffic lights is its own element and moves the window, as a title
+        // bar does; the items start below it, so a click on one always selects it.
+        .child(
+            div()
+                .h(size::TOOLBAR - px(2.))
+                .flex_none()
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move()),
+        )
         .children(items)
         .into_any_element()
 }
@@ -1043,5 +1043,15 @@ mod tests {
         let link = vcx.debug_bounds("site:link").expect("Link a folder…");
         assert!(toolbar.contains(&link.center()));
         assert_eq!(toolbar.size.height, gpui::px(52.));
+    }
+
+    /// The sidebar's first item sits below the strip the traffic lights share, so a click on it
+    /// selects it rather than moving the window (final review: the padding was overridden).
+    #[gpui::test]
+    async fn the_first_sidebar_item_is_below_the_title_strip(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let mut vcx = main_window_on(&env, Screen::Overview, cx);
+        let item = vcx.debug_bounds("nav:Overview").expect("the Overview item");
+        assert!(item.top() >= crate::widgets::theme::size::TOOLBAR, "Overview starts at {:?}", item.top());
     }
 }

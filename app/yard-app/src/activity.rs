@@ -12,6 +12,14 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Wi
 use yard_app_model::hint::HintAction;
 use yard_app_model::jobs::{JobPhase, JobRecord};
 
+/// The phase's word for its pill: why a job failed is in the error under it.
+pub fn phase_word(phase: &JobPhase) -> String {
+    match phase {
+        JobPhase::Failed(_) => "failed".into(),
+        other => phase_text(other),
+    }
+}
+
 pub fn phase_text(phase: &JobPhase) -> String {
     match phase {
         JobPhase::Waiting { behind } => format!("waiting for {behind}"),
@@ -85,7 +93,7 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                             .type_body_strong()
                             .child(crate::widgets::text(format!("{id}:title"), j.title.clone()))
                     })
-                    .child(Pill::of(format!("{id}:phase"), phase_text(&j.phase))),
+                    .child(Pill::of(format!("{id}:phase"), phase_word(&j.phase))),
             )
             .when(!tail.is_empty(), |d| d.child(LogView::new(format!("{id}:log"), tail)))
             .when_some(failure.clone(), |d, e| {
@@ -171,5 +179,20 @@ mod tests {
         let pill = vcx.debug_bounds("pill:job:1:php-install-1:phase").expect("the status pill");
         let (a, b) = (title.center().y, pill.center().y);
         assert!((a - b).abs() <= gpui::px(1.), "title centre {a:?}, pill centre {b:?}");
+    }
+
+    /// A long failure keeps the card's status short: the pill says "failed" and the message is in
+    /// the error under it (final review: a 200-character message ran the pill off the card).
+    #[gpui::test]
+    async fn a_long_failure_keeps_the_status_inside_its_card(cx: &mut TestAppContext) {
+        let (fake, env) = env(cx);
+        fake.event(finished("ext-add-2", Some(YardError::new(ErrorCode::JobFailed, "x ".repeat(100)))));
+        cx.run_until_parked();
+        let (_v, vcx) = cx.add_window_view(|_, _| Host(env));
+        vcx.simulate_resize(gpui::size(gpui::px(600.), gpui::px(400.)));
+        vcx.run_until_parked();
+        let pill = vcx.debug_bounds("pill:job:1:ext-add-2:phase").expect("the status pill");
+        assert!(pill.right() <= gpui::px(600.), "the pill ends at {:?}", pill.right());
+        assert!(pill.size.width < gpui::px(120.), "the pill is {:?} wide", pill.size.width);
     }
 }

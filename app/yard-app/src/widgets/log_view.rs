@@ -73,7 +73,10 @@ impl RenderOnce for LogView {
             .border_color(t.c.separator)
             .type_secondary()
             .text_color(t.c.text_secondary)
-            .child(if count == 1 { "1 line".to_string() } else { format!("{count} lines") })
+            .child(super::text(
+                format!("{}:count", a11y.id),
+                if count == 1 { "1 line".to_string() } else { format!("{count} lines") },
+            ))
             .child(
                 Button::new(format!("{}:copy", a11y.id), "Copy all")
                     .small()

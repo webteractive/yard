@@ -85,10 +85,10 @@ impl Render for SettingsView {
                 "yard",
                 "yard command",
                 div().flex().flex_col().gap(px(4.)).child(self.yard.clone()).child(
-                    div()
-                        .type_secondary()
-                        .text_color(t.c.text_secondary)
-                        .child("A path, or empty to find it beside the LaunchAgent's yardd."),
+                    div().type_secondary().text_color(t.c.text_secondary).child(crate::widgets::text(
+                        "settings:yard:help",
+                        "A path, or empty to find it beside the LaunchAgent's yardd.",
+                    )),
                 ),
             )
             .row("editor", "Editor app", self.editor.clone())

@@ -54,7 +54,10 @@ impl RenderOnce for Pill {
         let selector = format!("pill:{}", self.id);
         div()
             .debug_selector(move || selector)
-            .flex_none()
+            // It shrinks, and its word truncates, before it pushes past its container.
+            .flex_shrink(1.)
+            .min_w(px(0.))
+            .max_w_full()
             .flex()
             .items_center()
             .gap(px(5.))
