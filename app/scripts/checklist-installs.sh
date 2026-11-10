@@ -309,6 +309,7 @@ fi
 
 node_22() { y node list --json | jq -e 'any(.versions[]; .version | startswith("22."))'; }
 ax tab Node >/dev/null
+ax press "Install…" >/dev/null   # the install field is in a sheet
 ax type "Node version to install" 22 >/dev/null
 ax press Install >/dev/null
 if within 30 node_22; then
@@ -328,6 +329,7 @@ tunnel_url() { y tunnels --json | jq -r '.[] | select(.site == "chk-t") | .url /
 shared() { [[ -n "$(tunnel_url)" ]]; }
 unshared() { [[ -z "$(tunnel_url)" ]]; }
 ax tab Tunnels >/dev/null
+ax press "Share…" >/dev/null   # the share fields are in a sheet
 ax type "Site to share" chk-t >/dev/null
 ax press "Share (quick tunnel)" >/dev/null
 if within 30 shared; then

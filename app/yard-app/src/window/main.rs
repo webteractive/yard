@@ -270,6 +270,7 @@ fn sheet(env: &AppEnv, window: &mut Window, cx: &mut App) -> Option<AnyElement> 
     let open = env.nav.read(cx).sheet.clone()?;
     crate::sites::forms::sheet(env, &open, window, cx)
         .or_else(|| crate::services::forms::sheet(env, &open, window, cx))
+        .or_else(|| crate::screens::forms::sheet(env, &open, window, cx))
 }
 
 fn badge(env: &AppEnv, screen: &Screen, cx: &App) -> Option<usize> {
@@ -860,5 +861,40 @@ mod tests {
         let content = vcx.debug_bounds("content").expect("the content");
         let strip = vcx.debug_bounds("issues").expect("the strip");
         assert!(content.contains(&strip.origin), "the strip {strip:?} is inside the content {content:?}");
+    }
+
+    /// Each screen's inline form opens as a sheet that holds the fields it had, by id (spec §5
+    /// step 15: the fields collapsed inline under the tables).
+    #[gpui::test]
+    async fn inline_forms_open_as_sheets_with_their_fields(cx: &mut TestAppContext) {
+        let cases = [
+            (
+                Screen::Tunnels,
+                "tunnels:share",
+                "sheet:share",
+                vec!["tunnel:share:site:box", "tunnel:share:host:box", "tunnel:share:named"],
+            ),
+            (Screen::Tunnels, "tunnels:add-domain", "sheet:add-domain", vec!["tunnel:domain:add:box"]),
+            (Screen::Ports, "ports:range", "sheet:range", vec!["port:range:box"]),
+            (Screen::Node, "node:install:open", "sheet:node-install", vec!["node:install:spec:box"]),
+        ];
+        for (screen, opener, sheet, fields) in cases {
+            let (_fake, env) = env(cx);
+            let mut vcx = main_window_on(&env, screen, cx);
+            assert!(vcx.debug_bounds(sheet).is_none(), "{sheet} is closed until asked for");
+            let at = vcx.debug_bounds(opener).unwrap_or_else(|| panic!("{opener} is drawn")).center();
+            vcx.simulate_click(at, gpui::Modifiers::none());
+            vcx.run_until_parked();
+            assert!(vcx.debug_bounds(sheet).is_some(), "{opener} opens {sheet}");
+            for f in fields {
+                assert!(vcx.debug_bounds(f).is_some(), "{sheet} holds {f}");
+            }
+            cx.update(|cx| {
+                cx.windows().iter().for_each(|w| {
+                    let _ = w.update(cx, |_, w, _| w.remove_window());
+                })
+            });
+            cx.run_until_parked();
+        }
     }
 }

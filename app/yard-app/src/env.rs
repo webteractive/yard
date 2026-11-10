@@ -56,6 +56,8 @@ pub enum Sheet {
         name: String,
         after: Entity<crate::widgets::text_field::TextField>,
     },
+    /// A screen's own form, in a sheet (Share…, Add domain…, Range…, Install…).
+    Inline(crate::screens::forms::Inline),
 }
 
 /// Where the main window is and what it should open on.

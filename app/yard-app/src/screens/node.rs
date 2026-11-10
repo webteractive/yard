@@ -1,14 +1,14 @@
 //! Node (M6 design §8.2): installed versions, the default, installing and removing.
 
-use super::{errors, heading, job, quick, value};
-use crate::env::{AppEnv, Nav};
+use super::{errors, heading, job, quick};
+use crate::env::AppEnv;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_client::api;
-use yard_proto::methods::{NodeInstallParams, NodeListParams, NodeSpecParams, NodeVersionParams};
+use yard_proto::methods::{NodeListParams, NodeSpecParams, NodeVersionParams};
 
 /// The table's column titles, each read out by VoiceOver.
 /// The table's columns, with their widths.
@@ -64,8 +64,6 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let table = Table::new("node", columns(), rows.collect())
         .actions(200.)
         .empty("No Node versions installed.", None);
-    let spec = Nav::field(env, "node:install:spec", "Node version to install", "22, 22.17, lts/*", cx);
-    let (e3, s3) = (env.clone(), spec.clone());
     let e4 = env.clone();
     let available = env.nav.read(cx).node_available.clone();
     div()
@@ -79,18 +77,10 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
         )))
         .child(table)
-        .child(crate::widgets::bar().child(spec.clone()).child(
-            Button::new("node:install", "Install").style(ButtonStyle::Primary).on_click(move |_, _, cx| {
-                if let Some(spec) = value(&s3, cx) {
-                    job(
-                        &e3,
-                        "node:install".into(),
-                        api::NODE_INSTALL,
-                        NodeInstallParams { spec: Some(spec.clone()), path: None },
-                        format!("Install Node {spec}"),
-                        cx,
-                    );
-                }
+        .child(crate::widgets::bar().child(
+            Button::new("node:install:open", "Install…").style(ButtonStyle::Primary).on_click({
+                let env = env.clone();
+                move |_, _, cx| super::forms::open(&env, super::forms::Inline::NodeInstall, cx)
             }),
         ))
         .child(crate::widgets::bar().child(Button::new("node:available", "Show available").on_click(

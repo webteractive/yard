@@ -107,8 +107,6 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
     });
     let check = env.clone();
-    let range = crate::env::Nav::field(env, "port:range", "Auto range", "29000-29099", cx);
-    let (set, field) = (env.clone(), range.clone());
     div()
         .flex()
         .flex_col()
@@ -116,18 +114,17 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .child(heading("Ports"))
         .children(errors(env, "port:", cx))
         .child(
-            crate::widgets::bar().child(profile_picker).child(
-                Button::new("ports:check", "Check now").on_click(move |_, _, cx| check_now(&check, cx)),
-            ),
+            crate::widgets::bar()
+                .child(profile_picker)
+                .child(
+                    Button::new("ports:check", "Check now").on_click(move |_, _, cx| check_now(&check, cx)),
+                )
+                .child(Button::new("ports:range", "Range…").on_click({
+                    let env = env.clone();
+                    move |_, _, cx| super::forms::open(&env, super::forms::Inline::Range, cx)
+                })),
         )
         .child(table)
-        .child(crate::widgets::bar().child(range).child(Button::new("port:range:set", "Set range").on_click(
-            move |_, _, cx| {
-                if let Some(r) = super::value(&field, cx) {
-                    set_range(&set, r, cx);
-                }
-            },
-        )))
         .into_any_element()
 }
 

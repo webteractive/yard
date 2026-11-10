@@ -1,7 +1,7 @@
 //! Tunnels (M6 design §8.2): sites shared through Cloudflare, and the domains for named tunnels.
 
-use super::{errors, heading, job, quick, value};
-use crate::env::{AppEnv, Nav};
+use super::{errors, heading, quick};
+use crate::env::AppEnv;
 use crate::platform::open::Opener;
 use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
@@ -10,7 +10,7 @@ use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, Styled, Window, div, px};
 use yard_app_model::jobs::JobPhase;
 use yard_client::api;
-use yard_proto::methods::{TunnelAddParams, TunnelDomainAddParams, TunnelDomainParams, TunnelRemoveParams};
+use yard_proto::methods::{TunnelAddParams, TunnelDomainParams, TunnelRemoveParams};
 use yard_proto::{ErrorCode, TunnelKind, TunnelRemoved, YardError};
 
 /// What to delete in Cloudflare after a stop left DNS records, as `yard untunnel` says it.
@@ -189,10 +189,6 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let table = Table::new("tunnels", columns(), rows.collect())
         .actions(250.)
         .empty("No tunnels. Share a site to get a public URL.", None);
-    let site = Nav::field(env, "tunnel:share:site", "Site to share", "blog", cx);
-    let host = Nav::field(env, "tunnel:share:host", "Host on your domain", "blog.example.com", cx);
-    let (e1, site1) = (env.clone(), site.clone());
-    let (e3, site3, host3) = (env.clone(), site.clone(), host.clone());
     let domain_rows = domains.iter().map(|d| {
         let (e, name) = (env.clone(), d.domain.clone());
         Row::new(
@@ -215,49 +211,34 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         Table::new("domains", [Column::flex("Domain"), Column::flex("Cloudflare")], domain_rows.collect())
             .actions(90.)
             .empty("No domains for named tunnels.", None);
-    let domain = Nav::field(env, "tunnel:domain:add", "Domain to add", "example.com", cx);
-    let (e2, domain2) = (env.clone(), domain.clone());
     div()
         .flex()
         .flex_col()
         .gap(px(12.))
-        .child(heading("Tunnels"))
+        .child(gpui::div().flex().items_center().justify_between().child(heading("Tunnels")).child(
+            Button::new("tunnels:share", "Share…").style(ButtonStyle::Primary).on_click({
+                let env = env.clone();
+                move |_, _, cx| super::forms::open(&env, super::forms::Inline::Share, cx)
+            }),
+        ))
         .children(errors(env, "tunnel:", cx))
         .children(errors(env, "domain:", cx))
         .child(table)
-        .child(crate::widgets::bar().child(site.clone()).child(
-            Button::new("tunnel:share", "Share (quick tunnel)").style(ButtonStyle::Primary).on_click(
-                move |_, window, cx| {
-                    if let Some(site) = value(&site1, cx) {
-                        share(&e1, site, None, false, window, cx);
-                    }
-                },
-            ),
-        ))
-        .child(crate::widgets::bar().child(host.clone()).child(
-            Button::new("tunnel:share:named", "Share on my domain").on_click(move |_, window, cx| {
-                if let (Some(site), Some(host)) = (value(&site3, cx), value(&host3, cx)) {
-                    share(&e3, site, Some(host), false, window, cx);
-                }
-            }),
-        ))
         .child(
-            div().type_section().child(crate::widgets::text("domains:heading", "Domains for named tunnels")),
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .type_section()
+                        .child(crate::widgets::text("domains:heading", "Domains for named tunnels")),
+                )
+                .child(Button::new("tunnels:add-domain", "Add domain…").on_click({
+                    let env = env.clone();
+                    move |_, _, cx| super::forms::open(&env, super::forms::Inline::AddDomain, cx)
+                })),
         )
         .child(domain_table)
-        .child(crate::widgets::bar().child(domain.clone()).child(
-            Button::new("domain:add", "Add domain").on_click(move |_, _, cx| {
-                if let Some(d) = value(&domain2, cx) {
-                    job(
-                        &e2,
-                        format!("domain:{d}:add"),
-                        api::TUNNELS_DOMAIN_ADD,
-                        TunnelDomainAddParams { provider: None, domain: d.clone() },
-                        format!("Sign in to Cloudflare for {d}"),
-                        cx,
-                    );
-                }
-            }),
-        ))
         .into_any_element()
 }

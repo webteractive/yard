@@ -1,6 +1,7 @@
 //! The rest of the main window's screens (M6 design §8.2), and what they share.
 
 pub mod doctor;
+pub mod forms;
 pub mod logs;
 pub mod node;
 pub mod php;

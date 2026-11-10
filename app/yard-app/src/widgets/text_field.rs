@@ -48,6 +48,8 @@ pub struct TextField {
     is_selecting: bool,
     /// `None` fills its container (Settings); otherwise a fixed width.
     width: Option<Pixels>,
+    /// Shows its label above it, as a sheet's field does.
+    labelled: bool,
 }
 
 /// A field's default width (spec §3.3).
@@ -80,12 +82,20 @@ impl TextField {
             last_bounds: None,
             is_selecting: false,
             width,
+            labelled: width.is_none(),
         }
     }
 
-    /// Fills its container's width.
+    /// Shows it as a sheet's field: full width, with its label above it.
+    pub fn in_sheet(&mut self) {
+        self.width = None;
+        self.labelled = true;
+    }
+
+    /// Fills its container's width, with no label above it (Settings, whose rows name it).
     pub fn full_width(&mut self) {
         self.width = None;
+        self.labelled = false;
     }
 
     /// The editing keys, bound once at start-up for every field (key context `TextField`).
@@ -652,7 +662,7 @@ impl Render for TextField {
         let theme = super::theme::Theme::of(window);
         let a11y = self.a11y();
         // A sheet's field shows its label above it (G20); the placeholder alone left once typed in.
-        let labelled = a11y.id.starts_with("sheet:");
+        let labelled = self.labelled;
         let label = self.label.clone();
         let id = a11y.id.to_string();
         let boxed = div()
