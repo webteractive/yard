@@ -5,12 +5,13 @@ use crate::env::AppEnv;
 use crate::platform::activation;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::checkbox::Checkbox;
+use crate::widgets::group::Group;
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
 use gpui::{
     App, AppContext, Bounds, Context, Entity, Global, IntoElement, ParentElement, Pixels, Render, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, size,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
 use std::path::Path;
 
@@ -78,15 +79,41 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::of(window);
-        let row = |label: &str, field: Entity<TextField>| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(4.))
-                .child(div().type_secondary().text_color(t.muted).child(label.to_string()))
-                .child(field)
-        };
+        let settings = self.env.settings.clone();
+        let group = Group::new("settings", None)
+            .row_below(
+                "yard",
+                "yard command",
+                div().flex().flex_col().gap(px(4.)).child(self.yard.clone()).child(
+                    div()
+                        .type_secondary()
+                        .text_color(t.c.text_secondary)
+                        .child("A path, or empty to find it beside the LaunchAgent's yardd."),
+                ),
+            )
+            .row("editor", "Editor app", self.editor.clone())
+            .row("terminal", "Terminal app", self.terminal.clone())
+            .row_below(
+                "data-root",
+                "Data root",
+                div()
+                    .text_color(t.c.text_secondary)
+                    .child(crate::widgets::text("data-root", self.env.location.root.display().to_string())),
+            )
+            .footer(
+                Checkbox::new(
+                    "settings:auto-update",
+                    "Install updates automatically",
+                    settings.auto_update(),
+                )
+                .on_toggle(move |on, window, _| {
+                    settings.set_auto_update(on);
+                    window.refresh();
+                }),
+            );
         div()
+            .id("settings")
+            .overflow_y_scroll()
             .size_full()
             .p(px(16.))
             .gap(px(12.))
@@ -96,39 +123,22 @@ impl Render for SettingsView {
             .text_color(t.text)
             .type_body()
             .child(div().type_section().child(crate::widgets::text("heading", "Settings")))
-            .child(row(
-                "yard (a path, or empty to find it beside the LaunchAgent's yardd)",
-                self.yard.clone(),
-            ))
-            .child(row("Editor app", self.editor.clone()))
-            .child(row("Terminal app", self.terminal.clone()))
-            .child({
-                let settings = self.env.settings.clone();
-                Checkbox::new("settings:auto-update", "Install updates automatically", settings.auto_update())
-                    .on_toggle(move |on, window, _| {
-                        settings.set_auto_update(on);
-                        window.refresh();
-                    })
-            })
-            .child(div().type_secondary().text_color(t.muted).child(crate::widgets::text(
-                "data-root",
-                format!("Data root: {}", self.env.location.root.display()),
-            )))
+            .child(group)
             .child(
                 div()
                     .flex()
                     .gap(px(8.))
                     .items_center()
+                    .justify_end()
+                    .child(
+                        div().min_w(px(0.)).type_secondary().text_color(t.c.text_secondary).child(
+                            crate::widgets::text("saved", saved_text(self.saved, self.env.cli.yard())),
+                        ),
+                    )
                     .child(
                         Button::new("settings:save", "Save")
                             .style(ButtonStyle::Primary)
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                    )
-                    .child(
-                        div().type_secondary().text_color(t.muted).child(crate::widgets::text(
-                            "saved",
-                            saved_text(self.saved, self.env.cli.yard()),
-                        )),
                     ),
             )
             .child({

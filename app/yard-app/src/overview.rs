@@ -5,6 +5,7 @@ use crate::env::AppEnv;
 use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
+use crate::widgets::group::Group;
 use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::text;
 use crate::widgets::theme::Theme;
@@ -33,83 +34,109 @@ pub fn ca_text(ca: &yard_proto::CaInfo) -> (String, &'static str) {
 pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let s = env.state.read(cx);
-    let line = |label: &str, value: String| {
-        div()
-            .flex()
-            .gap(px(8.))
-            .child(
-                div()
-                    .w(px(110.))
-                    .text_color(t.muted)
-                    .child(text(format!("{label}:label"), label.to_string())),
-            )
-            .child(text(format!("{label}:value"), value))
-    };
-    let mut facts = div().flex().flex_col().gap(px(4.)).type_body();
+    let value = |label: &str, v: String| text(format!("{label}:value"), v);
+    let mut facts = Group::new("facts", None);
     if let Some(st) = &s.status.value {
         facts = facts
-            .child(line(
+            .row(
                 "yardd",
-                format!("{} ({})", st.version.daemon.clone().unwrap_or_default(), st.version.commit),
-            ))
-            .child(line("helper", st.version.helper.clone().unwrap_or_else(|| "not installed".into())))
-            .child(line("Profile", format!("{} · .{}", st.profile.name(), st.tld)));
+                "yardd",
+                value(
+                    "yardd",
+                    format!("{} ({})", st.version.daemon.clone().unwrap_or_default(), st.version.commit),
+                ),
+            )
+            .row(
+                "helper",
+                "helper",
+                value("helper", st.version.helper.clone().unwrap_or_else(|| "not installed".into())),
+            )
+            .row("Profile", "Profile", value("Profile", format!("{} · .{}", st.profile.name(), st.tld)));
     }
     if let Some(ca) = &s.ca.value {
-        let (value, verb) = ca_text(ca);
+        let (v, verb) = ca_text(ca);
         let env2 = env.clone();
         let id = format!("ca:{}", verb.to_lowercase());
-        let button = Button::new(id.clone(), verb).on_click(move |_, _, cx| {
+        let button = Button::new(id.clone(), verb).small().on_click(move |_, _, cx| {
             env2.run_cli_refreshing(&id, vec![verb.to_lowercase()], vec![ResourceKey::Ca], cx)
         });
-        facts = facts.child(line("CA", value).child(button));
+        facts = facts.row(
+            "CA",
+            "CA",
+            div().flex_1().flex().items_center().justify_between().child(value("CA", v)).child(button),
+        );
     }
+    let mut update_line = None;
     if let Some(item) = s.update.as_ref().and_then(yard_app_model::update::item) {
         let env2 = env.clone();
         let latest = s.update.as_ref().map(|c| c.latest.clone()).unwrap_or_default();
         let button = Button::new("update:install", item.title)
+            .small()
+            .style(ButtonStyle::Primary)
             .description(format!("installs Yard {latest} and relaunches Yard.app"))
             .on_click(move |_, _, cx| env2.update_now(cx));
-        facts = facts.child(
-            line("Update", format!("Yard {latest} is available"))
-                .child(button)
-                .debug_selector(|| "update".into()),
+        update_line = Some(
+            div()
+                .debug_selector(|| "update".into())
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(value("Update", format!("Yard {latest} is available")))
+                .child(button),
         );
     }
+    if let Some(line) = update_line {
+        facts = facts.row("Update", "Update", line);
+    }
     facts = facts
-        .child(line("Yard.app", format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("YARD_BUILD_COMMIT"))))
-        .child(line("Data root", env.location.root.display().to_string()));
-    let (start, stop, restart, setup) = (env.clone(), env.clone(), env.clone(), env.clone());
-    let controls = div()
-        .flex()
-        .gap(px(8.))
-        .child(Button::new("yardd:start", "Start yardd").on_click(move |_, _, cx| start.start_daemon(cx)))
-        .child(
-            Button::new("yardd:restart", "Restart yardd")
-                .on_click(move |_, _, cx| restart.restart_daemon(cx)),
+        .row(
+            "Yard.app",
+            "Yard.app",
+            value("Yard.app", format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("YARD_BUILD_COMMIT"))),
         )
+        .row("Data root", "Data root", value("Data root", env.location.root.display().to_string()));
+    // Start while yardd cannot be reached, Restart and Stop while it answers (G12).
+    let offline = matches!(crate::menubar::link(&s.connection), yard_app_model::health::Link::Offline(_));
+    let (start, stop, restart, setup) = (env.clone(), env.clone(), env.clone(), env.clone());
+    let controls = crate::widgets::bar()
+        .when(offline, |d| {
+            d.child(
+                Button::new("yardd:start", "Start yardd")
+                    .style(ButtonStyle::Primary)
+                    .on_click(move |_, _, cx| start.start_daemon(cx)),
+            )
+        })
+        .when(!offline, |d| {
+            d.child(
+                Button::new("yardd:restart", "Restart yardd")
+                    .on_click(move |_, _, cx| restart.restart_daemon(cx)),
+            )
+        })
         .child(
             Button::new("setup:open", "Set up Yard…")
                 .on_click(move |_, _, cx| crate::onboarding::open(&setup, cx)),
         )
-        .child(Button::new("yardd:stop", "Stop yardd…").style(ButtonStyle::Destructive).on_click(
-            move |_, window, cx| {
-                let answer = window.prompt(
-                    PromptLevel::Warning,
-                    "Stop yardd?",
-                    Some("Every site stops answering until yardd starts again."),
-                    &["Stop yardd", "Cancel"],
-                    cx,
-                );
-                let env = stop.clone();
-                cx.spawn(async move |cx| {
-                    if answer.await == Ok(0) {
-                        cx.update(|cx| env.stop_daemon(cx));
-                    }
-                })
-                .detach();
-            },
-        ));
+        .when(!offline, |d| {
+            d.child(Button::new("yardd:stop", "Stop yardd…").style(ButtonStyle::Destructive).on_click(
+                move |_, window, cx| {
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        "Stop yardd?",
+                        Some("Every site stops answering until yardd starts again."),
+                        &["Stop yardd", "Cancel"],
+                        cx,
+                    );
+                    let env = stop.clone();
+                    cx.spawn(async move |cx| {
+                        if answer.await == Ok(0) {
+                            cx.update(|cx| env.stop_daemon(cx));
+                        }
+                    })
+                    .detach();
+                },
+            ))
+        });
     let rows = s.status.value.iter().flat_map(|st| st.units.iter()).map(|u| {
         let env = env.clone();
         let unit = u.name.clone();
@@ -253,5 +280,45 @@ mod tests {
         let (_fake, env) = env(cx);
         let (_v, cx) = cx.add_window_view(|_, _| Host(env));
         cx.run_until_parked();
+    }
+
+    /// Start yardd is offered only while yardd is unreachable, Restart and Stop only while it
+    /// answers (G12: Start was enabled while yardd ran).
+    #[gpui::test]
+    async fn start_is_offered_only_while_offline(cx: &mut TestAppContext) {
+        let (fake, env) = env(cx);
+        let (_v, vcx) = cx.add_window_view(|_, _| Host(env));
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("yardd:start").is_none(), "Start while yardd answers");
+        assert!(vcx.debug_bounds("yardd:stop").is_some() && vcx.debug_bounds("yardd:restart").is_some());
+        fake.push(yard_client::session::Update::State(yard_client::session::ConnectionState::Disconnected(
+            yard_proto::YardError::internal("yardd is not running"),
+        )));
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("yardd:start").is_some(), "no Start while offline");
+        assert!(vcx.debug_bounds("yardd:stop").is_none() && vcx.debug_bounds("yardd:restart").is_none());
+    }
+
+    /// Every fact row is one height, the CA's with its button too (G14).
+    #[gpui::test]
+    async fn overview_fact_rows_are_one_height(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        env.state.update(cx, |s, cx| {
+            s.status.value = Some(serde_json::from_value(crate::testing::status()).unwrap());
+            s.ca.value = Some(yard_proto::CaInfo {
+                cert: "/r/ca/yard-ca.pem".into(),
+                sha256: "AB".into(),
+                trusted: false,
+                expires: "2036-11-06".into(),
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (_v, vcx) = cx.add_window_view(|_, _| Host(env));
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("facts:row:Yard.app").is_some(), "the Yard.app row");
+        let helper = vcx.debug_bounds("facts:row:helper").expect("the helper row");
+        let ca = vcx.debug_bounds("facts:row:CA").expect("the CA row");
+        assert_eq!(ca.size.height, helper.size.height);
     }
 }

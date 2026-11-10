@@ -6,6 +6,7 @@ use crate::platform::open::Opener;
 use crate::runner::ActionId;
 use crate::services::table::copy_env;
 use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::group::Group;
 use crate::widgets::picker::Picker;
 use crate::widgets::text;
 use crate::widgets::theme::Theme;
@@ -169,71 +170,84 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
     let detail = s.site_detail.get(name).and_then(|r| r.value.clone());
     let php_options: Vec<String> =
         s.php.value.iter().flatten().filter(|p| p.installed).map(|p| p.version.clone()).collect();
-    let mut pane = div()
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .p(px(12.))
-        .rounded(px(8.))
-        .border_1()
-        .border_color(t.border)
-        .bg(t.surface);
+    let mut pane = div().flex().flex_col().gap(px(12.)).min_w(px(0.));
     pane =
         pane.child(div().type_section().child(text(format!("site:{name}:name"), site.name.clone()))).child(
-            div().type_body().text_color(t.accent).child(text(format!("site:{name}:url"), site.url.clone())),
+            div()
+                .type_body()
+                .text_color(t.c.accent)
+                .child(text(format!("site:{name}:url"), site.url.clone())),
         );
+    // PHP, HTTPS, where each setting comes from and the services, in one group box (spec §4).
+    let mut group = Group::new(format!("site:{name}:settings"), None);
     if let Some(d) = &detail {
-        pane = pane.children(
-            source_lines(d)
-                .into_iter()
-                .enumerate()
-                .map(|(i, l)| div().type_body().child(text(format!("site:{name}:source:{i}"), l))),
+        group = group.row_below(
+            "sources",
+            "Settings",
+            div().flex().flex_col().children(
+                source_lines(d)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, l)| div().child(text(format!("site:{name}:source:{i}"), l))),
+            ),
         );
         if let SiteKind::Php { php, .. } = &site.kind {
             let mut options: Vec<SharedString> = vec!["Default".into()];
             options.extend(php_options.iter().map(|v| SharedString::from(v.clone())));
             let selected = php_options.iter().position(|v| v == php).map(|i| i + 1);
             let (e, n, versions) = (env.clone(), name.to_string(), php_options.clone());
-            pane = pane.child(
-                crate::widgets::bar().child(
-                    Picker::new(format!("site:{name}:php"), format!("PHP for {name}"), options, selected)
-                        .disabled_because(project_lock(&site).map(Into::into))
-                        .on_select(move |i, _, cx| {
-                            let php = if i == 0 { None } else { versions.get(i - 1).cloned() };
-                            let (daemon, site) = (e.daemon.clone(), n.clone());
-                            quick(
-                                &e,
-                                format!("site:{n}:php"),
-                                async move {
-                                    call(&*daemon, api::SITES_ISOLATE, IsolateParams { site, php })
-                                        .await
-                                        .map(|_| ())
-                                },
-                                cx,
-                            )
-                        }),
-                ),
+            let open_yard =
+                match (project_lock(&site), site.project_file.clone()) {
+                    (Some(_), Some(file)) => {
+                        let e = env.clone();
+                        Some(Button::new(format!("site:{name}:open-yard"), "Open .yard").small().on_click(
+                            move |_, _, cx| e.perform(HintAction::OpenFile(PathBuf::from(&file)), cx),
+                        ))
+                    }
+                    _ => None,
+                };
+            group = group.row(
+                "php",
+                "PHP",
+                crate::widgets::bar()
+                    .child(
+                        Picker::new(format!("site:{name}:php"), format!("PHP for {name}"), options, selected)
+                            .disabled_because(project_lock(&site).map(Into::into))
+                            .on_select(move |i, _, cx| {
+                                let php = if i == 0 { None } else { versions.get(i - 1).cloned() };
+                                let (daemon, site) = (e.daemon.clone(), n.clone());
+                                quick(
+                                    &e,
+                                    format!("site:{n}:php"),
+                                    async move {
+                                        call(&*daemon, api::SITES_ISOLATE, IsolateParams { site, php })
+                                            .await
+                                            .map(|_| ())
+                                    },
+                                    cx,
+                                )
+                            }),
+                    )
+                    .children(open_yard),
             );
-            if let (Some(_), Some(file)) = (project_lock(&site), site.project_file.clone()) {
-                let e = env.clone();
-                pane = pane.child(
-                    Button::new(format!("site:{name}:open-yard"), "Open .yard")
-                        .on_click(move |_, _, cx| e.perform(HintAction::OpenFile(PathBuf::from(&file)), cx)),
-                );
-            }
         }
-        for svc in &d.services {
-            let met = if svc.service.is_some() { "met" } else { "missing" };
-            let want = svc.want.as_deref().map(|w| format!(" {w}")).unwrap_or_default();
-            pane = pane.child(div().type_body().child(text(
-                format!("site:{name}:service:{}", svc.engine),
-                format!("{}{want} — {met}", yard_proto::engine_display(&svc.engine)),
-            )));
+        if !d.services.is_empty() {
+            let lines = d.services.iter().map(|svc| {
+                let met = if svc.service.is_some() { "met" } else { "missing" };
+                let want = svc.want.as_deref().map(|w| format!(" {w}")).unwrap_or_default();
+                div().child(text(
+                    format!("site:{name}:service:{}", svc.engine),
+                    format!("{}{want} — {met}", yard_proto::engine_display(&svc.engine)),
+                ))
+            });
+            group = group.row_below("services", "Services", div().flex().flex_col().children(lines));
         }
     }
     let lock = project_lock(&site);
     let (e, n, secure) = (env.clone(), name.to_string(), site.secure);
-    pane = pane.child(
+    group = group.row(
+        "https",
+        "HTTPS",
         Toggle::new(format!("site:{name}:secure"), format!("HTTPS for {name}"), secure)
             .disabled_because(lock.clone().map(Into::into))
             .on_toggle(move |on, _, cx| {
@@ -247,6 +261,7 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
                 )
             }),
     );
+    pane = pane.child(group);
     if node_pinned_by_yard(&site) {
         let (e, n) = (env.clone(), name.to_string());
         pane = pane.child(Button::new(format!("site:{name}:node-unuse"), "Use default Node").on_click(
@@ -278,11 +293,11 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
         pane = pane.child(
             div()
                 .type_body()
-                .text_color(t.danger)
+                .text_color(t.c.danger_text)
                 .child(text(format!("site:{name}:error"), e.message.clone())),
         );
     }
-    let mut actions = div().flex().flex_wrap().gap(px(6.));
+    let mut actions = crate::widgets::bar();
     let url = site.url.clone();
     actions = actions.child(
         Button::new(format!("site:{name}:browser"), "Open in browser")

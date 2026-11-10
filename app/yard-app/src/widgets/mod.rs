@@ -7,6 +7,7 @@ pub mod checkbox;
 pub mod disabled;
 pub mod error_view;
 pub mod form;
+pub mod group;
 pub mod log_view;
 pub mod picker;
 pub mod pill;
