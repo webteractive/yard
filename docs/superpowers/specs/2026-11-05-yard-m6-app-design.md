@@ -521,7 +521,8 @@ window instead without touching anything else.
 What a native menu cannot hold changes the draft's `MenuBarExtra(.window)` content: no spinner, no
 text field, no inline switch. Toggles are checkmark items, progress is a text line updated live,
 and site search moves to the main window. The status item's icon is a template image chosen from
-`Health` (§10.4): normal, busy (a job runs), warning, error, offline. The menu, top to bottom:
+`Health` (§10.4): normal, busy (a job runs), warning, error, offline; since 2026-11-10 they are
+the D3 logo and its badges (`2026-11-09-yard-app-visual-design.md` §6). The menu, top to bottom:
 
 - A status line (disabled item): `Yard <daemon version> · <profile> · .<tld>`, or the offline /
   not set up / stale message, with its action as the next item (**Start yardd**, **Set up Yard…**,

@@ -789,7 +789,7 @@ if [[ -z "$unlabelled" ]]; then pass "A3 every button, switch, picker and field 
 
 ok_header="$(menu_header)"
 icon="$(ax icon)"
-if [[ "$icon" == ok ]]; then pass "M1 the menu bar icon is the filled circle while all is well"; else fail "M1 icon with yardd up" "$icon"; fi
+if [[ "$icon" == ok ]]; then pass "M1 the menu bar icon is the plain logo while all is well"; else fail "M1 icon with yardd up" "$icon"; fi
 watch_start 10 menu-header not "$ok_header"
 stopped_at="$(now)"
 stop_yardd
@@ -803,7 +803,7 @@ fi
 # closes, so its shape is read again for up to 3 s.
 within 3 sh -c "[ \"\$(osascript -l JavaScript '$ax_js' icon)\" = offline ]" || true
 icon="$(ax icon)"
-if [[ "$icon" == offline ]]; then pass "M1 and the icon is the ring"; else fail "M1 icon with yardd down" "$icon"; fi
+if [[ "$icon" == offline ]]; then pass "M1 and the icon fades"; else fail "M1 icon with yardd down" "$icon"; fi
 watch_start 15 menu-header is "$ok_header"
 started_at="$(now)"
 start_yardd
@@ -814,7 +814,7 @@ else
   fail "M1 menu after yardd started" "$(cat "$out/watch.json")"
 fi
 icon="$(ax icon)"
-if [[ "$icon" == ok ]]; then pass "M1 and the icon is filled again"; else fail "M1 icon after yardd started" "$icon"; fi
+if [[ "$icon" == ok ]]; then pass "M1 and the icon is plain again"; else fail "M1 icon after yardd started" "$icon"; fi
 
 # --- M6: an open menu changes in place --------------------------------------------------------
 

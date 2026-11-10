@@ -26,8 +26,8 @@
 //                             finds the element (opening the menu for menu-header and keeping it
 //                             open), touches <ready>, then polls it every 50 ms and prints
 //                             {at, value} when it matches, `at` in Unix seconds; {at: null} on timeout
-//   icon                      the menu bar icon's shape: ok (filled circle), offline (ring), busy
-//                             (ring and dot) or warning (notched circle), from a screenshot
+//   icon                      the menu bar icon's state, from a screenshot: ok, offline (faded),
+//                             busy (a ring badge), warning (a triangle) or error (a dot)
 //   menu-log <ready> <seconds>  opens the menu, touches <ready>, and records every distinct list of
 //                             its top-level item names for <seconds> without reopening it: [{at, items}]
 //
@@ -305,9 +305,12 @@ function menuLog(ready, seconds) {
 
 ObjC.import("AppKit");
 
-// The icon is an 18 pt template image drawn in the menu bar's text colour (menubar.rs `icon`).
-// Its centre is on for ok and busy, off for offline and warning; a point 3.5 pt to the right of
-// the centre is on for ok and warning, off for offline and busy.
+// The icon is the D3 logo, an 18 pt template image drawn in the menu bar's text colour
+// (menubar/icon.rs): a disc with the routes cut out, at 38% while offline; busy, warning and error
+// cut the lower right corner away for a badge (a ring, a triangle, a dot). Points are read in pt
+// from the icon's centre: the body (-5.25, +0.25) is on the disc in every state, faint offline; the
+// corner (+3.25, +3.25) is on only while all is well; the badge centre (+5.25, +5.25) is on for a
+// warning and an error; the triangle's foot (+3.25, +7.75) only for a warning.
 function iconShape() {
   const [x, y] = statusItem().position();
   const [w, h] = statusItem().size();
@@ -318,18 +321,19 @@ function iconShape() {
   const rep = $.NSBitmapImageRep.imageRepWithData($.NSData.dataWithContentsOfFile(file));
   app.doShellScript(`rm -f '${file}'`);
   const scale = rep.pixelsWide / w;
-  const at = (px, py) => {
-    const c = rep.colorAtXY(Math.round(px * scale), Math.round(py * scale)).colorUsingColorSpace($.NSColorSpace.sRGBColorSpace);
+  const at = (dx, dy) => {
+    const c = rep.colorAtXY(Math.round((w / 2 + dx) * scale), Math.round((h / 2 + dy) * scale)).colorUsingColorSpace($.NSColorSpace.sRGBColorSpace);
     return [c.redComponent, c.greenComponent, c.blueComponent];
   };
-  const far = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 0.6;
-  const bg = at(1, 1);
-  const centre = far(at(w / 2, h / 2), bg);
-  const side = far(at(w / 2 + 3.5, h / 2), bg);
-  if (centre && side) return "ok";
-  if (!centre && !side) return "offline";
-  if (centre) return "busy";
-  return "warning";
+  const bg = at(-w / 2 + 1, -h / 2 + 1);
+  const apart = (p) => Math.abs(p[0] - bg[0]) + Math.abs(p[1] - bg[1]) + Math.abs(p[2] - bg[2]);
+  const on = (dx, dy) => apart(at(dx, dy)) > 1.5;
+  const body = apart(at(-5.25, 0.25));
+  if (body > 0.3 && body <= 1.5) return "offline";
+  if (body <= 0.3) return "none";
+  if (on(3.25, 3.25)) return "ok";
+  if (!on(5.25, 5.25)) return "busy";
+  return on(3.25, 7.75) ? "warning" : "error";
 }
 
 function run(argv) {

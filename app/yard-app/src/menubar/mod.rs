@@ -3,6 +3,8 @@
 //! `AppState`; `rebuild` changes the shown items' text and check marks in place, and builds the
 //! muda items again only when one is added, removed or replaced (`diff`).
 
+mod icon;
+
 use crate::env::AppEnv;
 use futures::StreamExt;
 use futures::channel::mpsc;
@@ -506,29 +508,11 @@ fn on_click(id: &str, cx: &mut App) {
     }
 }
 
-/// An 18×18 template image per health (black on clear; macOS tints it): a filled circle when all
-/// is well, a ring while offline, a ring with a dot while busy, a notch for a warning or error.
+/// The D3 logo as an 18 pt template image per health (`icon::icon_alpha`): black at each pixel's
+/// coverage on clear, which macOS tints for the menu bar.
 fn icon(health: &Health) -> Icon {
-    const N: u32 = 36;
-    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
-    for y in 0..N {
-        for x in 0..N {
-            let (dx, dy) = (x as f32 - 17.5, y as f32 - 17.5);
-            let r = (dx * dx + dy * dy).sqrt();
-            let on = match health {
-                Health::Ok => r < 15.0,
-                Health::Offline(_) => (11.5..15.0).contains(&r),
-                Health::Busy => (11.5..15.0).contains(&r) || r < 5.0,
-                Health::Warning(_) | Health::Error(_) => {
-                    r < 15.0
-                        && !(dx.abs() < 2.5 && (-9.0..4.0).contains(&dy)
-                            || (dx.abs() < 2.5 && (7.0..10.0).contains(&dy)))
-                }
-            };
-            rgba.extend_from_slice(if on { &[0, 0, 0, 255] } else { &[0, 0, 0, 0] });
-        }
-    }
-    Icon::from_rgba(rgba, N, N).expect("a 36×36 RGBA icon")
+    let rgba: Vec<u8> = icon::icon_alpha(health).into_iter().flat_map(|a| [0, 0, 0, a]).collect();
+    Icon::from_rgba(rgba, icon::SIZE, icon::SIZE).expect("a 36×36 RGBA icon")
 }
 
 #[cfg(test)]

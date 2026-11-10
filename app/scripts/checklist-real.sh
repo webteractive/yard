@@ -204,7 +204,7 @@ rm -f "$real/nginx/overrides/chk-real.conf" "$real/certs/chk-real.pem" "$real/ce
 
 ok_header="$(menu_header)"
 icon="$(ax icon)"
-if [[ "$icon" == ok ]]; then pass "M1 the icon is the filled circle with the real yardd up"; else note "M1 icon with yardd up: $icon (a problem or a job shows another shape)"; fi
+if [[ "$icon" == ok ]]; then pass "M1 the icon is the plain logo with the real yardd up"; else note "M1 icon with yardd up: $icon (a problem or a job shows another shape)"; fi
 watch_start 10 menu-header not "$ok_header"
 stopped_at="$(now)"
 y stop >/dev/null
