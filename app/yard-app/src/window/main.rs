@@ -8,6 +8,7 @@ use crate::runner::ActionId;
 use crate::widgets::Pressable;
 use crate::widgets::banner::{Banner, BannerKind};
 use crate::widgets::button::{Button, ButtonStyle};
+use crate::widgets::error_view::ErrorView;
 use crate::widgets::theme::{Theme, Typography, size};
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Global, IntoElement, ParentElement, Pixels,
@@ -236,23 +237,17 @@ impl Render for MainWindow {
             .type_body()
             .child(sidebar(&env, &screen, window, cx))
             .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .flex()
-                    .flex_col()
-                    .children(banner(&env, cx))
-                    .children(elsewhere_errors(&env, &screen, cx))
-                    .child(
-                        div()
-                            .id("content")
-                            .debug_selector(|| "content".into())
-                            .min_w(px(0.))
-                            .flex_1()
-                            .overflow_y_scroll()
-                            .p(px(16.))
-                            .child(content(&env, &screen, window, cx)),
-                    ),
+                div().flex_1().min_w(px(0.)).flex().flex_col().children(banner(&env, cx)).child(
+                    div()
+                        .id("content")
+                        .debug_selector(|| "content".into())
+                        .min_w(px(0.))
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .p(px(16.))
+                        .children(issues(&env, &screen, window, cx))
+                        .child(content(&env, &screen, window, cx)),
+                ),
             )
             .children(sheet)
     }
@@ -435,8 +430,53 @@ fn elsewhere(env: &AppEnv, screen: &Screen, cx: &App) -> Vec<(ActionId, yard_pro
 }
 
 /// Those errors, above the screen's content.
+/// The errors of actions the open screen does not show, each one line with Dismiss.
 pub fn elsewhere_errors(env: &AppEnv, screen: &Screen, cx: &App) -> Vec<AnyElement> {
-    crate::screens::error_views(env, elsewhere(env, screen, cx))
+    elsewhere(env, screen, cx)
+        .into_iter()
+        .map(|(id, e)| {
+            let (act, dismiss) = (env.clone(), env.clone());
+            ErrorView::new(format!("{}:error", id.0), &e, HintAction::parse(e.hint.as_deref().unwrap_or("")))
+                .on_action(move |a, _, cx| act.perform(a, cx))
+                .compact()
+                .dismissible(id.0.clone(), move |_, cx| dismiss.runner.update(cx, |r, cx| r.dismiss(&id, cx)))
+                .into_any_element()
+        })
+        .collect()
+}
+
+/// The issues strip at the top of the content (G6): with three or more errors it shows two and
+/// a button for the rest. An error stays until it is dismissed or its action succeeds.
+fn issues(env: &AppEnv, screen: &Screen, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+    let mut views = elsewhere_errors(env, screen, cx);
+    if views.is_empty() {
+        return None;
+    }
+    let expanded = window.use_keyed_state("issues:expanded", cx, |_, _| false);
+    let hidden = if views.len() >= 3 && !*expanded.read(cx) { views.len() - 2 } else { 0 };
+    views.truncate(views.len() - hidden);
+    Some(
+        div()
+            .debug_selector(|| "issues".into())
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .mb(px(16.))
+            .children(views)
+            .when(hidden > 0, |d| {
+                d.child(crate::widgets::bar().child(
+                    Button::new("issues:more", format!("{hidden} more…")).small().on_click(
+                        move |_, _, cx| {
+                            expanded.update(cx, |e, cx| {
+                                *e = true;
+                                cx.notify();
+                            })
+                        },
+                    ),
+                ))
+            })
+            .into_any_element(),
+    )
 }
 
 /// The file a configuration error is in (`data.file`), which the banner opens.
@@ -765,5 +805,60 @@ mod tests {
         let mut vcx = gpui::VisualTestContext::from_window(handle.into(), cx);
         vcx.run_until_parked();
         assert_eq!(vcx.debug_bounds("nav:Overview").unwrap().size.height, gpui::px(28.));
+    }
+
+    fn record_elsewhere(env: &crate::env::AppEnv, ids: &[&str], cx: &mut TestAppContext) {
+        env.runner.update(cx, |r, _| {
+            for id in ids {
+                r.errors.record(ActionId((*id).into()), YardError::internal(format!("{id} failed")));
+            }
+        });
+    }
+
+    /// Dismiss takes one error off the strip and leaves the others (G6: old errors never left).
+    #[gpui::test]
+    async fn a_dismissed_error_leaves_the_strip(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        record_elsewhere(&env, &["php:8.4:install", "unit:nginx:restart"], cx);
+        cx.update(|cx| env.runner.update(cx, |r, cx| r.dismiss(&ActionId("php:8.4:install".into()), cx)));
+        let ids = cx.update(|cx| super::elsewhere_error_ids(&env, &Screen::Doctor, cx));
+        assert_eq!(ids, ["unit:nginx:restart"]);
+    }
+
+    fn main_window_on(
+        env: &crate::env::AppEnv,
+        screen: Screen,
+        cx: &mut TestAppContext,
+    ) -> gpui::VisualTestContext {
+        cx.update(|cx| cx.set_global(env.clone()));
+        cx.update(|cx| super::open(env, screen, cx));
+        cx.run_until_parked();
+        let handle = cx.update(|cx| cx.try_global::<super::MainHandle>().map(|h| h.0)).expect("a window");
+        let vcx = gpui::VisualTestContext::from_window(handle.into(), cx);
+        vcx.run_until_parked();
+        vcx
+    }
+
+    /// Three or more errors show two and a button for the rest, so old errors do not take the screen.
+    #[gpui::test]
+    async fn three_errors_show_two_and_more(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        record_elsewhere(&env, &["php:8.4:install", "unit:nginx:restart", "xdebug:8.4"], cx);
+        let mut vcx = main_window_on(&env, Screen::Doctor, cx);
+        assert!(vcx.debug_bounds("dismiss:php:8.4:install").is_some());
+        assert!(vcx.debug_bounds("dismiss:unit:nginx:restart").is_some());
+        assert!(vcx.debug_bounds("dismiss:xdebug:8.4").is_none(), "the third waits behind More");
+        assert!(vcx.debug_bounds("issues:more").is_some());
+    }
+
+    /// The strip is part of the scrolling content, not a band above it.
+    #[gpui::test]
+    async fn the_strip_scrolls_with_the_content(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        record_elsewhere(&env, &["php:8.4:install"], cx);
+        let mut vcx = main_window_on(&env, Screen::Doctor, cx);
+        let content = vcx.debug_bounds("content").expect("the content");
+        let strip = vcx.debug_bounds("issues").expect("the strip");
+        assert!(content.contains(&strip.origin), "the strip {strip:?} is inside the content {content:?}");
     }
 }

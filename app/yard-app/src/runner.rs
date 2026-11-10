@@ -38,6 +38,12 @@ impl ActionRunner {
     }
 
     /// The question to ask now; the next waits until it is answered.
+    /// Takes an error off the screen without the action succeeding (the issues strip's Dismiss).
+    pub fn dismiss(&mut self, id: &ActionId, cx: &mut Context<Self>) {
+        self.errors.clear(id);
+        cx.notify();
+    }
+
     pub fn prompt(&self) -> Option<Prompt> {
         self.questions.front().map(|(p, _)| p.clone())
     }
