@@ -5,7 +5,7 @@ use crate::env::AppEnv;
 use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::text;
 use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
@@ -143,9 +143,16 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     });
     let units = Table::new(
         "units",
-        vec!["Unit".into(), "State".into(), "PID".into(), "Restarts".into()],
+        [
+            Column::flex("Unit").grow(2.),
+            Column::flex("State"),
+            Column::fixed("PID", 70.).end(),
+            Column::fixed("Restarts", 70.).end(),
+        ],
         rows.collect(),
-    );
+    )
+    .actions(90.)
+    .empty("No units: yardd is not running.", None);
     let sleeping: Vec<SharedString> = s
         .status
         .value

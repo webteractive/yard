@@ -6,7 +6,7 @@ use crate::env::{AppEnv, Nav};
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::checkbox::Checkbox;
 use crate::widgets::picker::Picker;
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::theme::Typography;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
 use std::path::PathBuf;
@@ -16,7 +16,15 @@ use yard_client::api;
 use yard_proto::methods::{ExtAddParams, ExtParams, PhpConfigParams, PhpParams};
 
 /// The table's column titles, each read out by VoiceOver.
-pub const COLUMNS: [&str; 4] = ["Version", "Default", "Sites", "Pool"];
+/// The table's columns, with their widths.
+pub fn columns() -> Vec<Column> {
+    vec![
+        Column::fixed("Version", 80.),
+        Column::fixed("Default", 80.),
+        Column::flex("Sites").grow(2.),
+        Column::flex("Pool"),
+    ]
+}
 
 /// The ini Yard leaves to the user for PHP `version` (as yardd names it, so it parses).
 pub fn overrides_file(env: &AppEnv, version: &str) -> Option<PathBuf> {
@@ -47,21 +55,23 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         if v.installed {
             if !v.default {
                 let (e, n1) = (env.clone(), n.clone());
-                actions = actions.child(Button::new(format!("php:{n}:default"), "Make default").on_click(
-                    move |_, _, cx| {
-                        quick(
-                            &e,
-                            format!("php:{n1}:default"),
-                            api::PHP_DEFAULT,
-                            PhpParams { php: n1.clone() },
-                            cx,
-                        )
-                    },
-                ));
+                actions =
+                    actions.child(Button::new(format!("php:{n}:default"), "Make default").small().on_click(
+                        move |_, _, cx| {
+                            quick(
+                                &e,
+                                format!("php:{n1}:default"),
+                                api::PHP_DEFAULT,
+                                PhpParams { php: n1.clone() },
+                                cx,
+                            )
+                        },
+                    ));
             }
             let (e, n2) = (env.clone(), n.clone());
             actions = actions.child(
                 Button::new(format!("php:{n}:uninstall"), "Uninstall…")
+                    .small()
                     .style(ButtonStyle::Destructive)
                     .on_click(move |_, window, cx| {
                         let answer = window.prompt(
@@ -92,8 +102,10 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         } else {
             let (e, n3) = (env.clone(), n.clone());
             actions = actions.child(
-                Button::new(format!("php:{n}:install"), "Install").style(ButtonStyle::Primary).on_click(
-                    move |_, _, cx| {
+                Button::new(format!("php:{n}:install"), "Install")
+                    .small()
+                    .style(ButtonStyle::Primary)
+                    .on_click(move |_, _, cx| {
                         job(
                             &e,
                             format!("php:{n3}:install"),
@@ -102,8 +114,7 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                             format!("Install PHP {n3}"),
                             cx,
                         )
-                    },
-                ),
+                    }),
             );
         }
         Row::new(
@@ -117,7 +128,7 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new("php", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
+    let table = Table::new("php", columns(), rows.collect()).actions(200.);
     let mut page = div()
         .flex()
         .flex_col()
@@ -167,7 +178,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                             e1.state.update(cx, |s, cx| s.refresh([key], cx));
                         }),
                 )
-                .child(Button::new(format!("ext:{php2}:{name2}:remove"), "Remove").on_click(
+                .child(Button::new(format!("ext:{php2}:{name2}:remove"), "Remove").small().on_click(
                     move |_, _, cx| {
                         job(
                             &e2,
@@ -181,7 +192,13 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                 )),
         )
     });
-    let table = Table::new(format!("ext:{v}"), vec!["Extension".into(), "From".into()], rows.collect());
+    let table = Table::new(
+        format!("ext:{v}"),
+        [Column::flex("Extension"), Column::flex("From").grow(2.)],
+        rows.collect(),
+    )
+    .actions(150.)
+    .empty("No extensions added. Brew's and pecl's are listed once added.", None);
     let add = Nav::field(
         env,
         "php:ext:add",

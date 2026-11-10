@@ -6,9 +6,9 @@ use crate::env::{AppEnv, Sheet};
 use crate::runner::ActionId;
 use crate::widgets::button::Button;
 use crate::widgets::picker::Picker;
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::text_field::TextField;
-use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
+use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_client::api;
 use yard_core::ports::mode_str;
 use yard_core::present::holder_kind_name;
@@ -16,7 +16,16 @@ use yard_proto::methods::{ProfileParams, RangeParams, UnitParams};
 use yard_proto::{PortMode, PortStatus, Profile};
 
 /// The table's column titles, each read out by VoiceOver.
-pub const COLUMNS: [&str; 5] = ["Unit", "Port", "Mode", "Status", "Held by"];
+/// The table's columns, with their widths.
+pub fn columns() -> Vec<Column> {
+    vec![
+        Column::flex("Unit").grow(2.),
+        Column::fixed("Port", 70.).end(),
+        Column::fixed("Mode", 80.),
+        Column::fixed("Status", 100.),
+        Column::flex("Held by"),
+    ]
+}
 
 fn status(s: PortStatus) -> &'static str {
     match s {
@@ -45,13 +54,15 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         let actions = div()
             .flex()
             .gap(px(4.))
-            .child(Button::new(format!("port:{unit}:pin"), if pinned { "Unpin" } else { "Pin" }).on_click(
-                move |_, _, cx| {
-                    let m = if pinned { api::PORTS_UNPIN } else { api::PORTS_PIN };
-                    quick(&e1, format!("port:{u1}:pin"), m, UnitParams { unit: u1.clone() }, cx)
-                },
-            ))
-            .child(Button::new(format!("port:{unit}:set"), "Set…").on_click(move |_, _, cx| {
+            .child(
+                Button::new(format!("port:{unit}:pin"), if pinned { "Unpin" } else { "Pin" })
+                    .small()
+                    .on_click(move |_, _, cx| {
+                        let m = if pinned { api::PORTS_UNPIN } else { api::PORTS_PIN };
+                        quick(&e1, format!("port:{u1}:pin"), m, UnitParams { unit: u1.clone() }, cx)
+                    }),
+            )
+            .child(Button::new(format!("port:{unit}:set"), "Set…").small().on_click(move |_, _, cx| {
                 let unit = u2.clone();
                 let port = cx.new(|cx| {
                     TextField::new(
@@ -78,7 +89,7 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new("ports", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
+    let table = Table::new("ports", columns(), rows.collect()).actions(130.);
     let pick = env.clone();
     let profile_picker = Picker::new(
         "ports:profile",

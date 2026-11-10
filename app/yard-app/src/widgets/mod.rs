@@ -225,7 +225,7 @@ mod tests {
     /// read every table as "empty" and could not reach a row (found with VoiceOver, 2026-11-07).
     #[test]
     fn a_table_is_a_list_voiceover_can_walk() {
-        let t = Table::new("sites", vec!["Name".into(), "URL".into()], rows(&["blog"]));
+        let t = Table::new("sites", vec!["Name", "URL"], rows(&["blog"]));
         assert_eq!(t.a11y().role, Role::List);
         assert_eq!(t.a11y().label.as_ref(), "Name, URL");
     }
@@ -240,7 +240,7 @@ mod tests {
             Button::new("site:blog:open", "Open blog").a11y(),
             Toggle::new("site:blog:secure", "HTTPS for blog", true).a11y(),
             Checkbox::new("service:redis:on", "Redis", false).a11y(),
-            Table::new("sites", vec!["Name".into(), "PHP".into()], rows(&["blog"])).a11y(),
+            Table::new("sites", vec!["Name", "PHP"], rows(&["blog"])).a11y(),
             Picker::new("site:blog:php", "PHP for blog", vec!["8.3".into(), "8.4".into()], Some(1)).a11y(),
             Banner::new("banner:stale", BannerKind::Warning, "yardd is older than this app").a11y(),
             ErrorView::new("site:blog:error", &error, HintAction::parse("yard doctor")).a11y(),
@@ -300,7 +300,7 @@ mod tests {
                 .child(Button::new("b", "Open"))
                 .child(Toggle::new("t", "HTTPS", true))
                 .child(Checkbox::new("c", "Redis", false))
-                .child(Table::new("tbl", vec!["Name".into()], rows(&["a", "b"])))
+                .child(Table::new("tbl", vec!["Name"], rows(&["a", "b"])))
                 .child(Banner::new("bn", BannerKind::Error, "broken"))
                 .child(ErrorView::new("e", &error, HintAction::parse("rm -rf ~/x")))
                 .child(LogView::new("l", vec!["see https://example.com".into()]))
@@ -332,8 +332,8 @@ mod tests {
 
     #[test]
     fn table_keeps_row_ids_across_refreshes() {
-        let before = Table::new("sites", vec!["Name".into()], rows(&["blog", "shop"]));
-        let after = Table::new("sites", vec!["Name".into()], rows(&["api", "shop", "blog"]));
+        let before = Table::new("sites", vec!["Name"], rows(&["blog", "shop"]));
+        let after = Table::new("sites", vec!["Name"], rows(&["api", "shop", "blog"]));
         let id_of = |t: &Table, key: &str| t.row_ids().into_iter().find(|(k, _)| k == key).map(|(_, id)| id);
         assert_eq!(
             id_of(&before, "blog"),
@@ -433,5 +433,94 @@ mod tests {
             assert_eq!(colors(ButtonStyle::Destructive, &t), (t.c.control_bg, t.c.danger_text));
             assert_eq!(colors(ButtonStyle::Primary, &t), (t.c.accent_fill, t.c.on_accent));
         }
+    }
+
+    struct Tables {
+        build: fn() -> Table,
+    }
+
+    impl Render for Tables {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(gpui::px(700.)).child((self.build)())
+        }
+    }
+
+    fn draw_table(cx: &mut TestAppContext, build: fn() -> Table) -> &mut gpui::VisualTestContext {
+        let (_v, vcx) = cx.add_window_view(move |_, _| Tables { build });
+        vcx.run_until_parked();
+        vcx
+    }
+
+    fn two_rows() -> Table {
+        use crate::widgets::table::Column;
+        let busy = Row::new("busy", vec!["8.4".into(), "default".into(), "chk-a".into()])
+            .extra(Button::new("a", "Make default").small())
+            .extra(Button::new("b", "Uninstall…").small());
+        let idle = Row::new("idle", vec!["7.1".into(), "installed".into(), "".into()]);
+        Table::new(
+            "php",
+            [Column::fixed("Version", 80.), Column::flex("Status"), Column::flex("Sites")],
+            vec![busy, idle],
+        )
+        .actions(180.)
+    }
+
+    /// Each column's cells start where its header does, in a row with two buttons and in one with
+    /// none (G1: a row's buttons took width out of its cells).
+    #[gpui::test]
+    async fn columns_line_up_with_and_without_actions(cx: &mut TestAppContext) {
+        let vcx = draw_table(cx, two_rows);
+        for i in 0..3 {
+            let header = vcx.debug_bounds(format!("php:column:{i}").leak()).unwrap();
+            for row in ["busy", "idle"] {
+                let cell = vcx.debug_bounds(format!("php:row:{row}:cell:{i}").leak()).unwrap();
+                assert_eq!(cell.left(), header.left(), "column {i} of {row}");
+                assert_eq!(cell.size.width, header.size.width, "column {i} of {row}");
+            }
+        }
+    }
+
+    /// A long value stays inside its column (G2: it painted into the next cell).
+    #[gpui::test]
+    async fn a_long_cell_truncates(cx: &mut TestAppContext) {
+        fn long() -> Table {
+            use crate::widgets::table::Column;
+            let url: SharedString = format!("http://{}.yard:8080/", "x".repeat(300)).into();
+            Table::new(
+                "sites",
+                [Column::flex("URL"), Column::fixed("PHP", 60.)],
+                vec![Row::new("a", vec![url, "8.4".into()])],
+            )
+        }
+        let vcx = draw_table(cx, long);
+        let url = vcx.debug_bounds("sites:row:a:cell:0").unwrap();
+        let php = vcx.debug_bounds("sites:row:a:cell:1").unwrap();
+        assert!(
+            url.right() <= php.left(),
+            "the URL ends at {:?}, PHP starts at {:?}",
+            url.right(),
+            php.left()
+        );
+        assert_eq!(php.size.width, gpui::px(60.));
+    }
+
+    /// With no rows a table says so, and stays a list VoiceOver names by its columns.
+    #[gpui::test]
+    async fn an_empty_table_says_so(cx: &mut TestAppContext) {
+        fn none() -> Table {
+            Table::new("node", vec!["Version"], vec![]).empty("No Node versions installed.", None)
+        }
+        let vcx = draw_table(cx, none);
+        assert!(vcx.debug_bounds("node:empty").is_some(), "the empty text is drawn");
+        let t = none();
+        assert_eq!(t.a11y().label.as_ref(), "Version");
+    }
+
+    #[test]
+    fn an_empty_value_reads_as_a_dash() {
+        use crate::widgets::table::{EMPTY, shown};
+        assert_eq!(shown(&"".into()).as_ref(), EMPTY);
+        assert_eq!(shown(&"  ".into()).as_ref(), "—");
+        assert_eq!(shown(&"8.4".into()).as_ref(), "8.4");
     }
 }

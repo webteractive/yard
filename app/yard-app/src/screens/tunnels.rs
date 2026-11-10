@@ -5,9 +5,9 @@ use crate::env::{AppEnv, Nav};
 use crate::platform::open::Opener;
 use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::theme::Typography;
-use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
+use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, Styled, Window, div, px};
 use yard_app_model::jobs::JobPhase;
 use yard_client::api;
 use yard_proto::methods::{TunnelAddParams, TunnelDomainAddParams, TunnelDomainParams, TunnelRemoveParams};
@@ -118,7 +118,15 @@ pub fn share(
 }
 
 /// The table's column titles, each read out by VoiceOver.
-pub const COLUMNS: [&str; 4] = ["Site", "Kind", "URL", "State"];
+/// The table's columns, with their widths.
+pub fn columns() -> Vec<Column> {
+    vec![
+        Column::flex("Site"),
+        Column::fixed("Kind", 70.),
+        Column::flex("URL").grow(3.),
+        Column::fixed("State", 90.),
+    ]
+}
 
 pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let s = env.state.read(cx);
@@ -132,16 +140,16 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
             let copied = u.clone();
             actions = actions
                 .child(
-                    Button::new(format!("tunnel:{}:copy", t.site), "Copy URL")
+                    Button::new(format!("tunnel:{}:copy", t.site), "Copy URL").small()
                         .on_click(move |_, _, cx| Opener::copy(cx, &copied)),
                 )
                 .child(
-                    Button::new(format!("tunnel:{}:open", t.site), "Open")
+                    Button::new(format!("tunnel:{}:open", t.site), "Open").small()
                         .on_click(move |_, _, cx| cx.open_url(&u)),
                 );
         }
         actions = actions.child(
-            Button::new(format!("tunnel:{}:stop", t.site), "Stop sharing")
+            Button::new(format!("tunnel:{}:stop", t.site), "Stop sharing").small()
                 .style(ButtonStyle::Destructive)
                 .on_click(move |_, window, cx| {
                     if !named {
@@ -178,8 +186,9 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table =
-        Table::new("tunnels", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
+    let table = Table::new("tunnels", columns(), rows.collect())
+        .actions(250.)
+        .empty("No tunnels. Share a site to get a public URL.", None);
     let site = Nav::field(env, "tunnel:share:site", "Site to share", "blog", cx);
     let host = Nav::field(env, "tunnel:share:host", "Host on your domain", "blog.example.com", cx);
     let (e1, site1) = (env.clone(), site.clone());
@@ -190,7 +199,7 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
             d.domain.clone(),
             vec![d.domain.clone().into(), (if d.logged_in { "signed in" } else { "not signed in" }).into()],
         )
-        .extra(Button::new(format!("domain:{}:remove", d.domain), "Remove").on_click(
+        .extra(Button::new(format!("domain:{}:remove", d.domain), "Remove").small().on_click(
             move |_, _, cx| {
                 quick(
                     &e,
@@ -203,7 +212,9 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         ))
     });
     let domain_table =
-        Table::new("domains", vec!["Domain".into(), "Cloudflare".into()], domain_rows.collect());
+        Table::new("domains", [Column::flex("Domain"), Column::flex("Cloudflare")], domain_rows.collect())
+            .actions(90.)
+            .empty("No domains for named tunnels.", None);
     let domain = Nav::field(env, "tunnel:domain:add", "Domain to add", "example.com", cx);
     let (e2, domain2) = (env.clone(), domain.clone());
     div()

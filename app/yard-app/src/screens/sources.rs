@@ -4,14 +4,21 @@
 use super::{errors, heading, job};
 use crate::env::AppEnv;
 use crate::widgets::button::Button;
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use yard_client::api;
 use yard_proto::SourceInfo;
 use yard_proto::methods::SourceParams;
 
 /// The table's column titles, each read out by VoiceOver.
-pub const COLUMNS: [&str; 3] = ["Tap or formula", "Tapped or installed", "Trusted by brew"];
+/// The table's columns, with their widths.
+pub fn columns() -> Vec<Column> {
+    vec![
+        Column::flex("Tap or formula").grow(2.),
+        Column::fixed("Tapped or installed", 150.),
+        Column::fixed("Trusted by brew", 130.),
+    ]
+}
 
 /// A row's trust action: the tap's, or one of its formulae's (`<tap>/<name>`).
 pub struct Target {
@@ -53,14 +60,16 @@ pub fn sources(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         let e = env.clone();
         let Target { key, cells, verb, params } = t;
         Row::new(key.clone(), cells.into_iter().map(SharedString::from).collect()).extra(
-            Button::new(format!("source:{key}:{}", verb.to_lowercase()), verb).on_click(move |_, _, cx| {
-                let m = if verb == "Untrust" { api::SOURCES_UNTRUST } else { api::SOURCES_TRUST };
-                job(&e, format!("source:{key}"), m, params.clone(), format!("{verb} {key}"), cx)
-            }),
+            Button::new(format!("source:{key}:{}", verb.to_lowercase()), verb).small().on_click(
+                move |_, _, cx| {
+                    let m = if verb == "Untrust" { api::SOURCES_UNTRUST } else { api::SOURCES_TRUST };
+                    job(&e, format!("source:{key}"), m, params.clone(), format!("{verb} {key}"), cx)
+                },
+            ),
         )
     });
     let table =
-        Table::new("sources", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
+        Table::new("sources", columns(), rows.collect()).actions(90.).empty("No third-party taps.", None);
     div()
         .flex()
         .flex_col()

@@ -5,7 +5,7 @@ use crate::env::{AppEnv, Sheet};
 use crate::runner::ActionId;
 use crate::services::logs::LogTail;
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::text_field::TextField;
 use gpui::{
     AnyElement, App, AppContext, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div,
@@ -263,10 +263,15 @@ pub fn table(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     });
     Table::new(
         "services",
-        ["Instance", "Engine", "State", "Ports", "Sleep", "Run by", "Used by"]
-            .iter()
-            .map(|c| SharedString::from(*c))
-            .collect(),
+        [
+            Column::flex("Instance"),
+            Column::flex("Engine"),
+            Column::fixed("State", 100.),
+            Column::fixed("Ports", 90.),
+            Column::fixed("Sleep", 70.),
+            Column::fixed("Run by", 70.),
+            Column::flex("Used by"),
+        ],
         rows.collect(),
     )
     .into_any_element()

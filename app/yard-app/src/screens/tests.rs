@@ -122,13 +122,13 @@ fn a_job_line_with_a_url_is_a_link() {
 #[test]
 fn every_table_column_has_a_title() {
     for columns in [
-        &super::php::COLUMNS[..],
-        &super::node::COLUMNS[..],
-        &super::ports::COLUMNS[..],
-        &super::tunnels::COLUMNS[..],
-        &super::sources::COLUMNS[..],
+        super::php::columns(),
+        super::node::columns(),
+        super::ports::columns(),
+        super::tunnels::columns(),
+        super::sources::columns(),
     ] {
-        assert!(columns.iter().all(|c| !c.trim().is_empty()), "{columns:?}");
+        assert!(columns.iter().all(|c| !c.title.trim().is_empty()), "{columns:?}");
     }
 }
 

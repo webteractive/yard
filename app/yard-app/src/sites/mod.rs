@@ -7,12 +7,11 @@ use crate::env::{AppEnv, Sheet};
 use crate::runner::ActionId;
 use crate::widgets::button::{Button, ButtonStyle};
 use crate::widgets::error_view::ErrorView;
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::text_field::TextField;
 use crate::widgets::theme::Typography;
 use gpui::{
-    AnyElement, App, AppContext, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Window,
-    div, px,
+    AnyElement, App, AppContext, IntoElement, ParentElement, PathPromptOptions, Styled, Window, div, px,
 };
 use yard_app_model::hint::{HintAction, Screen};
 use yard_proto::SiteKind;
@@ -81,9 +80,16 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let select = env.clone();
     let table = Table::new(
         "sites",
-        ["Name", "URL", "PHP or target", "HTTPS", "Status"].iter().map(|c| SharedString::from(*c)).collect(),
+        [
+            Column::flex("Name"),
+            Column::flex("URL").grow(2.),
+            Column::fixed("PHP or target", 110.),
+            Column::fixed("HTTPS", 60.),
+            Column::fixed("Status", 110.),
+        ],
         rows.collect(),
     )
+    .empty("No sites linked. Link a project folder to serve it.", None)
     .selected(selected.clone().map(Into::into))
     .on_select(move |key, _, cx| {
         crate::window::main::open(&select, Screen::Sites(Some(key.to_string())), cx)

@@ -3,15 +3,18 @@
 use super::{errors, heading, job, quick, value};
 use crate::env::{AppEnv, Nav};
 use crate::widgets::button::{Button, ButtonStyle};
-use crate::widgets::table::{Row, Table};
+use crate::widgets::table::{Column, Row, Table};
 use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
-use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
+use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use yard_client::api;
 use yard_proto::methods::{NodeInstallParams, NodeListParams, NodeSpecParams, NodeVersionParams};
 
 /// The table's column titles, each read out by VoiceOver.
-pub const COLUMNS: [&str; 3] = ["Version", "Default", "Sites"];
+/// The table's columns, with their widths.
+pub fn columns() -> Vec<Column> {
+    vec![Column::fixed("Version", 110.), Column::fixed("Default", 80.), Column::flex("Sites")]
+}
 
 pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
@@ -21,8 +24,8 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         let (e1, n1, e2, n2) = (env.clone(), n.clone(), env.clone(), n.clone());
         let mut actions = div().flex().gap(px(4.));
         if !v.default {
-            actions = actions.child(Button::new(format!("node:{n}:default"), "Make default").on_click(
-                move |_, _, cx| {
+            actions = actions.child(
+                Button::new(format!("node:{n}:default"), "Make default").small().on_click(move |_, _, cx| {
                     quick(
                         &e1,
                         format!("node:{n1}:default"),
@@ -30,12 +33,14 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                         NodeSpecParams { spec: n1.clone() },
                         cx,
                     )
-                },
-            ));
+                }),
+            );
         }
         actions = actions.child(
-            Button::new(format!("node:{n}:uninstall"), "Uninstall").style(ButtonStyle::Destructive).on_click(
-                move |_, _, cx| {
+            Button::new(format!("node:{n}:uninstall"), "Uninstall")
+                .small()
+                .style(ButtonStyle::Destructive)
+                .on_click(move |_, _, cx| {
                     job(
                         &e2,
                         format!("node:{n2}:uninstall"),
@@ -44,8 +49,7 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                         format!("Uninstall Node {n2}"),
                         cx,
                     )
-                },
-            ),
+                }),
         );
         Row::new(
             n.clone(),
@@ -57,7 +61,9 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         )
         .extra(actions)
     });
-    let table = Table::new("node", COLUMNS.iter().map(|c| SharedString::from(*c)).collect(), rows.collect());
+    let table = Table::new("node", columns(), rows.collect())
+        .actions(200.)
+        .empty("No Node versions installed.", None);
     let spec = Nav::field(env, "node:install:spec", "Node version to install", "22, 22.17, lts/*", cx);
     let (e3, s3) = (env.clone(), spec.clone());
     let e4 = env.clone();
