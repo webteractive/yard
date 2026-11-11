@@ -761,9 +761,11 @@ doc="$(ax tree)"
 resolver_hint="$(jq -r '.[] | select(.role == "AXStaticText" and (.value // "" | startswith("sudo "))) | .value' <<<"$doc" | head -1)"
 rm_hint="$(jq -r '.[] | select(.role == "AXStaticText" and (.value // "" | startswith("rm "))) | .value' <<<"$doc" | head -1)"
 terminal="$(jq '[.[] | select(.role == "AXButton" and .name == "Open in Terminal")] | length' <<<"$doc")"
+# One Open in Terminal per sudo hint: a Mac whose helper is out of date adds `sudo yard helper install`.
+sudo_hints="$(jq '[.[] | select(.role == "AXStaticText" and (.value // "" | startswith("sudo ")))] | length' <<<"$doc")"
 copies="$(jq '[.[] | select(.role == "AXButton" and .name == "Copy")] | length' <<<"$doc")"
 fixes="$(jq '[.[] | select(.role == "AXButton" and .name == "Fix")] | length' <<<"$doc")"
-if [[ -n "$resolver_hint" && -n "$rm_hint" && "$terminal" == 1 ]]; then
+if [[ -n "$resolver_hint" && -n "$rm_hint" && "$terminal" == "$sudo_hints" ]]; then
   pass "D2 a sudo hint offers Open in Terminal and Copy ($resolver_hint), an rm hint only Copy ($rm_hint): $terminal Terminal, $copies Copy, $fixes Fix"
 else
   fail "D2 hint buttons" "sudo [$resolver_hint] rm [$rm_hint] terminal $terminal copy $copies fix $fixes"

@@ -6,7 +6,10 @@ release); planned in `docs/superpowers/plans/2026-11-10-yard-app-visual-design.m
 built: step 18, the blurred sidebar (it needs a look at both appearances first); "Open in…" as one
 menu on the site detail (the editor, Finder and Terminal stay three buttons); Ports' controls stay
 in its page rather than the toolbar. Several text colours moved a little to pass 4.5:1 where pills and group labels sit (§3.4). The unit tests cover the layout fixes; `checklist.sh` and
-`checklist-installs.sh` were updated for the moved controls but not yet run on this build. It changes how Yard.app looks and lays out,
+`checklist-installs.sh` were updated for the moved controls and passed 72/72 and 14/14 on this build
+(with the review's fixes, 9e5e1c4) on 2026-11-11, run from Terminal.app (the agent's zmx shell had no
+Accessibility); D2 now expects one Open in Terminal per `sudo` hint, since a Mac whose helper is out
+of date shows a second. It changes how Yard.app looks and lays out,
 not what it does: every screen, action, error path, sheet key and accessibility rule in the M6 design
 (`2026-11-05-yard-m6-app-design.md` §8) and `.hydra/rules/app.md` still holds. The menu bar menu stays
 a native `NSMenu` (muda) and its content is out of scope; its icon, and the app icon, change to the
