@@ -13,7 +13,7 @@ use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
 use crate::widgets::toggle::Toggle;
 use gpui::{AnyElement, App, IntoElement, ParentElement, PromptLevel, SharedString, Styled, Window, div, px};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use yard_app_model::hint::HintAction;
 use yard_app_model::settle::SettlePlan;
 use yard_client::api;
@@ -156,6 +156,20 @@ fn quick(
     cx: &mut App,
 ) {
     env.runner.update(cx, |r, cx| r.perform(ActionId(id), work, cx).detach());
+}
+
+/// Unlinks `name`, or removes it when it is a proxy; its error stays beside Unlink….
+pub fn unlink(env: &AppEnv, name: String, proxy: bool, cx: &mut App) {
+    let (daemon, n) = (env.daemon.clone(), name.clone());
+    let m = if proxy { api::SITES_UNPROXY } else { api::SITES_UNLINK };
+    let removal = env.runner.update(cx, |r, cx| {
+        r.perform(
+            ActionId(format!("site:{name}:unlink")),
+            async move { call(&*daemon, m, NameParams { name: n }).await.map(|_| ()) },
+            cx,
+        )
+    });
+    crate::window::main::forget_after(env, name, removal, cx);
 }
 
 pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -396,22 +410,11 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
                 let (env, name) = (e8.clone(), n8.clone());
                 cx.spawn(async move |cx| {
                     if answer.await == Ok(0) {
-                        cx.update(|cx| {
-                            let daemon = env.daemon.clone();
-                            let m = if proxy { api::SITES_UNPROXY } else { api::SITES_UNLINK };
-                            let n = name.clone();
-                            quick(
-                                &env,
-                                format!("site:{name}:unlink"),
-                                async move { call(&*daemon, m, NameParams { name: n }).await.map(|_| ()) },
-                                cx,
-                            )
-                        });
+                        cx.update(|cx| unlink(&env, name, proxy, cx));
                     }
                 })
                 .detach();
             }),
     );
-    let _ = Path::new("");
     pane.child(actions).into_any_element()
 }

@@ -1,14 +1,18 @@
-//! A choice of one value from a short list, shown in a popup under it.
+//! A choice of one value from a short list, shown in a popup under it (above it near the
+//! window's bottom).
 
 use super::A11y;
 use super::Pressable;
 use super::disabled::Disabled;
 use super::theme::{Theme, Typography, radius, size};
 use gpui::{
-    AnchoredPositionMode, App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce, Role,
-    SharedString, Styled, Window, anchored, canvas, deferred, div, point, prelude::*, px,
+    Anchor, AnchoredPositionMode, App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce,
+    Role, SharedString, Styled, Window, anchored, canvas, deferred, div, point, prelude::*, px,
 };
 use std::rc::Rc;
+
+/// An option's row in the popup; the popup adds its 4 pt padding and 1 pt border on each side.
+const OPTION_HEIGHT: Pixels = px(24.);
 
 #[derive(IntoElement)]
 pub struct Picker {
@@ -127,7 +131,7 @@ impl RenderOnce for Picker {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .h(px(24.))
+                    .h(OPTION_HEIGHT)
                     .px(px(8.))
                     .rounded(radius::SM)
                     .cursor_pointer()
@@ -156,44 +160,51 @@ impl RenderOnce for Picker {
                 point(inner.left() - px(1.), inner.top() - px(1.)),
                 gpui::size(inner.size.width + px(2.), inner.size.height + px(2.)),
             );
+            // Under the button when the popup fits there, else above it: anchored's own flip turns
+            // about the popup's corner, which put it over its button near the window's bottom.
+            let height = OPTION_HEIGHT * self.options.len() as f32 + px(10.);
+            let fits_below = at.bottom() + px(2.) + height <= window.viewport_size().height;
+            let popup = anchored().position_mode(AnchoredPositionMode::Window);
+            let popup = if fits_below {
+                popup.position(point(at.left(), at.bottom() + px(2.)))
+            } else {
+                popup.anchor(Anchor::BottomLeft).position(point(at.left(), at.top() - px(2.)))
+            };
             root = root.child(deferred(
-                anchored()
-                    .position_mode(AnchoredPositionMode::Window)
-                    .position(point(at.left(), at.bottom() + px(2.)))
-                    .child(
-                        div()
-                            .id(ElementId::Name(format!("{}:menu", self.id).into()))
-                            .debug_selector({
-                                let s = format!("{}:menu", self.id);
-                                move || s
-                            })
-                            .role(Role::Menu)
-                            // Its options take their clicks: nothing under the popup is pressed.
-                            .occlude()
-                            // A click anywhere else closes it, as a macOS pop-up button does.
-                            .on_mouse_down_out({
-                                let (close, button) = (open.clone(), button.clone());
-                                move |e, _, cx| {
-                                    if button.read(cx).contains(&e.position) {
-                                        return;
-                                    }
-                                    close.update(cx, |o, cx| {
-                                        *o = false;
-                                        cx.notify();
-                                    })
+                popup.child(
+                    div()
+                        .id(ElementId::Name(format!("{}:menu", self.id).into()))
+                        .debug_selector({
+                            let s = format!("{}:menu", self.id);
+                            move || s
+                        })
+                        .role(Role::Menu)
+                        // Its options take their clicks: nothing under the popup is pressed.
+                        .occlude()
+                        // A click anywhere else closes it, as a macOS pop-up button does.
+                        .on_mouse_down_out({
+                            let (close, button) = (open.clone(), button.clone());
+                            move |e, _, cx| {
+                                if button.read(cx).contains(&e.position) {
+                                    return;
                                 }
-                            })
-                            .min_w(at.size.width)
-                            .p(px(4.))
-                            .rounded(radius::XL)
-                            .border_1()
-                            .border_color(t.c.separator)
-                            .bg(t.c.surface)
-                            .type_body()
-                            .text_color(t.c.text)
-                            .shadow_md()
-                            .children(items),
-                    ),
+                                close.update(cx, |o, cx| {
+                                    *o = false;
+                                    cx.notify();
+                                })
+                            }
+                        })
+                        .min_w(at.size.width)
+                        .p(px(4.))
+                        .rounded(radius::XL)
+                        .border_1()
+                        .border_color(t.c.separator)
+                        .bg(t.c.surface)
+                        .type_body()
+                        .text_color(t.c.text)
+                        .shadow_md()
+                        .children(items),
+                ),
             ));
         }
         root.into_any_element()

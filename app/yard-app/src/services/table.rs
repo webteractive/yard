@@ -265,25 +265,7 @@ fn controls(env: &AppEnv, s: &ServiceInfo, cx: &mut App) -> Vec<(&'static str, A
                     let (env, name) = (e7.clone(), n7.clone());
                     cx.spawn(async move |cx| {
                         if let Some(keep_data) = answer.await.ok().and_then(keep_data) {
-                            cx.update(|cx| {
-                                let daemon = env.daemon.clone();
-                                env.runner.update(cx, |r, cx| {
-                                    r.perform(
-                                        ActionId(format!("service:{name}:remove")),
-                                        async move {
-                                            call(
-                                                &*daemon,
-                                                api::SERVICES_REMOVE,
-                                                ServiceRemoveParams { name, keep_data },
-                                            )
-                                            .await
-                                            .map(|_| ())
-                                        },
-                                        cx,
-                                    )
-                                    .detach()
-                                })
-                            });
+                            cx.update(|cx| remove(&env, name, keep_data, cx));
                         }
                     })
                     .detach();
@@ -293,6 +275,19 @@ fn controls(env: &AppEnv, s: &ServiceInfo, cx: &mut App) -> Vec<(&'static str, A
         ));
     }
     out
+}
+
+/// Removes `name` (`keep_data` keeps its data directory); its error stays beside Remove….
+pub fn remove(env: &AppEnv, name: String, keep_data: bool, cx: &mut App) {
+    let (daemon, params) = (env.daemon.clone(), ServiceRemoveParams { name: name.clone(), keep_data });
+    let removal = env.runner.update(cx, |r, cx| {
+        r.perform(
+            ActionId(format!("service:{name}:remove")),
+            async move { call(&*daemon, api::SERVICES_REMOVE, params).await.map(|_| ()) },
+            cx,
+        )
+    });
+    crate::window::main::forget_after(env, name, removal, cx);
 }
 
 /// The selected instance's detail: its port and sleep with the sheets that change them, and its

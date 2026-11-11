@@ -583,6 +583,75 @@ mod tests {
         assert_eq!(menu.left(), picker.left());
     }
 
+    /// Near the window's bottom the popup opens above its button, never over it (final review:
+    /// flipped around its own top-left corner, it covered the button it belongs to).
+    #[gpui::test]
+    async fn a_picker_at_the_bottom_opens_above_its_button(cx: &mut TestAppContext) {
+        let (_v, cx) = cx.add_window_view(move |_, _| Covered {
+            under: std::rc::Rc::new(std::cell::Cell::new(0)),
+            top: || {
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .p(gpui::px(8.))
+                    .child(Picker::new(
+                        "pick",
+                        "PHP",
+                        vec!["7.1".into(), "7.4".into(), "8.3".into(), "8.4".into()],
+                        Some(0),
+                    ))
+                    .into_any_element()
+            },
+        });
+        cx.run_until_parked();
+        let picker = cx.debug_bounds("pick").expect("the picker is drawn");
+        click(cx, picker.center());
+        let menu = cx.debug_bounds("pick:menu").expect("the popup is open");
+        let gap = picker.top() - menu.bottom();
+        assert!(gap >= gpui::px(0.) && gap <= gpui::px(6.), "the popup ends {gap:?} above its button");
+        assert_eq!(menu.left(), picker.left());
+    }
+
+    /// The issues strip keeps an error to one line, and Details shows the rest (final review: a
+    /// long error was cut off with no way to read it but VoiceOver).
+    #[gpui::test]
+    async fn a_long_compact_error_offers_its_details(cx: &mut TestAppContext) {
+        let long = YardError::new(
+            ErrorCode::Internal,
+            "nginx could not start because port 28080 is held by another process that Yard did not start",
+        );
+        let short = YardError::new(ErrorCode::Internal, "boom");
+        let (_v, cx) = cx.add_window_view(move |_, _| Covered {
+            under: std::rc::Rc::new(std::cell::Cell::new(0)),
+            top: move || {
+                div()
+                    .w(gpui::px(320.))
+                    .child(ErrorView::new("long", &long, HintAction::Copy("x".into())).compact())
+                    .child(ErrorView::new("short", &short, HintAction::Copy("x".into())).compact())
+                    .into_any_element()
+            },
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("short:more").is_none(), "a short error fits on its line");
+        let one_line = cx.debug_bounds("long:message").expect("the message").size.height;
+        let more = cx.debug_bounds("long:more").expect("a long error offers Details");
+        click(cx, more.center());
+        let shown = cx.debug_bounds("long:message").expect("the message").size.height;
+        assert!(shown > one_line, "Details shows the whole message ({one_line:?} → {shown:?})");
+    }
+
+    /// Marking a field as a sheet's is a change once, so a sheet drawn every frame does not
+    /// redraw its fields every frame (final review).
+    #[gpui::test]
+    fn a_sheet_field_is_marked_once(cx: &mut TestAppContext) {
+        use gpui::AppContext;
+        let f = cx.new(|cx| TextField::new("port:range", "Auto range", "29000-29099", cx));
+        assert!(f.update(cx, |f, _| f.in_sheet()), "the first mark changes it");
+        assert!(!f.update(cx, |f, _| f.in_sheet()), "the second changes nothing");
+    }
+
     /// The off switch's track can be seen on white (G15).
     #[test]
     fn the_off_switch_track_is_visible() {

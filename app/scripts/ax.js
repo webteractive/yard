@@ -322,7 +322,7 @@ function iconShape() {
   app.doShellScript(`rm -f '${file}'`);
   const scale = rep.pixelsWide / w;
   const at = (dx, dy) => {
-    const c = rep.colorAtXY(Math.round((w / 2 + dx) * scale), Math.round((h / 2 + dy) * scale)).colorUsingColorSpace($.NSColorSpace.sRGBColorSpace);
+    const c = rep.colorAtXY(Math.floor((w / 2 + dx) * scale), Math.floor((h / 2 + dy) * scale)).colorUsingColorSpace($.NSColorSpace.sRGBColorSpace);
     return [c.redComponent, c.greenComponent, c.blueComponent];
   };
   const bg = at(-w / 2 + 1, -h / 2 + 1);

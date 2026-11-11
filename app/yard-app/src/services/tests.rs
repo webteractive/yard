@@ -164,3 +164,27 @@ async fn a_removed_selection_falls_back_to_none(cx: &mut TestAppContext) {
     assert!(vcx.debug_bounds("service:gone:detail").is_none());
     assert!(vcx.debug_bounds("service:redis:toggle").is_some(), "the table still draws");
 }
+
+/// A removed instance is no longer selected, so one added later under its name is not either
+/// (final review).
+#[gpui::test]
+async fn a_removed_instance_is_no_longer_selected(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    services_on(&env, Some("redis"), cx);
+    fake.answer("services.remove", serde_json::json!({}));
+    cx.update(|cx| super::table::remove(&env, "redis".into(), false, cx));
+    cx.run_until_parked();
+    let screen = env.nav.read_with(cx, |n, _| n.screen.clone());
+    assert_eq!(screen, yard_app_model::hint::Screen::Services(None));
+}
+
+/// A remove that fails keeps the selection, beside its error.
+#[gpui::test]
+async fn a_failed_remove_keeps_the_selection(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    services_on(&env, Some("redis"), cx);
+    cx.update(|cx| super::table::remove(&env, "redis".into(), false, cx));
+    cx.run_until_parked();
+    let screen = env.nav.read_with(cx, |n, _| n.screen.clone());
+    assert_eq!(screen, yard_app_model::hint::Screen::Services(Some("redis".into())));
+}

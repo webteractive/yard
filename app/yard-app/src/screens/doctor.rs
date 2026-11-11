@@ -39,7 +39,6 @@ fn grouped(report: &yard_proto::DoctorReport) -> Vec<(&'static str, CheckStatus,
         .collect()
 }
 
-/// A check as the screen lists it: its message and the buttons its hint becomes.
 /// The Doctor toolbar's button.
 pub fn actions(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
     let running = env.state.read(cx).doctor.loading;
@@ -56,7 +55,8 @@ pub fn actions(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
 #[cfg(test)]
 pub type Line = (String, Vec<&'static str>);
 
-/// `(group, lines)` as the screen shows them, as the tests read it.
+/// `(group, lines)` as the screen shows them, as the tests read it: each check's message and the
+/// buttons its hint becomes.
 #[cfg(test)]
 pub fn groups(report: &yard_proto::DoctorReport) -> Vec<(&'static str, Vec<Line>)> {
     grouped(report)
@@ -71,9 +71,6 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let s = env.state.read(cx);
     let report = s.doctor.value.clone();
-    let running = s.doctor.loading;
-    let run = env.clone();
-    let _ = (&run, running);
     let mut page = div().flex().flex_col().gap(px(10.));
     if let Some(e) = &s.doctor.error {
         page =

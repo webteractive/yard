@@ -61,6 +61,30 @@ pub fn visible_keys(screen: &Screen) -> Vec<ResourceKey> {
 }
 
 /// Shows the main window on `screen`, opening it if it is closed.
+/// Leaves `key` unselected once it is removed, so a site or instance added later under its name
+/// does not open selected.
+pub fn forget(env: &AppEnv, key: &str, cx: &mut App) {
+    env.nav.update(cx, |n, cx| {
+        let gone = match &mut n.screen {
+            Screen::Sites(s) | Screen::Services(s) if s.as_deref() == Some(key) => s,
+            _ => return,
+        };
+        *gone = None;
+        cx.notify();
+    });
+}
+
+/// Forgets `key` once `removal` succeeds; a failed one leaves it selected beside its error.
+pub fn forget_after(env: &AppEnv, key: String, removal: gpui::Task<Option<()>>, cx: &mut App) {
+    let env = env.clone();
+    cx.spawn(async move |cx| {
+        if removal.await.is_some() {
+            cx.update(|cx| forget(&env, &key, cx));
+        }
+    })
+    .detach();
+}
+
 pub fn open(env: &AppEnv, screen: Screen, cx: &mut App) {
     let keys = visible_keys(&screen);
     env.nav.update(cx, |n, cx| {

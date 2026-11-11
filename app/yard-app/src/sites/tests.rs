@@ -174,3 +174,15 @@ fn removing_a_proxy_says_what_stays() {
         ("Remove the proxy api?".to_string(), "What it forwards to keeps running.")
     );
 }
+
+/// An unlinked site is no longer selected, so one linked later under its name is not either
+/// (final review).
+#[gpui::test]
+async fn an_unlinked_site_is_no_longer_selected(cx: &mut TestAppContext) {
+    let (fake, env) = env(cx);
+    env.nav.update(cx, |n, _| n.screen = Screen::Sites(Some("blog".into())));
+    fake.answer("sites.unlink", serde_json::json!({}));
+    cx.update(|cx| super::detail::unlink(&env, "blog".into(), false, cx));
+    cx.run_until_parked();
+    assert_eq!(env.nav.read_with(cx, |n, _| n.screen.clone()), Screen::Sites(None));
+}

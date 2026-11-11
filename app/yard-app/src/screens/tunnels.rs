@@ -117,7 +117,6 @@ pub fn share(
         .detach();
 }
 
-/// The table's column titles, each read out by VoiceOver.
 /// The table's columns, with their widths.
 pub fn columns() -> Vec<Column> {
     vec![

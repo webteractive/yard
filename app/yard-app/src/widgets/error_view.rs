@@ -30,6 +30,9 @@ pub struct ErrorView {
 
 type DismissHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
+/// Longer than this, a compact error is likely cut off, so it offers Details.
+const COMPACT_CHARS: usize = 60;
+
 impl ErrorView {
     pub fn new(id: impl Into<SharedString>, e: &YardError, action: HintAction) -> ErrorView {
         let details = e
@@ -63,7 +66,7 @@ impl ErrorView {
         self
     }
 
-    /// One line: the message and its buttons, for the issues strip.
+    /// One line: the message and its buttons, for the issues strip; Details shows the rest.
     pub fn compact(mut self) -> Self {
         self.compact = true;
         self
@@ -105,6 +108,13 @@ impl RenderOnce for ErrorView {
         let open =
             window.use_keyed_state(ElementId::Name(format!("{}:details", self.id).into()), cx, |_, _| false);
         let show = *open.read(cx);
+        // The issues strip keeps an error to a line; Details shows it whole, with its hint and output.
+        let more = if self.compact {
+            self.message.chars().count() > COMPACT_CHARS || self.hint.is_some() || !self.details.is_empty()
+        } else {
+            !self.details.is_empty()
+        };
+        let compact = self.compact && !show;
         let mut row = div().flex().flex_none().gap(space::XS).items_center();
         if buttons.len() == 2 {
             let action = self.action.clone();
@@ -118,7 +128,7 @@ impl RenderOnce for ErrorView {
             ));
         }
         row = row.child(copy);
-        if !self.details.is_empty() && !self.compact {
+        if more {
             row = row.child(
                 Button::new(format!("{}:more", self.id), if show { "Hide details" } else { "Details" })
                     .small()
@@ -139,12 +149,16 @@ impl RenderOnce for ErrorView {
             );
         }
         let message = div()
+            .debug_selector({
+                let s = format!("{}:message", a11y.id);
+                move || s
+            })
             .min_w(px(0.))
             .type_body()
             .text_color(t.c.danger_text)
-            .when(self.compact, |d| d.flex_1().truncate())
+            .when(compact, |d| d.flex_1().truncate())
             .child(super::text(format!("{}:message", a11y.id), self.message));
-        let body = if self.compact {
+        let body = if compact {
             div().flex().items_center().gap(space::SM).min_w(px(0.)).child(message).child(row)
         } else {
             div()
@@ -162,7 +176,9 @@ impl RenderOnce for ErrorView {
                     )
                 })
                 .child(row)
-                .when(show, |d| d.child(LogView::new(format!("{}:log", a11y.id), self.details)))
+                .when(show && !self.details.is_empty(), |d| {
+                    d.child(LogView::new(format!("{}:log", a11y.id), self.details))
+                })
         };
         div()
             .id(ElementId::Name(a11y.id.clone()))
@@ -170,7 +186,7 @@ impl RenderOnce for ErrorView {
             .aria_label(a11y.label)
             .min_w(px(0.))
             .px(space::SM)
-            .py(if self.compact { px(5.) } else { space::SM })
+            .py(if compact { px(5.) } else { space::SM })
             .rounded(radius::MD)
             .border_l(px(3.))
             .border_color(t.c.danger)

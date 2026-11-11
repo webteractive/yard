@@ -38,8 +38,9 @@ fn close(env: &AppEnv, cx: &mut App) {
 fn field(env: &AppEnv, id: &str, label: &str, placeholder: &str, cx: &mut App) -> Entity<TextField> {
     let f = Nav::field(env, id, label, placeholder, cx);
     f.update(cx, |f, cx| {
-        f.in_sheet();
-        cx.notify();
+        if f.in_sheet() {
+            cx.notify();
+        }
     });
     f
 }

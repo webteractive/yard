@@ -87,9 +87,12 @@ impl TextField {
     }
 
     /// Shows it as a sheet's field: full width, with its label above it.
-    pub fn in_sheet(&mut self) {
+    /// Says whether that changed it.
+    pub fn in_sheet(&mut self) -> bool {
+        let changed = self.width.is_some() || !self.labelled;
         self.width = None;
         self.labelled = true;
+        changed
     }
 
     /// Fills its container's width, with no label above it (Settings, whose rows name it).

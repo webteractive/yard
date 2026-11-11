@@ -221,8 +221,9 @@ A wash under danger text at .15 keeps 4.5:1 for both themes' `*_text`.
   Disabled is 45% opacity, keeps `Disabled` and its description, and has no pointer cursor. A button
   sizes to its label (`flex_none`) and never stretches.
 - **Picker**: looks like a Normal button with a trailing "⌄" in `text_secondary`. Its popup is
-  anchored to the measured button bounds (no `mt(26)`), on `surface`, with `xl` radius, shadow, 24 pt
-  items, a check mark on the chosen item and `row_selected` on hover.
+  anchored to the measured button bounds (no `mt(26)`), under the button, or above it when it would
+  not fit under it, on `surface`, with `xl` radius, shadow, 24 pt items, a check mark on the chosen
+  item and `row_selected` on hover.
 - **Text field**: `control` height and `md` radius on `control_bg`, with a `control_border` that
   becomes the `focus_ring` when focused. 180 pt wide by default. Text and caret are centred on the
   `body` line, and the paint is clipped to the field's bounds (`window.with_content_mask`).
@@ -255,7 +256,8 @@ A wash under danger text at .15 keeps 4.5:1 for both themes' `*_text`.
 - **Issues strip** (the "elsewhere" errors, G6): it lives inside the scroll area, at the top of the
   content. Each error is one compact line: a danger dot, the message, a small hint button, and Dismiss
   (a small Normal button whose description is "dismisses <message>", which calls
-  `ActionErrors::clear`). With three or more errors it shows two and "N more…" to expand. An error
+  `ActionErrors::clear`). An error longer than 60 characters, or one with a hint or output, offers
+  Details, which shows it whole. With three or more errors it shows two and "N more…" to expand. An error
   still appears until it is dismissed or its action succeeds; the rule that every failure reaches the
   screen holds.
 - **Banner** (offline, config, stale): full width under the toolbar, 36 pt, wash background with a
