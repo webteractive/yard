@@ -1,8 +1,8 @@
 # Yard M4e: on-demand services (sleep when idle, wake on use) — design
 
 Status: **approved by the maintainer on 2026-10-26.** Written 2026-10-26 in a separate session (the maintainer's homedir
-session), from the yard session's account of the code at main `2472f47` (M4c in progress),
-then checked against the code at `c4e6eef` (M4c built and verified) the same day and
+session), from the yard session's account of the code at main `150caf6` (M4c in progress),
+then checked against the code at `05a042c` (M4c built and verified) the same day and
 corrected where it disagreed; corrections the code forced are marked **(code check)**. The maintainer
 answered §13's ten questions the same day, taking the yard session's recommendation on each
 (marked **(maintainer, §13)**), and approved the spec. Built on main on 2026-10-26 (§15); what the
@@ -91,7 +91,7 @@ Anti-goals (a failure even if it works):
 
 ## 3. What already scales to zero
 
-From the code at main `c4e6eef`:
+From the code at main `05a042c`:
 
 - **PHP-FPM:** one pool per PHP version, shared by every site on it, started only for
   versions a linked site uses (`php_versions(&resolution.sites)`), and each pool is
@@ -602,9 +602,9 @@ stopping process is not taken for the woken one and a wake works while a TOML do
 (§5.1). `scripts/e2e-m4e.sh` now runs the loop with real Redis, MySQL 8.0 and PostgreSQL 17
 at once and times each engine's cold start (§14).
 
-Built on main on 2026-10-26, from `8f5e06a` to the commit that adds `scripts/e2e-m4e.sh`, and
+Built on main on 2026-10-26, from `a09d6a7` to the commit that adds `scripts/e2e-m4e.sh`, and
 verified on the maintainer's machine the same day with `scripts/e2e-m1.sh` and `scripts/e2e-m4e.sh`
-passing, at `a1083ed` and again at `12babe5` after the final review's fixes. The review's
+passing, at `ffd34ee` and again at `fc68840` after the final review's fixes. The review's
 deferred minors were fixed on 2026-10-27: the ask's headers (§5.1), `run/sleeping` written
 before the stop, the idle check under one lock and a failed sleep undone (§6.2), an engine's
 connections to itself (§7) and `ServiceState`'s fallback for a state with data (§11).

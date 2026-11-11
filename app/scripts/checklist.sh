@@ -11,7 +11,7 @@
 # terminal. The scratch root is $YARD_CHECK_ROOT (default /tmp/yard-check); its nginx and dnsmasq
 # are pinned to 28080, 28443 and 28053, its instances to 28379-28381 and 28900, and its auto ports
 # come from 29000-29099. MinIO is added and removed when brew has its keg (V1, V6). O4 runs when
-# $YARD_CHECK_OLD_YARDD names a yardd built before protocol 2.11 (git 2c1ed9b) with yard-core's
+# $YARD_CHECK_OLD_YARDD names a yardd built before protocol 2.11 (git 14716f0) with yard-core's
 # HELPER_SOCKET pointed at a path that does not exist (it predates the helper guard). --keep leaves the
 # root, the daemon and the app running for a look afterwards.
 #
@@ -869,7 +869,7 @@ if [[ -n "${YARD_CHECK_OLD_YARDD:-}" ]]; then
   within 15 sh -c "! osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .subrole == \"AXApplicationAlert\" and (.name | test(\"older than this app\")))'" ||
     fail "O4 the stale banner stayed after yardd was current again"
 else
-  note "O4 skipped: set YARD_CHECK_OLD_YARDD to a yardd built from 2c1ed9b"
+  note "O4 skipped: set YARD_CHECK_OLD_YARDD to a yardd built from 14716f0"
 fi
 
 # --- M6: quitting the app leaves yardd answering ----------------------------------------------

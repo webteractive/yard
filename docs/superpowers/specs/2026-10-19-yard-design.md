@@ -1012,7 +1012,7 @@ Each milestone is usable on its own and gets its own implementation plan.
    can follow. Designed in `docs/superpowers/specs/2026-10-21-yard-tunnels-design.md` and
    planned in `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03);
    built on main on 2026-11-03 and, for a quick tunnel, verified with `scripts/e2e-m1.sh` and
-   `e2e-m5.sh` passing against yardd built from 0df393e (maintainer approved the run; its first pass
+   `e2e-m5.sh` passing against yardd built from 67057c4 (maintainer approved the run; its first pass
    found that this Mac's resolver cached the NXDOMAIN of a URL asked for before Cloudflare
    published it, so the script now resolves through 1.1.1.1). A named tunnel is the maintainer's manual
    check on his own zone.

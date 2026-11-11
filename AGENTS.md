@@ -40,13 +40,13 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   planned in `docs/superpowers/plans/2026-10-23-yard-m4b-services.md` (approved 2026-10-24).
   M4b is built on branch `m4b-services` and verified on this machine on 2026-10-24 with
   `scripts/e2e-m1.sh` and `e2e-m4b.sh` passing (maintainer approved the run; its first pass found that
-  postgres needs `LC_ALL` under launchd, fixed in 4420fb5), and merged into main on 2026-10-25.
+  postgres needs `LC_ALL` under launchd, fixed in 2f647c0), and merged into main on 2026-10-25.
   M4a.1, the managed `.yard` kept in Yard's data root (`sites/<name>/.yard`), is designed in
   `docs/superpowers/specs/2026-10-24-yard-managed-project-file-design.md` (approved
   2026-10-25) and planned in `docs/superpowers/plans/2026-10-25-yard-m4a1-managed-project-file.md`;
   it is built, merged into main and verified on this machine on 2026-10-25 with
   `scripts/e2e-m4a1.sh` passing (maintainer approved the run; its first pass found that
-  `yard unisolate` dropped the comment above a last key, fixed in 05c77dd). Until the first
+  `yard unisolate` dropped the comment above a last key, fixed in a3d41bd). Until the first
   release, work happens on main, with no feature branches (maintainer, 2026-10-25). The data root
   moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
   path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node is
@@ -58,14 +58,14 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   approved 2026-10-26; emailulator keeps its own LaunchAgent and Yard only points at it (option B,
   decided 2026-10-26: the maintainer asked Claude to decide). M4d is built on main (2026-11-01, Tasks 1–11
   committed one per task with the maintainer's approval) and verified on this machine on 2026-11-01 with
-  `scripts/e2e-m1.sh` and `e2e-m4d.sh` passing on their first run against yardd built from 09c4b81
+  `scripts/e2e-m1.sh` and `e2e-m4d.sh` passing on their first run against yardd built from e91ac55
   (maintainer approved the run); the agent kept its pid throughout. The final review's four Important
-  findings were fixed in a3413ce (emailulator's last known state is kept when it cannot be read,
+  findings were fixed in 84bb406 (emailulator's last known state is kept when it cannot be read,
   it is asked outside the reconcile lock, the scan follows a crashed or recovered agent, and a
   recorded `[emailulator]` alone no longer makes doctor speak); both scripts passed again against
-  yardd built from a3413ce the same day, so M4d is done. The review's deferred minors, the two
-  flaky tests and brew's missing disable date were fixed in 7580881, which also adds the e2e's
-  Origin check through `mail.yard`; both scripts passed again against yardd built from 7580881
+  yardd built from 84bb406 the same day, so M4d is done. The review's deferred minors, the two
+  flaky tests and brew's missing disable date were fixed in 7ea2641, which also adds the e2e's
+  Origin check through `mail.yard`; both scripts passed again against yardd built from 7ea2641
   the same day (maintainer approved the run).
   M4e, on-demand services (instances sleep when idle and wake on use), is designed in
   `docs/superpowers/specs/2026-10-26-yard-m4e-on-demand-services-design.md` (2026-10-26,
@@ -75,14 +75,14 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `docs/superpowers/plans/2026-10-26-yard-m4e-on-demand-services.md` (approved 2026-10-26). It
   is built on main (2026-10-26, before M4d) and verified on this machine on 2026-10-26 with
   `scripts/e2e-m1.sh` and `e2e-m4e.sh` passing on their first run (maintainer approved the run); a wake
-  ask while awake took 0.16 ms at p50. Both passed again on 12babe5, after the final review's
+  ask while awake took 0.16 ms at p50. Both passed again on fc68840, after the final review's
   fixes (the snapshot published outside the reconcile lock, sleep undone by the files, the hook
   only where a service may sleep). The review's deferred minors were fixed on 2026-10-27: sites
   are listed in `run/sleeping` before the stop begins, a failed sleep reconcile undoes the
   sleep, the idle check and the marking share one lock, a connection between two of an
   engine's own sockets is not a client, the wake ask forwards no client headers, and an
-  unknown `ServiceState` with data reads as `Other` (2fb79d6). `scripts/e2e-m1.sh` and `e2e-m4e.sh`
-  passed again against yardd built from 2fb79d6 on 2026-10-27 (a wake ask took 0.18 ms at p50),
+  unknown `ServiceState` with data reads as `Other` (ed7a6a2). `scripts/e2e-m1.sh` and `e2e-m4e.sh`
+  passed again against yardd built from ed7a6a2 on 2026-10-27 (a wake ask took 0.18 ms at p50),
   so M4e is done. On 2026-11-02 the maintainer asked for it to be made ready for production: closed
   connections (`TIME_WAIT`) now count as use, a sleep drains first and rechecks, asks during a
   stop wait for the new process, a held port refuses every ask (503, shim exit 1) until it is
@@ -97,7 +97,7 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `docs/superpowers/plans/2026-11-02-yard-m5-tunnels.md` (approved 2026-11-03). M5 is built
   inline on main (2026-11-03, one commit per task with the maintainer's approval); a quick tunnel is
   verified on this machine on 2026-11-03 with `scripts/e2e-m1.sh` and `e2e-m5.sh` passing
-  against yardd built from 0df393e (maintainer approved the run; its first pass found that this Mac's
+  against yardd built from 67057c4 (maintainer approved the run; its first pass found that this Mac's
   resolver cached the NXDOMAIN of a URL asked for before Cloudflare published it, so the script
   now resolves through 1.1.1.1); a named tunnel is the maintainer's manual check on his own zone (`yard
   tunnels domain add <domain>`, `yard tunnel --host <name>.<domain>`, curl it, `yard untunnel`,
@@ -323,7 +323,7 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   switches, pickers, text fields, rows, prompts, the open panel, other apps' windows, the icon's
   shape), each screen compared with the `yard` CLI and screenshotted, timings read by a 50 ms
   watcher, then a second launch on an empty root for onboarding. With `YARD_CHECK_OLD_YARDD`
-  naming a yardd built from 2c1ed9b (before protocol 2.11) it also checks the stale banner (O4);
+  naming a yardd built from 14716f0 (before protocol 2.11) it also checks the stale banner (O4);
   that yardd predates the helper guard, so build it with yard-core's `HELPER_SOCKET` pointed at a
   path that does not exist (the script refuses one that can reach the helper: the first O4 run
   repointed this Mac's resolver for a few minutes on 2026-11-06).

@@ -2,12 +2,12 @@
 
 Status: proposal of 2026-11-09, approved 2026-11-10 (the maintainer: implement the design, then the
 release); planned in `docs/superpowers/plans/2026-11-10-yard-app-visual-design.md` and built on
-2026-11-10 (45aa1b5..a3a3d27 and the commit after it), steps 1–17 of §5 and the logo of §6. Not
+2026-11-10 (5073b6f..9acb818 and the commit after it), steps 1–17 of §5 and the logo of §6. Not
 built: step 18, the blurred sidebar (it needs a look at both appearances first); "Open in…" as one
 menu on the site detail (the editor, Finder and Terminal stay three buttons); Ports' controls stay
 in its page rather than the toolbar. Several text colours moved a little to pass 4.5:1 where pills and group labels sit (§3.4). The unit tests cover the layout fixes; `checklist.sh` and
 `checklist-installs.sh` were updated for the moved controls and passed 72/72 and 14/14 on this build
-(with the review's fixes, 9e5e1c4) on 2026-11-11, run from Terminal.app (the agent's zmx shell had no
+(with the review's fixes, 4880e41) on 2026-11-11, run from Terminal.app (the agent's zmx shell had no
 Accessibility); D2 now expects one Open in Terminal per `sudo` hint, since a Mac whose helper is out
 of date shows a second. It changes how Yard.app looks and lays out,
 not what it does: every screen, action, error path, sheet key and accessibility rule in the M6 design
@@ -92,7 +92,7 @@ full-width fields and a Save row. That is acceptable; it only needs the new toke
 ## 2. Glitches
 
 Status: **seen** means it is visible in a screenshot. **Suspected** means it is read from the code
-only. Line numbers are as of a58e252.
+only. Line numbers are as of 46d8764.
 
 | # | Glitch | Evidence | Cause (file:line) |
 |---|---|---|---|
@@ -318,12 +318,12 @@ Sketches at about 900×600. `[ ]` is a button, `[x ⌄]` a picker, `(●)` a pil
 ```
 │ Overview                                      [Restart yardd] [Stop yardd…]  │
 │ ┌ Yard ──────────────────────────────────────────────────────────────────┐ │
-│ │ yardd        0.1.0 (2bedf38)                              (● running)   │ │
+│ │ yardd        0.1.0 (06fa9d4)                              (● running)   │ │
 │ │ Helper       0.1.0                                                      │ │
 │ │ Profile      standard · .yard · 8080 / 8443                             │ │
 │ │ HTTPS CA     not trusted · expires 2036-11-06                   [Trust] │ │
 │ │ Data root    /tmp/yard-check                                            │ │
-│ │ Yard.app     0.1.0 (2bedf38)                         [Set up Yard…]     │ │
+│ │ Yard.app     0.1.0 (06fa9d4)                         [Set up Yard…]     │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
 │ Units                                                                       │
 │ Unit            State          PID      Restarts                            │
