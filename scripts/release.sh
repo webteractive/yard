@@ -130,14 +130,27 @@ for manifest in Cargo.toml app/Cargo.toml; do
 done
 cargo update --workspace --offline -q
 (cd app && cargo update --workspace --offline -q -p yard-proto -p yard-core -p yard-client)
+# A published release commits its version before building, so every binary's `--version` names
+# the commit its tag points at. A run that fails before its push takes the commit back.
+if [[ "$publish" == 1 ]]; then
+  git add -- "${stamped[@]}"
+  if git diff --cached --quiet; then
+    echo "the workspaces already say $version: the tag goes on HEAD"
+  else
+    git commit -q -m "release $version"
+    committed=1
+  fi
+fi
 
 # --- build ----------------------------------------------------------------------------------
 
 cargo build --release --locked -p yard-cli -p yard-daemon -p yard-helper -p yard-shim
 app/scripts/bundle.sh --release "$repo/target/release" >/dev/null
+head_short="$(git rev-parse --short HEAD)"
 for bin in yard yardd yard-helper; do
   got="$("app/target/Yard.app/Contents/Helpers/$bin" --version 2>/dev/null | head -1 || true)"
   [[ "$got" == *"$version"* ]] || die "Helpers/$bin reports '$got', not $version"
+  [[ "$bin" == yard-helper || "$got" == *"$head_short"* ]] || die "Helpers/$bin reports '$got', not commit $head_short"
 done
 
 rm -rf "$dist"
@@ -212,13 +225,6 @@ fi
 # --- publish (§8.1 steps 7–8) -----------------------------------------------------------------
 
 tag="v$version"
-git add -- "${stamped[@]}"
-if git diff --cached --quiet; then
-  echo "the workspaces already say $version: tagging HEAD"
-else
-  git commit -q -m "release $version"
-  committed=1
-fi
 git tag -a "$tag" -m "Yard $version"
 tagged=1
 git push -q --atomic origin main "refs/tags/$tag"

@@ -178,8 +178,10 @@ ax press "Open in Terminal" @other >/dev/null
 if within 15 helper_sudo; then
   script="$(find "$tmp_dir" -maxdepth 1 -name 'yard-*.command' -newer "$report" -exec cat {} + 2>/dev/null)"
   pkill -INT -f "sudo .*--root $root helper install" || true
-  if [[ "$script" == *"'sudo' '$yard_bin' '--root' '$root' 'helper' 'install'"* ]]; then
-    pass "B3 the helper step opens Terminal, which runs sudo yard --root $root helper install (stopped at its password)"
+  # The yard is the one the app located: beside the LaunchAgent's yardd (this checkout's build, or
+  # an installed release), so only its name and the arguments are fixed.
+  if [[ "$script" =~ \'sudo\'\ \'(/[^\']*/yard)\'\ \'--root\'\ \'$root\'\ \'helper\'\ \'install\' && -x "${BASH_REMATCH[1]}" ]]; then
+    pass "B3 the helper step opens Terminal, which runs sudo ${BASH_REMATCH[1]} --root $root helper install (stopped at its password)"
   else
     fail "B3 the command file" "$script"
   fi
@@ -236,7 +238,11 @@ ax tab Activity >/dev/null
 if within 10 job_phase "waiting for Install PHP 7.1"; then
   shot activity-waiting
   ax press "Cancel Install PHP 7.2" >/dev/null
-  if within 10 job_phase cancelled && within 40 php_installed 7.1 && ! php_installed 7.2; then
+  p2_why=""
+  within 10 job_phase cancelled || p2_why="no card reads cancelled"
+  [[ -n "$p2_why" ]] || within 40 php_installed 7.1 || p2_why="PHP 7.1 is not installed 40 s on"
+  [[ -n "$p2_why" ]] || ! php_installed 7.2 || p2_why="PHP 7.2 was installed although cancelled"
+  if [[ -z "$p2_why" ]]; then
     # brew's output in the second card, read through the AX API as VoiceOver reads it: System
     # Events gives a repeated structure's later cards the first card's text (axdump.swift).
     if swift "$app_dir/scripts/axdump.swift" "$app_pid" | grep -q "fake brew install shivammathur/php/php@7.1"; then
@@ -245,7 +251,7 @@ if within 10 job_phase "waiting for Install PHP 7.1"; then
       fail "P2 7.1's card has no brew output for assistive technology" "$(swift "$app_dir/scripts/axdump.swift" "$app_pid" | grep -i 'fake brew' | head -3)"
     fi
   else
-    fail "P2 cancel or install" "$(texts | tr '\n' '|')"
+    fail "P2 cancel or install" "$p2_why: $(texts | tr '\n' '|')"
   fi
 else
   fail "P2 no install waiting behind the first" "$(texts | tr '\n' '|') $(alerts)"

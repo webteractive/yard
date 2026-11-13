@@ -21,14 +21,20 @@ use yard_proto::{ErrorCode, Event, JobStarted, YardError};
 const TAIL: usize = 20;
 
 type Work = Pin<Box<dyn Future<Output = ()> + Send>>;
-/// Jobs queued or running, oldest first, each with the switch that cancels it.
-type Pending = Arc<Mutex<Vec<(String, watch::Sender<bool>)>>>;
-
 pub struct Jobs {
     bus: EventBus,
     next: AtomicU64,
     queue: mpsc::UnboundedSender<Work>,
-    pending: Pending,
+    /// Jobs queued or running, oldest first.
+    pending: Arc<Mutex<Vec<Pending>>>,
+}
+
+/// A queued or running job: the switch that cancels it, and whether its work has begun. One
+/// cancelled before it begins leaves the queue at once; the worker then skips it.
+struct Pending {
+    id: String,
+    cancel: watch::Sender<bool>,
+    started: bool,
 }
 
 /// How long a cancelled command gets to exit after SIGTERM before its group is killed.
@@ -67,8 +73,8 @@ impl Jobs {
         };
         let ahead = {
             let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
-            let ahead = pending.last().map(|(id, _)| id.clone());
-            pending.push((job_id.clone(), cancel));
+            let ahead = pending.last().map(|p| p.id.clone());
+            pending.push(Pending { id: job_id.clone(), cancel, started: false });
             ahead
         };
         if let Some(ahead) = ahead {
@@ -77,9 +83,16 @@ impl Jobs {
         let (bus, pending) = (self.bus.clone(), self.pending.clone());
         let id = job_id.clone();
         let job: Work = Box::pin(async move {
-            // Cancelled while it waited: it never starts.
-            let error = if *ctx.cancel.borrow() { Some(cancelled(&id)) } else { work(ctx).await.err() };
-            pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != id);
+            // Cancelled while it waited: it already finished, and never starts.
+            {
+                let mut queued = pending.lock().unwrap_or_else(|p| p.into_inner());
+                match queued.iter_mut().find(|p| p.id == id) {
+                    Some(p) => p.started = true,
+                    None => return,
+                }
+            }
+            let error = work(ctx).await.err();
+            pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|p| p.id != id);
             let result = match error {
                 None => result.lock().unwrap_or_else(|p| p.into_inner()).take(),
                 Some(_) => None,
@@ -88,25 +101,29 @@ impl Jobs {
         });
         if self.queue.send(job).is_err() {
             // The worker is gone only when the runtime is shutting down.
-            self.pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|(j, _)| *j != job_id);
+            self.pending.lock().unwrap_or_else(|p| p.into_inner()).retain(|p| p.id != job_id);
             let error = Some(YardError::internal("yardd is shutting down"));
             self.bus.emit(Event::JobFinished { job_id: job_id.clone(), error, result: None });
         }
         JobStarted { job_id }
     }
 
-    /// Cancels a queued or running job. A queued one finishes `JOB_CANCELLED` without
-    /// running; a running one has its command's process group stopped, and finishes
-    /// `JOB_CANCELLED` once its work has cleaned up after itself.
+    /// Cancels a queued or running job. A queued one finishes `JOB_CANCELLED` at once, without
+    /// waiting for the jobs ahead of it, and never runs; a running one has its command's process
+    /// group stopped, and finishes `JOB_CANCELLED` once its work has cleaned up after itself.
     pub fn cancel(&self, job_id: &str) -> Result<(), YardError> {
-        let pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
-        match pending.iter().find(|(id, _)| id == job_id) {
-            Some((_, cancel)) => {
-                cancel.send_replace(true);
-                Ok(())
-            }
-            None => Err(YardError::new(ErrorCode::JobNotFound, format!("no queued or running job {job_id}"))),
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(at) = pending.iter().position(|p| p.id == job_id) else {
+            return Err(YardError::new(ErrorCode::JobNotFound, format!("no queued or running job {job_id}")));
+        };
+        pending[at].cancel.send_replace(true);
+        if !pending[at].started {
+            pending.remove(at);
+            drop(pending);
+            let error = Some(cancelled(job_id));
+            self.bus.emit(Event::JobFinished { job_id: job_id.to_string(), error, result: None });
         }
+        Ok(())
     }
 }
 

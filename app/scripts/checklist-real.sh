@@ -139,8 +139,10 @@ want="$(y status --json | jq -r '"\(.version.daemon) (\(.version.commit))"')"
 got="$(fact yardd)"
 if [[ "$got" == "$want" ]]; then pass "O1 the Overview shows the real yardd's version and commit ($got)"; else fail "O1 yardd" "app $got, yard status $want"; fi
 got="$(fact Yard.app)"
-app_commit="$(git -C "$repo" rev-parse --short HEAD)"
-if [[ "$got" == *"($app_commit)" ]]; then pass "O1 and Yard.app's ($got)"; else fail "O1 Yard.app" "app $got, HEAD $app_commit"; fi
+# The app ships with the yard beside it (a release's bundle, or this checkout's builds), so they
+# name one commit; HEAD can be newer (a release's own commit, work since the build).
+app_commit="$(y version --json | jq -r .commit)"
+if [[ "$got" == *"($app_commit)" ]]; then pass "O1 and Yard.app's ($got)"; else fail "O1 Yard.app" "app $got, yard $app_commit"; fi
 readable "A1 the Overview's facts are readable text" "yardd" "helper" "CA" "Data root" "$real"
 
 # --- R1: the Ports table ----------------------------------------------------------------------

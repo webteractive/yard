@@ -332,8 +332,9 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   SHA-1 (`YARD_SIGN_IDENTITY` overrides), notarizes through the `notary` keychain profile, staples,
   and writes `dist/X.Y.Z/` (zip, DMG, `SHA256SUMS`, `latest.json`). `--no-publish` and `--adhoc`
   put the version bump back; `--adhoc` seals ad hoc, skips Apple, and names every file `-adhoc`.
-  Without either flag it then publishes: commits the version (or tags HEAD when the workspaces
-  already say it), tags `vX.Y.Z`, pushes, creates the GitHub release, writes `Casks/yard.rb` in the
+  Without either flag it commits the version before building (so every binary's `--version`
+  names the commit its tag points at; when the workspaces already say it, the tag goes on HEAD),
+  and after the build and notarization it publishes: tags `vX.Y.Z`, pushes, creates the GitHub release, writes `Casks/yard.rb` in the
   tap, installs the release through the tag's `install.sh` and checks `yard --version`; its
   preflight refuses while either repo is private or git cannot reach them over SSH, or
   `.release-scrub-words` is missing. A publishing run that fails before its push takes back its

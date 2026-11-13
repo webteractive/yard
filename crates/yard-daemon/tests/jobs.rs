@@ -184,11 +184,11 @@ async fn a_cancelled_queued_job_never_runs() {
         Ok(())
     });
     jobs.cancel(&second.job_id).unwrap();
-    // Jobs finish in queue order, so the first's result comes first.
-    assert_eq!(outcome(&mut rx, &first.job_id).await.1, None, "the first ran on");
+    // The cancelled job finishes at once, while the first still runs.
     let (lines, error) = outcome(&mut rx, &second.job_id).await;
     assert_eq!(error.map(|e| e.code), Some(ErrorCode::JobCancelled));
     assert!(!lines.iter().any(|l| l == "b starts"), "{lines:?}");
+    assert_eq!(outcome(&mut rx, &first.job_id).await.1, None, "the first ran on");
 }
 
 #[tokio::test]
@@ -234,4 +234,34 @@ async fn a_job_result_rides_job_finished() {
         Err(YardError::internal("it broke after setting a result"))
     });
     assert_eq!(finished_result(&mut rx, &failed.job_id).await, None);
+}
+
+#[tokio::test]
+async fn a_queued_job_finishes_cancelled_at_once_not_when_the_one_ahead_ends() {
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    let (release, held) = tokio::sync::oneshot::channel::<()>();
+    let first = jobs.start("a", |_job: JobCtx| async move {
+        let _ = held.await;
+        Ok(())
+    });
+    let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ran_in_job = ran.clone();
+    let second = jobs.start("b", move |_job: JobCtx| async move {
+        ran_in_job.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    });
+
+    jobs.cancel(&second.job_id).unwrap();
+
+    // `a` still holds the queue; the cancelled `b` must not wait for it.
+    let (_, error) = outcome(&mut rx, &second.job_id).await;
+    assert_eq!(error.map(|e| e.code), Some(ErrorCode::JobCancelled));
+    release.send(()).unwrap();
+    let (_, error) = outcome(&mut rx, &first.job_id).await;
+    assert_eq!(error, None);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "a cancelled job never runs");
+    assert!(jobs.cancel(&second.job_id).is_err(), "it is no longer queued");
 }

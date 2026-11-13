@@ -327,10 +327,15 @@ function iconShape() {
   };
   const bg = at(-w / 2 + 1, -h / 2 + 1);
   const apart = (p) => Math.abs(p[0] - bg[0]) + Math.abs(p[1] - bg[1]) + Math.abs(p[2] - bg[2]);
-  const on = (dx, dy) => apart(at(dx, dy)) > 1.5;
-  const body = apart(at(-5.25, 0.25));
-  if (body > 0.3 && body <= 1.5) return "offline";
-  if (body <= 0.3) return "none";
+  // A template image is drawn in the menu bar's text colour, white or black, whichever stands out
+  // from the bar. Over a translucent bar that is far less than the full 3 apart, so each point is
+  // read as a share of that contrast: about 1 drawn, about .38 offline, about 0 not drawn.
+  const full = Math.max(apart([1, 1, 1]), apart([0, 0, 0]));
+  const share = (dx, dy) => apart(at(dx, dy)) / full;
+  const on = (dx, dy) => share(dx, dy) > 0.6;
+  const body = share(-5.25, 0.25);
+  if (body > 0.15 && body <= 0.6) return "offline";
+  if (body <= 0.15) return "none";
   if (on(3.25, 3.25)) return "ok";
   if (!on(5.25, 5.25)) return "busy";
   return on(3.25, 7.75) ? "warning" : "error";

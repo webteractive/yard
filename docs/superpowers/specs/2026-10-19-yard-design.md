@@ -615,8 +615,10 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
   `waiting for <job_id>`. Brew jobs run with `HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1`,
   and pecl as §4.3 says. A client subscribes to `jobs` before it calls.
 - `jobs.cancel { job_id }` (decided 2026-10-20: cancel, no timeout, since a brew build
-  can rightly take half an hour). A queued job finishes `JOB_CANCELLED` without
-  running. A running job's command, started in its own process group, gets SIGTERM
+  can rightly take half an hour). A queued job finishes `JOB_CANCELLED` at once,
+  without waiting for the jobs ahead of it, and never runs (before 2026-11-13 its
+  `job_finished` came only once the job ahead ended, so a cancelled install kept showing
+  "waiting"). A running job's command, started in its own process group, gets SIGTERM
   and, after 10 s, SIGKILL; the job then cleans up as on a failure (`ext add` rolls
   back) and finishes `JOB_CANCELLED`. An unknown or finished id is `JOB_NOT_FOUND`.
   In the CLI, Ctrl-C during a job cancels it and waits; a second Ctrl-C stops waiting

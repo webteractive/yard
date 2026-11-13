@@ -625,9 +625,10 @@ fi
 ax type "php.ini key" memory_limit >/dev/null
 ax type Value 321M >/dev/null
 ax press Set >/dev/null
-if within 10 sh -c "'$yard_bin' --root '$root' php config get memory_limit --php 8.4 2>/dev/null | grep -q 321M"; then
+# Set and Unset run yard and reload 8.4's pool, which a busy Mac can take well over 10 s to do.
+if within 30 sh -c "'$yard_bin' --root '$root' php config get memory_limit --php 8.4 2>/dev/null | grep -q 321M"; then
   ax press Unset >/dev/null
-  if within 10 sh -c "! '$yard_bin' --root '$root' php config get memory_limit --php 8.4 2>/dev/null | grep -q 321M"; then
+  if within 30 sh -c "! '$yard_bin' --root '$root' php config get memory_limit --php 8.4 2>/dev/null | grep -q 321M"; then
     pass "P5 Set writes memory_limit = 321M to 8.4's overrides, and Unset removes it"
   else fail "P5 unset" "$(y php config get memory_limit --php 8.4 2>&1)"; fi
 else
