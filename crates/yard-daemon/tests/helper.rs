@@ -123,6 +123,20 @@ async fn ports_bind_hands_over_loopback_listeners() {
 }
 
 #[tokio::test]
+async fn ports_bind_sockets_are_non_blocking_as_nginx_expects() {
+    let (_fx, _resolver, helper, port) = helper_for_one_port().await;
+
+    // nginx takes inherited listeners as they are. A blocking one leaves the workers that lose
+    // a race for a connection stuck in accept(2), deaf to the graceful quit, and orphaned
+    // holding 80 and 443 once the master is killed.
+    for fd in helper.bind_port(port).await.unwrap() {
+        // SAFETY: F_GETFL on a descriptor this test owns.
+        let flags = unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&fd), libc::F_GETFL) };
+        assert!(flags & libc::O_NONBLOCK != 0, "socket {fd:?} is blocking");
+    }
+}
+
+#[tokio::test]
 async fn ports_bind_refuses_unlisted_ports() {
     let (_fx, _resolver, helper, _port) = helper_for_one_port().await;
     let other = free_port();

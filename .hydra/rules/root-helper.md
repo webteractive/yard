@@ -26,7 +26,9 @@ triggers:
   backlog 511) and sends the two listening sockets with its answer as `SCM_RIGHTS`
   (`yard_helper::fdpass`; `BindResult.addresses` names them in order). yardd reads them
   with `HelperClient::bind_port`, marks each close-on-exec as it arrives (macOS has no
-  `MSG_CMSG_CLOEXEC`), and holds them in `PrivilegedSockets`. A held port is
+  `MSG_CMSG_CLOEXEC`) and non-blocking (nginx uses inherited listeners as they come: on a
+  blocking one, workers that lose a race for a connection sit in `accept(2)`, miss the graceful
+  quit and outlive their master holding 80 and 443), and holds them in `PrivilegedSockets`. A held port is
   `PORT_IN_USE` with `data.port`.
 - **The data root must be safe for root to read.** `root_dir::check` requires an
   absolute root and resolves it one component at a time, as written (nginx gets that

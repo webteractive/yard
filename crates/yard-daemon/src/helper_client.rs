@@ -121,6 +121,23 @@ impl HelperClient {
                     fds.len()
                 )));
             }
+            // nginx takes inherited listeners as they come and expects them non-blocking: on a
+            // blocking one, the workers that lose the race for a connection sit in accept(2),
+            // miss the graceful quit and outlive their master, holding the port. The flag
+            // belongs to the socket, so every copy nginx inherits has it.
+            for fd in &fds {
+                // SAFETY: fcntl on a descriptor this process just received and owns.
+                let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+                // SAFETY: as above.
+                if flags < 0
+                    || unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+                {
+                    return Err(YardError::internal(format!(
+                        "cannot make the helper's socket non-blocking: {}",
+                        std::io::Error::last_os_error()
+                    )));
+                }
+            }
             Ok(fds)
         };
         tokio::task::spawn_blocking(exchange).await.map_err(YardError::internal)?
