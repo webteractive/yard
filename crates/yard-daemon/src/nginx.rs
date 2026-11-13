@@ -3,6 +3,7 @@
 //! with SIGHUP.
 
 use std::ffi::OsString;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -80,12 +81,27 @@ impl NginxCommand {
     }
 
     /// `nginx -t`: `Ok(Err(..))` when nginx rejects the config, `Err` when it cannot run.
-    /// The test parses and opens files but binds nothing, so it needs no sockets.
-    pub async fn test(&self) -> Result<Result<(), String>, YardError> {
+    /// The test binds what the config listens on, as nginx itself does, so in the privileged
+    /// profile it inherits the helper's sockets (`inherit`) exactly as the nginx unit does:
+    /// as the user it cannot bind 80 or 443 on loopback.
+    pub async fn test(&self, inherit: &[OwnedFd]) -> Result<Result<(), String>, YardError> {
         let mut cmd = Command::new(&self.bin);
         cmd.args(self.args()).arg("-t").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-        // SAFETY: the hook makes only async-signal-safe calls.
-        unsafe { cmd.pre_exec(crate::fds::cloexec_inherited) };
+        let keep: Vec<RawFd> = inherit.iter().map(AsRawFd::as_raw_fd).collect();
+        if !keep.is_empty() {
+            cmd.env("NGINX", keep.iter().map(|fd| format!("{fd};")).collect::<String>());
+        }
+        // SAFETY: the hook makes only async-signal-safe calls: fcntl on descriptors this
+        // process owns, from a Vec allocated before the fork.
+        unsafe {
+            cmd.pre_exec(move || {
+                crate::fds::cloexec_inherited()?;
+                for fd in &keep {
+                    libc::fcntl(*fd, libc::F_SETFD, 0);
+                }
+                Ok(())
+            })
+        };
         crate::fds::settle_before_fork();
         let mut child = cmd.spawn().map_err(|e| {
             YardError::new(ErrorCode::FormulaMissing, format!("cannot run {}: {e}", self.bin.display()))

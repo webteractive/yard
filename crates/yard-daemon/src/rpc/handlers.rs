@@ -501,11 +501,8 @@ async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
     let nginx_running =
         ctx.supervisor().list().iter().any(|u| u.name == "nginx" && u.state == UnitState::Running);
     let current = Registry::load(&ctx.paths)?;
-    let own: BTreeSet<u16> = [NGINX_HTTP, NGINX_HTTPS]
-        .iter()
-        .filter(|_| nginx_running)
-        .filter_map(|unit| current.entries.get(*unit).map(|e| e.port))
-        .collect();
+    let served = ctx.reconciler.snapshot().await.map(|s| s.registry);
+    let own = own_nginx_ports(served.as_ref(), &current, nginx_running);
     let free = tokio::task::spawn_blocking(move || {
         [profile.http_port(), profile.https_port()]
             .into_iter()
@@ -528,6 +525,18 @@ async fn profile(ctx: &Context, profile: Profile) -> Result<(), YardError> {
         }
         result => result,
     }
+}
+
+/// The ports a running nginx holds: those of the last config it accepted (`served`), which
+/// differ from the file when a later change was saved but rejected. Before any good state, the
+/// file's.
+fn own_nginx_ports(served: Option<&Registry>, current: &Registry, nginx_running: bool) -> BTreeSet<u16> {
+    let registry = served.unwrap_or(current);
+    [NGINX_HTTP, NGINX_HTTPS]
+        .iter()
+        .filter(|_| nginx_running)
+        .filter_map(|unit| registry.entries.get(*unit).map(|e| e.port))
+        .collect()
 }
 
 /// Adds who holds each refused port (`data.ports`) to the message and to `data.holders`,
@@ -555,6 +564,28 @@ mod tests {
     use super::*;
     use serde_json::json;
     use yard_proto::{Holder, HolderKind};
+
+    fn registry(text: &str) -> Registry {
+        Registry::parse(Some(text), Path::new("ports.toml")).unwrap()
+    }
+
+    #[test]
+    fn nginx_holds_the_ports_of_the_config_it_serves_not_of_the_file() {
+        // A switch to privileged that nginx rejected is saved, while nginx keeps serving the
+        // last config it accepted, on 8080 and 8443: switching back must count those as free.
+        let served = registry("profile = \"standard\"\n");
+        let saved = registry("profile = \"privileged\"\n");
+
+        let own = own_nginx_ports(Some(&served), &saved, true);
+
+        assert_eq!(own, BTreeSet::from([8080, 8443]));
+        assert!(own_nginx_ports(Some(&served), &saved, false).is_empty(), "a stopped nginx holds nothing");
+        assert_eq!(
+            own_nginx_ports(None, &saved, true),
+            BTreeSet::from([80, 443]),
+            "no good state yet: the file"
+        );
+    }
 
     #[test]
     fn profile_refusal_names_each_holder() {

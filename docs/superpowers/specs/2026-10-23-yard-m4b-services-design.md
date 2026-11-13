@@ -164,7 +164,9 @@ when brew has it, else the plain formula when its version has that major.minor. 
 resolves it with `brew info --json=v2`, which also lists the lines brew has; a line brew
 does not have is `SERVICE_VERSION_UNSUPPORTED`, listing the ones it has. A deprecated
 formula (`mysql@8.0`, `postgresql@14`) installs with a warning naming brew's disable date
-**(builder's call)**; a formula brew has already disabled is not offered as a line. `add`
+**(builder's call)**; a formula brew has already disabled is not offered as a line. Deprecated means
+brew's `deprecated` is true: brew 7 sets `deprecation_date` years ahead (`mysql@8.4`: 2032) and
+marks the formula deprecated only once it passes, so a date alone is not a warning (2026-11-13). `add`
 asks brew once per formula, and a winning formula brew lists but cannot describe is
 `FORMULA_MISSING` (`brew could not describe <formula>`), not a missing line.
 
@@ -641,7 +643,11 @@ except `service:<i>` and `service-data:<i>`, which say `ok` for a healthy instan
   (`opt/<formula>`'s Cellar version, `9.7.1_1` being line `9.7`) is on a different line than the
   instance's name (§5), hint `yard service add mysql --version 8.4`, a line that does not move.
 - `service-deprecated:<i>`: `warn` for an instance whose formula brew has deprecated (with its
-  disable date) or disabled. One `brew info --json=v2` names the instances' formulae, leaving out
+  disable date) or disabled; a deprecation brew has only scheduled says nothing. Its hint is
+  `yard service add <engine> --version <line>` for the engine's default line, else the line brew's
+  plain formula is on, whichever brew has current and the instance is not already on (a second
+  `brew info` for `<base>@<default>` and `<base>`, made only when such an instance exists; a failure
+  costs only the hint), else `brew info <formula>`. One `brew info --json=v2` names the instances' formulae, leaving out
   any brew would refuse: real brew 6 fails the whole call over one formula from an untrusted tap, and
   `info <tap>/<formula>` may tap a tap, which a read-only doctor must not do. So a formula is named only
   when it is homebrew/core's, or its tap is already tapped and trusted (or brew predates trust); when trust

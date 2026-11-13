@@ -89,7 +89,9 @@ nginx_user="$(ps -o user= -p "$nginx_pid" | tr -d ' ')"
 pass "nginx (pid $nginx_pid) runs as $USER"
 
 # 6. Switching to the privileged profile is refused while something holds 80 or 443, naming
-# Herd when it is Herd. With both free the switch would go through, so it is not tried.
+# Herd when it is Herd. With both free it goes through: hello-php answers on 80, and the
+# switch back to standard (nginx still holding 8080 and 8443 until it moves) serves it on 8080
+# again. Both run nginx -t on the helper's sockets, which nginx cannot bind itself.
 if [[ $herd == yes ]] || lsof -nP -iTCP:80 -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1; then
   set +e
   refusal="$("$yard" ports profile privileged 2>&1 >/dev/null)"
@@ -99,7 +101,18 @@ if [[ $herd == yes ]] || lsof -nP -iTCP:80 -iTCP:443 -sTCP:LISTEN >/dev/null 2>&
   [[ $herd == no || $refusal == *Herd* ]] || fail "the refusal does not name Herd: $refusal"
   pass "yard ports profile privileged is refused: $refusal"
 else
-  pass "skip: nothing holds 80 or 443, so the privileged profile is not tried"
+  # Back to standard whatever happens below, so the run never leaves this Mac on 80/443.
+  trap '"$yard" ports profile standard >/dev/null 2>&1 || true; cleanup' EXIT
+  "$yard" ports profile privileged >/dev/null || fail "yard ports profile privileged failed with 80 and 443 free"
+  body="$(answer "http://hello-php.yard/" "8.4.*")"
+  [[ $body == 8.4.* ]] || fail "hello-php did not answer on 80 in the privileged profile: '$body'"
+  pass "the privileged profile serves http://hello-php.yard/ on 80"
+  "$yard" ports profile standard >/dev/null || fail "yard ports profile standard failed after privileged"
+  body="$(answer "http://hello-php.yard:8080/" "8.4.*")"
+  [[ $body == 8.4.* ]] || fail "hello-php did not answer on 8080 after switching back: '$body'"
+  lsof -nP -iTCP:80 -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1 && fail "80 or 443 is still held after switching back"
+  trap cleanup EXIT
+  pass "switching back to standard serves on 8080 and lets go of 80 and 443"
 fi
 
 # 7. Doctor has no failing check.

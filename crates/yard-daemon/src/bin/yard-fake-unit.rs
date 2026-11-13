@@ -19,7 +19,7 @@ fn main() -> ExitCode {
         stop_slowly(Path::new(&argv0));
     }
     match name {
-        Some("nginx") => nginx(&args),
+        Some("nginx") => nginx(Path::new(&argv0), &args),
         Some("dnsmasq") => dnsmasq(&args),
         Some("php-fpm") => php_fpm(Path::new(&argv0), &args),
         Some("brew") => brew(Path::new(&argv0), &args),
@@ -344,12 +344,32 @@ fn mode(args: &[String]) -> ExitCode {
 /// `-p <prefix> -c <conf> [-e <log>] [-t]`. Runs in the foreground, as Yard's
 /// `daemon off;` asks. With `NGINX="fd;…"` it serves on every inherited socket, as nginx
 /// does, and logs the line real nginx logs; otherwise it listens on the conf's first
-/// `listen 127.0.0.1:N`.
-fn nginx(args: &[String]) -> ExitCode {
+/// `listen 127.0.0.1:N`. `-t` binds what the conf listens on, as real nginx's does: a port
+/// in `<brew prefix>/fake-root-ports` stands for 80 or 443, which only root can bind on
+/// macOS, so without inherited sockets the test fails as nginx's does.
+fn nginx(argv0: &Path, args: &[String]) -> ExitCode {
     let (Some(prefix), Some(conf)) = (flag(args, "-p"), flag(args, "-c")) else {
         return fail("nginx needs -p and -c".into());
     };
     if args.iter().any(|a| a == "-t") {
+        let brew = argv0.ancestors().nth(4).unwrap_or(Path::new("/"));
+        let root_only: Vec<u16> = std::fs::read_to_string(brew.join("fake-root-ports"))
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        let inherited = std::env::var("NGINX").is_ok_and(|v| !v.is_empty());
+        let text = std::fs::read_to_string(conf).unwrap_or_default();
+        let denied = text.lines().find_map(|l| {
+            let rest = l.trim().strip_prefix("listen 127.0.0.1:")?;
+            let port: u16 = rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+            root_only.contains(&port).then_some(port)
+        });
+        if let (Some(port), false) = (denied, inherited) {
+            eprintln!("nginx: [emerg] bind() to 127.0.0.1:{port} failed (13: Permission denied)");
+            eprintln!("nginx: configuration file {conf} test failed");
+            return ExitCode::from(1);
+        }
         if let Some(bad) = find_broken(Path::new(prefix)) {
             eprintln!("nginx: [emerg] yard-test-broken in {}", bad.display());
             eprintln!("nginx: configuration file {conf} test failed");

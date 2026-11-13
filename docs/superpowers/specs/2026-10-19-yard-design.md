@@ -714,11 +714,15 @@ ends; nginx owns `nginx-tunnel-*`.
 (nginx on 80/443, opt-in) are named sets of pinned values; `yard ports profile
 <name>` switches them. Only `privileged` uses root: `yardd` asks the helper's
 `ports.bind` for the two sockets when it first needs them, holds them while the
-profile stays `privileged` (every nginx start inherits them; `nginx -t` binds
-nothing, so it needs none), and closes them when it switches back, when it stops,
+profile stays `privileged` (every nginx start inherits them, and so does every `nginx -t`,
+which binds what the config listens on just as nginx does: corrected 2026-11-13, when a switch to
+`privileged` was found failing every time with `bind() to 127.0.0.1:80 failed (13: Permission
+denied)`), and closes them when it switches back, when it stops,
 and while nginx is `failed`, so a connection is refused rather than left waiting and
 something else may take the port (§3.1). The switch itself is refused unless the
-helper is installed and hands the sockets over. Neither
+helper is installed and hands the sockets over. The ports nginx already holds count as free for
+a switch, judged by the last config nginx accepted, not by `ports.toml`, which may hold a later
+change nginx rejected. Neither
 profile sets the TLD (§5.3). M1's `trial` and `default` are read as `standard`
 and `privileged`.
 

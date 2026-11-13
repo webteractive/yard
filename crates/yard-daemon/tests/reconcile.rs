@@ -431,12 +431,14 @@ async fn tld_with_a_foreign_resolver_is_refused_and_the_old_tld_serves() {
     e.sup.shutdown().await;
 }
 
-/// Two free ports stand in for 80 and 443: the helper may bind them, and ports.toml puts
-/// the privileged profile on them.
+/// Two free ports stand in for 80 and 443: the helper may bind them, ports.toml puts the
+/// privileged profile on them, and the fake nginx, like real nginx as the user, cannot bind
+/// them itself (`fake-root-ports`), not even for `nginx -t`.
 async fn privileged_env() -> (Env, u16) {
     let fx = Fixture::new();
     let resolver = tempfile::tempdir().unwrap();
     let (http, https) = (free_port(), free_port());
+    std::fs::write(fx.brew.path().join("fake-root-ports"), format!("{http} {https}\n")).unwrap();
     let helper = spawn_helper(&fx, resolver.path(), &[http, https]).await;
     let e = env_with(fx, resolver, helper);
     let ports = format!("profile = \"privileged\"\n{}", support::ports_toml(http, https, free_port()));
@@ -453,6 +455,19 @@ async fn privileged_profile_serves_on_helper_sockets() {
     let inherited = || support::inherited_starts(&e.fx.paths) == 1;
     assert!(support::wait_until(inherited, Duration::from_secs(5)).await, "nginx took the helper's sockets");
     assert!(support::served(http), "nginx serves on the socket it inherited");
+    e.sup.shutdown().await;
+}
+
+#[tokio::test]
+async fn testing_nginx_in_the_privileged_profile_uses_the_helper_sockets() {
+    let (e, _http) = privileged_env().await;
+    e.site("blog");
+    e.rec.reconcile().await.unwrap();
+    e.unit("nginx", running).await;
+
+    // What `yard restart nginx` and a hand-edited override run before touching nginx.
+    let tested = e.rec.test_nginx().await.unwrap();
+    assert!(tested.is_ok(), "nginx -t got the sockets it cannot bind itself: {tested:?}");
     e.sup.shutdown().await;
 }
 

@@ -31,6 +31,10 @@ triggers:
   holder and a `port.conflict` event. A missing or M1-era helper fails nginx without
   retrying, and `ports.profile privileged` refuses up front unless the helper answers
   and hands over both sockets. A unit entering `Failed` releases its privileged ports.
+  `nginx -t` binds too, so in the privileged profile every test (reconcile, `units.restart`,
+  an override edit) inherits the same sockets; sockets yardd cannot have skip the test, and
+  the nginx unit reports why. The fake nginx's `-t` refuses the ports in
+  `<brew prefix>/fake-root-ports` without inherited sockets, as real nginx does as the user.
 - Before the first nginx start, `NginxCommand::stop_orphan` stops the master in
   `run/nginx.pid` if it is brew's nginx and launchd is its parent (a yardd that was
   killed left it running); it would otherwise hold the port the new nginx needs.

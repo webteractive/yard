@@ -244,7 +244,11 @@ impl Reconciler {
     /// not. Nothing is rendered, so nothing is rolled back; nginx keeps the old config.
     pub async fn apply_overrides(&self) -> Result<(), YardError> {
         let mut state = self.state.lock().await;
-        self.test_nginx().await?.inspect_err(|e| state.last_error = Some(e.clone()))?;
+        let ports = inherited_ports(state.snapshot.as_ref());
+        self.nginx_test(&ports)
+            .await?
+            .map_err(|o| nginx_rejected(&o, false))
+            .inspect_err(|e| state.last_error = Some(e.clone()))?;
         if state.last_error.as_ref().is_some_and(|e| e.code == ErrorCode::NginxConfigInvalid) {
             state.last_error = None;
         }
@@ -340,7 +344,21 @@ impl Reconciler {
 
     /// `Ok(Err(..))` when nginx rejects the config; `Err` when the test could not run.
     pub async fn test_nginx(&self) -> Result<Result<(), YardError>, YardError> {
-        Ok(self.nginx.test().await?.map_err(|output| nginx_rejected(&output, false)))
+        let ports = inherited_ports(self.state.lock().await.snapshot.as_ref());
+        Ok(self.nginx_test(&ports).await?.map_err(|output| nginx_rejected(&output, false)))
+    }
+
+    /// `nginx -t` with the privileged sockets for `inherit` (none in the standard profile).
+    /// Sockets yardd cannot have skip the test: nginx could not start either, and its unit
+    /// says why (`PORT_IN_USE`, the helper's refusal).
+    async fn nginx_test(&self, inherit: &[u16]) -> Result<Result<(), String>, YardError> {
+        if inherit.is_empty() {
+            return self.nginx.test(&[]).await;
+        }
+        match self.supervisor.sockets().get(inherit).await {
+            Ok(fds) => self.nginx.test(&fds).await,
+            Err(_) => Ok(Ok(())),
+        }
     }
 
     /// Serialized: a second call waits for the first to finish.
@@ -605,8 +623,10 @@ impl Reconciler {
         let changed: BTreeSet<PathBuf> = applied.changed().map(Path::to_path_buf).collect();
         let nginx_changed =
             state.nginx_reload_pending || changed.iter().any(|p| p.starts_with(paths.nginx_dir()));
+        let privileged = profile == Profile::Privileged;
+        let inherit = if privileged { vec![http, https] } else { vec![] };
         if nginx_changed || state.snapshot.is_none() {
-            match self.nginx.test().await {
+            match self.nginx_test(&inherit).await {
                 Ok(Err(output)) => {
                     generated::rollback(&applied, &mut hashes).map_err(io_error)?;
                     return Err(nginx_rejected(&output, true));
@@ -626,8 +646,6 @@ impl Reconciler {
         // 8. Apply units; restart the ones whose files changed and reload nginx. In the
         // privileged profile nginx inherits the helper's sockets, whose bind is the probe.
         let existing: BTreeSet<String> = self.supervisor.list().into_iter().map(|u| u.name).collect();
-        let privileged = profile == Profile::Privileged;
-        let inherit = if privileged { vec![http, https] } else { vec![] };
         let mut desired = vec![
             UnitSpec {
                 name: "dnsmasq".into(),
@@ -908,6 +926,16 @@ impl Reconciler {
             .map(|(_, e)| e.port)
             .collect()
     }
+}
+
+/// The ports nginx inherits from the helper in the last good state: both nginx ports in the
+/// privileged profile, none in the standard one.
+fn inherited_ports(snapshot: Option<&Snapshot>) -> Vec<u16> {
+    let Some(s) = snapshot.filter(|s| s.registry.profile == Profile::Privileged) else { return vec![] };
+    [NGINX_HTTP, NGINX_HTTPS]
+        .iter()
+        .filter_map(|unit| s.registry.entries.get(*unit).map(|e| e.port))
+        .collect()
 }
 
 /// The supervised unit behind a registry entry: nginx owns both nginx ports and each tunnel's

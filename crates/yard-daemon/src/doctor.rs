@@ -1025,19 +1025,22 @@ async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Ve
         return cannot(tail.trim().to_string());
     };
     let Ok(described) = brew_info::parse(&out) else { return cannot("its answer did not parse".into()) };
-    services
+    let describes = |f: &brew_info::Formula, name: &str| {
+        f.full_name == name || f.name == name || f.aliases.iter().any(|a| a == name)
+    };
+    // brew sets a deprecation date ahead of time and only marks the formula deprecated once it
+    // passes; until then brew itself says nothing, and neither does doctor.
+    let warned: Vec<(&String, &ServiceEntry, String)> = services
         .services
         .iter()
         .filter_map(|(instance, entry)| {
-            let f = described.iter().find(|f| {
-                f.full_name == entry.formula || f.name == entry.formula || f.aliases.contains(&entry.formula)
-            })?;
+            let f = described.iter().find(|f| describes(f, &entry.formula))?;
             let what = if f.disabled {
                 match &f.disable_date {
                     Some(date) => format!("which brew has disabled (since {date})"),
                     None => "which brew has disabled".to_string(),
                 }
-            } else if f.deprecated || f.disable_date.is_some() {
+            } else if f.deprecated {
                 match &f.disable_date {
                     Some(date) => format!("which brew has deprecated and disables on {date}"),
                     None => "which brew has deprecated, with no date set to disable it".to_string(),
@@ -1045,17 +1048,66 @@ async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Ve
             } else {
                 return None;
             };
-            let hint = match entry.engine.default_line() {
-                Some(line) => format!("yard service add {} --version {line}", entry.engine.key()),
-                None => format!("brew info {}", entry.formula),
-            };
-            Some(warn(
+            Some((instance, entry, what))
+        })
+        .collect();
+    let engines: BTreeSet<Engine> =
+        warned.iter().map(|(_, entry, _)| entry.engine).filter(|e| e.versioned()).collect();
+    let current = current_lines(brew, &engines).await;
+    warned
+        .into_iter()
+        .map(|(instance, entry, what)| {
+            let hint = replacement_line(entry, &current, &describes)
+                .map(|line| format!("yard service add {} --version {line}", entry.engine.key()))
+                .unwrap_or_else(|| format!("brew info {}", entry.formula));
+            warn(
                 &format!("service-deprecated:{instance}"),
                 format!("{instance} runs {}, {what}", entry.formula),
                 hint,
-            ))
+            )
         })
         .collect()
+}
+
+/// `brew info` for each engine's default line and plain formula (`mysql@8.4`, `mysql`), the
+/// lines a deprecated instance's hint can point at. A second call, so a brew that no longer
+/// has one of them costs only the hint: any failure is no answer.
+async fn current_lines(brew: &Brew, engines: &BTreeSet<Engine>) -> Vec<brew_info::Formula> {
+    let mut names: Vec<String> = vec![];
+    for engine in engines {
+        if let Some(line) = engine.default_line() {
+            names.push(format!("{}@{line}", engine.base_formula()));
+        }
+        names.push(engine.base_formula().to_string());
+    }
+    if names.is_empty() {
+        return vec![];
+    }
+    let mut args = vec!["info", "--json=v2"];
+    args.extend(names.iter().map(String::as_str));
+    match tokio::time::timeout(BREW_TIMEOUT, sources::brew_stdout(brew, &args)).await {
+        Ok(Ok((true, out, _))) => brew_info::parse(&out).unwrap_or_default(),
+        _ => vec![],
+    }
+}
+
+/// The line a deprecated instance moves to: the engine's default line, else the line brew's
+/// plain formula is on, whichever brew has current and the instance is not already on.
+fn replacement_line(
+    entry: &ServiceEntry,
+    current: &[brew_info::Formula],
+    describes: &dyn Fn(&brew_info::Formula, &str) -> bool,
+) -> Option<String> {
+    let engine = entry.engine;
+    let usable = |f: &brew_info::Formula| !f.deprecated && !f.disabled && !describes(f, &entry.formula);
+    let default = engine.default_line().and_then(|line| {
+        let name = format!("{}@{line}", engine.base_formula());
+        current.iter().find(|f| describes(f, &name) && usable(f)).map(|_| line.to_string())
+    });
+    default.or_else(|| {
+        let plain = current.iter().find(|f| describes(f, engine.base_formula()) && usable(f))?;
+        plain_line(engine, &plain.version)
+    })
 }
 
 // ---- Brew sources (spec M4b §8) ----

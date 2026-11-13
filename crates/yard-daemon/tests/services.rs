@@ -813,6 +813,22 @@ async fn add_unknown_line_lists_lines() {
 }
 
 #[tokio::test]
+async fn a_formula_brew_only_plans_to_deprecate_installs_without_a_warning() {
+    let d = prepared("").await;
+    let mut planned = core("mysql@8.4", "8.4.13");
+    // brew 7 sets the date ahead of time; until it passes, `deprecated` stays false.
+    planned["deprecation_date"] = json!("2032-04-30");
+    write_formulae(&d, &[planned]);
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let (lines, error) = add(&mut c, "mysql", Some("8.4")).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("deprecated")), "{lines:?}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_disabled_formula_is_not_offered() {
     let d = prepared("").await;
     let mut old = core("postgresql@13", "13.9");

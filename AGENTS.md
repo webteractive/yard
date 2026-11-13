@@ -157,8 +157,12 @@ on 2026-11-11.
   `brew trust`. All three update paths took 0.1.0 to 0.1.1 and restarted yardd with no password:
   `yard self-update` and the app's Update to 0.1.1… item here, `brew upgrade --cask yard` there. The
   maintainer then ran `sudo yard helper install` on both Macs, so each runs helper 0.1.1 and doctor
-  reports 0 failed. Left open: one `checklist-real.sh` run saw nginx rejected for binding 127.0.0.1:80 at its S4, which did
-  not recur and whose cause is unknown.
+  reports 0 failed. One `checklist-real.sh` run saw nginx rejected for binding 127.0.0.1:80 at its
+  S4: the privileged profile had been chosen in the app (not by the script), and it failed every
+  time, because `nginx -t` binds and never got the helper's sockets, while the switch back was
+  refused over the ports the running nginx held. Both were fixed on 2026-11-13, and `e2e-m1.sh` now
+  switches to privileged and back where 80 and 443 are free. Doctor no longer warns about a formula
+  brew has only scheduled to deprecate, and its hint names a current line.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -266,8 +270,9 @@ spec's milestone notes and in older rules means the maintainer's main Mac, where
 Every `scripts/e2e-*.sh` checksums Herd's `/etc/resolver/test` before and after; on a Mac
 without Herd the file must stay absent. `e2e-m1.sh` curls a Herd site and expects the
 privileged profile to be refused naming Herd only where Herd is installed (`Herd.app` or its
-resolver); without it, it skips the Herd site and tries the profile only while something
-holds 80 or 443, since with both free the switch would go through.
+resolver); without it, it skips the Herd site, and tries the profile for its refusal only
+while something holds 80 or 443. With both free it switches to privileged, curls a site on 80,
+switches back and curls it on 8080 (a trap switches back if the run fails between).
 
 ### Findings that hold on any Mac
 
@@ -393,7 +398,9 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
 - `cargo run -p yard-cli -- --root /tmp/yard-dev sites` — the CLI against that daemon.
   `doctor` and `ports check` also work with no daemon running.
 - `scripts/e2e-m1.sh` — real-machine check in the standard profile. It needs the
-  brew prerequisites and `sudo yard helper install`, so ask the maintainer first.
+  brew prerequisites and `sudo yard helper install`, so ask the maintainer first. With 80 and
+  443 free it also switches to the privileged profile and back (Machines says how); `YARD`
+  names the `yard` to check (default `target/release/yard`).
 - `scripts/e2e-m2.sh` — real-machine M2 check after `e2e-m1.sh`: brew-installs php@7.1
   and two extension formulas, and pecl-builds apcu into brew's PHP 8.4, so ask the maintainer first. Its
   cleanup removes the inis in brew's `conf.d` that its adds left for a removed extension, and it

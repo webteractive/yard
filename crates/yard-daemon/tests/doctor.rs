@@ -958,7 +958,84 @@ async fn a_deprecated_formula_warns_with_its_disable_date_from_one_brew_call() {
     assert!(!report.checks.iter().any(|c| c.id == "service-deprecated:redis"), "{report:#?}");
     let calls: Vec<String> =
         e.brew_log().lines().filter(|l| l.starts_with("info --json=v2")).map(String::from).collect();
-    assert_eq!(calls, ["info --json=v2 mysql@8.0 redis"], "one call for every instance's formula");
+    assert_eq!(
+        calls,
+        ["info --json=v2 mysql@8.0 redis", "info --json=v2 mysql@8.4 mysql"],
+        "one call for every instance's formula, and one for the lines a deprecated one's hint can name"
+    );
+}
+
+/// A homebrew/core formula as `brew info --json=v2` describes it, with its deprecation fields.
+fn dated(name: &str, version: &str, deprecated: bool, deprecation_date: Option<&str>) -> Value {
+    json!({
+        "name": name, "full_name": name, "tap": "homebrew/core", "versions": {"stable": version},
+        "deprecated": deprecated, "deprecation_date": deprecation_date, "disabled": false, "disable_date": null
+    })
+}
+
+#[tokio::test]
+async fn a_formula_brew_only_plans_to_deprecate_is_not_warned_about() {
+    let e = env().await;
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.data("mysql-8.4");
+    e.instance("postgres-17", "postgresql@17", false);
+    e.data("postgres-17");
+    // As brew 7 describes them in 2026: dates set in the future, `deprecated` still false.
+    let mut pg = dated("postgresql@17", "17.11", false, Some("2029-11-08"));
+    pg["disable_date"] = json!("2030-11-08");
+    e.formulae(json!([dated("mysql@8.4", "8.4.13", false, Some("2032-04-30")), pg]));
+
+    let report = e.with(vec![running("mysql-8.4"), running("postgres-17")], &[]).await;
+
+    not_present(&report, "service-deprecated");
+}
+
+#[tokio::test]
+async fn a_deprecated_line_hints_the_default_line_when_brew_has_it_current() {
+    let e = env().await;
+    e.instance("mysql-8.0", "mysql@8.0", false);
+    e.data("mysql-8.0");
+    e.formulae(json!([
+        dated("mysql@8.0", "8.0.46", true, Some("2026-04-30")),
+        dated("mysql@8.4", "8.4.13", false, Some("2032-04-30")),
+        dated("mysql", "26.10.0", false, None),
+    ]));
+
+    let report = e.with(vec![running("mysql-8.0")], &[]).await;
+
+    let c = only(&report, "service-deprecated:mysql-8.0");
+    assert_eq!(c.hint.as_deref(), Some("yard service add mysql --version 8.4"), "{c:?}");
+}
+
+#[tokio::test]
+async fn a_deprecated_default_line_hints_the_current_release_never_itself() {
+    let e = env().await;
+    e.instance("mysql-8.4", "mysql@8.4", false);
+    e.data("mysql-8.4");
+    e.formulae(json!([
+        dated("mysql@8.4", "8.4.13", true, Some("2026-01-01")),
+        dated("mysql", "26.10.0", false, None)
+    ]));
+
+    let report = e.with(vec![running("mysql-8.4")], &[]).await;
+
+    let c = only(&report, "service-deprecated:mysql-8.4");
+    assert_eq!(c.hint.as_deref(), Some("yard service add mysql --version 26.10"), "{c:?}");
+}
+
+#[tokio::test]
+async fn with_no_current_line_known_the_hint_is_brew_info() {
+    let e = env().await;
+    e.instance("mysql-8.0", "mysql@8.0", false);
+    e.data("mysql-8.0");
+    // brew knows neither mysql@8.4 nor mysql here, so asking about them fails.
+    e.formulae(json!([dated("mysql@8.0", "8.0.46", true, Some("2026-04-30"))]));
+
+    let report = e.with(vec![running("mysql-8.0")], &[]).await;
+
+    let c = only(&report, "service-deprecated:mysql-8.0");
+    assert_eq!(c.hint.as_deref(), Some("brew info mysql@8.0"), "{c:?}");
+    assert!(!report.checks.iter().any(|c| c.id == "service-deprecated"), "no failure warn: {report:#?}");
 }
 
 #[tokio::test]
@@ -1227,21 +1304,21 @@ async fn the_one_brew_info_call_leaves_out_formulae_brew_would_refuse() {
     let c = only(&report, "service-deprecated:mysql-8.0");
     assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
     assert!(!report.checks.iter().any(|c| c.id == "service-deprecated"), "no failure warn: {report:#?}");
-    assert_eq!(info_calls(&e), ["info --json=v2 mysql@8.0 redis"], "one call, naming no minio");
+    assert_eq!(info_calls(&e)[0], "info --json=v2 mysql@8.0 redis", "one call, naming no minio");
     assert_eq!(only(&report, "sources:trust").hint.as_deref(), Some("yard source trust minio/stable/minio"));
 
     // Trusted but not tapped: asking could make brew tap it, which a read-only doctor must not.
     std::fs::remove_file(e.fx.brew.path().join("fake-brew.log")).unwrap();
     e.trust(&["shivammathur/php", "minio/stable"], &[]);
     let report = e.with(units(), &[]).await;
-    assert_eq!(info_calls(&e), ["info --json=v2 mysql@8.0 redis"], "an untapped tap is not asked about");
+    assert_eq!(info_calls(&e)[0], "info --json=v2 mysql@8.0 redis", "an untapped tap is not asked about");
     assert_eq!(only(&report, "service-deprecated:mysql-8.0").status, CheckStatus::Warn);
 
     // Trusted and tapped: asked about with the others, still one call.
     std::fs::remove_file(e.fx.brew.path().join("fake-brew.log")).unwrap();
     std::fs::create_dir_all(e.fx.brew.path().join("Library/Taps/minio/homebrew-stable")).unwrap();
     let report = e.with(units(), &[]).await;
-    assert_eq!(info_calls(&e), ["info --json=v2 minio/stable/minio mysql@8.0 redis"]);
+    assert_eq!(info_calls(&e)[0], "info --json=v2 minio/stable/minio mysql@8.0 redis");
     assert_eq!(only(&report, "service-deprecated:mysql-8.0").status, CheckStatus::Warn);
     not_present(&report, "sources:trust");
 }

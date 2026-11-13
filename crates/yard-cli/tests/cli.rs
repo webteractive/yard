@@ -69,7 +69,8 @@ fn version_flag_prints_version_and_commit() {
     let (_root, out) = offline(&["--version"]);
     assert!(out.status.success());
     let line = first_line(&out);
-    assert!(line.starts_with("yard 0.1.0 ("), "{line}");
+    // Every release bumps the workspace version, so the test reads it rather than naming one.
+    assert!(line.starts_with(&format!("yard {} (", env!("CARGO_PKG_VERSION"))), "{line}");
     assert!(line.ends_with(')'), "{line}");
 }
 
@@ -89,7 +90,7 @@ fn version_json_has_stable_shape() {
     let (_root, out) = offline(&["version", "--json"]);
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["cli"], "0.1.0");
+    assert_eq!(v["cli"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["protocol"], "2.11");
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
@@ -2595,7 +2596,7 @@ fn self_update_check_reads_the_feed() {
     assert!(out.status.success(), "{}", stderr(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["latest"], "9.9.9");
-    assert_eq!(v["installed"], "0.1.0");
+    assert_eq!(v["installed"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["available"], true);
     assert_eq!(v["kind"], "dev");
 }

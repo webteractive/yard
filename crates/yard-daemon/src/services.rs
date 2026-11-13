@@ -382,9 +382,10 @@ pub async fn resolve(brew: &Brew, engine: Engine, line: Option<&str>) -> Result<
     }
 }
 
-/// The job line for a deprecated formula, naming brew's disable date.
+/// The job line for a deprecated formula, naming brew's disable date. A deprecation brew has
+/// only scheduled (a date ahead, `deprecated` still false) is not one yet.
 fn deprecation_note(f: &Formula) -> Option<String> {
-    if !f.deprecated && f.disable_date.is_none() {
+    if !f.deprecated {
         return None;
     }
     Some(match &f.disable_date {
