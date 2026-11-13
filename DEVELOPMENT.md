@@ -102,4 +102,7 @@ against it.
 publishes: it tags the release, uploads the app to GitHub Releases, updates the cask in
 `webteractive/homebrew-tap`, and installs the published release on the Mac it runs on.
 `--no-publish` stops before publishing, and `--adhoc` builds an ad hoc signed copy for a Mac
-without the certificate. AGENTS.md has the details.
+without the certificate. A run that fails before it pushes takes back its tag, commit and version
+bump. `scripts/test-install.sh`, `test-scrub-check.sh` and `test-release-undo.sh` check the
+installer, the name scrub and that undo without building or publishing anything. AGENTS.md has
+the details.

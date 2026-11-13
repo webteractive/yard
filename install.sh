@@ -35,10 +35,16 @@ macos="$(sw_vers -productVersion)"
 # 3. Not over a Homebrew install of Yard, which brew owns.
 [ -d "$brew_prefix/Caskroom/yard" ] && die "Yard was installed with Homebrew: brew upgrade --cask yard"
 
+# YARD_SYSTEM_APPS stands in for /Applications in install.sh's tests.
+system_apps="${YARD_SYSTEM_APPS:-/Applications}"
 if [ -n "${YARD_APPS_DIR:-}" ]; then
   apps="$YARD_APPS_DIR"
-elif [ -w /Applications ]; then
-  apps=/Applications
+elif [ -d "$HOME/Applications/Yard.app" ] && [ ! -e "$system_apps/Yard.app" ]; then
+  # Installed there before, while the system folder was not writable: update that copy rather
+  # than add a second one.
+  apps="$HOME/Applications"
+elif [ -w "$system_apps" ]; then
+  apps="$system_apps"
 else
   apps="$HOME/Applications"
   mkdir -p "$apps"
@@ -50,7 +56,9 @@ link="$HOME/.local/bin/yard"
 
 # 4. The release: its checksum, its signature, and Gatekeeper's word on it.
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+stage=""
+# A failed swap leaves no staged copy beside the app.
+trap 'rm -rf "$tmp"; [ -z "$stage" ] || rm -rf "$stage"' EXIT
 fetch() { curl -fsSL --proto "$protos" "$1" -o "$2" || die "cannot download $1"; }
 fetch "$base/latest.json" "$tmp/latest.json"
 field() { plutil -extract "$1" raw -o - "$tmp/latest.json" 2>/dev/null || die "the release feed has no $1"; }

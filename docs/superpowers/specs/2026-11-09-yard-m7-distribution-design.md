@@ -183,7 +183,11 @@ for MinIO. Nothing in the README is about quarantine.
    Team ID equal to the running bundle's own, read from its signature at run time, so the Team ID
    is not compiled in).
 5. Swaps the bundle: stage the new app beside the old one, rename the old one aside, rename the new
-   one into place, remove the old one. A failure after the first rename puts the old one back.
+   one into place, remove the old one. A failure after the first rename puts the old one back. The
+   work directory is `.yard-update-<pid>` beside the app, and one whose process is gone (a killed
+   update) is removed first. A Yard.app open on the old bundle, other than the one that started
+   this update (an ancestor process, which reopens itself), is quit (SIGTERM, SIGKILL after 5 s)
+   and opened again, so it never runs from the deleted bundle (`relaunched_app` in `--json`).
 6. Restarts yardd on the new build (`launchctl kickstart -k`) when the LaunchAgent runs this
    bundle's yardd; sites are down for a second or two. A yardd run from elsewhere (a dev build) is
    left alone and named.

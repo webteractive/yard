@@ -90,7 +90,7 @@ if [[ "$publish" == 1 ]]; then
     git ls-remote -q "$remote" HEAD >/dev/null 2>&1 \
       || die "git cannot reach $remote over SSH (is the agent holding a key? ssh-add -l)"
   done
-  [[ -f .release-scrub ]] || die ".release-scrub is missing (the maintainer's names and paths to keep out)"
+  [[ -s .release-scrub-words ]] || die ".release-scrub-words is missing or empty: scrub-check.sh reads the words to keep out of the repository from it"
   scripts/scrub-check.sh || die "a tracked file still names the maintainer"
   (cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings \
     && cargo test --workspace --locked) >/dev/null || die "the root workspace's checks fail"
@@ -100,9 +100,30 @@ fi
 
 # --- the version, put back on exit unless this run publishes it ----------------------------
 
-# shellcheck disable=SC2329 # called from the EXIT traps below
-restore() { git checkout -q -- "${stamped[@]}"; }
-[[ "$publish" == 1 ]] || trap restore EXIT
+# What a run has done to the repository, so that a run that fails takes back what it can.
+committed=0 # this run's `release X.Y.Z` commit exists
+tagged=0    # its local tag exists
+pushed=0    # both reached origin: nothing can be taken back
+work=""
+# shellcheck disable=SC2329 # called from the EXIT trap below
+restore() { git checkout -q HEAD -- "${stamped[@]}"; }
+# shellcheck disable=SC2329 # the EXIT trap
+on_exit() {
+  local status=$?
+  [[ -z "$work" ]] || rm -rf "$work"
+  if [[ "$publish" == 0 ]]; then
+    restore
+  elif [[ "$status" != 0 && "$pushed" == 0 ]]; then
+    [[ "$tagged" == 0 ]] || git tag -d "v$version" >/dev/null
+    [[ "$committed" == 0 ]] || git reset -q --soft HEAD~1
+    restore
+    echo "release.sh: nothing was published; the version bump was put back" >&2
+  elif [[ "$status" != 0 ]]; then
+    echo "release.sh: v$version is pushed but publishing stopped; finish it by hand from the" >&2
+    echo "  step that failed above (gh release create, the cask in webteractive/homebrew-tap, install.sh)" >&2
+  fi
+}
+trap on_exit EXIT
 for manifest in Cargo.toml app/Cargo.toml; do
   # Only the [workspace.package] version line, which is the first `version =` in each file.
   sed -i '' -E "1,/^version = \"[^\"]+\"/s/^version = \"[^\"]+\"/version = \"$version\"/" "$manifest"
@@ -151,7 +172,6 @@ notarize() {
 }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"; [[ "$publish" == 1 ]] || restore' EXIT
 if [[ "$mode" == release ]]; then
   ditto -c -k --keepParent "$app" "$work/Yard.zip"
   notarize "$work/Yard.zip"
@@ -197,9 +217,12 @@ if git diff --cached --quiet; then
   echo "the workspaces already say $version: tagging HEAD"
 else
   git commit -q -m "release $version"
+  committed=1
 fi
 git tag -a "$tag" -m "Yard $version"
+tagged=1
 git push -q --atomic origin main "refs/tags/$tag"
+pushed=1
 
 notes="$work/notes.md"
 if [[ -n "$last" ]]; then

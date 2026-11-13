@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Checks install.sh's refusals against a fake release served over file:// (M7 plan Task 7).
-# Nothing here installs anything: every case must stop before the app is placed, and the
-# temp Applications directory must stay empty. The signed path is checked against a real
-# release build instead (the plan's Step 4).
+# Checks install.sh against a fake release served over file:// (M7 plan Task 7): its refusals,
+# which must stop before the app is placed, and where it places the app, with the signature
+# checks stubbed and a temp directory standing in for /Applications. Nothing is installed on
+# this Mac. The signed path is checked against a real release build instead (the plan's Step 4).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo="$PWD"
@@ -71,6 +71,52 @@ expect_refusal refuses_an_unsigned_app "not signed"
 mkdir -p "$tmp/home-refuses_a_file_at_the_link/.local/bin"
 echo "not a link" > "$tmp/home-refuses_a_file_at_the_link/.local/bin/yard"
 expect_refusal refuses_a_file_at_the_link "is a file, not a link"
+
+# The placement itself, with codesign, spctl and launchctl stubbed to accept the fake release.
+# Nothing reaches the real /Applications: YARD_SYSTEM_APPS stands in for it, and an install.sh
+# that does not read it would install there, so the cases are not run against one.
+grep -q YARD_SYSTEM_APPS "$repo/install.sh" || { echo "FAIL  install.sh does not read YARD_SYSTEM_APPS"; exit 1; }
+stub_signing() {
+  printf '#!/bin/sh\nexit 0\n' > "$tmp/stubs/codesign"
+  printf '#!/bin/sh\nexit 0\n' > "$tmp/stubs/spctl"
+  printf '#!/bin/sh\nexit 1\n' > "$tmp/stubs/launchctl"
+  chmod +x "$tmp/stubs/codesign" "$tmp/stubs/spctl" "$tmp/stubs/launchctl"
+}
+# run_install <name> [env...]: sets $out and $status; the system Applications is $tmp/sys-<name>.
+run_install() {
+  local name="$1"
+  shift
+  status=0
+  mkdir -p "$tmp/sys-$name" "$tmp/home-$name"
+  out="$(env HOME="$tmp/home-$name" YARD_SYSTEM_APPS="$tmp/sys-$name" YARD_BREW_PREFIX="$brew_prefix" \
+    YARD_RELEASE_URL="file://$release" PATH="$tmp/stubs:$PATH" "$@" sh "$repo/install.sh" 2>&1)" || status=$?
+}
+check() { # check <name> <condition> <message>
+  if eval "$2"; then echo "PASS  $1"; else echo "FAIL  $1: $3"; failures=$((failures + 1)); fi
+}
+
+# An existing ~/Applications/Yard.app is updated where it is, not joined by a second copy.
+stub_signing
+mkdir -p "$tmp/home-updates_the_home_copy/Applications/Yard.app"
+run_install updates_the_home_copy
+# shellcheck disable=SC2016 # check evaluates it
+check updates_the_home_copy \
+  '[[ $status == 0 && -x $tmp/home-updates_the_home_copy/Applications/Yard.app/Contents/Helpers/yard && ! -e $tmp/sys-updates_the_home_copy/Yard.app ]]' \
+  "status $status, out: $out"
+rm -f "$tmp/stubs/"*
+
+# A swap that fails leaves the old app in place and no staged copy beside it.
+stub_signing
+# shellcheck disable=SC2016 # $1 belongs to the stub
+printf '#!/bin/sh\ncase "$1" in */Yard.app) exit 1;; esac\nexec /bin/mv "$@"\n' > "$tmp/stubs/mv"
+chmod +x "$tmp/stubs/mv"
+mkdir -p "$tmp/sys-cleans_its_stage/Yard.app"
+run_install cleans_its_stage
+# shellcheck disable=SC2016 # check evaluates it
+check cleans_its_stage \
+  '[[ $status != 0 && -d $tmp/sys-cleans_its_stage/Yard.app && -z $(ls -A "$tmp/sys-cleans_its_stage" | grep -v "^Yard.app$") ]]' \
+  "status $status, left: $(ls -A "$tmp/sys-cleans_its_stage"), out: $out"
+rm -f "$tmp/stubs/"*
 
 echo
 if [[ "$failures" -gt 0 ]]; then

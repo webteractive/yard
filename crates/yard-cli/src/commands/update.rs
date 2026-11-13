@@ -3,8 +3,10 @@
 use super::{Ctx, Outcome, confirm, interactive};
 use crate::commands::lifecycle::{agent_plist, launchctl, uid};
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use yard_core::brew::Brew;
 use yard_core::install::{
     InstallKind, Latest, Update, Version, install_kind, release_url, sha256_hex, update,
@@ -12,6 +14,7 @@ use yard_core::install::{
 use yard_core::paths::{DAEMON_LABEL, HELPER_SOCKET};
 use yard_core::render::launchd::{AgentFacts, read_agent};
 use yard_daemon::helper_client::HelperClient;
+use yard_daemon::holder::{parent_of, pid_path};
 use yard_proto::{ErrorCode, VersionInfo, YardError};
 
 /// What `--check` reports, for people and for Yard.app (`--json`).
@@ -33,6 +36,8 @@ pub struct Updated {
     /// The yardd the agent runs instead of this app's (a dev build), left alone.
     pub yardd_left: Option<PathBuf>,
     pub helper_changed: bool,
+    /// Yard.app was open on the old bundle, so it was quit and opened again on the new one.
+    pub relaunched_app: bool,
     /// What went wrong after the new app was in place; the update itself stands.
     pub warnings: Vec<String>,
 }
@@ -87,6 +92,10 @@ pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
     }
 
     let parent = app.parent().ok_or_else(|| YardError::internal("the app has no parent directory"))?;
+    // An update that was killed left its work directory behind.
+    for stale in stale_work(parent, &alive) {
+        let _ = std::fs::remove_dir_all(stale);
+    }
     let work = parent.join(format!(".yard-update-{}", std::process::id()));
     let _cleanup = RemoveOnDrop(work.clone());
     std::fs::create_dir_all(&work).map_err(|e| io(&work, e))?;
@@ -104,8 +113,18 @@ pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
     let staged = work.join("Yard.app");
     verify(&app, &staged, newest, installed)?;
 
+    // Read before the swap: once the old bundle is gone its processes have no path to match.
+    let open_apps = apps_to_relaunch(&yard_processes(), &app.join(APP_EXECUTABLE), &ancestors());
+
     // From here on the new app is in place: nothing below fails the update.
     let mut warnings: Vec<String> = swap(&app, &staged)?.into_iter().collect();
+    let relaunched_app = match relaunch(&app, &open_apps) {
+        Ok(relaunched) => relaunched,
+        Err(e) => {
+            warnings.push(format!("Yard.app still runs the old version: {e}; quit and open it again"));
+            false
+        }
+    };
     let (yardd, warning) = restart_yardd_in(&app);
     warnings.extend(warning);
     let helper_changed = helper_changed(&app).await;
@@ -118,6 +137,7 @@ pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
             _ => None,
         },
         helper_changed,
+        relaunched_app,
         warnings,
     };
     ctx.emit(&done, || {
@@ -133,6 +153,9 @@ pub async fn self_update(ctx: &Ctx, check: bool, yes: bool) -> Outcome {
                 out.push_str("yardd is not running; yard start runs the new build.\n")
             }
             _ => {}
+        }
+        if done.relaunched_app {
+            out.push_str("Yard.app reopened on the new version.\n");
         }
         for w in &done.warnings {
             out.push_str(&format!("warning: {w}\n"));
@@ -343,6 +366,85 @@ async fn helper_changed(app: &Path) -> bool {
     needs.is_some_and(|r| r != status.revision)
 }
 
+/// Yard.app's executable inside the bundle.
+const APP_EXECUTABLE: &str = "Contents/MacOS/Yard";
+
+/// `.yard-update-<pid>` directories in `dir` whose process is gone.
+fn stale_work(dir: &Path, alive: &dyn Fn(u32) -> bool) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let mut stale: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name();
+            let pid: u32 = name.to_str()?.strip_prefix(".yard-update-")?.parse().ok()?;
+            (!alive(pid)).then(|| e.path())
+        })
+        .collect();
+    stale.sort();
+    stale
+}
+
+fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks that the pid exists.
+    i32::try_from(pid).is_ok_and(|p| unsafe { libc::kill(p, 0) } == 0)
+}
+
+/// The pids of `running` (pid, executable path) that run `exe`, leaving out this process's
+/// ancestors: Yard.app's own update item runs `yard self-update` and reopens itself.
+fn apps_to_relaunch(running: &[(u32, Option<String>)], exe: &Path, ancestors: &BTreeSet<u32>) -> Vec<u32> {
+    running
+        .iter()
+        .filter(|(pid, path)| {
+            path.as_deref().is_some_and(|p| Path::new(p) == exe) && !ancestors.contains(pid)
+        })
+        .map(|(pid, _)| *pid)
+        .collect()
+}
+
+/// Every process named Yard, with its executable path.
+fn yard_processes() -> Vec<(u32, Option<String>)> {
+    let Ok(out) = Command::new("/usr/bin/pgrep").args(["-x", "Yard"]).output() else { return vec![] };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .map(|pid| (pid, pid_path(pid)))
+        .collect()
+}
+
+/// This process's parent, its parent, and so on up to launchd.
+fn ancestors() -> BTreeSet<u32> {
+    let mut found = BTreeSet::new();
+    let mut pid = std::process::id();
+    while let Some(parent) = parent_of(pid).filter(|p| *p > 1 && found.len() < 64) {
+        found.insert(parent);
+        pid = parent;
+    }
+    found
+}
+
+/// Quits the apps in `pids` (SIGTERM, then SIGKILL after 5 s) and opens `app` once, so Yard.app
+/// runs the bundle now on disk rather than the one just deleted. `Ok(false)` when none was open.
+fn relaunch(app: &Path, pids: &[u32]) -> Result<bool, YardError> {
+    if pids.is_empty() {
+        return Ok(false);
+    }
+    for &pid in pids {
+        let Ok(raw) = i32::try_from(pid) else { continue };
+        // SAFETY: kill(2) on a Yard.app process found running this bundle.
+        unsafe { libc::kill(raw, libc::SIGTERM) };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while alive(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if alive(pid) {
+            // SAFETY: as above.
+            unsafe { libc::kill(raw, libc::SIGKILL) };
+        }
+    }
+    run("/usr/bin/open", &[&app.display().to_string()])?;
+    Ok(true)
+}
+
 fn io(path: &Path, e: std::io::Error) -> YardError {
     YardError::internal(format!("{}: {e}", path.display()))
 }
@@ -372,6 +474,32 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains(".old-"))
             .collect()
+    }
+
+    #[test]
+    fn a_killed_update_s_work_directory_is_stale_once_its_process_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [".yard-update-100", ".yard-update-200", ".yard-update-x", "Yard.app"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+
+        let stale = stale_work(dir.path(), &|pid| pid == 200);
+
+        assert_eq!(stale, vec![dir.path().join(".yard-update-100")], "200 still runs; the rest are not ours");
+    }
+
+    #[test]
+    fn the_app_is_relaunched_only_where_it_runs_this_bundle_and_did_not_start_the_update() {
+        let exe = Path::new("/Applications/Yard.app/Contents/MacOS/Yard");
+        let running = [
+            (10, Some("/Applications/Yard.app/Contents/MacOS/Yard".to_string())),
+            (11, Some("/Users/me/Applications/Yard.app/Contents/MacOS/Yard".to_string())),
+            (12, Some("/Applications/Yard.app/Contents/MacOS/Yard".to_string())),
+            (13, None),
+        ];
+        let ancestors = BTreeSet::from([12]);
+
+        assert_eq!(apps_to_relaunch(&running, exe, &ancestors), vec![10]);
     }
 
     #[test]

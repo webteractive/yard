@@ -466,17 +466,32 @@ async fn port_infos(ctx: &Context) -> Vec<PortInfo> {
     tokio::task::spawn_blocking(move || portscan::infos(&registry, &running)).await.unwrap_or_default()
 }
 
+/// Changes `ports.toml` and applies it. A change the reconcile refuses (nginx rejecting the
+/// config, most often) is taken back, byte for byte, so it cannot fail every change after it,
+/// and the error says why.
 async fn edit_registry(
     ctx: &Context,
     change: impl FnOnce(&mut Registry) -> Result<(), YardError>,
 ) -> Result<(), YardError> {
-    TomlFile::edit(&ctx.paths.ports_toml(), |file| {
+    let file = ctx.paths.ports_toml();
+    let before = std::fs::read(&file).ok();
+    TomlFile::edit(&file, |toml| {
         let mut registry = Registry::load(&ctx.paths)?;
         change(&mut registry)?;
-        registry.save(file);
+        registry.save(toml);
         Ok(())
     })?;
-    reconcile(ctx).await
+    let Err(e) = reconcile(ctx).await else { return Ok(()) };
+    let restored = match &before {
+        Some(bytes) => std::fs::write(&file, bytes),
+        None => std::fs::remove_file(&file),
+    };
+    if let Err(io) = restored {
+        return Err(e.with_hint(format!("{} could not be put back ({io}): fix it by hand", file.display())));
+    }
+    // Back to what nginx serves; a failure here is the one already being returned.
+    let _ = reconcile(ctx).await;
+    Err(e)
 }
 
 async fn edit_ports(

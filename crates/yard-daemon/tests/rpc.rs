@@ -358,6 +358,25 @@ async fn restart_nginx_refuses_a_broken_config() {
 }
 
 #[tokio::test]
+async fn a_port_change_nginx_rejects_is_not_kept() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    nginx_pid(&mut c).await;
+    let before = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    // nginx rejects every config while this override is broken.
+    std::fs::write(d.fx.paths.nginx_override("blog"), "yard-test-broken;\n").unwrap();
+
+    let e = c.call("ports.set", json!({"unit": "nginx-http", "port": free_port()})).await.unwrap_err();
+
+    assert_eq!(e.code, ErrorCode::NginxConfigInvalid, "{e:?}");
+    let after = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    assert_eq!(after, before, "a change nginx refused is not left in ports.toml to fail every later one");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn ports_check_reads_ports_toml_from_disk() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;

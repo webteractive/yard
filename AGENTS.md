@@ -335,11 +335,20 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   Without either flag it then publishes: commits the version (or tags HEAD when the workspaces
   already say it), tags `vX.Y.Z`, pushes, creates the GitHub release, writes `Casks/yard.rb` in the
   tap, installs the release through the tag's `install.sh` and checks `yard --version`; its
-  preflight refuses while either repo is private or git cannot reach them over SSH.
-  Submitting to Apple or publishing needs the maintainer's approval. `packaging/yard.rb.tmpl` is
+  preflight refuses while either repo is private or git cannot reach them over SSH, or
+  `.release-scrub-words` is missing. A publishing run that fails before its push takes back its
+  tag, its commit and the version bump; one that fails after says what to finish by hand
+  (`scripts/test-release-undo.sh` checks that handler in a scratch repo). Submitting to Apple or publishing needs the maintainer's approval. `packaging/yard.rb.tmpl` is
   the cask it renders for `webteractive/homebrew-tap`. Remove `dist/` afterwards.
-- `install.sh` — the curl installer (M7 spec §5.2); `scripts/test-install.sh` checks its refusals
-  against a fake release over `file://` and installs nothing.
+- `install.sh` — the curl installer (M7 spec §5.2); it updates an existing `~/Applications/Yard.app`
+  in place when `/Applications` has none, and a failed swap leaves no staged copy.
+  `scripts/test-install.sh` checks its refusals and its placement against a fake release over
+  `file://`, with `codesign`, `spctl` and `launchctl` stubbed and `YARD_SYSTEM_APPS` and `HOME`
+  pointing at temp directories; it refuses to run the placement cases against an `install.sh`
+  that does not read `YARD_SYSTEM_APPS`, which would install into the real `/Applications`.
+- `scripts/scrub-check.sh [--history]` — fails when a tracked file (or any commit) contains a
+  word from the git-ignored `.release-scrub-words`, matched as fixed text, case-insensitively;
+  `scripts/test-scrub-check.sh` checks it with made-up words.
 - `app/scripts/checklist.sh [--keep]` — the M6 checklist a script can see: a scratch yardd on
   `/tmp/yard-check` (nginx and dnsmasq pinned to 28080/28443/28053, its instances to 28379-28381
   and 28900, auto ports 29000-29099), three linked sites (one with a committed `.yard` that needs
