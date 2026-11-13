@@ -371,6 +371,9 @@ async fn a_port_change_nginx_rejects_is_not_kept() {
     let e = c.call("ports.set", json!({"unit": "nginx-http", "port": free_port()})).await.unwrap_err();
 
     assert_eq!(e.code, ErrorCode::NginxConfigInvalid, "{e:?}");
+    let hint = e.hint.as_deref().unwrap_or_default();
+    assert!(!hint.contains("saved"), "the change was not kept, so the hint must not say it was: {hint}");
+    assert!(hint.contains("ports.toml is as it was"), "{hint}");
     let after = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
     assert_eq!(after, before, "a change nginx refused is not left in ports.toml to fail every later one");
     d.shutdown().await.unwrap();

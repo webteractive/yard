@@ -491,7 +491,12 @@ async fn edit_registry(
     }
     // Back to what nginx serves; a failure here is the one already being returned.
     let _ = reconcile(ctx).await;
-    Err(e)
+    // The reconcile's own hint says a change is saved, which this one no longer is.
+    let fix = match e.code {
+        ErrorCode::NginxConfigInvalid => "fix the file named above, then make the change again",
+        _ => "fix that, then make the change again",
+    };
+    Err(e.with_hint(format!("{fix}; ports.toml is as it was")))
 }
 
 async fn edit_ports(
