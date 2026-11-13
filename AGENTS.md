@@ -288,6 +288,8 @@ holds 80 or 443, since with both free the switch would go through.
   (M4b spec §16), which Yard does.
 - Ports held by DBngin (3306, 6379) or Postgres.app (5432) push new instances to the next free
   port; read them from `yard services`, never assume them.
+- `brew install --cask webteractive/tap/yard` needs no `brew trust` first: brew (7.0.11) trusts a
+  cask named in full, and taps its tap, but leaves the tap itself untrusted.
 - Brew's dnsmasq caveat says `/etc/resolver/<domain>` overrides fail with `127.0.0.1` on a port
   other than 53. It does not hold: `.yard` names resolve through dnsmasq on 53535 on both Macs.
 
@@ -353,8 +355,10 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   items that change nothing, against the real yardd on `~/.yard` (M3, O1, A1, R1, D1, S4 on a
   scratch site `chk-real` it links, secures and unlinks, R3 where Herd is installed, and M1 last,
   which runs `yard stop` and `yard start`, so every site is down for a few seconds and the
-  LaunchAgent's yardd comes back as the build in `target/release`). It backs up and restores
-  `yard.toml`, `sites.toml`, `ports.toml` and `services.toml`, and refuses a running Yard.app.
+  LaunchAgent's yardd comes back as the build in `target/release`). `YARD=<yard> YARD_APP=<Yard.app>`
+  check an installed release instead (`/Applications/Yard.app`), whose yardd the agent then keeps.
+  It backs up and restores `yard.toml`, `sites.toml`, `ports.toml` and `services.toml`, and refuses
+  a running Yard.app.
 - `cargo test --workspace` — full suite. Tests use a temp `YARD_ROOT` and free ports in
   20000-29999 (below macOS's ephemeral range), and never touch Herd, `/etc/resolver` or ports 53/80/443/8080/8443/53535.
   If test daemons time out at startup, `target/debug/deps` has grown too big for FSEvents:

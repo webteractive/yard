@@ -131,15 +131,17 @@ POSIX `sh`, `set -eu`, idempotent. It:
 `binary "#{appdir}/Yard.app/Contents/Helpers/yard"`. `auto_updates` is false, because the brew
 install never updates itself (§6.2). Brew runs a cask's `uninstall` stanza on
 `brew upgrade` too, so the stanza does **not** boot yardd out (every upgrade would leave every site
-down). Instead a `postflight` restarts yardd on the new build (`launchctl kickstart -k
-gui/<uid>/dev.more.yard.daemon`) when the agent is loaded and runs this bundle's yardd, as
+down). Instead a `postflight_steps` `run` step (brew 7 deprecates a `postflight` block) restarts yardd
+on the new build (`launchctl kickstart -k gui/<uid>/dev.more.yard.daemon`) when the agent is
+loaded and runs an installed `Yard.app`'s yardd rather than a dev build's, as
 `self-update` does **(Claude's call)**. Uninstalling is `yard uninstall` (§10), which stops yardd first. `zap`
 removes the app's preferences only, **never** `~/.yard` (it holds databases).
 
 Homebrew 6 loads a third-party tap's formula or cask only once it is trusted (AGENTS.md
-findings). The README's brew route is therefore `brew trust webteractive/tap` then the install,
-unless the builder finds that casks are exempt; the builder checks with the real brew and writes
-what holds.
+findings). Checked on the second Mac with brew 7.0.11 on 2026-11-13: `brew install --cask
+webteractive/tap/yard`, with nothing trusted, taps the tap, prints `Trusted cask
+webteractive/tap/yard` and installs; brew trusts a cask named in full (the tap stays untrusted).
+The README's brew route is that one command.
 
 ### 5.4 After installing
 

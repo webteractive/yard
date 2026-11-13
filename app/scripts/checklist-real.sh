@@ -2,11 +2,14 @@
 # The M6 checklist items that change nothing, against the real yardd on ~/.yard (plan Task 17
 # Step 4, run only with the maintainer's approval): M3, O1, R1, D1, A1, S4 on a scratch site, R3 where Herd
 # is installed, and M1 last, which stops and starts the real yardd (every site is down for a few
-# seconds; the LaunchAgent's yardd comes back as the build in target/release).
+# seconds; the LaunchAgent's yardd comes back as the yardd beside the yard it ran).
 #
 #   app/scripts/checklist-real.sh
+#   YARD=/Applications/Yard.app/Contents/Helpers/yard YARD_APP=/Applications/Yard.app \
+#     app/scripts/checklist-real.sh     # an installed release instead of this checkout's build
 #
-# Needs: target/release/yard (the yardd LaunchAgent installed by it), app/target/Yard.app, jq, and
+# Needs: target/release/yard (the yardd LaunchAgent installed by it) and app/target/Yard.app, or
+# the YARD and YARD_APP that replace them, jq, and
 # Accessibility and Screen Recording for the terminal. It refuses a running Yard.app, backs up
 # yard.toml, sites.toml, ports.toml and services.toml and restores them (cp -p, cmp), and links,
 # secures and unlinks one scratch site (`chk-real`, in this script's temp directory), deleting the
@@ -17,8 +20,8 @@ app_dir="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$app_dir/.." && pwd)"
 real="$HOME/.yard"
 out="${TMPDIR:-/tmp}/yard-check-real-$(date +%Y%m%d-%H%M%S)"
-yard_bin="$repo/target/release/yard"
-bundle="$app_dir/target/Yard.app"
+yard_bin="${YARD:-$repo/target/release/yard}"
+bundle="${YARD_APP:-$app_dir/target/Yard.app}"
 ax_js="$app_dir/scripts/ax.js"
 app_domain=dev.more.yard.app
 

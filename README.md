@@ -43,15 +43,15 @@ the root helper and the shims) and put `yard` on your PATH. Yard needs an Apple 
 macOS 14 or later, and Homebrew.
 
 ```sh
-brew tap webteractive/tap && brew trust --tap webteractive/tap
 brew install --cask webteractive/tap/yard
 # or
 curl -fsSL https://raw.githubusercontent.com/webteractive/yard/main/install.sh | sh
 ```
 
-Homebrew loads a cask from a tap other than its own only once you trust the tap, which is
-what `brew trust` does; Yard never trusts anything on your behalf. The same goes for the taps
-PHP comes from, once, before your first `yard link`:
+Naming the cask in full is enough: brew trusts the one cask you named and taps
+`webteractive/tap` for it. PHP comes from taps that brew loads formulae from only once you trust
+them (`brew trust`), which Yard never does on your behalf, so trust them once, before your first
+`yard link`:
 
 ```sh
 brew tap shivammathur/php && brew tap shivammathur/extensions
