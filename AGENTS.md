@@ -155,9 +155,9 @@ on 2026-11-11.
   unchanged), `scripts/e2e-m1.sh` and `checklist-real.sh` (10/10, `YARD`/`YARD_APP` pointing at the
   installed app) passed; on the second Mac, `brew install --cask webteractive/tap/yard` needed no
   `brew trust`. All three update paths took 0.1.0 to 0.1.1 and restarted yardd with no password:
-  `yard self-update` and the app's Update to 0.1.1… item here, `brew upgrade --cask yard` there. Left
-  open: the second Mac's helper is revision 0 (the maintainer runs `sudo yard helper install` there),
-  and one `checklist-real.sh` run saw nginx rejected for binding 127.0.0.1:80 at its S4, which did
+  `yard self-update` and the app's Update to 0.1.1… item here, `brew upgrade --cask yard` there. The
+  maintainer then ran `sudo yard helper install` on both Macs, so each runs helper 0.1.1 and doctor
+  reports 0 failed. Left open: one `checklist-real.sh` run saw nginx rejected for binding 127.0.0.1:80 at its S4, which did
   not recur and whose cause is unknown.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
