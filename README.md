@@ -1,14 +1,11 @@
 # Yard
 
-Yard serves local PHP sites on macOS. A Rust daemon
-(`yardd`, a user LaunchAgent) runs nginx, dnsmasq and a php-fpm pool per PHP version,
-all from Homebrew and all as you. A small root helper (`yard-helper`, a LaunchDaemon)
-does the few things that need root through a fixed set of verbs: it writes
-`/etc/resolver/<tld>`, and in the privileged profile it opens ports 80 and 443 on
-loopback and hands the sockets to yardd. Root never runs nginx. The `yard` CLI talks to
-the daemon over a unix socket.
+Yard serves local PHP sites on macOS. A background daemon (`yardd`) runs nginx, dnsmasq and a
+PHP-FPM pool per PHP version, all from Homebrew and all as you; a small root helper does only
+what needs root: it points `.yard` names at Yard, and opens ports 80 and 443 if you ask for
+them. You drive it with the `yard` command or with Yard.app, a menu bar app.
 
-The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/superpowers/specs/2026-10-19-yard-design.md).
+To build Yard yourself or work on it, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## What it does
 
@@ -27,7 +24,7 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
   Yard's own directory.
 - **Mail** through [emailulator](https://github.com/webteractive/emailulator) at `mail.yard`.
 - **Tunnels**: `yard tunnel` shares a site at a public HTTPS URL through cloudflared.
-- **Yard.app**, a menu bar app and window (Rust and GPUI) over the same daemon; everything it
+- **Yard.app**, a menu bar app and window over the same daemon; everything it
   does, the CLI does too.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
@@ -68,64 +65,10 @@ yard doctor                 # every check should say ok
 Update with `brew upgrade --cask yard` (brew) or `yard self-update` (curl), or let Yard.app do
 it (Settings → Install updates automatically). Remove everything with `yard uninstall`.
 
-### From source
-
-See [Building from source](#building-from-source) for what it needs.
-
-```sh
-cargo build --release
-ln -sf "$PWD/target/release/yard" ~/.local/bin/yard   # any directory on PATH
-sudo ./target/release/yard helper install   # once, and after each upgrade
-yard start
-yard doctor                                 # every check should say ok
-```
-
-The symlink keeps `yard` current across rebuilds; it still finds `yardd` and
-`yard-helper` beside the binary it points at.
-
-Run the helper install in a real terminal: sudo needs one to ask for the password.
-Upgrading from M1, re-run it: it stops the root nginx M1's helper started, waits for it to
-exit, and removes the two files that nginx left owned by root (`logs/nginx-error.log`,
-`run/nginx.pid`). It names each file it removed and the next step: `yard start`, or
-`yard restart nginx` when yardd is already running.
-`scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
-proxies another, curls both on `.yard:8080`, and, where 80 and 443 are free, switches to the
-privileged profile and back.
-`scripts/e2e-m2.sh` checks multi-PHP and extensions, `scripts/e2e-m3.sh` HTTPS, `scripts/e2e-m4a.sh`
-the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git status` stays clean),
-`scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
-(installing what is missing with brew), asks each one a question, and removes what it added,
-`scripts/e2e-m4c.sh` Node: it installs Node 16.14.0 and 22 with fnm, runs them through the
-shims (a native module build included), and removes only what it installed, and
-`scripts/e2e-m4e.sh` sleeping services: it lets scratch Redis, MySQL 8.0 and PostgreSQL 17
-instances fall asleep, times each one's cold start, wakes them from a page and from `php`,
-keeps them awake with held connections, and removes them, and `scripts/e2e-m4d.sh`
-emailulator: against the agent already installed (it never installs, starts or stops it), it
-checks `yard doctor`, the external port entries, `mail.yard:8080` and a project's `MAIL_PORT`.
-`scripts/e2e-m5.sh` checks a quick tunnel with no Cloudflare account (it needs the network and
-brew's `cloudflared`): PHP behind the `trycloudflare.com` URL sees HTTPS, the public host and the
-visitor's address, and `yard untunnel` leaves nothing behind. It looks the new name up through
-1.1.1.1 and pins curl to that address, since a local resolver asked too early caches the miss.
-
-`yard start` installs `~/Library/LaunchAgents/dev.more.yard.daemon.plist` and starts
-`yardd` from beside the `yard` binary. Data lives in
-`~/.yard` (or `YARD_ROOT`, or `--root <path>`).
-
-## Building from source
-
-Prerequisites:
-
-- An Apple Silicon Mac with Homebrew at `/opt/homebrew`.
-- Rust 1.92 from rustup (`rust-toolchain.toml` pins it). Homebrew's `rust` formula ignores
-  the pin, so use rustup instead of it.
-- nginx, dnsmasq and PHP from Homebrew; Yard runs them itself. `yard start` installs nginx
-  and dnsmasq when they are missing, after asking (`--yes` does not ask), and `yard link`
-  installs the PHP a project needs. `yard tunnel` also needs `brew install cloudflared`.
-
-Yard only uses the installed binaries; do not start them with `brew services`.
-
-A `dnsmasq` keg with no files in it needs `brew reinstall dnsmasq` instead. `yard doctor`
-says which of these is missing.
+`yard start` installs a LaunchAgent (`~/Library/LaunchAgents/dev.more.yard.daemon.plist`) so
+yardd runs at login. Yard keeps its data, settings and logs in `~/.yard` (or `YARD_ROOT`, or
+`--root <path>`). The root helper needs `sudo yard helper install` again only when a release
+changes it; `yard doctor` says when.
 
 ## HTTPS
 
@@ -233,11 +176,9 @@ error, 3 `yardd` is not running.
 | `yard restart <unit>` | yes | Restarts nginx (after checking its config), dnsmasq, `php-fpm-<version>` or `tunnel-<site>`. |
 | `sudo yard helper install` / `uninstall` | no | Installs or removes the root helper. |
 
-## Development
+## Contributing
 
-See [`AGENTS.md`](AGENTS.md) for the build, test and lint commands and the conventions. Yard.app is
-a second workspace in `app/` on its own toolchain (Rust 1.98.1, from `app/rust-toolchain.toml`):
-`cd app && cargo test --workspace --locked`, and `scripts/bundle.sh` builds `app/target/Yard.app`.
+Building from source, the tests and how releases are made are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 

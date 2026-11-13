@@ -527,8 +527,9 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
   `git@github.com:webteractive/yard.git` (added 2026-11-03, public since 2026-11-13; `gh` acts as
   the maintainer's account for the webteractive org). Commit messages are lean prose:
   a lowercase subject with no type prefix, prose paragraphs, no trailers.
-- **Docs move with the code**: the spec, the active plan, README, `--help`
-  text, this file and the hydra rules.
+- **Docs move with the code**: the spec, the active plan, README (installation and usage
+  only), DEVELOPMENT.md (building, testing and releasing), `--help` text, this file and the
+  hydra rules.
 - **Herd must keep working.** Yard only reads Herd's files.
 - Area-specific conventions are lazy-loaded hydra rules in `.hydra/rules/` (index below).
 
