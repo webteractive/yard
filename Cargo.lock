@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "yard-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "yard-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "yard-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "insta",
  "plist",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "yard-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "notify-debouncer-mini",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "yard-helper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "serde",
@@ -1502,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "yard-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "yard-shim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
  "yard-core",

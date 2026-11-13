@@ -6540,7 +6540,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "yard-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures",
  "gpui",
@@ -6565,7 +6565,7 @@ dependencies = [
 
 [[package]]
 name = "yard-app-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6576,7 +6576,7 @@ dependencies = [
 
 [[package]]
 name = "yard-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6586,7 +6586,7 @@ dependencies = [
 
 [[package]]
 name = "yard-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "plist",
  "serde",
@@ -6600,7 +6600,7 @@ dependencies = [
 
 [[package]]
 name = "yard-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
