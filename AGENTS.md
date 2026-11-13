@@ -162,7 +162,17 @@ on 2026-11-11.
   time, because `nginx -t` binds and never got the helper's sockets, while the switch back was
   refused over the ports the running nginx held. Both were fixed on 2026-11-13, and `e2e-m1.sh` now
   switches to privileged and back where 80 and 443 are free. Doctor no longer warns about a formula
-  brew has only scheduled to deprecate, and its hint names a current line.
+  brew has only scheduled to deprecate, and its hint names a current line. Every bug known at the
+  time was then fixed and released by 0.1.6 (2026-11-13, the maintainer: fix them all, leave
+  nothing): a rejected port change is taken back; the helper's sockets reach nginx non-blocking,
+  so leaving the privileged profile orphans no worker; install.sh updates an existing
+  `~/Applications/Yard.app` and leaves no stage; `yard self-update` sweeps killed updates' work
+  directories and reopens a Yard.app left on the old bundle; a cancelled queued job finishes at
+  once; scrub-check matches fixed text; release.sh commits the version before building and takes
+  back a failed publish; and three checklist misreadings (the icon, the app's commit, the helper
+  command) were corrected. Checked against the installed 0.1.6: `e2e-m1.sh` (with its privileged
+  round trip), `checklist-real.sh` 11/11, and against this checkout `checklist.sh` 72/72 and
+  `checklist-installs.sh` 14/14; self-update from 0.1.4 reopened an open Yard.app on 0.1.5.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
