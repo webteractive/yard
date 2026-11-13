@@ -17,9 +17,11 @@
 #                                          the certificate; never published (implies
 #                                          --no-publish), every file named -adhoc
 #
-# Publishing commits the version, tags vX.Y.Z, pushes, creates the GitHub release with the
-# four assets, updates the cask in webteractive/homebrew-tap, and installs the published
-# release on this Mac with install.sh. Run it only with the maintainer's approval.
+# Publishing commits the version (when the workspaces did not already say it), tags vX.Y.Z,
+# pushes, creates the GitHub release with the four assets, writes Casks/yard.rb in
+# webteractive/homebrew-tap, installs the published release on this Mac with the tag's
+# install.sh, checks `yard --version`, and removes dist/X.Y.Z. Run it only with the
+# maintainer's approval.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo="$PWD"
@@ -45,6 +47,7 @@ notary_profile="${YARD_NOTARY_PROFILE:-notary}"
 dist="$repo/dist/$version$suffix"
 zip_name="Yard-$version-arm64$suffix.zip"
 dmg_name="Yard-$version-arm64$suffix.dmg"
+tap_remote=git@github.com:webteractive/homebrew-tap.git
 
 # --- preflight: everything that can fail is checked before anything changes ---------------
 
@@ -81,6 +84,11 @@ if [[ "$publish" == 1 ]]; then
   for r in webteractive/yard webteractive/homebrew-tap; do
     [[ "$(gh repo view "$r" --json visibility -q .visibility 2>/dev/null)" == PUBLIC ]] \
       || die "$r is not public: install.sh, latest.json and the cask would all 404"
+  done
+  # git pushes over SSH, which gh's sign-in says nothing about.
+  for remote in origin "$tap_remote"; do
+    git ls-remote -q "$remote" HEAD >/dev/null 2>&1 \
+      || die "git cannot reach $remote over SSH (is the agent holding a key? ssh-add -l)"
   done
   [[ -f .release-scrub ]] || die ".release-scrub is missing (the maintainer's names and paths to keep out)"
   scripts/scrub-check.sh || die "a tracked file still names the maintainer"
@@ -181,4 +189,49 @@ if [[ "$publish" == 0 ]]; then
   exit 0
 fi
 
-die "publishing is not written yet (M7 plan Task 12)"
+# --- publish (§8.1 steps 7–8) -----------------------------------------------------------------
+
+tag="v$version"
+git add -- "${stamped[@]}"
+if git diff --cached --quiet; then
+  echo "the workspaces already say $version: tagging HEAD"
+else
+  git commit -q -m "release $version"
+fi
+git tag -a "$tag" -m "Yard $version"
+git push -q --atomic origin main "refs/tags/$tag"
+
+notes="$work/notes.md"
+if [[ -n "$last" ]]; then
+  git log --no-merges --format='- %s' "$last..$tag" | grep -vx -- "- release $version" > "$notes" || true
+else
+  printf 'The first public release of Yard.\n' > "$notes"
+fi
+gh release create "$tag" --repo webteractive/yard --verify-tag --title "Yard $version" \
+  --notes-file "$notes" "$dist/$zip_name" "$dist/$dmg_name" "$dist/SHA256SUMS" "$dist/latest.json"
+assets="$(gh release view "$tag" --repo webteractive/yard --json assets -q '.assets | length')"
+[[ "$assets" == 4 ]] || die "release $tag has $assets assets, not 4"
+
+# The cask points at the DMG, so it carries the DMG's checksum.
+dmg_sha="$(shasum -a 256 "$dist/$dmg_name" | awk '{print $1}')"
+tap="$work/tap"
+git clone -q "$tap_remote" "$tap"
+mkdir -p "$tap/Casks"
+{
+  echo "# Written by scripts/release.sh in webteractive/yard: change packaging/yard.rb.tmpl there."
+  sed -n '/^cask "yard"/,$p' packaging/yard.rb.tmpl | sed -e "s/@VERSION@/$version/" -e "s/@SHA256@/$dmg_sha/"
+} > "$tap/Casks/yard.rb"
+ruby -c "$tap/Casks/yard.rb" >/dev/null || die "the rendered cask is not valid Ruby"
+git -C "$tap" add Casks/yard.rb
+git -C "$tap" commit -q -m "yard $version"
+git -C "$tap" push -q origin HEAD
+echo "published $tag and the cask at $version"
+
+# Install what was published, through the published installer, and check it (release-install rule).
+curl -fsSL "https://raw.githubusercontent.com/webteractive/yard/$tag/install.sh" | sh \
+  || die "install.sh failed on the published release"
+got="$("$HOME/.local/bin/yard" --version 2>/dev/null | head -1 || true)"
+[[ "$got" == *"$version"* ]] || die "the installed yard reports '$got', not $version"
+echo "installed: $got"
+rm -rf "$dist"
+echo "removed $dist"

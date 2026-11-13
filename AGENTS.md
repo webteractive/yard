@@ -312,6 +312,10 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   SHA-1 (`YARD_SIGN_IDENTITY` overrides), notarizes through the `notary` keychain profile, staples,
   and writes `dist/X.Y.Z/` (zip, DMG, `SHA256SUMS`, `latest.json`). `--no-publish` and `--adhoc`
   put the version bump back; `--adhoc` seals ad hoc, skips Apple, and names every file `-adhoc`.
+  Without either flag it then publishes: commits the version (or tags HEAD when the workspaces
+  already say it), tags `vX.Y.Z`, pushes, creates the GitHub release, writes `Casks/yard.rb` in the
+  tap, installs the release through the tag's `install.sh` and checks `yard --version`; its
+  preflight refuses while either repo is private or git cannot reach them over SSH.
   Submitting to Apple or publishing needs the maintainer's approval. `packaging/yard.rb.tmpl` is
   the cask it renders for `webteractive/homebrew-tap`. Remove `dist/` afterwards.
 - `install.sh` — the curl installer (M7 spec §5.2); `scripts/test-install.sh` checks its refusals

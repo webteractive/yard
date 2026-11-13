@@ -246,7 +246,8 @@ publishes). Steps, in order:
    it (`--timestamp`, no runtime), notarize and staple it. `spctl -a -vvv -t exec` on the app and
    `-t open --context context:primary-signature` on the DMG.
 6. **Zip the stapled app** for updates, then write `SHA256SUMS` and `latest.json` last.
-7. **Publish:** commit `release X.Y.Z` (commit-messages rule), tag `vX.Y.Z`, push, `gh release
+7. **Publish:** commit `release X.Y.Z` (commit-messages rule; when the workspaces already say
+   `X.Y.Z` there is nothing to commit and HEAD is tagged, **Claude's call**), tag `vX.Y.Z`, push, `gh release
    create` with the four assets and notes from the commits since the last tag; update
    `Casks/yard.rb` (version, sha256) in the tap repo, commit and push.
 8. **Install what was published** with `install.sh` on this Mac and check `yard --version`
