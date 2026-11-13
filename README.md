@@ -1,6 +1,6 @@
 # Yard
 
-Yard serves local PHP sites on macOS, as a replacement for Laravel Herd. A Rust daemon
+Yard serves local PHP sites on macOS. A Rust daemon
 (`yardd`, a user LaunchAgent) runs nginx, dnsmasq and a php-fpm pool per PHP version,
 all from Homebrew and all as you. A small root helper (`yard-helper`, a LaunchDaemon)
 does the few things that need root through a fixed set of verbs: it writes
@@ -13,7 +13,7 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
 ## What it does
 
 - **PHP 7.0–8.5 side by side**, from Homebrew's `shivammathur/php` tap; each site runs the
-  version it asks for, and the `php`, `composer` and `pecl` shims follow it (never Herd's PHP).
+  version it asks for, and the `php`, `composer` and `pecl` shims follow it.
 - **Explicit sites**: `yard link` serves a directory as `<name>.yard`; nothing is written into
   the project unless you ask (`yard init --local`).
 - **A `.yard` project file** a project can commit: its PHP, docroot, HTTPS, extensions,
@@ -29,12 +29,11 @@ The design is in [`docs/superpowers/specs/2026-10-19-yard-design.md`](docs/super
 - **Tunnels**: `yard tunnel` shares a site at a public HTTPS URL through cloudflared.
 - **Yard.app**, a menu bar app and window (Rust and GPUI) over the same daemon; everything it
   does, the CLI does too.
-- **Runs beside Laravel Herd**: Yard never changes Herd's files, ports or resolver.
 
 Yard uses the **standard profile** by default: nginx on 8080/8443, and sites at
-`http://<site>.yard:8080`. Herd keeps its `.test` domain,
-ports 80/443 and `/etc/resolver/test` untouched. `yard ports profile privileged` moves
-nginx to 80/443 through the helper, once nothing else holds them.
+`http://<site>.yard:8080`, leaving ports 80/443 to anything else that uses them.
+`yard ports profile privileged` moves nginx to 80/443 through the helper, once nothing else
+holds them.
 
 ## Install
 
@@ -90,8 +89,8 @@ exit, and removes the two files that nginx left owned by root (`logs/nginx-error
 `run/nginx.pid`). It names each file it removed and the next step: `yard start`, or
 `yard restart nginx` when yardd is already running.
 `scripts/e2e-m1.sh` then checks the whole path on your machine: it links a PHP app and
-proxies another, curls both on `.yard:8080`, and confirms Herd's resolver is unchanged (or
-still absent without Herd).
+proxies another, curls both on `.yard:8080`, and, where 80 and 443 are free, switches to the
+privileged profile and back.
 `scripts/e2e-m2.sh` checks multi-PHP and extensions, `scripts/e2e-m3.sh` HTTPS, `scripts/e2e-m4a.sh`
 the `.yard` file, `scripts/e2e-m4a1.sh` the managed `.yard` (and that `git status` stays clean),
 `scripts/e2e-m4b.sh` services: it adds MySQL, PostgreSQL, Redis and MinIO
@@ -190,7 +189,7 @@ error, 3 `yardd` is not running.
 | `yard stop` | no | Stops yardd and unloads its LaunchAgent; refused, as `start` is, for another root's agent. |
 | `yard status` | yes | Profile, TLD, units and site count; a sleeping service instance is a row of its own (`sleeping`). |
 | `yard version`, `--version`, `-V` | optional | CLI, daemon, helper and protocol versions; `--json` also gives the helper revision this `yard` needs. |
-| `yard uninstall [--keep-data] [--yes]` | no | Takes Yard off the Mac: lists what it will remove (the data directories with their sizes) and asks for `uninstall` typed back, then stops yardd and removes its LaunchAgent, removes the CA from the login keychain, runs `sudo yard helper uninstall`, deletes `~/.yard` (unless `--keep-data`), the app's settings and Yard.app (`brew uninstall --cask yard` for a Homebrew install). A failed step does not stop the rest; it ends naming what is left. Homebrew and what it installed, your projects, Herd, DBngin, Postgres.app and emailulator are left alone; named tunnels' hostnames are printed so their DNS records can be deleted at Cloudflare. With `--root` it removes only that root's agent, CA trust and data. |
+| `yard uninstall [--keep-data] [--yes]` | no | Takes Yard off the Mac: lists what it will remove (the data directories with their sizes) and asks for `uninstall` typed back, then stops yardd and removes its LaunchAgent, removes the CA from the login keychain, runs `sudo yard helper uninstall`, deletes `~/.yard` (unless `--keep-data`), the app's settings and Yard.app (`brew uninstall --cask yard` for a Homebrew install). A failed step does not stop the rest; it ends naming what is left. Homebrew and what it installed, your projects, DBngin, Postgres.app and emailulator are left alone; named tunnels' hostnames are printed so their DNS records can be deleted at Cloudflare. With `--root` it removes only that root's agent, CA trust and data. |
 | `yard self-update [--check] [--yes]` | no | Replaces Yard.app, and so the CLI, yardd and the shim, with the latest release, after checking its checksum, that `codesign` finds it meets the installed app's own signing requirement (same bundle id, Developer ID, same team), that Gatekeeper accepts it, and that it is the newer release the feed names; restarts yardd when the LaunchAgent runs the updated one, and says when the new helper needs `sudo yard helper install`. `--check` only says whether a newer release exists. Refused for a Homebrew install (`brew upgrade --cask yard`) and a development build. |
 | `yard doctor` | optional | Checks the installation and prints the fix for each problem. It tells yardd which `XDG_CONFIG_HOME` and `HOMEBREW_FORBIDDEN_*` your shell sets (and nothing else), so it can warn when brew would see something else under launchd. With a tunnel configured or running it also checks cloudflared, each domain's sign-in, each tunnel's state and credentials, a Vite `public/hot` file in a shared site, and every DNS record Yard left for you to delete, until it no longer resolves. |
 | `yard sites` | yes | The sites Yard serves, with the directory each one serves and whether it is `serving` or `needs setup`. |
@@ -226,7 +225,7 @@ error, 3 `yardd` is not running.
 | `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), Node (with the spec it pins), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, the managed `.yard` (`managed`), `sites.toml`, `.nvmrc`, `.node-version` or the default. |
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |
 | `yard source trust\|untrust <formula> [--tap]` | yes | Runs `brew trust` / `brew untrust` for one formula, or with `--tap` a whole tap. Needs no terminal. Untrusting something installed does not stop it serving, but brew will no longer load it. |
-| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx` first. The PHP ones follow the nearest `.yard`, then the site's managed `.yard`, then the site's isolated version, then `.yard-php`, then the default; the Node ones the nearest pin, where in one directory a `.yard`'s `node` beats the site's pin, which beats `.nvmrc`, then `.node-version`; with none, the default. Warns when another `php` or `node` would still win, naming Herd's, nvm's, mise's, fnm's or brew's. |
+| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx` first. The PHP ones follow the nearest `.yard`, then the site's managed `.yard`, then the site's isolated version, then `.yard-php`, then the default; the Node ones the nearest pin, where in one directory a `.yard`'s `node` beats the site's pin, which beats `.nvmrc`, then `.node-version`; with none, the default. Warns when another `php` or `node` would still win, naming nvm's, mise's, fnm's or brew's. |
 | `yard tunnel [site] [--quick \| --host <hostname>] [--tunnel <name\|uuid>] [--overwrite-dns]` | yes | Shares a site at a public URL through cloudflared (`brew install cloudflared`). `--quick` gives a random `trycloudflare.com` URL until yardd stops; `--host` a name on a domain set up with `yard tunnels domain add`, kept in `sites.toml` until `yard untunnel`. With neither, it asks when a domain is set up (and without a terminal fails with `TUNNEL_KIND_REQUIRED`, exit 2), and makes a quick tunnel when none is. Prints the URL and the `APP_URL` to use. |
 | `yard untunnel [site] [--keep-tunnel]` | yes | Stops sharing a site. For a named tunnel it deletes the Cloudflare tunnel Yard made (unless `--keep-tunnel`, and never one adopted with `--tunnel`) and names the DNS record left for you to delete in Cloudflare's dashboard. |
 | `yard tunnels` | yes | One row per tunnel: `SITE URL KIND STATE TUNNEL`. |
