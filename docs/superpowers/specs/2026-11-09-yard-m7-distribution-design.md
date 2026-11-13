@@ -1,6 +1,7 @@
 # Yard M7: distribution — design
 
-Status: approved by the maintainer on 2026-11-09. Main spec §11 and §12 (M7), M6 design §14 and §18
+Status: approved by the maintainer on 2026-11-09; built and released (v0.1.0 and v0.1.1, verified
+on both Macs) on 2026-11-13, see AGENTS.md Status. Main spec §11 and §12 (M7), M6 design §14 and §18
 (Q1, Q6). Decisions are marked with who made them: **(maintainer)** for what the maintainer said on 2026-11-09,
 **(Claude's call)** for what this design decided and the maintainer can still reverse.
 

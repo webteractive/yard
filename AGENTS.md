@@ -146,6 +146,19 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   (`docs/superpowers/specs/2026-11-09-yard-app-visual-design.md`, the D3 logo in its §6) was built on
   2026-11-10; its Status says what is left; `checklist.sh` passed 72/72 and `checklist-installs.sh` 14/14 on it
 on 2026-11-11.
+- M7 (distribution) is done: design `docs/superpowers/specs/2026-11-09-yard-m7-distribution-design.md`,
+  plan `docs/superpowers/plans/2026-11-09-yard-m7-distribution.md`. The history was scrubbed and
+  force-pushed and `webteractive/yard` went public (MIT) on 2026-11-13, with the tap
+  `webteractive/homebrew-tap`. `scripts/release.sh` published v0.1.0 and v0.1.1 (Developer ID
+  signed, notarized). Verified on 2026-11-13: on this machine, installed with `install.sh`, `yard
+  start` moved the agent onto `/Applications/Yard.app`'s yardd with no `sudo` (helper revision
+  unchanged), `scripts/e2e-m1.sh` and `checklist-real.sh` (10/10, `YARD`/`YARD_APP` pointing at the
+  installed app) passed; on the second Mac, `brew install --cask webteractive/tap/yard` needed no
+  `brew trust`. All three update paths took 0.1.0 to 0.1.1 and restarted yardd with no password:
+  `yard self-update` and the app's Update to 0.1.1… item here, `brew upgrade --cask yard` there. Left
+  open: the second Mac's helper is revision 0 (the maintainer runs `sudo yard helper install` there),
+  and one `checklist-real.sh` run saw nginx rejected for binding 127.0.0.1:80 at its S4, which did
+  not recur and whose cause is unknown.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -504,8 +517,8 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
 - **`AGENTS.md` is the only agent instruction file.** Do not add a `CLAUDE.md`
   (or any other harness-specific copy); project guidance goes here or in `.hydra/rules/`.
 - **Never commit or push without asking the maintainer.** The remote is `origin`,
-  `git@github.com:webteractive/yard.git` (private, added 2026-11-03; `gh` acts as
-  `maintainer` for the webteractive org). Commit messages are lean prose:
+  `git@github.com:webteractive/yard.git` (added 2026-11-03, public since 2026-11-13; `gh` acts as
+  the maintainer's account for the webteractive org). Commit messages are lean prose:
   a lowercase subject with no type prefix, prose paragraphs, no trailers.
 - **Docs move with the code**: the spec, the active plan, README, `--help`
   text, this file and the hydra rules.
