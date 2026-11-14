@@ -1,7 +1,9 @@
 //! `yard db` (db spec): which databases and instances a command means, the SQL Yard runs,
 //! what a GUI client needs to connect, and which PostgreSQL keg's tools to run. Pure.
 
+pub mod command;
 pub mod connect;
+pub mod flags;
 pub mod resolve;
 pub mod sql;
 
