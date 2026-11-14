@@ -3,6 +3,8 @@
 
 pub mod command;
 pub mod connect;
+pub mod detect;
+pub mod filter;
 pub mod flags;
 pub mod resolve;
 pub mod sql;
