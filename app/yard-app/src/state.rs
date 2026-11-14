@@ -12,12 +12,13 @@ use time::OffsetDateTime;
 use tokio::sync::oneshot;
 use yard_app_model::jobs::{JobKey, JobPhase, JobsStore};
 use yard_app_model::refresh::{RefreshQueue, ResourceKey, invalidation};
+use yard_app_model::transfers::TransferStore;
 use yard_client::api;
 use yard_client::session::{ConnectionState, Update};
 use yard_proto::methods::DoctorParams;
 use yard_proto::{
-    CaInfo, DoctorReport, ExtInfo, NodeList, PhpInfo, PortInfo, ServiceInfo, SiteDetail, SiteInfo,
-    SourceInfo, StatusInfo, TunnelDomain, TunnelInfo, YardError,
+    CaInfo, DbInstanceList, DoctorReport, ExtInfo, NodeList, PhpInfo, PortInfo, ServiceInfo, ServiceState,
+    SiteDetail, SiteInfo, SourceInfo, StatusInfo, TunnelDomain, TunnelInfo, YardError,
 };
 
 /// The last value of a list, the last error fetching it, whether a fetch is in flight, and when it
@@ -68,8 +69,17 @@ pub struct AppState {
     pub ca: Resource<CaInfo>,
     pub extensions: HashMap<String, Resource<Vec<ExtInfo>>>,
     pub site_detail: HashMap<String, Resource<SiteDetail>>,
+    /// `db.list` per MySQL or PostgreSQL instance (db spec §10).
+    pub databases: HashMap<String, Resource<Vec<DbInstanceList>>>,
     pub doctor: Resource<DoctorReport>,
     pub jobs: JobsStore,
+    /// The dumps and imports this app runs through the CLI, shown in Activity.
+    pub transfers: TransferStore,
+    /// How to stop each running transfer (Cancel, and quitting).
+    pub interrupts: HashMap<u64, Arc<crate::platform::cli::CliChild>>,
+    /// Database lists asked for while their instance was not up (asleep, stopped, starting, or
+    /// not listed yet): fetched once the services list says it runs, since listing wakes it.
+    deferred: HashSet<ResourceKey>,
     /// The last `yard self-update --check` answer (M7 spec §6.3); none until one succeeds.
     pub update: Option<yard_app_model::update::Check>,
     queue: RefreshQueue,
@@ -119,8 +129,12 @@ impl AppState {
                 ca: Resource::default(),
                 extensions: HashMap::new(),
                 site_detail: HashMap::new(),
+                databases: HashMap::new(),
                 doctor: Resource::default(),
                 jobs: JobsStore::default(),
+                transfers: TransferStore::default(),
+                interrupts: HashMap::new(),
+                deferred: HashSet::new(),
                 update: None,
                 queue: RefreshQueue::default(),
                 flush: None,
@@ -131,8 +145,52 @@ impl AppState {
     }
 
     pub fn refresh(&mut self, keys: impl IntoIterator<Item = ResourceKey>, cx: &mut Context<Self>) {
+        let keys: Vec<ResourceKey> = keys.into_iter().filter(|k| self.ready(k)).collect();
         self.queue.invalidate(keys);
         self.schedule(cx);
+    }
+
+    /// Whether `key` may be fetched now. Listing an instance's databases wakes it, so a list is
+    /// fetched only while its instance runs; one asked for before that waits in `deferred`, and
+    /// one for an engine without databases (or an instance that is gone) is never fetched.
+    fn ready(&mut self, key: &ResourceKey) -> bool {
+        let ResourceKey::Databases(name) = key else { return true };
+        let instance = self.services.value.as_ref().map(|list| list.iter().find(|s| &s.name == name));
+        match instance {
+            Some(None) => {
+                self.deferred.remove(key);
+                false
+            }
+            Some(Some(s)) if !yard_app_model::db::has_databases(&s.engine) => false,
+            Some(Some(s)) if s.state == ServiceState::Running => {
+                self.deferred.remove(key);
+                true
+            }
+            _ => {
+                self.deferred.insert(key.clone());
+                false
+            }
+        }
+    }
+
+    /// A `db.list` answer the app asked for itself (List databases, which wakes the instance).
+    pub fn put_databases(&mut self, name: &str, lists: Vec<DbInstanceList>, cx: &mut Context<Self>) {
+        let r = self.databases.entry(name.to_string()).or_default();
+        r.put(Ok(json!(lists)));
+        self.deferred.remove(&ResourceKey::Databases(name.to_string()));
+        cx.notify();
+    }
+
+    /// Stops a running dump or import, as Ctrl-C would.
+    pub fn interrupt(&mut self, id: u64) {
+        if let Some(child) = self.interrupts.get(&id) {
+            child.interrupt();
+        }
+    }
+
+    /// Stops every running dump and import.
+    pub fn interrupt_all(&self) {
+        self.interrupts.values().for_each(|child| child.interrupt());
     }
 
     /// The window or menu became active: `status`, and what is on screen.
@@ -284,6 +342,10 @@ impl AppState {
                             s.refresh(unseen, cx);
                         }
                     }
+                    if key == ResourceKey::Services && !s.deferred.is_empty() {
+                        let waiting: Vec<ResourceKey> = s.deferred.iter().cloned().collect();
+                        s.refresh(waiting, cx);
+                    }
                     if s.queue.finished(key) {
                         s.schedule(cx);
                     }
@@ -324,6 +386,10 @@ impl AppState {
                 self.site_detail.entry(n.clone()).or_default().loading = true;
                 (api::SITES_INFO.name, json!({"site": n}))
             }
+            ResourceKey::Databases(n) => {
+                self.databases.entry(n.clone()).or_default().loading = true;
+                return self.daemon.call_value(api::DB_LIST.name, api::DB_LIST.slow, json!({"service": n}));
+            }
         };
         self.daemon.call_value(name, false, params)
     }
@@ -342,6 +408,7 @@ impl AppState {
             ResourceKey::Ca => self.ca.put(answer),
             ResourceKey::Extensions(v) => self.extensions.entry(v.clone()).or_default().put(answer),
             ResourceKey::SiteDetail(n) => self.site_detail.entry(n.clone()).or_default().put(answer),
+            ResourceKey::Databases(n) => self.databases.entry(n.clone()).or_default().put(answer),
         }
         self.prune(key);
     }
@@ -357,6 +424,10 @@ impl AppState {
             ResourceKey::Php if self.php.error.is_none() => {
                 let Some(php) = &self.php.value else { return };
                 self.extensions.retain(|v, _| php.iter().any(|p| p.installed && &p.version == v));
+            }
+            ResourceKey::Services if self.services.error.is_none() => {
+                let Some(services) = &self.services.value else { return };
+                self.databases.retain(|n, _| services.iter().any(|s| &s.name == n));
             }
             _ => {}
         }

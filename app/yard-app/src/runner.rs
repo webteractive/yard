@@ -174,6 +174,15 @@ impl ActionRunner {
         )
     }
 
+    /// Queues `prompt` for the main window to ask (opening it if it is closed); resolves with
+    /// the button pressed.
+    pub fn ask(&mut self, prompt: Prompt, cx: &mut Context<Self>) -> oneshot::Receiver<usize> {
+        let (tx, answer) = oneshot::channel();
+        self.questions.push_back((prompt, tx));
+        cx.notify();
+        answer
+    }
+
     /// The answer to the question asked now: button 0 is yes. Yes to the trust question trusts
     /// the formula as a job, then repeats the work that asked, once.
     pub fn answer(&mut self, choice: usize, cx: &mut Context<Self>) {

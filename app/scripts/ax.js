@@ -17,6 +17,8 @@
 //   key <return|escape|tab>   presses that key in Yard
 //   pick <picker> <option>    opens the picker named <picker> and chooses <option>
 //   goto <folder>             in the open panel Yard shows, goes to <folder> and chooses it
+//   save <folder> <name>      in the save panel Yard shows, goes to <folder>, names the file
+//                             <name> and presses Save
 //   windows-of <process>      another app's window titles (an editor, Finder): [title]
 //   close-window <process> <title>  presses that window's close button
 //   row <name>                presses (opens) the table row named <name>
@@ -416,6 +418,34 @@ function run(argv) {
       se.keyCode(36);
       delay(0.8);
       result = { chose: args[0] };
+      break;
+    }
+    case "save": {
+      const [folder, name] = args;
+      const p = activate();
+      const panel = () => p.windows().find((w) => str(() => w.name()) === "Save");
+      for (let i = 0; i < 30 && !panel(); i++) delay(0.1);
+      const w = panel();
+      if (!w) throw new Error("no save panel");
+      se.keystroke("g", { using: ["command down", "shift down"] });
+      delay(0.8);
+      se.keystroke(folder);
+      delay(0.4);
+      se.keyCode(36);
+      delay(0.8);
+      // The name field (Save As) is the panel's first plain text field; the search field is not one.
+      const field = w.entireContents().find((e) => str(() => e.role()) === "AXTextField" && str(() => e.subrole()) !== "AXSearchField");
+      if (!field) throw new Error("the save panel has no name field");
+      try { field.focused = true; } catch (err) {}
+      delay(0.2);
+      se.keystroke("a", { using: "command down" });
+      se.keystroke(name);
+      delay(0.3);
+      const save = w.entireContents().find((e) => str(() => e.role()) === "AXButton" && str(() => e.name()) === "Save");
+      if (!save) throw new Error("the save panel has no Save button");
+      save.actions.byName("AXPress").perform();
+      delay(0.8);
+      result = { saved: folder + "/" + name };
       break;
     }
     case "key": {

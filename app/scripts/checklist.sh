@@ -9,8 +9,10 @@
 # Needs: target/release/{yard,yardd} at the repo root (cargo build --release), app/target/Yard.app
 # (scripts/bundle.sh), jq, brew's redis keg, and Accessibility and Screen Recording for the
 # terminal. The scratch root is $YARD_CHECK_ROOT (default /tmp/yard-check); its nginx and dnsmasq
-# are pinned to 28080, 28443 and 28053, its instances to 28379-28381 and 28900, and its auto ports
-# come from 29000-29099. MinIO is added and removed when brew has its keg (V1, V6). O4 runs when
+# are pinned to 28080, 28443 and 28053, its instances to 28379-28382 and 28900, and its auto ports
+# come from 29000-29099. MinIO is added and removed when brew has its keg (V1, V6); a MySQL 8.4
+# instance on 28382 for the database items (DB1-DB4) when brew has mysql@8.4, removed with its
+# data afterwards. The clipboard is put back after the items that copy. O4 runs when
 # $YARD_CHECK_OLD_YARDD names a yardd built before protocol 2.11 (git 14716f0) with yard-core's
 # HELPER_SOCKET pointed at a path that does not exist (it predates the helper guard). --keep leaves the
 # root, the daemon and the app running for a look afterwards.
@@ -114,7 +116,7 @@ if [[ -e "$root" ]]; then
   pgrep -f "yardd --root $root" >/dev/null && die "a yardd is still running on $root"
   rm -rf "$root"
 fi
-for port in 28080 28443 28053 28379 28380 28381 28900; do
+for port in 28080 28443 28053 28379 28380 28381 28382 28900; do
   lsof -nP -iTCP:"$port" -sTCP:LISTEN -iUDP:"$port" >/dev/null 2>&1 && die "port $port is in use"
 done
 
@@ -604,6 +606,120 @@ fi
 kill "$holder_pid" 2>/dev/null || true
 wait "$holder_pid" 2>/dev/null || true
 y service start redis >/dev/null 2>&1 || true
+
+# --- Databases: DB1 Connect…, DB2 Create database…, DB3 Dump…, DB4 Import… (db spec §10) -------
+
+if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
+  # Added here, not at the start: S2 compares chk-c's needs with what the root had then. Kept
+  # awake for the items, and removed with its data afterwards.
+  y service add mysql --version 8.4 --port 28382 >"$out/service-add-mysql.log" 2>&1 ||
+    die "yard service add mysql failed (see $out/service-add-mysql.log)"
+  y service sleep-after mysql-8.4 off >/dev/null
+  within 60 sh -c "'$yard_bin' --root '$root' services --json | jq -e 'any(.[]; .name == \"mysql-8.4\" and .state == \"running\")'" ||
+    die "the scratch mysql-8.4 did not start (see $out/service-add-mysql.log)"
+  db_names() { y db list --service mysql-8.4 --json | jq -c '[.[0].databases[].name] | sort'; }
+  mkdir -p "$root/dumps"
+  ax tab Services >/dev/null
+  ax row mysql-8.4 >/dev/null
+  sleep 1
+  shot services-mysql
+
+  # DB1: Connect… shows what yard db connect says, each field with a Copy that says what it copies
+  url="$(y db connect mysql-8.4 --json | jq -r '.[0].url')"
+  ax press "Connect…" mysql-8.4 >/dev/null
+  if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e --arg u '$url' 'any(.[]; .role == \"AXStaticText\" and .value == \$u)'"; then
+    shot connect
+    described="$(ax tree | jq '[.[] | select(.role == "AXButton" and .name == "Copy" and ((.help // "") | startswith("Copy the ")))] | length')"
+    clip_backup="$out/clipboard-db"
+    pbpaste >"$clip_backup"
+    ax press "Copy URL" >/dev/null
+    copied="$(pbpaste)"
+    pbcopy <"$clip_backup"
+    if texts_have "127.0.0.1" && texts_have "28382" && texts_have "(none)" && [[ "$described" -ge 5 && "$copied" == "$url" ]]; then
+      pass "DB1 Connect… shows yard db connect's fields ($url), $described Copy buttons say what they copy, and Copy URL copies it"
+    else
+      fail "DB1 Connect…" "copied [$copied], $described described Copy buttons, $(texts | grep -m3 -F -e 127.0.0.1 -e 28382 | tr '\n' ';')"
+    fi
+  else
+    fail "DB1 Connect… never showed the URL $url" "$(alert_texts)"
+  fi
+  ax press Done >/dev/null 2>&1 || ax key escape >/dev/null
+
+  # DB2: Create database… creates it, and the Databases list shows it
+  ax press "Create database…" mysql-8.4 >/dev/null
+  ax type "Database name" "chk shop" >/dev/null
+  ax press Create >/dev/null
+  if within 5 texts_have "is not a database name"; then
+    ax type "Database name" chk_shop >/dev/null
+    ax press Create >/dev/null
+    if within 15 sh -c "'$yard_bin' --root '$root' db list --service mysql-8.4 --json | jq -e 'any(.[0].databases[]; .name == \"chk_shop\")'" &&
+      within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .role == \"AXRow\" and .name == \"chk_shop\")'"; then
+      pass "DB2 Create database… refuses a name Yard does not take in the sheet, then creates chk_shop, which the list shows"
+    else
+      fail "DB2 create" "cli $(db_names), app $(rows)"
+    fi
+  else
+    fail "DB2 a bad name was not refused in the sheet" "$(texts | tail -3 | tr '\n' ';')"
+    ax key escape >/dev/null
+  fi
+  y db shell chk_shop --service mysql-8.4 -- -e "create table t (id int); insert into t values (1), (2), (3)" >/dev/null 2>&1 ||
+    note "DB2 could not add a table to chk_shop"
+
+  # DB3: Dump… through the save panel; bad Extra options stay in the sheet; Activity shows the bytes
+  ax press "Dump…" chk_shop >/dev/null
+  ax save "$root/dumps" chk_shop.sql.gz >/dev/null
+  if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .name == \"Extra options\")'"; then
+    ax type "Extra options" "--where='x" >/dev/null
+    ax press Dump >/dev/null
+    if within 5 texts_have "Extra options: a quote is not closed"; then
+      ax type "Extra options" "--single-transaction --routines" >/dev/null
+      ax press Compress >/dev/null
+      ax press Dump >/dev/null
+      if within 30 sh -c "gzip -dc '$root/dumps/chk_shop.sql.gz' 2>/dev/null | grep -q 'CREATE TABLE'"; then
+        ax tab Activity >/dev/null
+        sleep 0.5
+        shot activity-dump
+        # The save panel gives the real path (/private/tmp for /tmp).
+        if texts_have "Dump chk_shop from mysql-8.4" && texts | grep -q "^Dumped chk_shop from mysql-8.4 to .*/dumps/chk_shop.sql.gz ("; then
+          pass "DB3 Dump… writes the file the save panel chose, gzipped, after refusing an unclosed quote in the sheet; Activity says $(texts | grep -m1 '^Dumped')"
+        else
+          fail "DB3 Activity does not show the dump" "$(texts | grep -i -m3 dump | tr '\n' ';')"
+        fi
+        ax tab Services >/dev/null
+      else
+        fail "DB3 no dump at $root/dumps/chk_shop.sql.gz" "$(ls "$root/dumps") $(alert_texts)"
+      fi
+    else
+      fail "DB3 an unclosed quote was not refused in the sheet"
+    fi
+  else
+    fail "DB3 the Dump sheet never showed after the save panel"
+  fi
+  ax key escape >/dev/null 2>&1 || true
+
+  # DB4: Import… through the open panel into a new database, which the list then shows
+  ax row mysql-8.4 >/dev/null
+  ax press "Import…" mysql-8.4 >/dev/null
+  ax goto "$root/dumps/chk_shop.sql.gz" >/dev/null
+  if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .name == \"Into existing\")'"; then
+    ax type Database chk_copy >/dev/null
+    ax press Import >/dev/null
+    count() { y db shell chk_copy --service mysql-8.4 -- -N -B -e "select count(*) from t" 2>/dev/null; }
+    if within 30 sh -c "[ \"\$('$yard_bin' --root '$root' db shell chk_copy --service mysql-8.4 -- -N -B -e 'select count(*) from t' 2>/dev/null)\" = 3 ]" &&
+      within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .role == \"AXRow\" and .name == \"chk_copy\")'"; then
+      pass "DB4 Import… loads the gzipped dump from the open panel into a new chk_copy (3 rows), and the list shows it"
+    else
+      fail "DB4 import" "rows $(count), cli $(db_names), app $(rows), $(alert_texts)"
+    fi
+  else
+    fail "DB4 the Import sheet never showed after the open panel"
+  fi
+  ax key escape >/dev/null 2>&1 || true
+  y service remove mysql-8.4 --yes >/dev/null 2>&1 || fail "DB the scratch mysql-8.4 was not removed"
+  rm -rf "$root/dumps"
+else
+  note "DB1-DB4 skipped: no brew mysql@8.4 keg"
+fi
 
 ax tab PHP >/dev/null
 sleep 0.5

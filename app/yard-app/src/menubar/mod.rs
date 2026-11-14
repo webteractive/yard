@@ -471,7 +471,7 @@ fn on_click(id: &str, cx: &mut App) {
     let env = AppEnv::global(cx);
     let parts: Vec<&str> = id.splitn(3, ':').collect();
     match parts.as_slice() {
-        ["quit"] => cx.quit(),
+        ["quit"] => env.quit(cx),
         ["open"] => crate::window::main::open(&env, env.nav.read(cx).screen.clone(), cx),
         ["settings"] => crate::settings_window::open(&env, cx),
         ["setup"] => crate::onboarding::open(&env, cx),

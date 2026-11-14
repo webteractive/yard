@@ -109,6 +109,16 @@ impl Opener {
         cx.open_url(url);
     }
 
+    /// Opens a database URL (`mysql://root@127.0.0.1:3307/shop`) in the app macOS has for its
+    /// scheme (TablePlus, Sequel Ace); with none, `DB_NO_HANDLER`, which macOS would not report.
+    pub fn open_db_url(cx: &App, url: &str) -> Result<(), YardError> {
+        if !has_handler(url) {
+            return Err(yard_app_model::db::no_handler(url));
+        }
+        cx.open_url(url);
+        Ok(())
+    }
+
     /// Shows `path` in Finder.
     pub fn reveal(cx: &App, path: &Path) {
         cx.reveal_path(path);
@@ -162,6 +172,19 @@ impl Opener {
             None => Err(YardError::internal(format!("macOS would not open {}", file.display()))),
         }
     }
+}
+
+/// Whether some app opens `url`'s scheme.
+#[cfg(not(test))]
+fn has_handler(url: &str) -> bool {
+    let Some(url) = NSURL::URLWithString(&NSString::from_str(url)) else { return false };
+    NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url).is_some()
+}
+
+/// Tests open URLs through GPUI's test platform, which takes every scheme.
+#[cfg(test)]
+fn has_handler(_url: &str) -> bool {
+    true
 }
 
 #[cfg(test)]

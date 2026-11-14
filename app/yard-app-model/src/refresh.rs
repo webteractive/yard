@@ -20,6 +20,9 @@ pub enum ResourceKey {
     Extensions(String),
     /// `sites.info` for one site.
     SiteDetail(String),
+    /// `db.list` for one MySQL or PostgreSQL instance. No event makes it stale: listing wakes a
+    /// sleeping instance, so it is fetched only when shown or after the app changed it.
+    Databases(String),
 }
 
 pub mod invalidation {

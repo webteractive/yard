@@ -58,6 +58,40 @@ pub enum Sheet {
     },
     /// A screen's own form, in a sheet (Share…, Add domain…, Range…, Install…).
     Inline(crate::screens::forms::Inline),
+    /// Connect…: what a GUI client needs for instance `name` (db spec §8); `None` until yardd
+    /// answers.
+    Connect {
+        name: String,
+        info: Option<Box<yard_proto::ConnectInfo>>,
+    },
+    /// Create database… on instance `name`.
+    CreateDatabase {
+        name: String,
+        database: Entity<crate::widgets::text_field::TextField>,
+    },
+    /// Dump… of `database` on instance `name` into the file the save panel gave.
+    Dump {
+        name: String,
+        database: String,
+        file: PathBuf,
+        /// The save panel asked whether to replace the file that is there.
+        overwrite: bool,
+        compress: bool,
+        extra: Entity<crate::widgets::text_field::TextField>,
+        /// Sent, and waiting for the dump to start or be refused.
+        starting: bool,
+    },
+    /// Import… of the file or folder the open panel gave into instance `name`.
+    Import {
+        name: String,
+        engine: String,
+        file: PathBuf,
+        database: Entity<crate::widgets::text_field::TextField>,
+        into_existing: bool,
+        keep_owners: bool,
+        extra: Entity<crate::widgets::text_field::TextField>,
+        starting: bool,
+    },
 }
 
 /// Where the main window is and what it should open on.
@@ -198,6 +232,100 @@ impl AppEnv {
             )
             .detach()
         });
+    }
+
+    /// Runs `yard --json <args>` as a dump or import Activity shows under `title` (db spec §10):
+    /// the CLI's `--progress-json` lines feed its bytes, Cancel sends it Ctrl-C, and its error
+    /// stays beside `id`. `started` runs once: at the first progress line (the tool is running,
+    /// so nothing was refused) or at a successful end, whichever is first.
+    pub fn run_transfer(
+        &self,
+        id: &str,
+        title: String,
+        args: Vec<String>,
+        started: impl FnOnce(&mut App) + 'static,
+        cx: &mut App,
+    ) -> gpui::Task<Result<Value, YardError>> {
+        let crate::platform::cli::Streaming { child, mut lines, done } = self.cli.stream(&args);
+        let tid = self.state.update(cx, |s, cx| {
+            let tid = s.transfers.start(title, time::OffsetDateTime::now_utc());
+            s.interrupts.insert(tid, child);
+            cx.notify();
+            tid
+        });
+        let (state, runner, id) = (self.state.clone(), self.runner.clone(), ActionId(id.to_string()));
+        cx.spawn(async move |cx| {
+            let mut started = Some(started);
+            while let Some(line) = lines.recv().await {
+                let progress = state.update(cx, |s, cx| {
+                    let progress = s.transfers.line(tid, &line);
+                    cx.notify();
+                    progress
+                });
+                if progress && let Some(f) = started.take() {
+                    cx.update(f);
+                }
+            }
+            let result = done.await;
+            state.update(cx, |s, cx| {
+                let said = result.as_ref().map(yard_app_model::db::outcome_text).map_err(Clone::clone);
+                s.transfers.finish(tid, said);
+                s.interrupts.remove(&tid);
+                cx.notify();
+            });
+            runner.update(cx, |r, cx| {
+                match &result {
+                    Err(e) if e.code != yard_proto::ErrorCode::JobCancelled => r.errors.record(id, e.clone()),
+                    _ => r.errors.clear(&id),
+                }
+                cx.notify();
+            });
+            if result.is_ok()
+                && let Some(f) = started.take()
+            {
+                cx.update(f);
+            }
+            result
+        })
+    }
+
+    /// Quits, asking first while a dump or import runs; yes stops them (Ctrl-C to each CLI, which
+    /// removes a dump's partial file) and quits once they have ended, or after 10 s.
+    pub fn quit(&self, cx: &mut App) {
+        let records: Vec<yard_app_model::transfers::Transfer> =
+            self.state.read(cx).transfers.running().cloned().collect();
+        let Some((title, message, buttons)) =
+            yard_app_model::transfers::quit_question(&records.iter().collect::<Vec<_>>())
+        else {
+            return cx.quit();
+        };
+        let prompt = yard_app_model::actions::Prompt::Confirm {
+            title,
+            message,
+            buttons: buttons.iter().map(|b| b.to_string()).collect(),
+            destructive: 0,
+        };
+        let answer = self.runner.update(cx, |r, cx| r.ask(prompt, cx));
+        let state = self.state.clone();
+        cx.spawn(async move |cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            state.update(cx, |s, _| s.interrupt_all());
+            for _ in 0..100 {
+                if state.read_with(cx, |s, _| s.transfers.running().next().is_none()) {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+            }
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
+    }
+
+    /// Stops every running dump and import, as the app quits by any way (an update, uninstall).
+    pub fn interrupt_transfers(&self, cx: &mut App) {
+        self.state.update(cx, |s, _| s.interrupt_all());
     }
 
     /// Runs `yard <args> --json` like `run_cli`, then fetches `keys` again whatever the result:

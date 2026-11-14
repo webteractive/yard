@@ -6,11 +6,13 @@ use crate::widgets::button::Button;
 use crate::widgets::error_view::ErrorView;
 use crate::widgets::log_view::LogView;
 use crate::widgets::pill::Pill;
-use crate::widgets::theme::Theme;
 use crate::widgets::theme::Typography;
+use crate::widgets::theme::{Theme, radius, space};
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
+use time::OffsetDateTime;
 use yard_app_model::hint::HintAction;
 use yard_app_model::jobs::{JobPhase, JobRecord};
+use yard_app_model::transfers::{Transfer, progress_text};
 
 /// The phase's word for its pill: why a job failed is in the error under it.
 pub fn phase_word(phase: &JobPhase) -> String {
@@ -56,10 +58,85 @@ pub fn rows(env: &AppEnv, cx: &App) -> Vec<String> {
     newest_first(env, cx).iter().map(|j| format!("{} — {}", j.title, phase_text(&j.phase))).collect()
 }
 
+/// A dump or import the app runs (db spec §10): its title, phase, bytes so far, what the CLI
+/// said, its error, and Cancel (Ctrl-C to the CLI) while it runs.
+fn transfer_card(env: &AppEnv, r: &Transfer, t: &Theme) -> AnyElement {
+    let id = format!("transfer:{}", r.id);
+    let running = !r.phase.is_finished();
+    let lines: Vec<SharedString> =
+        r.lines.iter().rev().take(20).rev().map(|l| SharedString::from(l.clone())).collect();
+    let bytes = r.progress.map(progress_text).or_else(|| running.then(|| "starting…".to_string()));
+    let failure = match &r.phase {
+        JobPhase::Failed(e) => Some(e.clone()),
+        _ => None,
+    };
+    let (env, tid) = (env.clone(), r.id);
+    div()
+        .flex()
+        .flex_col()
+        .gap(space::SM)
+        .p(space::MD)
+        .rounded(radius::LG)
+        .border_1()
+        .border_color(t.c.separator)
+        .bg(t.c.surface)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(space::SM)
+                .child({
+                    let selector = format!("{id}:title");
+                    div()
+                        .debug_selector(move || selector)
+                        .min_w(px(0.))
+                        .type_body_strong()
+                        .child(crate::widgets::text(format!("{id}:title"), r.title.clone()))
+                })
+                .child(Pill::of(format!("{id}:phase"), phase_word(&r.phase))),
+        )
+        .when_some(bytes, |d, b| {
+            d.child(
+                div()
+                    .type_secondary()
+                    .text_color(t.c.text_secondary)
+                    .child(crate::widgets::text(format!("{id}:bytes"), b)),
+            )
+        })
+        .when(!lines.is_empty(), |d| d.child(LogView::new(format!("{id}:log"), lines)))
+        .when_some(failure, |d, e| {
+            let env = env.clone();
+            d.child(
+                ErrorView::new(format!("{id}:error"), &e, HintAction::parse(e.hint.as_deref().unwrap_or("")))
+                    .on_action(move |a, _, cx| env.perform(a, cx)),
+            )
+        })
+        .when(running, |d| {
+            d.child(crate::widgets::bar().child(
+                Button::new(format!("{id}:cancel"), format!("Cancel {}", r.title)).on_click(
+                    move |_, _, cx| {
+                        env.state.update(cx, |s, _| s.interrupt(tid));
+                    },
+                ),
+            ))
+        })
+        .into_any_element()
+}
+
 pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
     let jobs = newest_first(env, cx);
+    let transfers: Vec<(OffsetDateTime, AnyElement)> = env
+        .state
+        .read(cx)
+        .transfers
+        .all()
+        .iter()
+        .map(|r| (r.started_at, transfer_card(env, r, &t)))
+        .collect();
     let cards = jobs.into_iter().map(|j| {
+        let started_at = j.started_at;
         let running = !j.phase.is_finished();
         let failure = match &j.phase {
             JobPhase::Failed(e) => Some(e.clone()),
@@ -70,7 +147,7 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         let job_id = j.key.id.clone();
         let tail: Vec<SharedString> =
             j.lines.iter().rev().take(20).rev().map(|l| SharedString::from(l.clone())).collect();
-        div()
+        let card = div()
             .flex()
             .flex_col()
             .gap(px(6.))
@@ -118,9 +195,13 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                         },
                     ),
                 ))
-            })
+            });
+        (started_at, card.into_any_element())
     });
-    let cards: Vec<_> = cards.collect();
+    // Newest first, jobs and transfers together; the sort is stable, so a tie keeps that order.
+    let mut cards: Vec<(OffsetDateTime, AnyElement)> = cards.chain(transfers.into_iter().rev()).collect();
+    cards.sort_by_key(|c| std::cmp::Reverse(c.0));
+    let cards: Vec<AnyElement> = cards.into_iter().map(|(_, c)| c).collect();
     if cards.is_empty() {
         return crate::widgets::empty_state(
             "activity:empty",

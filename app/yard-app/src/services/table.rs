@@ -191,6 +191,17 @@ fn controls(env: &AppEnv, s: &ServiceInfo, cx: &mut App) -> Vec<(&'static str, A
             .small()
             .into_any_element(),
     ));
+    if s.managed_by == ServiceManager::Yard && yard_app_model::db::has_connect(&s.engine) {
+        let (e8, n8) = (env.clone(), n.clone());
+        out.push((
+            "connect",
+            Button::new(format!("service:{n}:connect"), "Connect…")
+                .description(format!("What a database app needs to connect to {n}"))
+                .on_click(move |_, _, cx| super::db::connect(&e8, &n8, cx))
+                .small()
+                .into_any_element(),
+        ));
+    }
     if let Some(console) = s.console.clone() {
         out.push((
             "console",
@@ -292,7 +303,7 @@ pub fn remove(env: &AppEnv, name: String, keep_data: bool, cx: &mut App) {
 
 /// The selected instance's detail: its port and sleep with the sheets that change them, and its
 /// other controls (spec §4, Services). `None` when `name` is no longer an instance.
-pub fn detail(env: &AppEnv, name: &str, cx: &mut App) -> Option<AnyElement> {
+pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     let now = OffsetDateTime::now_utc();
     let s = env.state.read(cx).services.value.iter().flatten().find(|s| s.name == name).cloned()?;
     let cells = cells(&s, now);
@@ -305,6 +316,7 @@ pub fn detail(env: &AppEnv, name: &str, cx: &mut App) -> Option<AnyElement> {
     let cell = |i: usize| {
         crate::widgets::table::shown(&SharedString::from(cells.get(i).cloned().unwrap_or_default()))
     };
+    let databases = super::db::section(env, &s, window, cx);
     let id = format!("service:{name}:detail");
     let selector = id.clone();
     Some(
@@ -315,6 +327,9 @@ pub fn detail(env: &AppEnv, name: &str, cx: &mut App) -> Option<AnyElement> {
             .role(gpui::Role::Group)
             .aria_label(SharedString::from(name.to_string()))
             .debug_selector(move || selector)
+            .flex()
+            .flex_col()
+            .gap(crate::widgets::theme::space::LG)
             .child(
                 Group::new(id, Some(name.to_string().into()))
                     .row(
@@ -342,6 +357,7 @@ pub fn detail(env: &AppEnv, name: &str, cx: &mut App) -> Option<AnyElement> {
                             .children(remove),
                     ),
             )
+            .children(databases)
             .into_any_element(),
     )
 }

@@ -52,6 +52,13 @@ fn main() {
         // the runtime under every session lives as long as the app (found 2026-11-06, when a
         // session stopped noticing yardd the moment start-up finished).
         cx.set_global(env.clone());
+        // However the app quits (an update, Uninstall Yard…), a dump or import still running is
+        // stopped as Ctrl-C would, so the CLI removes a partial dump rather than run on orphaned.
+        cx.on_app_quit(|cx| {
+            env::AppEnv::global(cx).interrupt_transfers(cx);
+            async {}
+        })
+        .detach();
         cx.on_window_closed(|cx, _| {
             platform::activation::window_closed(cx);
             window::main::closed(&env::AppEnv::global(cx), cx);

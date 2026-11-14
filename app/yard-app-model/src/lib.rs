@@ -3,6 +3,7 @@
 //! access, and no clock: `now` is always a parameter, so every rule is a plain `cargo test`.
 
 pub mod actions;
+pub mod db;
 pub mod health;
 pub mod hint;
 pub mod jobs;
@@ -13,4 +14,5 @@ pub mod settle;
 pub mod setup;
 pub mod shell_words;
 pub mod terminal;
+pub mod transfers;
 pub mod update;

@@ -50,7 +50,10 @@ pub fn visible_keys(screen: &Screen) -> Vec<ResourceKey> {
             vec![ResourceKey::Sites, ResourceKey::SiteDetail(site.clone()), ResourceKey::Php]
         }
         Screen::Sites(None) => vec![ResourceKey::Sites],
-        Screen::Services(_) => vec![ResourceKey::Services],
+        // A selected MySQL or PostgreSQL instance's databases; AppState fetches them only while
+        // it runs, since listing wakes it.
+        Screen::Services(Some(name)) => vec![ResourceKey::Services, ResourceKey::Databases(name.clone())],
+        Screen::Services(None) => vec![ResourceKey::Services],
         Screen::Php => vec![ResourceKey::Php],
         Screen::Node => vec![ResourceKey::Node],
         Screen::Tunnels => vec![ResourceKey::Tunnels, ResourceKey::TunnelDomains, ResourceKey::Sites],
@@ -355,6 +358,7 @@ fn sheet(env: &AppEnv, window: &mut Window, cx: &mut App) -> Option<AnyElement> 
     let open = env.nav.read(cx).sheet.clone()?;
     crate::sites::forms::sheet(env, &open, window, cx)
         .or_else(|| crate::services::forms::sheet(env, &open, window, cx))
+        .or_else(|| crate::services::db::sheet(env, &open, window, cx))
         .or_else(|| crate::screens::forms::sheet(env, &open, window, cx))
 }
 
@@ -369,7 +373,7 @@ fn badge(env: &AppEnv, screen: &Screen, cx: &App) -> Option<usize> {
             .filter(|x| matches!(x.state, ServiceState::Failed { .. }))
             .count(),
         Screen::Ports => s.ports.value.iter().flatten().filter(|p| p.status == PortStatus::InUse).count(),
-        Screen::Activity => s.jobs.running().count(),
+        Screen::Activity => s.jobs.running().count() + s.transfers.running().count(),
         _ => 0,
     };
     (n > 0).then_some(n)

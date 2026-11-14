@@ -1,5 +1,6 @@
 //! Services (M6 design §8.2): the instances, their row actions, adding one, and a live log.
 
+pub mod db;
 pub mod forms;
 pub mod logs;
 pub mod table;
@@ -16,8 +17,23 @@ use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString
 use yard_app_model::hint::HintAction;
 
 /// The actions on an instance whose errors the Services screen shows, as `service:<name>:<verb>`;
-/// with `service:add`.
-pub const VERBS: [&str; 8] = ["start", "stop", "restart", "remove", "port", "sleep", "env", "add"];
+/// with `service:add`. `databases` to `import` are the database actions (`db`).
+pub const VERBS: [&str; 14] = [
+    "start",
+    "stop",
+    "restart",
+    "remove",
+    "port",
+    "sleep",
+    "env",
+    "databases",
+    "create-db",
+    "connect",
+    "open-db",
+    "dump",
+    "import",
+    "add",
+];
 
 pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let t = Theme::of(window);
@@ -90,7 +106,7 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(12.))
         .children(errors)
         .child(table::table(env, selected.clone(), window, cx))
-        .children(selected.and_then(|n| table::detail(env, &n, cx)))
+        .children(selected.and_then(|n| table::detail(env, &n, window, cx)))
         .children(failed)
         .children(log)
         .into_any_element()
