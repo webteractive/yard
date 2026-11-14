@@ -339,7 +339,11 @@ Redis gets **Connect…**.
   variables or globbing) **(builder's call)**, and §7's refusals show in the sheet.
 - The app runs dumps and imports through the CLI (`yard db dump|import … --progress-json`, decided
   while planning: the runner then exists once, and the CLI child inherits the file access the open
-  and save panels grant); the progress JSON lines on stderr feed Activity. Each shows in Activity with its
+  and save panels grant); the progress JSON lines on stderr feed Activity. **Built:** the sheet stays
+  open until the run has started, so a refusal shows in it; a file the save panel already asked
+  about replacing gets `--overwrite`; **Keep owners** shows for PostgreSQL only; the Databases list
+  is fetched only while the instance runs (**List databases** wakes it), so the app never wakes an
+  instance on its own; and Quit asks while a dump or import runs. Each shows in Activity with its
   bytes and Cancel, as the app's own entries; quitting the app stops them, after asking.
 - The app writes nothing of Yard's (app rule): every decision is yardd's, and the only files it
   writes are the dump the user saved.
