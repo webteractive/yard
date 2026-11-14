@@ -234,7 +234,7 @@ pub fn config_file(
     let port = main_port(engine, instance, ports);
     match engine {
         Engine::Mysql => {
-            let socket = nginx_str(&paths.run_dir().join(format!("{instance}.sock")).display().to_string());
+            let socket = nginx_str(&paths.mysql_socket(instance).display().to_string());
             let text = format!(
                 "{header}[mysqld]
 port = {port}

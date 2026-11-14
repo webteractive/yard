@@ -220,6 +220,11 @@ impl Paths {
         self.root.join("run")
     }
 
+    /// A MySQL instance's socket; PostgreSQL's sockets live in `run_dir` itself.
+    pub fn mysql_socket(&self, instance: &str) -> PathBuf {
+        self.run_dir().join(format!("{instance}.sock"))
+    }
+
     /// yardd's wake socket, which nginx and the shims ask before a site's sleeping
     /// services are needed (M4e spec §5.1, §5.2).
     pub fn wake_socket(&self) -> PathBuf {
@@ -369,5 +374,11 @@ mod tests {
         assert_eq!(Paths::from_vars(Some("/x".into()), Some("/h".into())).unwrap().root(), Path::new("/x"));
         assert_eq!(Paths::from_vars(None, Some("/h".into())).unwrap().root(), Path::new("/h/.yard"));
         assert!(Paths::from_vars(None, None).is_err());
+    }
+
+    #[test]
+    fn mysql_socket_is_in_run() {
+        let p = Paths::new("/r");
+        assert_eq!(p.mysql_socket("mysql-8.4"), PathBuf::from("/r/run/mysql-8.4.sock"));
     }
 }
