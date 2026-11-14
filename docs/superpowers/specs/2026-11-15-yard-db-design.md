@@ -211,7 +211,9 @@ Feeds the file to the instance, creating the database first when it does not exi
   body is not a statement); PostgreSQL's quotes, dollar quoting, comments and `COPY … FROM stdin`
   data up to `\.`. An archive for `pg_restore` cannot switch on its own once `-C` is refused (§7).
 - **The import's own database (final review, 2026-11-15).** A switch to the database being
-  imported into is followed, not refused: its `USE` and `\connect` run, and its `CREATE DATABASE`
+  imported into is followed, not refused: its `USE` runs, a bare `\connect <it>` (no other argument
+  or backslash on the line, since psql runs every backslash command on a line) is re-written as
+  `\connect "<it>"`, and its `CREATE DATABASE`
   is skipped (yardd made it), so a `mysqldump -B shop` dump (HeidiSQL's default) imports as `shop`.
   `DROP DATABASE` stays refused even for it. A gzipped import fails when gzip does (a truncated
   download), even if the tool took the prefix as a whole dump, and a dump to an existing directory
@@ -224,8 +226,8 @@ Feeds the file to the instance, creating the database first when it does not exi
   statement. The lexers read strings as psql and the server do (an `E'` only where `E` starts a
   token, bytes from 0x80 as identifier bytes, dollar tags included, `COPY` data only after `COPY
   <table> [(…)] FROM STDIN`), and a statement that would change how strings end
-  (`standard_conforming_strings` but `= on`, `NO_BACKSLASH_ESCAPES`) is refused, but only in a
-  statement that can change them (`SET`, `ALTER`, `RESET`, `set_config`), not in row data. An
+  (`standard_conforming_strings` but `= on`, `NO_BACKSLASH_ESCAPES`) is refused in any statement
+  but row data (an `INSERT`, or MySQL's `REPLACE`), which cannot change them. An
   `ALTER` is an ownership statement only when `OWNER TO <role>` ends it, so `RENAME COLUMN owner
   TO x` is kept.
 - **What the filters are for (builder's call, 2026-11-15).** They guard against accidents, not

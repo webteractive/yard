@@ -259,11 +259,15 @@ impl PostgresFilter {
     fn complete_meta(&mut self, out: &mut Vec<u8>) {
         let line = self.buf.trim_ascii();
         let start = line.iter().position(|&c| c == b'\\').map_or(0, |p| p + 1);
-        let mut parts = line[start..].split(|c| c.is_ascii_whitespace()).filter(|p| !p.is_empty());
-        let command = parts.next();
+        let words: Vec<&[u8]> =
+            line[start..].split(|c| c.is_ascii_whitespace()).filter(|p| !p.is_empty()).collect();
+        // psql runs every backslash command on a line, so a line passes only in its bare form:
+        // the command and one argument, and no other backslash.
+        let bare = words.len() == 2 && !line[start..].contains(&b'\\');
+        let command = words.first().copied();
         // pg_dump's own `\restrict`/`\unrestrict` pass; any other meta-command (`\!` runs a
         // shell, `\i` reads a file) is refused, and `\connect` names the database it switches to.
-        if matches!(command, Some(b"restrict" | b"unrestrict")) {
+        if bare && matches!(command, Some(b"restrict" | b"unrestrict")) {
             out.append(&mut self.buf);
             self.reset();
             return;
@@ -271,13 +275,15 @@ impl PostgresFilter {
         let from = self.buf.len() - self.buf.trim_ascii_start().len();
         let switch = match command {
             Some(b"connect" | b"c") => {
-                let db = parts.next().map(|d| String::from_utf8_lossy(d).trim_matches('"').to_string());
+                let db = words.get(1).map(|d| String::from_utf8_lossy(d).trim_matches('"').to_string());
                 Switch::new(Verb::Use, &self.buf, from, db)
             }
             _ => Switch::new(Verb::Client, &self.buf, from, None),
         };
-        if switch.is_own(&self.target) {
-            out.append(&mut self.buf);
+        if bare && switch.is_own(&self.target) {
+            // Re-written, not passed on: only the connect to the import's own database runs.
+            out.extend_from_slice(format!("\\connect \"{}\"\n", self.target).as_bytes());
+            self.buf.clear();
             self.reset();
             return;
         }
@@ -319,10 +325,8 @@ fn changes_string_rules(stmt: &[u8]) -> bool {
     if !contains_ci(stmt, b"standard_conforming_strings") {
         return false;
     }
-    // Only a statement that can change it: the words in row data are not one.
-    let setting = matches!(w.first().map(String::as_str), Some("set" | "alter" | "reset"))
-        || contains_ci(stmt, b"set_config");
-    if !setting {
+    // Row data (an INSERT) cannot change it; any other statement naming it might.
+    if w.first().map(String::as_str) == Some("insert") {
         return false;
     }
     let w: Vec<&str> = w.iter().map(String::as_str).collect();
@@ -526,10 +530,20 @@ REVOKE ALL ON SCHEMA app FROM PUBLIC;
         let out = String::from_utf8(out).unwrap();
         assert!(
             !out.contains("CREATE DATABASE")
-                && out.contains("\\connect app")
+                && out.contains("\\connect \"app\"\n")
                 && out.contains("CREATE TABLE t"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn a_connect_to_the_target_carrying_more_is_refused() {
+        // psql runs every backslash command on the line, so only the bare form is followed.
+        for line in ["\\connect app \\! touch /tmp/p\n", "\\c app otheruser\n", "\\connect app\\! ls\n"] {
+            let mut f = PostgresFilter::new(true, "app");
+            let result = f.push(line.as_bytes()).and_then(|_| f.finish());
+            assert!(result.is_err(), "{line:?} passed");
+        }
     }
 
     #[test]
@@ -537,6 +551,13 @@ REVOKE ALL ON SCHEMA app FROM PUBLIC;
         let sql = b"ALTER TABLE t RENAME COLUMN owner TO proprietor;\nALTER TABLE t RENAME \"owner\" TO x;\n";
         let (out, skipped) = run(sql, 5, false);
         assert_eq!((out.unwrap(), skipped), (sql.to_vec(), 0));
+    }
+
+    #[test]
+    fn setting_words_outside_row_data_are_refused() {
+        let sql = b"CREATE FUNCTION f() RETURNS int SET standard_conforming_strings = off AS $$ select 1 $$ LANGUAGE sql;\n";
+        let (out, _) = run(sql, 4, true);
+        assert!(out.is_err());
     }
 
     #[test]

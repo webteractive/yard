@@ -195,11 +195,12 @@ impl MysqlFilter {
     fn complete(&mut self, out: &mut Vec<u8>) {
         if self.content > 0 {
             // NO_BACKSLASH_ESCAPES would have the server end `'a\'` where the client and this
-            // filter do not, so a SET that turns it on is refused (fails closed); the words in
-            // row data are not a SET.
-            let is_set =
-                words(&self.buf, true, 1).first().is_some_and(|(_, w)| w.eq_ignore_ascii_case("SET"));
-            if self.client_command || (is_set && contains_ci(&self.buf, b"no_backslash_escapes")) {
+            // filter do not, so any statement naming it is refused (fails closed), except row
+            // data: an INSERT or REPLACE cannot change sql_mode.
+            let row_data = words(&self.buf, true, 1)
+                .first()
+                .is_some_and(|(_, w)| w.eq_ignore_ascii_case("INSERT") || w.eq_ignore_ascii_case("REPLACE"));
+            if self.client_command || (!row_data && contains_ci(&self.buf, b"no_backslash_escapes")) {
                 self.switched = Some(Switch::client(&self.buf));
                 self.buf.clear();
                 return;
@@ -372,6 +373,12 @@ SELECT 'done';
             f.push(b"DROP DATABASE IF EXISTS `shop`;").and_then(|_| f.finish()).is_err(),
             "DROP stays refused"
         );
+    }
+
+    #[test]
+    fn setting_words_outside_row_data_are_refused() {
+        let sql = b"PREPARE s FROM 'SET sql_mode=\"NO_BACKSLASH_ESCAPES\"';\n";
+        assert!(run(sql, 3).is_err());
     }
 
     #[test]
