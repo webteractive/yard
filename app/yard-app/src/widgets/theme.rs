@@ -5,6 +5,9 @@
 use gpui::Rgba;
 use gpui::{FontWeight, Hsla, Styled, Window, WindowAppearance, hsla, px, rgb};
 
+/// How much of `sidebar_bg` covers the blurred desktop under the sidebar.
+const SIDEBAR_ALPHA: f32 = 0.92;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     /// The design's tokens.
@@ -17,7 +20,10 @@ pub struct Theme {
 #[derive(Debug, Clone, Copy)]
 pub struct Colors {
     pub window_bg: Hsla,
-    pub sidebar_bg: Hsla,
+    /// The sidebar's fill over the main window's blurred desktop (spec §5 step 18).
+    pub sidebar_translucent: Hsla,
+    /// The sidebar's group labels: 4.5:1 on `sidebar_translucent` whatever the desktop behind it.
+    pub sidebar_label: Hsla,
     pub content_bg: Hsla,
     pub surface: Hsla,
     pub surface_sunken: Hsla,
@@ -87,7 +93,8 @@ impl Theme {
         Theme {
             c: Colors {
                 window_bg: c(0xf5f5f7),
-                sidebar_bg: c(0xededef),
+                sidebar_translucent: a(0xededef, SIDEBAR_ALPHA),
+                sidebar_label: c(0x58585d),
                 content_bg: c(0xffffff),
                 surface: c(0xffffff),
                 surface_sunken: c(0xf5f5f7),
@@ -127,7 +134,8 @@ impl Theme {
         Theme {
             c: Colors {
                 window_bg: c(0x1e1e1e),
-                sidebar_bg: c(0x262628),
+                sidebar_translucent: a(0x262628, SIDEBAR_ALPHA),
+                sidebar_label: c(0xb4b4b9),
                 content_bg: c(0x1e1e1e),
                 surface: c(0x2a2a2c),
                 surface_sunken: c(0x161617),
@@ -308,8 +316,15 @@ mod tests {
                     assert!(r >= 4.5, "{name} {tone:?} text on its wash over {under} is {r:.2}");
                 }
             }
-            let r = contrast(c.text_secondary, c.sidebar_bg);
-            assert!(r >= 4.5, "{name} text_secondary on sidebar_bg (group labels) is {r:.2}");
+            // The sidebar lets the blurred desktop through: its labels and items stay readable over
+            // a black and a white desktop alike (a dark Mac's labels read 3.9:1 in text_secondary).
+            for (desk, under) in [("black", super::c(0x000000)), ("white", super::c(0xffffff))] {
+                let bg = over(c.sidebar_translucent, under);
+                for (token, fg) in [("sidebar_label", c.sidebar_label), ("text", c.text)] {
+                    let r = contrast(fg, bg);
+                    assert!(r >= 4.5, "{name} {token} on the sidebar over a {desk} desktop is {r:.2}");
+                }
+            }
             let r = contrast(c.on_accent, c.accent_fill);
             assert!(r >= 4.5, "{name} on_accent on accent_fill is {r:.2}");
             let r = contrast(c.on_accent, c.danger_fill);

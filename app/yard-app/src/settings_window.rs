@@ -122,7 +122,6 @@ impl Render for SettingsView {
             .bg(t.c.window_bg)
             .text_color(t.c.text)
             .type_body()
-            .child(div().type_section().child(crate::widgets::text("heading", "Settings")))
             .child(group)
             .child(
                 div()
@@ -143,10 +142,15 @@ impl Render for SettingsView {
             )
             .child({
                 let env = self.env.clone();
-                Button::new("settings:uninstall", "Uninstall Yard…")
-                    .style(ButtonStyle::Destructive)
-                    .description("opens Terminal to run yard uninstall, which asks before removing anything")
-                    .on_click(move |_, _, cx| env.uninstall(cx))
+                // Apart from Save, under a rule: it removes Yard rather than changing a setting.
+                div().flex().pt(px(12.)).border_t_1().border_color(t.c.separator).child(
+                    Button::new("settings:uninstall", "Uninstall Yard…")
+                        .style(ButtonStyle::Destructive)
+                        .description(
+                            "opens Terminal to run yard uninstall, which asks before removing anything",
+                        )
+                        .on_click(move |_, _, cx| env.uninstall(cx)),
+                )
             })
     }
 }
@@ -213,5 +217,15 @@ mod tests {
         let (_fake, env) = env(cx);
         let (_v, cx) = cx.add_window_view(|_, cx| super::SettingsView::new(env, cx));
         cx.run_until_parked();
+    }
+
+    /// Uninstall Yard… is a button its own size, not a bar across the window (G7).
+    #[gpui::test]
+    async fn uninstall_is_not_stretched(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let (_v, cx) = cx.add_window_view(|_, cx| super::SettingsView::new(env, cx));
+        cx.run_until_parked();
+        let button = cx.debug_bounds("settings:uninstall").expect("Uninstall Yard…");
+        assert!(button.size.width < gpui::px(200.), "it is {:?} wide", button.size.width);
     }
 }

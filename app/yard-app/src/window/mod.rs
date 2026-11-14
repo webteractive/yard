@@ -34,4 +34,19 @@ mod tests {
         assert_eq!(title(&settings).as_deref(), Some("Yard Settings"));
         assert_eq!(main.window_min_size, Some(size(px(760.), px(480.))));
     }
+
+    /// The main window's sidebar is translucent over a blurred desktop (spec §5 step 18); the
+    /// content pane stays opaque, and the other windows stay opaque.
+    #[test]
+    fn only_the_main_window_is_blurred() {
+        use gpui::WindowBackgroundAppearance::{Blurred, Opaque};
+        let b = Bounds::new(point(px(0.), px(0.)), size(px(900.), px(600.)));
+        assert_eq!(super::main::window_options(b).window_background, Blurred);
+        assert_eq!(crate::onboarding::window_options(b).window_background, Opaque);
+        assert_eq!(crate::settings_window::window_options(b).window_background, Opaque);
+        for t in [crate::widgets::theme::Theme::light(), crate::widgets::theme::Theme::dark()] {
+            assert!(t.c.sidebar_translucent.a < 1., "the sidebar lets the blur through");
+            assert_eq!(t.c.content_bg.a, 1., "the content stays opaque");
+        }
+    }
 }

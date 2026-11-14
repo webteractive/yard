@@ -133,7 +133,7 @@ pub fn tunnels(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let domains = s.tunnel_domains.value.clone().unwrap_or_default();
     let rows = tunnels.iter().map(|t| {
         let (e, site, named) = (env.clone(), t.site.clone(), t.kind == TunnelKind::Named);
-        let url = t.url.clone().unwrap_or_else(|| "-".into());
+        let url = t.url.clone().unwrap_or_default();
         let mut actions = div().flex().gap(px(4.));
         if let Some(u) = t.url.clone() {
             let copied = u.clone();

@@ -76,7 +76,18 @@ pub fn doctor(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         page =
             page.child(div().type_body().text_color(t.c.danger_text).child(text("error", e.message.clone())));
     }
-    let Some(report) = report else { return page.into_any_element() };
+    let Some(report) = report else {
+        let empty = if s.doctor.loading {
+            crate::widgets::empty_state("doctor:checking", "Checking this Mac…", &t)
+        } else {
+            crate::widgets::empty_state(
+                "doctor:empty",
+                "Run doctor to check that Yard, its helper, ports and brew are set up.",
+                &t,
+            )
+        };
+        return page.child(empty).into_any_element();
+    };
     for (title, status, checks) in grouped(&report) {
         let color = match status {
             CheckStatus::Fail => t.c.danger_text,

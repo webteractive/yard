@@ -105,11 +105,11 @@ pub fn php(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .or_else(|| installed.first().cloned());
     let rows = versions.iter().map(|v| {
         let n = v.version.clone();
-        let sites = if v.sites.is_empty() { "-".to_string() } else { v.sites.join(", ") };
+        let sites = v.sites.join(", ");
         let pool = match (v.installed, &v.pool) {
             (false, _) => "not installed".to_string(),
             (true, Some(p)) => p.clone(),
-            (true, None) => "-".to_string(),
+            (true, None) => String::new(),
         };
         let mut actions = div().flex().gap(px(4.));
         if !v.installed {
@@ -207,6 +207,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
                 .gap(px(6.))
                 .child(
                     Checkbox::new(format!("ext:{php}:{name}:on"), format!("{name} on PHP {php}"), x.enabled)
+                        .label_hidden()
                         .on_toggle(move |on, _, cx| {
                             let m = if on { api::EXT_ENABLE } else { api::EXT_DISABLE };
                             quick(
@@ -239,7 +240,7 @@ fn extensions(env: &AppEnv, v: &str, installed: &[String], _window: &mut Window,
         [Column::flex("Extension"), Column::flex("From").grow(2.)],
         rows.collect(),
     )
-    .actions(150.)
+    .actions_titled(150., "Enabled")
     .empty("No extensions added. Brew's and pecl's are listed once added.", None);
     let add = Nav::field(
         env,

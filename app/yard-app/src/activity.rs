@@ -120,6 +120,15 @@ pub fn activity(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
                 ))
             })
     });
+    let cards: Vec<_> = cards.collect();
+    if cards.is_empty() {
+        return crate::widgets::empty_state(
+            "activity:empty",
+            "Nothing running. Installs and other long tasks show their progress here.",
+            &t,
+        )
+        .into_any_element();
+    }
     div().flex().flex_col().gap(px(10.)).children(cards).into_any_element()
 }
 
@@ -147,6 +156,15 @@ mod tests {
             .with_data(serde_json::json!({"output": "Warning: cannot load\nPHP Startup"}));
         assert_eq!(super::failure_log(&output), ["Warning: cannot load", "PHP Startup"]);
         assert!(super::failure_log(&YardError::internal("x")).is_empty());
+    }
+
+    /// With no jobs, Activity says what it will show rather than staying blank.
+    #[gpui::test]
+    async fn an_empty_activity_says_what_it_shows(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let (_v, cx) = cx.add_window_view(|_, _| Host(env));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("activity:empty").is_some(), "an empty state");
     }
 
     #[gpui::test]

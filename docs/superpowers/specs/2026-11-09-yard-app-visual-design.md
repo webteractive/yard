@@ -2,10 +2,21 @@
 
 Status: proposal of 2026-11-09, approved 2026-11-10 (the maintainer: implement the design, then the
 release); planned in `docs/superpowers/plans/2026-11-10-yard-app-visual-design.md` and built on
-2026-11-10 (5073b6f..9acb818 and the commit after it), steps 1–17 of §5 and the logo of §6. Not
-built: step 18, the blurred sidebar (it needs a look at both appearances first); "Open in…" as one
-menu on the site detail (the editor, Finder and Terminal stay three buttons); Ports' controls stay
-in its page rather than the toolbar. Several text colours moved a little to pass 4.5:1 where pills and group labels sit (§3.4). The unit tests cover the layout fixes; `checklist.sh` and
+2026-11-10 (5073b6f..9acb818 and the commit after it), steps 1–17 of §5 and the logo of §6. The three
+parts held back then were built on 2026-11-14: step 18, the blurred sidebar (only the main window;
+its group labels take their own `sidebar_label` token, tested at 4.5:1 over a black and a white
+desktop and measured on screen at 5.7:1 or more in both appearances); "Open in…" as one menu on the
+site detail (`widgets/menu_button.rs`, items keeping the ids `site:<n>:editor`, `:reveal` and
+`:terminal`, each named for the app it opens); and Ports' profile, Range… and Check now in the
+toolbar. A screenshot review of every screen in both appearances on 2026-11-14 also fixed: the
+Overview's title shown twice; pickers' ⌄ sitting below the label; the site detail listing its
+settings twice (a list of sources, then the controls), now one row per setting with its source under
+the control, Detect docroot in the Docroot row, services as met/missing pills, the actions in rows
+and Unlink… on its own; a switch or checkbox repeating its row's name beside it; a lone `-` in
+empty cells beside `—`; Services' Run by cut off and cells crowded (cells 12 pt apart); blank
+Doctor and Activity pages before there is anything to show; Logs' controls in the toolbar and its
+log filling the page, its empty text no longer in Menlo; Node's Show available in the toolbar; and
+Settings repeating its window's title and stretching Uninstall Yard…. Several text colours moved a little to pass 4.5:1 where pills and group labels sit (§3.4). The unit tests cover the layout fixes; `checklist.sh` and
 `checklist-installs.sh` were updated for the moved controls and passed 72/72 and 14/14 on this build
 (with the review's fixes, 4880e41) on 2026-11-11, run from Terminal.app (the agent's zmx shell had no
 Accessibility); D2 now expects one Open in Terminal per `sudo` hint, since a Mac whose helper is out
@@ -182,7 +193,8 @@ signal.
 | Token | Light | Dark | Use |
 |---|---|---|---|
 | `window_bg` | #F5F5F7 | #1E1E1E | behind everything |
-| `sidebar_bg` | #EDEDEF (≈ 92% when blurred) | #262628 | sidebar |
+| `sidebar_translucent` | #EDEDEF at 92% | #262628 at 92% | sidebar, over the blurred desktop (built as `sidebar_bg` until step 18) |
+| `sidebar_label` | #58585D | #B4B4B9 | sidebar group labels (added 2026-11-14) |
 | `content_bg` | #FFFFFF | #1E1E1E | content pane |
 | `surface` | #FFFFFF | #2A2A2C | cards, group boxes, sheets, popups |
 | `surface_sunken` | #F5F5F7 | #161617 | log view, a group box on `surface` |
@@ -207,7 +219,8 @@ signal.
 
 The `*_text` values and `accent_text` (#0E693C light, #5BD299 dark, for an accent pill's text) were
 made darker in light and lighter in dark when built (2026-11-10), so that each passes 4.5:1 on its pill
-wash both on the content and on a selected row, and `text_secondary` on `sidebar_bg`; the test
+wash both on the content and on a selected row; the sidebar's `sidebar_label` and `text` pass it on
+`sidebar_translucent` over a black and over a white desktop (step 18); the test
 `text_tokens_meet_contrast` checks every pair. A pill's background is its state colour at .15 alpha (`Theme::wash`, with the alpha as a parameter).
 A wash under danger text at .15 keeps 4.5:1 for both themes' `*_text`.
 
@@ -530,7 +543,8 @@ as `app.md` requires.
     space). Each screen's header row moves into the toolbar (`screens/mod.rs::heading` becomes
     `toolbar(title, actions)`). Check that VoiceOver still finds the heading text (id `heading`).
 18. **Optional, last**: `WindowBackgroundAppearance::Blurred` under a translucent `sidebar_bg`.
-    Keep it only if text in the content pane stays opaque and readable in both appearances.
+    Keep it only if text in the content pane stays opaque and readable in both appearances. Built
+    2026-11-14 (`sidebar_translucent` at 92%, `sidebar_label` for the group labels).
 
 ## 6. Logo (D3, chosen 2026-11-10)
 

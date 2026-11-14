@@ -54,13 +54,77 @@ async fn site_detail_renders_sources(cx: &mut TestAppContext) {
         s.site_detail.entry("blog".into()).or_default().value = Some(detail("managed_file"));
     });
     env.nav.update(cx, |n, _| n.screen = Screen::Sites(Some("blog".into())));
-    let lines = cx.update(|cx| {
-        super::detail::source_lines(&env.state.read(cx).site_detail["blog"].value.clone().unwrap())
-    });
-    assert!(lines.contains(&"PHP 8.3.21 — from the managed .yard".to_string()), "{lines:?}");
-    assert!(lines.contains(&"HTTPS off — from sites.toml".to_string()), "{lines:?}");
+    let settings = cx
+        .update(|cx| super::detail::settings(&env.state.read(cx).site_detail["blog"].value.clone().unwrap()));
+    let find =
+        |key: &str| settings.iter().find(|s| s.key == key).map(|s| format!("{} — {}", s.value, s.from));
+    assert_eq!(find("php").as_deref(), Some("8.3.21 — from the managed .yard"));
+    assert_eq!(find("docroot").as_deref(), Some("/p/public — the default"));
+    assert_eq!(find("https").as_deref(), Some("off — from sites.toml"));
     let (_v, cx) = cx.add_window_view(|_, _| Host(env));
     cx.run_until_parked();
+}
+
+/// Each setting is one row of the detail with where it comes from under its control (spec §4,
+/// Sites): no separate list of sources repeating them, and Detect docroot sits in the Docroot row.
+#[gpui::test]
+async fn each_setting_is_one_row_with_its_source(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    env.state.update(cx, |s, _| {
+        s.sites.value = serde_json::from_value(json!([site("blog", json!([]))])).ok();
+        s.site_detail.entry("blog".into()).or_default().value = Some(detail("managed_file"));
+    });
+    env.nav.update(cx, |n, _| n.screen = Screen::Sites(Some("blog".into())));
+    let (_v, cx) = cx.add_window_view(|_, _| Host(env));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("site:blog:settings:row:sources").is_none(), "no list of sources");
+    for row in
+        ["site:blog:settings:row:php", "site:blog:settings:row:docroot", "site:blog:settings:row:https"]
+    {
+        assert!(cx.debug_bounds(row).is_some(), "{row} is shown");
+    }
+    let docroot = cx.debug_bounds("site:blog:settings:row:docroot").unwrap();
+    let detect = cx.debug_bounds("site:blog:detect").expect("Detect docroot");
+    assert!(docroot.contains(&detect.center()), "Detect docroot is in the Docroot row");
+}
+
+/// Install what it needs… is a button its own size, not a bar across the pane (G7).
+#[gpui::test]
+async fn the_settle_button_is_not_stretched(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    env.state.update(cx, |s, _| {
+        s.sites.value =
+            serde_json::from_value(json!([site("legacy", json!([{"kind": "php", "php": "7.1"}]))])).ok();
+    });
+    env.nav.update(cx, |n, _| n.screen = Screen::Sites(Some("legacy".into())));
+    let (_v, cx) = cx.add_window_view(|_, _| Host(env));
+    cx.run_until_parked();
+    let settle = cx.debug_bounds("site:legacy:settle").expect("Install what it needs…");
+    assert!(settle.size.width < gpui::px(300.), "the button is {:?} wide", settle.size.width);
+}
+
+/// The project opens in the editor, Finder or Terminal from one Open in… menu beside Open in
+/// browser (spec §4, Sites); each item keeps the id its button had.
+#[gpui::test]
+async fn the_project_opens_from_one_menu(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    env.state.update(cx, |s, _| {
+        s.sites.value = serde_json::from_value(json!([site("blog", json!([]))])).ok();
+        s.site_detail.entry("blog".into()).or_default().value = Some(detail("managed_file"));
+    });
+    env.nav.update(cx, |n, _| n.screen = Screen::Sites(Some("blog".into())));
+    let (_v, cx) = cx.add_window_view(|_, _| Host(env));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("site:blog:browser").is_some(), "Open in browser stays a button");
+    for id in ["site:blog:editor", "site:blog:reveal", "site:blog:terminal"] {
+        assert!(cx.debug_bounds(id).is_none(), "{id} is in the menu, not a button");
+    }
+    let open = cx.debug_bounds("site:blog:open").expect("the Open in… menu");
+    cx.simulate_click(open.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    for id in ["site:blog:editor", "site:blog:reveal", "site:blog:terminal"] {
+        assert!(cx.debug_bounds(id).is_some(), "the menu offers {id}");
+    }
 }
 
 /// yardd refuses `isolate`, `secure` and `docroot` (and `init` finds the file there) for a site
@@ -92,18 +156,19 @@ fn the_detail_shows_the_sites_node_and_offers_to_unpin_yards_own_pin() {
         d.site.node = serde_json::from_value(node).unwrap();
         d
     };
+    let node = |d: &yard_proto::SiteDetail| {
+        super::detail::settings(d).into_iter().find(|s| s.key == "node").map(|s| (s.value, s.from))
+    };
     let pinned = with_node(json!({"spec": "22", "source": "sites_toml", "version": null}));
-    let lines = super::detail::source_lines(&pinned);
-    assert!(lines.contains(&"Node 22 — not installed, from sites.toml".to_string()), "{lines:?}");
+    assert_eq!(node(&pinned), Some(("22 — not installed".into(), "from sites.toml".into())));
     assert!(super::detail::node_pinned_by_yard(&pinned.site));
 
     let nvmrc =
         with_node(json!({"spec": "22", "source": "nvmrc", "file": "/p/.nvmrc", "version": "22.11.0"}));
-    let lines = super::detail::source_lines(&nvmrc);
-    assert!(lines.contains(&"Node 22.11.0 — from /p/.nvmrc".to_string()), "{lines:?}");
+    assert_eq!(node(&nvmrc), Some(("22.11.0".into(), "from /p/.nvmrc".into())));
     assert!(!super::detail::node_pinned_by_yard(&nvmrc.site));
 
-    assert!(!super::detail::source_lines(&detail("default")).iter().any(|l| l.starts_with("Node")));
+    assert_eq!(node(&detail("default")), None);
 }
 
 struct Blank;

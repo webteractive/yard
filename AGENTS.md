@@ -144,8 +144,10 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   passed 72/72 and `checklist-installs.sh` 14/14 again. `ax.js menu-click` no longer presses Escape
   after an enabled item, which would cancel the sheet the item opened. The visual design
   (`docs/superpowers/specs/2026-11-09-yard-app-visual-design.md`, the D3 logo in its §6) was built on
-  2026-11-10; its Status says what is left; `checklist.sh` passed 72/72 and `checklist-installs.sh` 14/14 on it
-on 2026-11-11.
+  2026-11-10; `checklist.sh` passed 72/72 and `checklist-installs.sh` 14/14 on it
+on 2026-11-11. Its three held-back parts (the blurred sidebar, Open in… as a menu, Ports' controls in
+the toolbar) and the fixes a screenshot review of every screen in both appearances found were built
+on 2026-11-14; its Status lists them.
 - M7 (distribution) is done: design `docs/superpowers/specs/2026-11-09-yard-m7-distribution-design.md`,
   plan `docs/superpowers/plans/2026-11-09-yard-m7-distribution.md`. The history was scrubbed and
   force-pushed and `webteractive/yard` went public (MIT) on 2026-11-13, with the tap

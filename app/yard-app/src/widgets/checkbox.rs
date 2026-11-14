@@ -16,11 +16,20 @@ pub struct Checkbox {
     label: SharedString,
     checked: bool,
     on_toggle: Option<super::Callback<bool>>,
+    /// Only read aloud: the row's own label already says what it is.
+    label_hidden: bool,
 }
 
 impl Checkbox {
     pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>, checked: bool) -> Checkbox {
-        Checkbox { id: id.into(), label: label.into(), checked, on_toggle: None }
+        Checkbox { id: id.into(), label: label.into(), checked, on_toggle: None, label_hidden: false }
+    }
+
+    /// Shows no label beside it, for a row whose label already names it; VoiceOver still reads
+    /// the label.
+    pub fn label_hidden(mut self) -> Self {
+        self.label_hidden = true;
+        self
     }
 
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
@@ -61,6 +70,6 @@ impl RenderOnce for Checkbox {
                     .justify_center()
                     .when(checked, |d| d.child("✓")),
             )
-            .child(div().type_body().text_color(t.c.text).child(self.label))
+            .when(!self.label_hidden, |d| d.child(div().type_body().text_color(t.c.text).child(self.label)))
     }
 }

@@ -98,9 +98,10 @@ impl Row {
     }
 }
 
-/// A cell's text: the value, or the dash for an empty one.
+/// A cell's text: the value, or the dash for an empty one (blank, or a lone hyphen).
 pub fn shown(value: &SharedString) -> SharedString {
-    if value.trim().is_empty() { EMPTY.into() } else { value.clone() }
+    let v = value.trim();
+    if v.is_empty() || v == "-" { EMPTY.into() } else { value.clone() }
 }
 
 #[derive(IntoElement)]
@@ -111,6 +112,8 @@ pub struct Table {
     selected: Option<SharedString>,
     on_select: Option<super::KeyCallback>,
     actions: Option<Pixels>,
+    /// The controls column's title, when its controls need one (a checkbox with no label).
+    actions_title: Option<SharedString>,
     empty: Option<(SharedString, Option<AnyElement>)>,
 }
 
@@ -127,6 +130,7 @@ impl Table {
             selected: None,
             on_select: None,
             actions: None,
+            actions_title: None,
             empty: None,
         }
     }
@@ -144,6 +148,13 @@ impl Table {
     /// Reserves `width` at the end of the header and of every row for the row's controls.
     pub fn actions(mut self, width: f32) -> Self {
         self.actions = Some(px(width));
+        self
+    }
+
+    /// As [`Table::actions`], with `title` over the controls.
+    pub fn actions_titled(mut self, width: f32, title: impl Into<SharedString>) -> Self {
+        self.actions = Some(px(width));
+        self.actions_title = Some(title.into());
         self
     }
 
@@ -192,7 +203,7 @@ impl RenderOnce for Table {
             .items_center()
             .h(size::HEADER)
             .px(space::SM)
-            .gap(space::SM)
+            .gap(space::MD)
             .border_b_1()
             .border_color(t.c.separator)
             .type_secondary()
@@ -200,8 +211,15 @@ impl RenderOnce for Table {
             .children(self.columns.iter().enumerate().map(|(i, c)| {
                 cell(c, format!("{id}:column:{i}")).child(text(format!("column:{i}"), c.title.clone()))
             }))
-            .when_some(self.actions, |d, w| d.child(div().w(w).flex_none()));
+            .when_some(self.actions, |d, w| {
+                let title = self.actions_title.clone();
+                let selector = format!("{id}:column:actions");
+                d.child(div().w(w).flex_none().when_some(title, |d, title| {
+                    d.debug_selector(move || selector).child(text("column:actions", title))
+                }))
+            });
         let row_height = if self.actions.is_some() { size::ROW_ACTIONS } else { size::ROW };
+        let titled = self.actions_title.is_some();
         let mut rows = vec![];
         let ids: Vec<SharedString> = self.rows.iter().map(|r| self.row_id(&r.key)).collect();
         for (row, row_id) in self.rows.into_iter().zip(ids) {
@@ -236,7 +254,7 @@ impl RenderOnce for Table {
                     .items_center()
                     .h(row_height)
                     .px(space::SM)
-                    .gap(space::SM)
+                    .gap(space::MD)
                     .border_b_1()
                     .border_color(t.c.separator)
                     .text_color(t.c.text)
@@ -251,7 +269,8 @@ impl RenderOnce for Table {
                                 .flex_none()
                                 .flex()
                                 .items_center()
-                                .justify_end()
+                                // Under a title, the controls start where it does.
+                                .map(|d| if titled { d.justify_start() } else { d.justify_end() })
                                 .gap(space::XS)
                                 .children(extra),
                         ),

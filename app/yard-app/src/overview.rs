@@ -104,7 +104,7 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             vec![
                 u.name.clone().into(),
                 u.state.name().into(),
-                u.pid.map_or("-".into(), |p| p.to_string()).into(),
+                u.pid.map_or(String::new(), |p| p.to_string()).into(),
                 u.restarts.to_string().into(),
             ],
         )
@@ -158,7 +158,6 @@ pub fn overview(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(14.))
-        .child(div().type_title().child("Overview"))
         .child(facts)
         .children(errors)
         .child(units)

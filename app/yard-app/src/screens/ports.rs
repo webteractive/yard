@@ -41,13 +41,12 @@ fn status(s: PortStatus) -> &'static str {
 pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
     let s = env.state.read(cx);
     let ports = s.ports.value.clone().unwrap_or_default();
-    let profile = s.status.value.as_ref().map(|st| st.profile).unwrap_or_default();
     let rows = ports.iter().map(|p| {
         let holder = p
             .holder
             .as_ref()
             .map(|h| format!("{} (pid {}, {})", h.name, h.pid, holder_kind_name(h.kind)))
-            .unwrap_or_else(|| "-".into());
+            .unwrap_or_default();
         let unit = p.unit.clone();
         let pinned = p.mode == PortMode::Pinned;
         let (e1, u1, e2, u2) = (env.clone(), unit.clone(), env.clone(), unit.clone());
@@ -90,6 +89,12 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
         .extra(actions)
     });
     let table = Table::new("ports", columns(), rows.collect()).actions(130.);
+    div().flex().flex_col().gap(px(12.)).children(errors(env, "port:", cx)).child(table).into_any_element()
+}
+
+/// The toolbar's controls (spec §4, Ports): the profile, Check now and Range….
+pub fn actions(env: &AppEnv, cx: &App) -> Vec<AnyElement> {
+    let profile = env.state.read(cx).status.value.as_ref().map(|st| st.profile).unwrap_or_default();
     let pick = env.clone();
     let profile_picker = Picker::new(
         "ports:profile",
@@ -106,25 +111,16 @@ pub fn ports(env: &AppEnv, _window: &mut Window, cx: &mut App) -> AnyElement {
             cx,
         )
     });
-    let check = env.clone();
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .children(errors(env, "port:", cx))
-        .child(
-            crate::widgets::bar()
-                .child(profile_picker)
-                .child(
-                    Button::new("ports:check", "Check now").on_click(move |_, _, cx| check_now(&check, cx)),
-                )
-                .child(Button::new("ports:range", "Range…").on_click({
-                    let env = env.clone();
-                    move |_, _, cx| super::forms::open(&env, super::forms::Inline::Range, cx)
-                })),
-        )
-        .child(table)
-        .into_any_element()
+    let (check, range) = (env.clone(), env.clone());
+    vec![
+        profile_picker.into_any_element(),
+        Button::new("ports:range", "Range…")
+            .on_click(move |_, _, cx| super::forms::open(&range, super::forms::Inline::Range, cx))
+            .into_any_element(),
+        Button::new("ports:check", "Check now")
+            .on_click(move |_, _, cx| check_now(&check, cx))
+            .into_any_element(),
+    ]
 }
 
 /// Check now: `ports.check` probes every port and answers the list as it found it, which the

@@ -52,7 +52,7 @@ fn cells(s: &ServiceInfo, now: OffsetDateTime) -> Vec<String> {
         ServiceManager::LaunchAgent { .. } => "LaunchAgent",
         ServiceManager::Other => "unknown",
     };
-    let used = if s.used_by.is_empty() { "-".to_string() } else { s.used_by.join(", ") };
+    let used = s.used_by.join(", ");
     vec![s.name.clone(), engine, state_text(s, now), ports, sleep_text(s), managed.into(), used]
 }
 
@@ -370,7 +370,7 @@ pub fn table(env: &AppEnv, selected: Option<String>, _window: &mut Window, cx: &
             Column::fixed("State", 110.).pill(),
             Column::fixed("Ports", 90.),
             Column::fixed("Sleep", 70.),
-            Column::fixed("Run by", 70.),
+            Column::fixed("Run by", 96.),
             Column::flex("Used by"),
         ],
         rows.collect(),

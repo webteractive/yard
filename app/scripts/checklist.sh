@@ -431,7 +431,7 @@ else
 fi
 y node use 22 --site chk-b >/dev/null 2>&1
 ax row chk-b >/dev/null
-if within 5 texts_have "Node 22 — not installed, from sites.toml"; then
+if within 5 sh -c "osascript -l JavaScript '$ax_js' tree | grep -qF '22 — not installed' && osascript -l JavaScript '$ax_js' tree | grep -qF 'from sites.toml'"; then
   ax press "Use default Node" >/dev/null
   if within 5 sh -c "'$yard_bin' --root '$root' sites --json | jq -e '.[] | select(.name == \"chk-b\") | .node == null'"; then
     pass "S5 the detail says the site's Node and where it is set, and Use default Node unpins it"

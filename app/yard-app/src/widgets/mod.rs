@@ -9,6 +9,7 @@ pub mod error_view;
 pub mod form;
 pub mod group;
 pub mod log_view;
+pub mod menu_button;
 pub mod picker;
 pub mod pill;
 pub mod table;
@@ -19,16 +20,31 @@ pub mod toggle;
 use gpui::{App, ElementId, Role, SharedString, Window};
 use std::rc::Rc;
 
-/// Text that assistive technology can read. GPUI puts a `Text` with an id in the accessibility
-/// tree and never a plain string, so every visible line that is not a control's own label goes
-/// through here. `id` must be unique among the elements under the nearest ancestor with an id, and
-/// stable across frames, so a refresh does not announce unchanged text again.
 /// A row of controls: centred, spaced, wrapping, and never stretching them across the pane (G7).
 pub fn bar() -> gpui::Div {
     use gpui::Styled;
     gpui::div().flex().flex_row().flex_wrap().items_center().gap(gpui::px(8.))
 }
 
+/// A page with nothing to show yet says what will show there: centred, secondary text, findable
+/// as `id` (the tables' own empty text looks the same).
+pub fn empty_state(id: &'static str, words: impl Into<SharedString>, t: &theme::Theme) -> gpui::Div {
+    use gpui::{InteractiveElement, ParentElement, Styled};
+    use theme::Typography;
+    gpui::div()
+        .debug_selector(move || id.to_string())
+        .flex()
+        .justify_center()
+        .py(gpui::px(48.))
+        .type_body()
+        .text_color(t.c.text_secondary)
+        .child(text(id, words.into()))
+}
+
+/// Text that assistive technology can read. GPUI puts a `Text` with an id in the accessibility
+/// tree and never a plain string, so every visible line that is not a control's own label goes
+/// through here. `id` must be unique among the elements under the nearest ancestor with an id, and
+/// stable across frames, so a refresh does not announce unchanged text again.
 pub fn text(id: impl Into<ElementId>, s: impl Into<SharedString>) -> gpui::Text {
     gpui::Text::new(id.into(), s.into())
 }
@@ -83,6 +99,7 @@ mod tests {
     use crate::widgets::error_view::ErrorView;
     use crate::widgets::form::Form;
     use crate::widgets::log_view::LogView;
+    use crate::widgets::menu_button::MenuButton;
     use crate::widgets::picker::Picker;
     use crate::widgets::table::{Row, Table};
     use crate::widgets::text_field::TextField;
@@ -194,6 +211,58 @@ mod tests {
         assert!(cx.debug_bounds("pick:option:1").is_none(), "the button closes it");
     }
 
+    /// A menu button (Open in…) opens a menu whose items keep their own ids and labels, runs the
+    /// chosen one, presses nothing under it and closes; a click outside closes it too.
+    #[gpui::test]
+    async fn a_menu_button_runs_the_chosen_item(cx: &mut TestAppContext) {
+        let under = std::rc::Rc::new(std::cell::Cell::new(0));
+        let chosen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+        let (u, c) = (under.clone(), chosen.clone());
+        let (_v, cx) = cx.add_window_view(move |_, _| {
+            let c = c.clone();
+            Covered {
+                under: u.clone(),
+                top: move || {
+                    let (c1, c2) = (c.clone(), c.clone());
+                    div()
+                        .p(gpui::px(120.))
+                        .child(
+                            MenuButton::new("open", "Open in…")
+                                .item("site:a:editor", "Editor", move |_, _| c1.borrow_mut().push("editor"))
+                                .item("site:a:reveal", "Finder", move |_, _| c2.borrow_mut().push("finder")),
+                        )
+                        .into_any_element()
+                },
+            }
+        });
+        cx.run_until_parked();
+        let button = cx.debug_bounds("open").expect("the button is drawn");
+        assert!(cx.debug_bounds("site:a:editor").is_none(), "the menu starts closed");
+        click(cx, button.center());
+        let menu = cx.debug_bounds("open:menu").expect("the menu is open");
+        let gap = menu.top() - button.bottom();
+        assert!(gap >= gpui::px(0.) && gap <= gpui::px(6.), "the menu is {gap:?} below its button");
+        let finder = cx.debug_bounds("site:a:reveal").expect("an item keeps its id");
+        let before = under.get();
+        click(cx, finder.center());
+        assert_eq!(*chosen.borrow(), vec!["finder"]);
+        assert_eq!(under.get(), before, "the item's click reached the control under it");
+        assert!(cx.debug_bounds("site:a:reveal").is_none(), "choosing closes the menu");
+        click(cx, button.center());
+        assert!(cx.debug_bounds("site:a:editor").is_some(), "the button opens it again");
+        click(cx, gpui::point(gpui::px(4.), gpui::px(4.)));
+        assert!(cx.debug_bounds("site:a:editor").is_none(), "a click outside closes it");
+        assert_eq!(*chosen.borrow(), vec!["finder"], "closing runs nothing");
+    }
+
+    /// The menu button reads as a button that opens a menu, and each item as a menu item.
+    #[test]
+    fn a_menu_button_reads_as_a_button() {
+        let m = MenuButton::new("open", "Open in…").item("site:a:editor", "Editor", |_, _| {});
+        assert_eq!(m.a11y().role, Role::Button);
+        assert_eq!(m.a11y().label.as_ref(), "Open in…");
+    }
+
     /// Choosing from a picker's popup chooses, and presses nothing under the popup (M6 final
     /// review: picking a site's PHP could press Detect docroot below it).
     #[gpui::test]
@@ -221,6 +290,16 @@ mod tests {
         click(cx, option.center());
         assert_eq!(chosen.get(), Some(1));
         assert_eq!(under.get(), before, "the option's click reached the control under it");
+    }
+
+    /// An empty cell reads the same everywhere (G18): blank and a lone hyphen both show the dash.
+    #[test]
+    fn an_empty_cell_shows_one_dash() {
+        use crate::widgets::table::{EMPTY, shown};
+        assert_eq!(shown(&"".into()).as_ref(), EMPTY);
+        assert_eq!(shown(&"-".into()).as_ref(), EMPTY);
+        assert_eq!(shown(&" ".into()).as_ref(), EMPTY);
+        assert_eq!(shown(&"-1".into()).as_ref(), "-1");
     }
 
     /// A table is a list VoiceOver can walk: AccessKit gives a macOS table no rows, so VoiceOver
@@ -560,6 +639,26 @@ mod tests {
         let pill = vcx.debug_bounds("pill:cell:1").expect("a pill is drawn");
         assert!(cell.contains(&pill.center()));
         assert_eq!(pill.size.height, gpui::px(18.));
+    }
+
+    /// A table's controls column can have a title of its own (the extensions' Enabled), so a
+    /// checkbox there needs no label beside it.
+    #[gpui::test]
+    async fn a_controls_column_can_have_a_title(cx: &mut TestAppContext) {
+        fn titled() -> Table {
+            let control = div().debug_selector(|| "ext-control".into()).w(gpui::px(16.)).h(gpui::px(16.));
+            let rows = vec![Row::new("redis", vec!["redis".into(), "brew".into()]).extra(control)];
+            Table::new("ext", vec!["Extension", "From"], rows).actions_titled(150., "Enabled")
+        }
+        let vcx = draw_table(cx, titled);
+        let header = vcx.debug_bounds("ext:column:actions").expect("the controls column has a title");
+        let from = vcx.debug_bounds("ext:column:1").unwrap();
+        assert!(header.left() > from.right() - gpui::px(1.), "the title is over the controls");
+        let control = vcx.debug_bounds("ext-control").unwrap();
+        assert!(
+            (control.left() - header.left()).abs() < gpui::px(2.),
+            "the controls start under their title"
+        );
     }
 
     /// A picker's popup opens just under its button, wherever the button is (G19: a fixed offset).

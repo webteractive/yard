@@ -6,8 +6,8 @@ use super::Pressable;
 use super::disabled::Disabled;
 use super::theme::{Theme, Typography, radius, size};
 use gpui::{
-    Anchor, AnchoredPositionMode, App, Bounds, ElementId, IntoElement, ParentElement, Pixels, RenderOnce,
-    Role, SharedString, Styled, Window, anchored, canvas, deferred, div, point, prelude::*, px,
+    Anchor, AnchoredPositionMode, App, Bounds, ElementId, Entity, IntoElement, ParentElement, Pixels,
+    RenderOnce, Role, SharedString, Styled, Window, anchored, canvas, deferred, div, point, prelude::*, px,
 };
 use std::rc::Rc;
 
@@ -95,7 +95,7 @@ impl RenderOnce for Picker {
             .text_color(t.c.text)
             .relative()
             .child(div().min_w(px(0.)).truncate().child(current))
-            .child(div().text_color(t.c.text_secondary).child("⌄"))
+            .child(chevron(&t))
             .child({
                 let button = button.clone();
                 canvas(move |bounds, _, cx| button.update(cx, |b, _| *b = bounds), |_, _, _, _| {})
@@ -122,20 +122,9 @@ impl RenderOnce for Picker {
                 let close = open.clone();
                 let handler = self.on_select.clone();
                 let selector = format!("{}:option:{i}", self.id);
-                div()
-                    .id(ElementId::Name(format!("{}:option:{o}", self.id).into()))
-                    .debug_selector(|| selector)
-                    .role(Role::MenuItem)
+                popup_row(&t, format!("{}:option:{o}", self.id), selector, Role::MenuItem)
                     .aria_label(o.clone())
                     .aria_selected(self.selected == Some(i))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .h(OPTION_HEIGHT)
-                    .px(px(8.))
-                    .rounded(radius::SM)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(t.c.row_selected))
                     .child(
                         div()
                             .w(px(12.))
@@ -154,59 +143,100 @@ impl RenderOnce for Picker {
                     })
                     .child(o.clone())
             });
-            // The canvas fills the button inside its 1 px border; the popup lines up with the border.
-            let inner = *button.read(cx);
-            let at = Bounds::new(
-                point(inner.left() - px(1.), inner.top() - px(1.)),
-                gpui::size(inner.size.width + px(2.), inner.size.height + px(2.)),
-            );
-            // Under the button when the popup fits there, else above it: anchored's own flip turns
-            // about the popup's corner, which put it over its button near the window's bottom.
-            let height = OPTION_HEIGHT * self.options.len() as f32 + px(10.);
-            let fits_below = at.bottom() + px(2.) + height <= window.viewport_size().height;
-            let popup = anchored().position_mode(AnchoredPositionMode::Window);
-            let popup = if fits_below {
-                popup.position(point(at.left(), at.bottom() + px(2.)))
-            } else {
-                popup.anchor(Anchor::BottomLeft).position(point(at.left(), at.top() - px(2.)))
-            };
-            root = root.child(deferred(
-                popup.child(
-                    div()
-                        .id(ElementId::Name(format!("{}:menu", self.id).into()))
-                        .debug_selector({
-                            let s = format!("{}:menu", self.id);
-                            move || s
-                        })
-                        .role(Role::Menu)
-                        // Its options take their clicks: nothing under the popup is pressed.
-                        .occlude()
-                        // A click anywhere else closes it, as a macOS pop-up button does.
-                        .on_mouse_down_out({
-                            let (close, button) = (open.clone(), button.clone());
-                            move |e, _, cx| {
-                                if button.read(cx).contains(&e.position) {
-                                    return;
-                                }
-                                close.update(cx, |o, cx| {
-                                    *o = false;
-                                    cx.notify();
-                                })
-                            }
-                        })
-                        .min_w(at.size.width)
-                        .p(px(4.))
-                        .rounded(radius::XL)
-                        .border_1()
-                        .border_color(t.c.separator)
-                        .bg(t.c.surface)
-                        .type_body()
-                        .text_color(t.c.text)
-                        .shadow_md()
-                        .children(items),
-                ),
+            let items: Vec<_> = items.collect();
+            root = root.child(popup(
+                &self.id,
+                *button.read(cx),
+                self.options.len(),
+                open,
+                button,
+                items,
+                window,
+                &t,
             ));
         }
         root.into_any_element()
     }
+}
+
+/// An item's row in a popup: its id, the selector the tests find it by, and its hover.
+pub(super) fn popup_row(t: &Theme, id: String, selector: String, role: Role) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(ElementId::Name(id.into()))
+        .debug_selector(|| selector)
+        .role(role)
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .h(OPTION_HEIGHT)
+        .px(px(8.))
+        .rounded(radius::SM)
+        .cursor_pointer()
+        .hover(|s| s.bg(t.c.row_selected))
+}
+
+/// The popup of the control drawn at `inner` (its bounds inside its 1 px border), holding `rows`
+/// rows: under the control when it fits there, else above it. It takes its own clicks, and a click
+/// anywhere but the control closes it, as a macOS pop-up button does.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn popup(
+    id: &str,
+    inner: Bounds<Pixels>,
+    rows: usize,
+    open: Entity<bool>,
+    button: Entity<Bounds<Pixels>>,
+    items: impl IntoIterator<Item = impl IntoElement>,
+    window: &Window,
+    t: &Theme,
+) -> impl IntoElement {
+    // The popup lines up with the control's border.
+    let at = Bounds::new(
+        point(inner.left() - px(1.), inner.top() - px(1.)),
+        gpui::size(inner.size.width + px(2.), inner.size.height + px(2.)),
+    );
+    // Under the control when the popup fits there, else above it: anchored's own flip turns about
+    // the popup's corner, which put it over its control near the window's bottom.
+    let height = OPTION_HEIGHT * rows as f32 + px(10.);
+    let fits_below = at.bottom() + px(2.) + height <= window.viewport_size().height;
+    let placed = anchored().position_mode(AnchoredPositionMode::Window);
+    let placed = if fits_below {
+        placed.position(point(at.left(), at.bottom() + px(2.)))
+    } else {
+        placed.anchor(Anchor::BottomLeft).position(point(at.left(), at.top() - px(2.)))
+    };
+    let selector = format!("{id}:menu");
+    deferred(
+        placed.child(
+            div()
+                .id(ElementId::Name(selector.clone().into()))
+                .debug_selector(move || selector)
+                .role(Role::Menu)
+                .occlude()
+                .on_mouse_down_out(move |e, _, cx| {
+                    if button.read(cx).contains(&e.position) {
+                        return;
+                    }
+                    open.update(cx, |o, cx| {
+                        *o = false;
+                        cx.notify();
+                    })
+                })
+                .min_w(at.size.width)
+                .p(px(4.))
+                .rounded(radius::XL)
+                .border_1()
+                .border_color(t.c.separator)
+                .bg(t.c.surface)
+                .type_body()
+                .text_color(t.c.text)
+                .shadow_md()
+                .children(items),
+        ),
+    )
+}
+
+/// The ⌄ beside a picker's or a menu button's label. The glyph sits low in its line box, so it is
+/// raised to centre on the label.
+pub(super) fn chevron(t: &Theme) -> gpui::Div {
+    div().relative().top(px(-3.)).text_color(t.c.text_secondary).child("⌄")
 }

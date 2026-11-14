@@ -14,11 +14,18 @@ use gpui::{
 pub struct LogView {
     id: SharedString,
     lines: Vec<SharedString>,
+    min_height: Option<gpui::Pixels>,
 }
 
 impl LogView {
     pub fn new(id: impl Into<SharedString>, lines: Vec<SharedString>) -> LogView {
-        LogView { id: id.into(), lines }
+        LogView { id: id.into(), lines, min_height: None }
+    }
+
+    /// At least `h` high, for a log that fills its page.
+    pub fn min_height(mut self, h: gpui::Pixels) -> Self {
+        self.min_height = Some(h);
+        self
     }
 
     pub fn a11y(&self) -> A11y {
@@ -97,6 +104,7 @@ impl RenderOnce for LogView {
             .border_1()
             .border_color(t.c.separator)
             .bg(t.c.surface_sunken)
+            .when_some(self.min_height, |d, h| d.min_h(h))
             .child(header)
             .child(
                 div()
@@ -113,6 +121,7 @@ impl RenderOnce for LogView {
                             div()
                                 .debug_selector(move || selector)
                                 .type_body()
+                                .font_family(".SystemUIFont")
                                 .text_color(t.c.text_secondary)
                                 .child(super::text(format!("{}:empty", self.id), "No log lines yet")),
                         )

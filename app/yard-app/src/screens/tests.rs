@@ -332,3 +332,18 @@ async fn php_actions_live_in_the_selected_version(cx: &mut TestAppContext) {
     assert!(vcx.debug_bounds("php:7.1:uninstall").is_some() && vcx.debug_bounds("php:7.1:default").is_some());
     assert!(vcx.debug_bounds("php:8.4:uninstall").is_none());
 }
+
+/// Before its first run, Doctor says how to run it, and while it runs, that it is checking,
+/// rather than showing a blank page.
+#[gpui::test]
+async fn doctor_says_what_it_is_doing_before_a_report(cx: &mut TestAppContext) {
+    let (_fake, env) = env(cx);
+    let e = env.clone();
+    let (v, cx) = cx.add_window_view(|_, _| Host(e, super::doctor::doctor));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("doctor:empty").is_some(), "says to run it");
+    env.state.update(cx, |s, _| s.doctor.loading = true);
+    v.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("doctor:checking").is_some(), "says it is checking");
+}

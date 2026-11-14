@@ -18,11 +18,20 @@ pub struct Toggle {
     on: bool,
     disabled: Option<SharedString>,
     on_toggle: Option<super::Callback<bool>>,
+    /// Only read aloud: the row's own label already says what it is.
+    label_hidden: bool,
 }
 
 impl Toggle {
     pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>, on: bool) -> Toggle {
-        Toggle { id: id.into(), label: label.into(), on, disabled: None, on_toggle: None }
+        Toggle {
+            id: id.into(),
+            label: label.into(),
+            on,
+            disabled: None,
+            on_toggle: None,
+            label_hidden: false,
+        }
     }
 
     /// Greys the switch out and ignores clicks, `why` read as its description.
@@ -32,6 +41,13 @@ impl Toggle {
     }
 
     /// Called with the new value.
+    /// Shows no label beside it, for a row whose label already names it; VoiceOver still reads
+    /// the label.
+    pub fn label_hidden(mut self) -> Self {
+        self.label_hidden = true;
+        self
+    }
+
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self
@@ -57,8 +73,10 @@ impl RenderOnce for Toggle {
         let on = self.on;
         let a11y = self.a11y();
         let handler = self.on_toggle.filter(|_| !a11y.disabled);
+        let selector = a11y.id.to_string();
         let switch = div()
             .id(ElementId::Name(a11y.id.clone()))
+            .debug_selector(move || selector)
             .role(a11y.role)
             .aria_label(a11y.label.clone())
             .aria_toggled(if on { Toggled::True } else { Toggled::False })
@@ -80,7 +98,7 @@ impl RenderOnce for Toggle {
                     .p(px(2.))
                     .child(div().size(px(14.)).rounded_full().bg(gpui::white()).shadow_sm()),
             )
-            .child(div().type_body().text_color(t.c.text).child(self.label));
+            .when(!self.label_hidden, |d| d.child(div().type_body().text_color(t.c.text).child(self.label)));
         if a11y.disabled { Disabled(switch).into_any_element() } else { switch.into_any_element() }
     }
 }

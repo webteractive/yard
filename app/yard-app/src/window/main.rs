@@ -186,6 +186,8 @@ fn toolbar(env: &AppEnv, screen: &Screen, cx: &mut App) -> AnyElement {
         Screen::Tunnels => crate::screens::tunnels::actions(env),
         Screen::Node => crate::screens::node::actions(env),
         Screen::Doctor => crate::screens::doctor::actions(env, cx),
+        Screen::Ports => crate::screens::ports::actions(env, cx),
+        Screen::Logs(_) => crate::screens::logs::actions(env, cx),
         _ => vec![],
     };
     let drag =
@@ -304,7 +306,6 @@ impl Render for MainWindow {
             .size_full()
             .relative()
             .flex()
-            .bg(t.c.window_bg)
             .text_color(t.c.text)
             .type_body()
             .child(sidebar(&env, &screen, window, cx))
@@ -448,7 +449,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
                 .pt(if i == 0 { px(4.) } else { px(14.) })
                 .pb(px(4.))
                 .type_caption()
-                .text_color(t.c.text_secondary)
+                .text_color(t.c.sidebar_label)
                 .child(crate::widgets::text(format!("nav-group:{group}"), *group))
                 .into_any_element(),
         );
@@ -462,7 +463,7 @@ fn sidebar(env: &AppEnv, current: &Screen, window: &mut Window, cx: &mut App) ->
         .role(Role::TabList)
         .aria_label("Screens")
         .w(size::SIDEBAR)
-        .bg(t.c.sidebar_bg)
+        .bg(t.c.sidebar_translucent)
         .flex_shrink_0()
         .px(px(8.))
         .pb(px(8.))
@@ -523,6 +524,8 @@ pub(crate) fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
             traffic_light_position: Some(gpui::point(px(16.), px(18.))),
         }),
         window_min_size: Some(size(px(760.), px(480.))),
+        // The desktop shows, blurred, through the sidebar's translucent fill (spec §5 step 18).
+        window_background: gpui::WindowBackgroundAppearance::Blurred,
         ..Default::default()
     }
 }
@@ -1067,6 +1070,45 @@ mod tests {
         let link = vcx.debug_bounds("site:link").expect("Link a folder…");
         assert!(toolbar.contains(&link.center()));
         assert_eq!(toolbar.size.height, gpui::px(52.));
+    }
+
+    /// Logs' unit picker, filter, Pause and Show log file sit in the toolbar (spec §4, Logs), and
+    /// the log fills the page below it even with no lines.
+    #[gpui::test]
+    async fn logs_controls_sit_in_the_toolbar_and_the_log_fills_the_page(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let mut vcx = main_window_on(&env, Screen::Logs(None), cx);
+        let toolbar = vcx.debug_bounds("toolbar").expect("the toolbar");
+        for id in ["logs:unit", "logs:filter", "logs:pause", "logs:file"] {
+            let control = vcx.debug_bounds(id).unwrap_or_else(|| panic!("{id} is shown"));
+            assert!(toolbar.contains(&control.center()), "{id} is in the toolbar");
+        }
+        let log = vcx.debug_bounds("logs:view").expect("the log");
+        let content = vcx.debug_bounds("content").expect("the content");
+        assert!(log.size.height > content.size.height * 0.7, "the log is {:?} high", log.size.height);
+    }
+
+    /// Node's Show available sits in the toolbar beside Install…, not under the table.
+    #[gpui::test]
+    async fn node_show_available_sits_in_the_toolbar(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let mut vcx = main_window_on(&env, Screen::Node, cx);
+        let toolbar = vcx.debug_bounds("toolbar").expect("the toolbar");
+        let button = vcx.debug_bounds("node:available").expect("Show available");
+        assert!(toolbar.contains(&button.center()));
+    }
+
+    /// Ports' profile, Check now and Range… sit in the toolbar like every other page's actions
+    /// (spec §4, Ports), not in a bar of their own above the table.
+    #[gpui::test]
+    async fn ports_controls_sit_in_the_toolbar(cx: &mut TestAppContext) {
+        let (_fake, env) = env(cx);
+        let mut vcx = main_window_on(&env, Screen::Ports, cx);
+        let toolbar = vcx.debug_bounds("toolbar").expect("the toolbar");
+        for id in ["ports:profile", "ports:check", "ports:range"] {
+            let control = vcx.debug_bounds(id).unwrap_or_else(|| panic!("{id} is shown"));
+            assert!(toolbar.contains(&control.center()), "{id} is in the toolbar");
+        }
     }
 
     /// The sidebar's first item sits below the strip the traffic lights share, so a click on it

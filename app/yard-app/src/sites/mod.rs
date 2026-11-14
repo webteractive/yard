@@ -56,7 +56,7 @@ pub fn sites(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
         let target = match &s.kind {
             SiteKind::Php { php, .. } => format!("PHP {php}"),
             SiteKind::Proxy { target } => target.clone(),
-            SiteKind::Other => "-".into(),
+            SiteKind::Other => String::new(),
         };
         let status = if s.project_error.is_some() {
             "error"

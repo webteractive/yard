@@ -64,7 +64,6 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
     let table = Table::new("node", columns(), rows.collect())
         .actions(200.)
         .empty("No Node versions installed.", None);
-    let e4 = env.clone();
     let available = env.nav.read(cx).node_available.clone();
     div()
         .flex()
@@ -76,45 +75,6 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             format!("Default: {}", list.as_ref().map(|l| l.default.clone()).unwrap_or_default()),
         )))
         .child(table)
-        .child(crate::widgets::bar().child(Button::new("node:available", "Show available").on_click(
-            move |_, _, cx| {
-                let (env, daemon) = (e4.clone(), e4.daemon.clone());
-                let task = env.runner.update(cx, |r, cx| {
-                    r.perform(
-                        crate::runner::ActionId("node:available".into()),
-                        async move {
-                            crate::daemon::call(
-                                &*daemon,
-                                api::NODE_LIST_AVAILABLE,
-                                NodeListParams { available: true, major: None },
-                            )
-                            .await
-                        },
-                        cx,
-                    )
-                });
-                cx.spawn(async move |cx| {
-                    if let Some(list) = task.await {
-                        let text = list
-                            .available
-                            .iter()
-                            .map(|r| match &r.lts {
-                                Some(lts) => format!("{} ({lts})", r.version),
-                                None => r.version.clone(),
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        cx.update(|cx| {
-                            env.nav.update(cx, |n, cx| {
-                                n.node_available = Some(text);
-                                cx.notify();
-                            })
-                        });
-                    }
-                })
-                .detach();
-            },
-        )))
         .children(available.map(|a| {
             div()
                 .type_secondary()
@@ -126,11 +86,54 @@ pub fn node(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
 
 /// The Node toolbar's button.
 pub fn actions(env: &AppEnv) -> Vec<AnyElement> {
+    let e4 = env.clone();
     let env = env.clone();
     vec![
+        Button::new("node:available", "Show available")
+            .on_click(move |_, _, cx| show_available(&e4, cx))
+            .into_any_element(),
         Button::new("node:install:open", "Install…")
             .style(ButtonStyle::Primary)
             .on_click(move |_, _, cx| super::forms::open(&env, super::forms::Inline::NodeInstall, cx))
             .into_any_element(),
     ]
+}
+
+/// Show available: the versions fnm can install, newest first, under the table.
+fn show_available(e4: &AppEnv, cx: &mut App) {
+    let (env, daemon) = (e4.clone(), e4.daemon.clone());
+    let task = env.runner.update(cx, |r, cx| {
+        r.perform(
+            crate::runner::ActionId("node:available".into()),
+            async move {
+                crate::daemon::call(
+                    &*daemon,
+                    api::NODE_LIST_AVAILABLE,
+                    NodeListParams { available: true, major: None },
+                )
+                .await
+            },
+            cx,
+        )
+    });
+    cx.spawn(async move |cx| {
+        if let Some(list) = task.await {
+            let text = list
+                .available
+                .iter()
+                .map(|r| match &r.lts {
+                    Some(lts) => format!("{} ({lts})", r.version),
+                    None => r.version.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            cx.update(|cx| {
+                env.nav.update(cx, |n, cx| {
+                    n.node_available = Some(text);
+                    cx.notify();
+                })
+            });
+        }
+    })
+    .detach();
 }
