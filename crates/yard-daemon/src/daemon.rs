@@ -64,6 +64,8 @@ pub struct DaemonOptions {
     /// Whether a host still resolves, for doctor's `dns_left` check (P10): `Some(false)` when it
     /// does not, `None` when the resolver could not say.
     pub resolve_host: fn(&str) -> Option<bool>,
+    /// How long a `db.*` call waits for the instance it wakes (db spec §9).
+    pub db_wake_wait: Duration,
 }
 
 impl DaemonOptions {
@@ -88,6 +90,7 @@ impl DaemonOptions {
             tunnel_poll: Duration::from_secs(2),
             tunnel_ready_wait: Duration::from_secs(30),
             resolve_host: tunnel::resolves_with_getaddrinfo,
+            db_wake_wait: Duration::from_secs(30),
         }
     }
 }
@@ -122,6 +125,8 @@ pub struct Context {
     pub resolve_host: fn(&str) -> Option<bool>,
     /// The asks that may wait on a wake at once (`wake::WAKE_SLOTS`).
     pub wake_slots: Arc<tokio::sync::Semaphore>,
+    /// `DaemonOptions.db_wake_wait`.
+    pub db_wake_wait: Duration,
 }
 
 impl Context {
@@ -187,6 +192,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         sleeper,
         tunnels,
         tunnel_ready_wait: opts.tunnel_ready_wait,
+        db_wake_wait: opts.db_wake_wait,
         resolve_host: opts.resolve_host,
         wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });

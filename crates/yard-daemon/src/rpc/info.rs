@@ -204,7 +204,7 @@ fn note_clashes(blocks: Vec<(Engine, EnvBlock)>) -> Vec<EnvBlock> {
 /// The linked site whose directory contains `path`, the innermost when projects nest. Both
 /// sides are resolved, since `sites.toml` may spell a path through a symlink (`/var` on
 /// macOS) and `path` may name a directory that is not there yet.
-fn site_containing<'a>(snap: &'a Snapshot, path: &Path) -> Option<&'a SiteInfo> {
+pub(super) fn site_containing<'a>(snap: &'a Snapshot, path: &Path) -> Option<&'a SiteInfo> {
     let path = resolve(path);
     snap.resolution
         .sites

@@ -122,9 +122,9 @@ impl Fixture {
     /// `minio`) whose binaries are the fake, as the fake brew's `install` leaves it.
     pub fn add_formula(&self, name: &str) {
         let bins: &[&str] = if name.starts_with("mysql") {
-            &["mysqld"]
+            &["mysqld", "mysql", "mysqldump"]
         } else if name.starts_with("postgresql@") {
-            &["postgres", "initdb"]
+            &["postgres", "initdb", "psql", "pg_dump", "pg_restore"]
         } else if name == "redis" {
             &["redis-server"]
         } else if name == "minio" {

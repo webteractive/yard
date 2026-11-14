@@ -28,6 +28,9 @@ fn main() -> ExitCode {
         Some("pecl") => pecl(Path::new(&argv0), &args),
         Some("security") => security(Path::new(&argv0), &args),
         Some("mysqld") => mysqld(Path::new(&argv0), &args),
+        Some(tool @ ("mysql" | "mysqldump" | "psql" | "pg_dump" | "pg_restore")) => {
+            db_tool(Path::new(&argv0), tool, &args)
+        }
         Some("initdb") => initdb(Path::new(&argv0), &args),
         Some("postgres") => postgres(&args),
         Some("postgres-backend") => backend(),
@@ -843,6 +846,53 @@ fn pecl(argv0: &Path, args: &[String]) -> ExitCode {
 /// listens on the `port` in `F`, and exits 1 with `unknown variable` when the file `F`
 /// includes (`!include <path>`, Yard's `overrides.conf`) contains `bad`, as mysqld refuses
 /// a line it does not know.
+/// A database client (`yard db`): logs its arguments as a JSON array per line to
+/// `<keg>/fake-db.log`, keeps what came on stdin in `<keg>/fake-db-stdin`, answers a query
+/// (`-e`, `-c`) from `fake-db-exists`, `fake-db-tables` or `fake-db-answer` by what it asks,
+/// writes `fake-db-dump` (or a line) for `mysqldump`/`pg_dump`, waits while `fake-db-hang`
+/// exists, and fails with `fake db failed` while `fake-db-fail` exists.
+fn db_tool(argv0: &Path, tool: &str, args: &[String]) -> ExitCode {
+    use std::io::{IsTerminal, Read, Write};
+    let keg = argv0.ancestors().nth(2).unwrap_or(Path::new("/")).to_path_buf();
+    if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(keg.join("fake-db.log")) {
+        let _ = writeln!(log, "{}", serde_json::to_string(args).unwrap_or_default());
+    }
+    while keg.join("fake-db-hang").exists() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !std::io::stdin().is_terminal() {
+        let mut input = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut input);
+        let _ = std::fs::write(keg.join("fake-db-stdin"), input);
+    }
+    if keg.join("fake-db-fail").exists() {
+        eprintln!("fake db failed");
+        return ExitCode::from(1);
+    }
+    let read = |file: &str, default: &str| {
+        std::fs::read_to_string(keg.join(file)).unwrap_or_else(|_| default.to_string())
+    };
+    let query = args.windows(2).find(|w| w[0] == "-e" || w[0] == "-c").map(|w| w[1].clone());
+    if let Some(q) = query {
+        if q.starts_with("CREATE DATABASE") {
+            return ExitCode::SUCCESS;
+        }
+        let answer = if q.contains("schemata WHERE schema_name") || q.contains("pg_database WHERE datname") {
+            read("fake-db-exists", "0\n")
+        } else if q.starts_with("SELECT COUNT(*) FROM information_schema.tables") {
+            read("fake-db-tables", "0\n")
+        } else {
+            read("fake-db-answer", "")
+        };
+        print!("{answer}");
+        return ExitCode::SUCCESS;
+    }
+    if tool == "mysqldump" || tool == "pg_dump" {
+        print!("{}", read("fake-db-dump", "-- fake dump\n"));
+    }
+    ExitCode::SUCCESS
+}
+
 fn mysqld(argv0: &Path, args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "--initialize-insecure") {
         let Some(data) = flag(args, "--datadir") else { return fail("mysqld needs --datadir".into()) };
