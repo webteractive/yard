@@ -871,6 +871,9 @@ pub struct ConnectInfo {
     pub instance: String,
     pub engine: String,
     pub state: ServiceState,
+    /// Asleep (M4e): stopped, and woken by `yard db open` or `shell`.
+    #[serde(default)]
+    pub sleeping: bool,
     pub host: String,
     pub port: u16,
     pub user: Option<String>,

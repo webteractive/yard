@@ -1,0 +1,25 @@
+---
+source: crates/yard-cli/tests/db.rs
+expression: stdout(&out)
+---
+postgres-17  running
+  Host      127.0.0.1
+  Port      5433
+  User      me
+  Password  (none)
+  Socket    /Users/me/.yard/run  (the directory; a client takes it as the host)
+  URL       postgresql://me@127.0.0.1:5433
+
+  TablePlus: yard db open [database], or paste the URL
+  DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above
+
+redis  running
+  Host      127.0.0.1
+  Port      6380
+  Password  (none)
+  URL       redis://127.0.0.1:6380
+
+  TablePlus: paste the URL
+  Another Redis client: a connection to the host and port above
+
+For agents and scripts: yard db connect --json

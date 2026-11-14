@@ -275,7 +275,17 @@ fn socket_of(ctx: &Context, instance: &str, engine: Engine) -> Option<PathBuf> {
 
 fn connect_info(ctx: &Context, instance: &str, engine: Engine, info: &ServiceInfo) -> ConnectInfo {
     let socket = socket_of(ctx, instance, engine);
-    connect::info(instance, engine, info.state.clone(), port_of(info), &info.account, socket.as_deref(), None)
+    let mut c = connect::info(
+        instance,
+        engine,
+        info.state.clone(),
+        port_of(info),
+        &info.account,
+        socket.as_deref(),
+        None,
+    );
+    c.sleeping = info.sleeping_since.is_some() && info.state == ServiceState::Stopped;
+    c
 }
 
 /// The `bin` directory a tool runs from (db spec §7.1) and the note that says so when it is

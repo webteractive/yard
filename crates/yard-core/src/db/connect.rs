@@ -31,6 +31,7 @@ pub fn info(
         instance: instance.to_string(),
         engine: engine.key().to_string(),
         state,
+        sleeping: false,
         host: HOST.to_string(),
         port,
         user,

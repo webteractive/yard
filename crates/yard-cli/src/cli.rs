@@ -186,6 +186,12 @@ pub enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Work with the databases on the MySQL and PostgreSQL instances: list, create, connect,
+    /// open, shell, dump and import. Nothing here drops a database or makes users.
+    Db {
+        #[command(subcommand)]
+        action: DbSub,
+    },
     /// Print the .env lines for a project's services (or one instance). Writes no file.
     ///
     /// In a linked project, or with --site, it prints the services the project's .yard
@@ -323,6 +329,66 @@ pub enum ServiceAction {
         /// A duration of at least 60s (90s, 15m, 1h), off to keep it awake, or default to
         /// follow service_sleep_after in yard.toml (15m when that is unset too).
         after: String,
+    },
+}
+
+/// Which instance a `yard db` command means.
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct DbAt {
+    /// The instance, e.g. mysql-8.4 (see yard services). Defaults to the database the
+    /// project's .yard asks for, else the only MySQL or PostgreSQL instance.
+    #[arg(long)]
+    pub service: Option<String>,
+    /// The site whose .yard picks the instance; defaults to the linked project that contains
+    /// the current directory.
+    #[arg(long)]
+    pub site: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DbSub {
+    /// List the databases on an instance (or every MySQL and PostgreSQL instance), with their
+    /// size and number of tables. Wakes a sleeping instance.
+    List {
+        #[command(flatten)]
+        at: DbAt,
+    },
+    /// Create a database: utf8mb4 with utf8mb4_unicode_ci on MySQL, UTF8 on PostgreSQL. A
+    /// database that exists is left as it is.
+    Create {
+        /// Letters, digits, _ and -, at most 63 characters.
+        name: String,
+        #[command(flatten)]
+        at: DbAt,
+    },
+    /// Show what a GUI client (TablePlus, Sequel Ace, DBeaver, DataGrip) needs to connect: host,
+    /// port, user, password, socket and URL. Wakes nothing.
+    Connect {
+        /// The instance, e.g. mysql-8.4; defaults as for the other db commands, and outside a
+        /// project every MySQL, PostgreSQL and Redis instance is shown.
+        instance: Option<String>,
+        /// The site whose .yard picks the instance.
+        #[arg(long)]
+        site: Option<String>,
+    },
+    /// Open a database in the app that handles mysql:// or postgresql:// URLs (TablePlus,
+    /// Sequel Ace), waking the instance first. With no such app, it prints the details.
+    Open {
+        /// The database to open; without it, the server.
+        name: Option<String>,
+        #[command(flatten)]
+        at: DbAt,
+    },
+    /// Log in with the instance's own client (mysql or psql, from its brew keg), on a database
+    /// when one is named. Flags after -- go to the client, e.g. -- -e "show tables".
+    Shell {
+        /// The database; without it, the server (PostgreSQL's postgres database).
+        name: Option<String>,
+        #[command(flatten)]
+        at: DbAt,
+        /// Passed to the client; flags naming another server, user or database are refused.
+        #[arg(last = true)]
+        args: Vec<String>,
     },
 }
 

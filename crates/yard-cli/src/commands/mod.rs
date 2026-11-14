@@ -1,6 +1,7 @@
 //! One module per command group. Each command prints its own output and returns the
 //! exit code; `run` turns errors into exit codes 1 and 3.
 
+mod db;
 mod doctor;
 mod env;
 mod ext;
@@ -23,8 +24,8 @@ mod update;
 mod version;
 
 use crate::cli::{
-    Cli, Command, DomainCommand, ExtAction, HelperAction, NodeAction, OnOff, PhpAction, PortsAction,
-    ServiceAction, SourceAction, TunnelsCommand,
+    Cli, Command, DbAt, DbSub, DomainCommand, ExtAction, HelperAction, NodeAction, OnOff, PhpAction,
+    PortsAction, ServiceAction, SourceAction, TunnelsCommand,
 };
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
@@ -161,6 +162,13 @@ pub async fn run(cli: Cli) -> i32 {
             ServiceAction::SleepAfter { instance, after } => {
                 services::sleep_after(&ctx, instance, after).await
             }
+        },
+        Command::Db { action } => match action {
+            DbSub::List { at } => db::list(&ctx, at).await,
+            DbSub::Create { name, at } => db::create(&ctx, name, at).await,
+            DbSub::Connect { instance, site } => db::connect(&ctx, DbAt { service: instance, site }).await,
+            DbSub::Open { name, at } => db::open(&ctx, name, at).await,
+            DbSub::Shell { name, at, args } => db::shell(&ctx, name, at, args).await,
         },
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,

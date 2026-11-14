@@ -1,0 +1,205 @@
+//! `yard db` (db spec §6, §8): yardd picks and wakes the instance and builds every command;
+//! this side prints, opens the URL, and runs the client in the user's terminal.
+
+use super::{Ctx, Outcome, cwd_absolute};
+use crate::cli::DbAt;
+use crate::output::{for_agents, table};
+use std::os::unix::process::CommandExt;
+use yard_proto::methods::{self, DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
+use yard_proto::{
+    ConnectInfo, DbAction, DbCommand, DbCreated, DbInstanceList, ErrorCode, ServiceState, YardError,
+};
+
+/// The params' target. With no flag yardd needs the directory, as an absolute real path.
+pub fn target(at: DbAt) -> Result<DbTarget, YardError> {
+    let path = if at.site.is_none() && at.service.is_none() { Some(cwd_absolute()?) } else { None };
+    Ok(DbTarget { path, site: at.site, service: at.service })
+}
+
+pub async fn list(ctx: &Ctx, at: DbAt) -> Outcome {
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    if target.service.is_none() && !ctx.json {
+        // Say which sleeping instances the list is about to wake (db spec §6.1).
+        let params = DbConnectParams { target: target.clone(), wake: false };
+        let infos: Vec<ConnectInfo> = client.call(methods::DB_CONNECT, params).await.unwrap_or_default();
+        for info in infos.iter().filter(|i| matches!(i.engine.as_str(), "mysql" | "postgres") && i.sleeping) {
+            eprintln!("waking {} to list its databases", info.instance);
+        }
+    }
+    let lists: Vec<DbInstanceList> = client.call(methods::DB_LIST, DbListParams { target }).await?;
+    ctx.emit(&lists, || list_text(&lists));
+    Ok(0)
+}
+
+fn list_text(lists: &[DbInstanceList]) -> String {
+    let mut out = String::new();
+    for list in lists {
+        out.push_str(&format!("{}\n", list.instance));
+        if list.databases.is_empty() {
+            out.push_str(&format!(
+                "No databases on {} yet. yard db create <name> makes one.\n\n",
+                list.instance
+            ));
+            continue;
+        }
+        let rows: Vec<Vec<String>> = list
+            .databases
+            .iter()
+            .map(|d| vec![d.name.clone(), human(d.size_bytes), d.tables.to_string()])
+            .collect();
+        out.push_str(&table(&["DATABASE", "SIZE", "TABLES"], &rows));
+        out.push('\n');
+    }
+    if lists.is_empty() {
+        out.push_str("No MySQL or PostgreSQL instances yet. Add one with yard service add mysql.\n\n");
+    }
+    out.push_str(&for_agents("yard db list"));
+    out
+}
+
+pub async fn create(ctx: &Ctx, name: String, at: DbAt) -> Outcome {
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    let made: DbCreated = client.call(methods::DB_CREATE, DbCreateParams { target, name }).await?;
+    ctx.emit(&made, || match made.created {
+        true => format!("Created {} on {}.\n", made.name, made.instance),
+        false => format!("{} already exists on {}.\n", made.name, made.instance),
+    });
+    Ok(0)
+}
+
+pub async fn connect(ctx: &Ctx, at: DbAt) -> Outcome {
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    let infos: Vec<ConnectInfo> =
+        client.call(methods::DB_CONNECT, DbConnectParams { target, wake: false }).await?;
+    ctx.emit(&infos, || {
+        let blocks: Vec<String> = infos.iter().map(connect_text).collect();
+        format!("{}\n{}", blocks.join("\n"), for_agents("yard db connect"))
+    });
+    Ok(0)
+}
+
+/// What a GUI client needs, as spec §8 lays it out.
+pub fn connect_text(i: &ConnectInfo) -> String {
+    let n = &i.instance;
+    let state = match &i.state {
+        ServiceState::Running => "running".to_string(),
+        ServiceState::Stopped if i.sleeping => {
+            format!("sleeping — yard db open or yard db shell wakes it; or yard service start {n}")
+        }
+        ServiceState::Stopped => format!("stopped — yard service start {n}"),
+        ServiceState::Starting => "starting".to_string(),
+        ServiceState::Failed { .. } => "failed — yard services says why".to_string(),
+        ServiceState::Other => "unknown".to_string(),
+    };
+    let mut out = format!("{n}  {state}\n");
+    let mut field = |name: &str, value: &str| out.push_str(&format!("  {name:<9} {value}\n"));
+    field("Host", &i.host);
+    field("Port", &i.port.to_string());
+    if let Some(user) = &i.user {
+        field("User", user);
+    }
+    field("Password", i.password.as_deref().unwrap_or("(none)"));
+    if let Some(socket) = &i.socket {
+        let note =
+            if i.engine == "postgres" { "  (the directory; a client takes it as the host)" } else { "" };
+        field("Socket", &format!("{socket}{note}"));
+    }
+    field("URL", &i.url);
+    out.push('\n');
+    let clients = match i.engine.as_str() {
+        "postgres" => [
+            "TablePlus: yard db open [database], or paste the URL".to_string(),
+            "DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above".to_string(),
+        ],
+        "redis" => [
+            "TablePlus: paste the URL".to_string(),
+            "Another Redis client: a connection to the host and port above".to_string(),
+        ],
+        _ => [
+            "TablePlus, Sequel Ace: yard db open [database], or paste the URL".to_string(),
+            "DBeaver, DataGrip: a new MySQL connection with the fields above".to_string(),
+        ],
+    };
+    for line in clients {
+        out.push_str(&format!("  {line}\n"));
+    }
+    out
+}
+
+pub async fn open(ctx: &Ctx, name: Option<String>, at: DbAt) -> Outcome {
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    let infos: Vec<ConnectInfo> =
+        client.call(methods::DB_CONNECT, DbConnectParams { target, wake: true }).await?;
+    let info = infos.into_iter().next().ok_or_else(|| YardError::internal("yardd named no instance"))?;
+    let url = match &name {
+        Some(db) => format!("{}/{db}", info.url),
+        None => info.url.clone(),
+    };
+    let opened = std::process::Command::new(opener()).arg(&url).status().is_ok_and(|s| s.success());
+    if !opened {
+        print!("{}", connect_text(&info));
+        let scheme = url.split("://").next().unwrap_or("mysql");
+        return Err(YardError::new(ErrorCode::DbNoHandler, format!("no app opens {scheme}:// URLs"))
+            .with_hint("install TablePlus or Sequel Ace, or use the details above")
+            .into());
+    }
+    ctx.emit(&info, || format!("Opened {url}.\n"));
+    Ok(0)
+}
+
+/// macOS's `open`; tests point `YARD_OPEN` at a stand-in (debug builds only).
+fn opener() -> std::path::PathBuf {
+    if cfg!(debug_assertions)
+        && let Some(path) = std::env::var_os("YARD_OPEN")
+    {
+        return path.into();
+    }
+    "/usr/bin/open".into()
+}
+
+pub async fn shell(ctx: &Ctx, name: Option<String>, at: DbAt, args: Vec<String>) -> Outcome {
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    let params = DbCommandParams {
+        target,
+        action: DbAction::Shell,
+        name,
+        args,
+        compress: false,
+        into_existing: false,
+        keep_owners: false,
+        import_kind: None,
+        file: None,
+    };
+    let cmd: DbCommand = client.call(methods::DB_COMMAND, params).await?;
+    for note in &cmd.notes {
+        eprintln!("{note}");
+    }
+    Err(exec(&cmd).into())
+}
+
+/// Replaces this process with the command; it returns only when that fails.
+fn exec(cmd: &DbCommand) -> YardError {
+    let mut c = std::process::Command::new(&cmd.program);
+    c.args(&cmd.args);
+    for var in &cmd.env_remove {
+        c.env_remove(var);
+    }
+    c.envs(cmd.env.iter().map(|(k, v)| (k, v)));
+    let e = c.exec();
+    YardError::new(ErrorCode::DbToolFailed, format!("cannot run {}: {e}", cmd.program))
+}
+
+/// `3.0 MB`, `80.0 KB`, `512 bytes`.
+pub fn human(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
+        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
+        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / (1u64 << 10) as f64),
+        b => format!("{b} bytes"),
+    }
+}
