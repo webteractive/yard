@@ -111,7 +111,7 @@ async fn hello_is_the_first_request() {
     let first = fake.requests().into_iter().next().unwrap();
     assert_eq!(first.1, "hello");
     assert_eq!(first.2, json!({"protocol": PROTOCOL_VERSION, "client": NAME}));
-    assert_eq!(conn.hello().protocol, "2.11");
+    assert_eq!(conn.hello().protocol, yard_proto::PROTOCOL_VERSION);
 }
 
 #[tokio::test]

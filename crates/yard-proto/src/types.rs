@@ -822,6 +822,96 @@ pub struct TunnelDomain {
     pub logged_in: bool,
 }
 
+/// What `db.command` builds a command for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DbAction {
+    Shell,
+    Dump,
+    Import,
+}
+
+/// An import file's format, read from its first bytes: SQL for `mysql`/`psql`, or a
+/// PostgreSQL archive or directory for `pg_restore`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportKind {
+    Plain,
+    Archive,
+    Directory,
+}
+
+/// One database of `db.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbInfo {
+    pub name: String,
+    pub size_bytes: u64,
+    pub tables: u64,
+}
+
+/// One instance's databases (`db.list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbInstanceList {
+    pub instance: String,
+    pub engine: String,
+    pub databases: Vec<DbInfo>,
+}
+
+/// `db.create`'s answer; `created` is false when the database was already there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbCreated {
+    pub instance: String,
+    pub name: String,
+    pub created: bool,
+}
+
+/// What a GUI client needs to connect to an instance (`db.connect`, db spec §8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectInfo {
+    pub instance: String,
+    pub engine: String,
+    pub state: ServiceState,
+    pub host: String,
+    pub port: u16,
+    pub user: Option<String>,
+    /// `None` when the login has no password.
+    pub password: Option<String>,
+    /// MySQL's socket file or PostgreSQL's socket directory; Redis has none.
+    pub socket: Option<String>,
+    pub url: String,
+}
+
+/// The statement filter the client runs an import through (db spec §6.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamFilter {
+    None,
+    Mysql,
+    Postgres {
+        keep_owners: bool,
+    },
+    /// A filter a newer yardd names that this client does not know; never sent.
+    #[serde(other)]
+    Other,
+}
+
+/// `db.command`'s answer: the command the client runs, with nothing left to decide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbCommand {
+    pub instance: String,
+    /// The tool's absolute path.
+    pub program: String,
+    /// Yard's arguments, then the user's.
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub env_remove: Vec<String>,
+    pub filter: StreamFilter,
+    /// An import created the database.
+    pub created: bool,
+    /// Lines to show the user (`using mysql-8.4`, `using pg_restore 18 for postgres-17`).
+    pub notes: Vec<String>,
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1340,5 +1430,19 @@ pub(crate) mod tests {
         assert!(e.contains("unknown variant `turbo`"), "{e}");
         let e = serde_json::from_value::<T>(json!({"p":"standard","m":"other"})).unwrap_err().to_string();
         assert!(e.contains("unknown variant `other`"), "{e}");
+    }
+
+    #[test]
+    fn stream_filter_names() {
+        let f = StreamFilter::Postgres { keep_owners: true };
+        assert_eq!(serde_json::to_value(&f).unwrap(), json!({"kind":"postgres","keep_owners":true}));
+        assert_eq!(
+            serde_json::from_value::<StreamFilter>(json!({"kind":"none"})).unwrap(),
+            StreamFilter::None
+        );
+        assert_eq!(
+            serde_json::from_value::<StreamFilter>(json!({"kind":"zstd"})).unwrap(),
+            StreamFilter::Other
+        );
     }
 }

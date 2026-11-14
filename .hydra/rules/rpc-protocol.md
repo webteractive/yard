@@ -60,6 +60,15 @@ triggers:
   A client of an older yardd leaves `state` out of `subscribe`, which would refuse it.
   `SERVICE_VERSION_UNSUPPORTED` carries `data.available`, the lines brew has (Yard.app's line
   picker); the M6 design promised it with 2.11 and yardd sent it only from 2026-11-06.
+- Protocol 2.12 (`yard db`, db spec §11): `db.list`, `db.create`, `db.connect { wake }` and
+  `db.command`, each taking `DbTarget` (`path`, `site`, `service`, flattened). `db.command` runs no
+  tool: it picks and wakes the instance, checks the name and the passed-through flags, creates an
+  import's database or refuses one with tables, and answers `DbCommand` (program, args, env,
+  `env_remove`, `filter`), which the client runs, since yardd as a LaunchAgent cannot open the
+  user's protected folders. `StreamFilter` is tagged by `kind` with an `Other` fallback. New codes:
+  `DB_SERVICE_AMBIGUOUS`, `DB_NO_SERVICE`, `DB_UNSUPPORTED_ENGINE`, `DB_NOT_EMPTY`, `DB_FLAG_RESERVED`,
+  `DB_DUMP_SWITCHES_DATABASE`, `DB_NO_HANDLER` and `DB_TOOL_FAILED` (the client's), `FILE_EXISTS`,
+  `SERVICE_STOPPED`, `SERVICE_WAKE_TIMEOUT`.
 - Protocol 2.10 (M5, tunnels): `job_finished` carries an optional `result` (a job's answer, sent
   only on success); `tunnels.list` returns every tunnel the last reconcile ran as `TunnelInfo`,
   sorted by site, and `tunnel_changed` (topic `tunnels`) goes out when a tunnel's state, url or

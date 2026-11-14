@@ -91,7 +91,7 @@ fn version_json_has_stable_shape() {
     assert!(out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["cli"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(v["protocol"], "2.11");
+    assert_eq!(v["protocol"], yard_proto::PROTOCOL_VERSION);
     assert!(v["commit"].is_string());
     assert!(v["build_date"].is_string());
     assert!(v["daemon"].is_null());

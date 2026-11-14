@@ -98,6 +98,11 @@ pub const TUNNELS_DOMAIN_REMOVE: Method<TunnelDomainParams, Vec<TunnelDomain>> =
     Method::quick(methods::TUNNELS_DOMAIN_REMOVE);
 pub const TUNNELS_ADD: Method<TunnelAddParams, JobStarted> = Method::quick(methods::TUNNELS_ADD);
 pub const TUNNELS_REMOVE: Method<TunnelRemoveParams, JobStarted> = Method::quick(methods::TUNNELS_REMOVE);
+// Each may wake a sleeping instance first, which takes up to 30 s.
+pub const DB_LIST: Method<DbListParams, Vec<DbInstanceList>> = Method::slow(methods::DB_LIST);
+pub const DB_CREATE: Method<DbCreateParams, DbCreated> = Method::slow(methods::DB_CREATE);
+pub const DB_CONNECT: Method<DbConnectParams, Vec<ConnectInfo>> = Method::slow(methods::DB_CONNECT);
+pub const DB_COMMAND: Method<DbCommandParams, DbCommand> = Method::slow(methods::DB_COMMAND);
 pub const JOBS_CANCEL: Method<JobParams, IgnoredAny> = Method::quick(methods::JOBS_CANCEL);
 
 /// Each entry's method name once (`node.list` has two entries), `hello` and `subscribe` aside.
@@ -162,5 +167,9 @@ pub const NAMES: &[&str] = &[
     TUNNELS_DOMAIN_REMOVE.name,
     TUNNELS_ADD.name,
     TUNNELS_REMOVE.name,
+    DB_LIST.name,
+    DB_CREATE.name,
+    DB_CONNECT.name,
+    DB_COMMAND.name,
     JOBS_CANCEL.name,
 ];

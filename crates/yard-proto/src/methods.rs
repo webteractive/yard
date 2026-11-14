@@ -1,6 +1,6 @@
 //! Daemon method names and their parameter/result shapes (spec §6.2).
 
-use crate::{Profile, Topic};
+use crate::{DbAction, ImportKind, Profile, Topic};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -65,6 +65,10 @@ pub const TUNNELS_DOMAIN_ADD: &str = "tunnels.domain_add";
 pub const TUNNELS_DOMAIN_REMOVE: &str = "tunnels.domain_remove";
 pub const TUNNELS_ADD: &str = "tunnels.add";
 pub const TUNNELS_REMOVE: &str = "tunnels.remove";
+pub const DB_LIST: &str = "db.list";
+pub const DB_CREATE: &str = "db.create";
+pub const DB_CONNECT: &str = "db.connect";
+pub const DB_COMMAND: &str = "db.command";
 pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
@@ -131,6 +135,10 @@ pub const ALL: &[&str] = &[
     TUNNELS_DOMAIN_REMOVE,
     TUNNELS_ADD,
     TUNNELS_REMOVE,
+    DB_LIST,
+    DB_CREATE,
+    DB_CONNECT,
+    DB_COMMAND,
     JOBS_CANCEL,
     SUBSCRIBE,
 ];
@@ -345,6 +353,67 @@ pub struct TunnelDomainAddParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TunnelDomainParams {
     pub domain: String,
+}
+
+/// Which instance a `db.*` call means (db spec §5): `service` names it; else the project
+/// at `site`, or the linked site containing `path`; else the machine's only one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DbTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+}
+
+/// `db.list`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DbListParams {
+    #[serde(flatten)]
+    pub target: DbTarget,
+}
+
+/// `db.create`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbCreateParams {
+    #[serde(flatten)]
+    pub target: DbTarget,
+    pub name: String,
+}
+
+/// `db.connect`: with `wake`, the one picked instance, once it is up.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DbConnectParams {
+    #[serde(flatten)]
+    pub target: DbTarget,
+    #[serde(default)]
+    pub wake: bool,
+}
+
+/// `db.command`: the command a client runs for `yard db shell|dump|import` (db spec §11).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbCommandParams {
+    #[serde(flatten)]
+    pub target: DbTarget,
+    pub action: DbAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// What the user passed after `--`, verbatim.
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub compress: bool,
+    #[serde(default)]
+    pub into_existing: bool,
+    #[serde(default)]
+    pub keep_owners: bool,
+    /// What the client read from the import file's first bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_kind: Option<ImportKind>,
+    /// The directory of a directory-format import, which `pg_restore` takes as a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[cfg(test)]
@@ -601,4 +670,47 @@ pub struct SourceParams {
     pub target: String,
     #[serde(default)]
     pub tap: bool,
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn protocol_is_2_12() {
+        assert_eq!(crate::PROTOCOL_VERSION, "2.12");
+    }
+
+    #[test]
+    fn db_methods_are_listed() {
+        for name in ["db.list", "db.create", "db.connect", "db.command"] {
+            assert_eq!(ALL.iter().filter(|m| **m == name).count(), 1, "{name}");
+        }
+        assert_eq!(
+            [DB_LIST, DB_CREATE, DB_CONNECT, DB_COMMAND],
+            ["db.list", "db.create", "db.connect", "db.command"]
+        );
+    }
+
+    #[test]
+    fn db_command_params_round_trip() {
+        let v = json!({"action":"import","name":"shop","args":["--force"],"into_existing":true,"import_kind":"plain","service":"mysql-8.4"});
+        let p: DbCommandParams = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(p.target.service.as_deref(), Some("mysql-8.4"));
+        assert_eq!(p.action, DbAction::Import);
+        assert_eq!(p.import_kind, Some(ImportKind::Plain));
+        assert!(!p.compress && !p.keep_owners && p.into_existing);
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            json!({"service":"mysql-8.4","action":"import","name":"shop","args":["--force"],"compress":false,"into_existing":true,"keep_owners":false,"import_kind":"plain"})
+        );
+    }
+
+    #[test]
+    fn connect_params_default_wake_false() {
+        let p: DbConnectParams = serde_json::from_value(json!({})).unwrap();
+        assert!(!p.wake);
+        assert_eq!(p.target, DbTarget::default());
+    }
 }

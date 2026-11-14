@@ -221,7 +221,7 @@ fn handle(state: &Arc<Mutex<State>>, conn: usize, out: &mpsc::UnboundedSender<Ve
         "hello" => Some(match s.refuse_hello.clone() {
             Some(e) => Err(e),
             None => Ok(json!({
-                "protocol": s.protocol.clone().unwrap_or_else(|| "2.11".into()),
+                "protocol": s.protocol.clone().unwrap_or_else(|| yard_proto::PROTOCOL_VERSION.into()),
                 "daemon_version": "0.1.0",
                 "commit": "fake",
             })),

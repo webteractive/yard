@@ -97,6 +97,28 @@ pub enum ErrorCode {
     TunnelNotReady,
     /// `unlink` or `unproxy` of a site shared through a named tunnel.
     SiteTunnelled,
+    /// A `yard db` command could mean more than one instance; the message names them.
+    DbServiceAmbiguous,
+    /// There is no MySQL or PostgreSQL instance for a `yard db` command.
+    DbNoService,
+    /// `yard db` works on MySQL and PostgreSQL only (and `connect` on Redis too).
+    DbUnsupportedEngine,
+    /// An import into a database that already has tables, without `--into-existing`.
+    DbNotEmpty,
+    /// A flag passed after `--` that would point the tool at another server, database or file.
+    DbFlagReserved,
+    /// An import's dump switches, creates or drops a database; `data.database` names it.
+    DbDumpSwitchesDatabase,
+    /// No app opens the instance's URL scheme (CLI only).
+    DbNoHandler,
+    /// A database tool exited non-zero; `data.tail` has its last lines.
+    DbToolFailed,
+    /// The file to write is already there.
+    FileExists,
+    /// The instance was stopped with `yard service stop`, so Yard does not start it.
+    ServiceStopped,
+    /// The instance did not come up in time after a wake.
+    ServiceWakeTimeout,
     Internal,
     /// A code a newer yardd sends that this build does not know (`"OTHER"`); never sent.
     #[serde(other)]
@@ -185,6 +207,17 @@ mod tests {
             (ErrorCode::NodeInUse, "NODE_IN_USE"),
             (ErrorCode::EmailulatorNotFound, "EMAILULATOR_NOT_FOUND"),
             (ErrorCode::ServiceExternal, "SERVICE_EXTERNAL"),
+            (ErrorCode::DbServiceAmbiguous, "DB_SERVICE_AMBIGUOUS"),
+            (ErrorCode::DbNoService, "DB_NO_SERVICE"),
+            (ErrorCode::DbUnsupportedEngine, "DB_UNSUPPORTED_ENGINE"),
+            (ErrorCode::DbNotEmpty, "DB_NOT_EMPTY"),
+            (ErrorCode::DbFlagReserved, "DB_FLAG_RESERVED"),
+            (ErrorCode::DbDumpSwitchesDatabase, "DB_DUMP_SWITCHES_DATABASE"),
+            (ErrorCode::DbNoHandler, "DB_NO_HANDLER"),
+            (ErrorCode::DbToolFailed, "DB_TOOL_FAILED"),
+            (ErrorCode::FileExists, "FILE_EXISTS"),
+            (ErrorCode::ServiceStopped, "SERVICE_STOPPED"),
+            (ErrorCode::ServiceWakeTimeout, "SERVICE_WAKE_TIMEOUT"),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
         }
