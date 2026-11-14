@@ -7,6 +7,9 @@ use yard_proto::{DbAction, DbCommand, ImportKind, StreamFilter};
 
 /// The PostgreSQL variables that could point a tool at another server or login; cleared for
 /// Yard's dumps and imports (db spec §7).
+/// The MySQL client's variables that could point it at another server; cleared for every run.
+pub const MYSQL_ENV: [&str; 3] = ["MYSQL_HOST", "MYSQL_TCP_PORT", "MYSQL_UNIX_PORT"];
+
 pub const PG_ENV: [&str; 9] = [
     "PGHOST",
     "PGHOSTADDR",
@@ -79,7 +82,13 @@ pub fn build(
             }
         }
         _ => {
-            let conn = vec![format!("--socket={socket}"), format!("--user={}", t.user)];
+            // --protocol=socket wins over a host in MYSQL_HOST or a ~/.my.cnf [client] group.
+            let conn = vec![
+                "--protocol=socket".to_string(),
+                format!("--socket={socket}"),
+                format!("--user={}", t.user),
+            ];
+            env_remove = MYSQL_ENV.iter().map(|v| v.to_string()).collect();
             let no_defaults = vec!["--no-defaults".to_string()];
             match action {
                 DbAction::Shell => {
@@ -156,11 +165,18 @@ mod tests {
         assert_eq!(c.program, "/k/bin/mysql");
         assert_eq!(
             c.args,
-            s(&["--socket=/r/run/mysql-8.4.sock", "--user=root", "--database=shop", "-e", "show tables"])
+            s(&[
+                "--protocol=socket",
+                "--socket=/r/run/mysql-8.4.sock",
+                "--user=root",
+                "--database=shop",
+                "-e",
+                "show tables"
+            ])
         );
-        assert_eq!((c.filter, c.env_remove.len()), (StreamFilter::None, 0));
+        assert_eq!((c.filter, c.env_remove.len()), (StreamFilter::None, 3));
         let c = build(&my(), DbAction::Shell, None, &[], None, false);
-        assert_eq!(c.args, s(&["--socket=/r/run/mysql-8.4.sock", "--user=root"]));
+        assert_eq!(c.args, s(&["--protocol=socket", "--socket=/r/run/mysql-8.4.sock", "--user=root"]));
 
         let c = build(&my(), DbAction::Dump, Some("shop"), &s(&["--routines", "orders"]), None, false);
         assert_eq!(c.program, "/k/bin/mysqldump");
@@ -168,6 +184,7 @@ mod tests {
             c.args,
             s(&[
                 "--no-defaults",
+                "--protocol=socket",
                 "--socket=/r/run/mysql-8.4.sock",
                 "--user=root",
                 "shop",
@@ -189,6 +206,7 @@ mod tests {
             c.args,
             s(&[
                 "--no-defaults",
+                "--protocol=socket",
                 "--socket=/r/run/mysql-8.4.sock",
                 "--user=root",
                 "--database=shop",
@@ -198,6 +216,17 @@ mod tests {
         );
         assert_eq!(c.filter, StreamFilter::Mysql);
         assert_eq!((c.instance.as_str(), c.created, c.notes.len()), ("mysql-8.4", false, 0));
+    }
+
+    #[test]
+    fn mysql_always_uses_the_socket() {
+        for action in [DbAction::Shell, DbAction::Dump, DbAction::Import] {
+            let c = build(&my(), action, Some("shop"), &[], Some((ImportKind::Plain, None)), false);
+            assert!(c.args.contains(&"--protocol=socket".to_string()), "{action:?}: {:?}", c.args);
+            for var in ["MYSQL_HOST", "MYSQL_TCP_PORT", "MYSQL_UNIX_PORT"] {
+                assert!(c.env_remove.contains(&var.to_string()), "{action:?} keeps {var}");
+            }
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! PostgreSQL's statement filter: the quoting, comments, psql meta-commands and `COPY` data
 //! that `psql` reads from a plain `pg_dump`.
 
-use super::{Switch, contains_ci, database_statement, words};
+use super::{Switch, Verb, contains_ci, database_statement, words};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum State {
@@ -38,13 +38,15 @@ pub struct PostgresFilter {
     keep_owners: bool,
     skipped: usize,
     copy_line: Vec<u8>,
+    /// The database the import writes to.
+    target: String,
     /// A `\` outside quotes inside a statement: a psql meta-command.
     inline_meta: bool,
     switched: Option<Switch>,
 }
 
 impl PostgresFilter {
-    pub fn new(keep_owners: bool) -> PostgresFilter {
+    pub fn new(keep_owners: bool, target: &str) -> PostgresFilter {
         PostgresFilter {
             buf: Vec::new(),
             state: State::Normal,
@@ -56,6 +58,7 @@ impl PostgresFilter {
             keep_owners,
             skipped: 0,
             copy_line: Vec::new(),
+            target: target.to_string(),
             inline_meta: false,
             switched: None,
         }
@@ -196,7 +199,7 @@ impl PostgresFilter {
             }
             b'*' if self.prev == b'/' => {
                 self.state = State::Block(1);
-                self.content -= 1;
+                self.content = self.content.saturating_sub(1);
                 self.opened = true;
             }
             b'\\' if self.content == 0 => {
@@ -219,19 +222,18 @@ impl PostgresFilter {
 
     fn complete(&mut self, out: &mut Vec<u8>) {
         if self.content > 0 {
-            if self.inline_meta {
-                let from = self.buf.len() - self.buf.trim_ascii_start().len();
-                self.switched = Some(Switch::new(&self.buf, from, None));
-                self.buf.clear();
-                return;
-            }
-            if changes_string_rules(&self.buf) {
-                let from = self.buf.len() - self.buf.trim_ascii_start().len();
-                self.switched = Some(Switch::new(&self.buf, from, None));
+            if self.inline_meta || changes_string_rules(&self.buf) {
+                self.switched = Some(Switch::client(&self.buf));
                 self.buf.clear();
                 return;
             }
             if let Some(s) = database_statement(&self.buf, false) {
+                if s.is_own(&self.target) {
+                    // `CREATE DATABASE <target>` (pg_dump -C) is yardd's to do.
+                    self.buf.clear();
+                    self.reset();
+                    return;
+                }
                 self.switched = Some(s);
                 self.buf.clear();
                 return;
@@ -266,14 +268,20 @@ impl PostgresFilter {
             self.reset();
             return;
         }
-        let db = match command {
-            Some(b"connect" | b"c") => {
-                parts.next().map(|d| String::from_utf8_lossy(d).trim_matches('"').to_string())
-            }
-            _ => None,
-        };
         let from = self.buf.len() - self.buf.trim_ascii_start().len();
-        self.switched = Some(Switch::new(&self.buf, from, db));
+        let switch = match command {
+            Some(b"connect" | b"c") => {
+                let db = parts.next().map(|d| String::from_utf8_lossy(d).trim_matches('"').to_string());
+                Switch::new(Verb::Use, &self.buf, from, db)
+            }
+            _ => Switch::new(Verb::Client, &self.buf, from, None),
+        };
+        if switch.is_own(&self.target) {
+            out.append(&mut self.buf);
+            self.reset();
+            return;
+        }
+        self.switched = Some(switch);
         self.buf.clear();
     }
 
@@ -293,9 +301,7 @@ fn is_ownership(stmt: &[u8]) -> bool {
     match w.as_slice() {
         ["GRANT", ..] | ["REVOKE", ..] | ["RESET", "ROLE", ..] | ["SET", "ROLE", ..] => true,
         ["SET", "SESSION", "AUTHORIZATION", ..] | ["ALTER", "DEFAULT", "PRIVILEGES", ..] => true,
-        ["ALTER", ..] => words(stmt, false, usize::MAX)
-            .windows(2)
-            .any(|p| p[0].1.eq_ignore_ascii_case("OWNER") && p[1].1.eq_ignore_ascii_case("TO")),
+        ["ALTER", ..] => owner_to_at_end(stmt),
         _ => false,
     }
 }
@@ -310,9 +316,13 @@ fn ident_byte(b: u8) -> bool {
 /// backslashes would end strings where this filter does not (db spec §6.6; fails closed).
 fn changes_string_rules(stmt: &[u8]) -> bool {
     let w: Vec<String> = words(stmt, false, 6).into_iter().map(|(_, w)| w.to_ascii_lowercase()).collect();
-    if !w.iter().any(|x| x == "standard_conforming_strings")
-        && !contains_ci(stmt, b"standard_conforming_strings")
-    {
+    if !contains_ci(stmt, b"standard_conforming_strings") {
+        return false;
+    }
+    // Only a statement that can change it: the words in row data are not one.
+    let setting = matches!(w.first().map(String::as_str), Some("set" | "alter" | "reset"))
+        || contains_ci(stmt, b"set_config");
+    if !setting {
         return false;
     }
     let w: Vec<&str> = w.iter().map(String::as_str).collect();
@@ -320,6 +330,21 @@ fn changes_string_rules(stmt: &[u8]) -> bool {
         w.as_slice(),
         ["set", "standard_conforming_strings", "on"] | ["set", "standard_conforming_strings", "to", "on"]
     )
+}
+
+/// `… OWNER TO <role>` ending an `ALTER`, with OWNER a bare keyword, not a column being renamed
+/// (`RENAME COLUMN owner TO x`).
+fn owner_to_at_end(stmt: &[u8]) -> bool {
+    let w = words(stmt, false, usize::MAX);
+    let n = w.len();
+    if n < 4 {
+        return false;
+    }
+    let (owner, to, before) = (&w[n - 3], &w[n - 2], w[n - 4].1.to_ascii_uppercase());
+    owner.1.eq_ignore_ascii_case("OWNER")
+        && stmt[owner.0] != b'"'
+        && to.1.eq_ignore_ascii_case("TO")
+        && !matches!(before.as_str(), "COLUMN" | "RENAME" | "CONSTRAINT" | "ATTRIBUTE")
 }
 
 /// `COPY <table> [(<columns>)] FROM STDIN …`, whose data lines follow up to `\.`. A query
@@ -348,7 +373,7 @@ mod tests {
     type Run = (Result<Vec<u8>, (Vec<u8>, Switch)>, usize);
 
     fn run(input: &[u8], chunk: usize, keep_owners: bool) -> Run {
-        let mut f = PostgresFilter::new(keep_owners);
+        let mut f = PostgresFilter::new(keep_owners, "target");
         let mut out = Vec::new();
         for c in input.chunks(chunk.max(1)) {
             match f.push(c) {
@@ -489,6 +514,36 @@ REVOKE ALL ON SCHEMA app FROM PUBLIC;
             let (out, _) = run(ok.as_bytes(), 2, true);
             assert_eq!(out.unwrap(), ok.as_bytes(), "{ok:?}");
         }
+    }
+
+    #[test]
+    fn the_target_database_s_own_statements_are_followed() {
+        // pg_dump -C app, imported as app.
+        let dump = "CREATE DATABASE app WITH TEMPLATE = template0 ENCODING = 'UTF8';\n\\connect app\nCREATE TABLE t (a int);\n";
+        let mut f = PostgresFilter::new(true, "app");
+        let mut out = f.push(dump.as_bytes()).unwrap();
+        out.extend(f.finish().unwrap());
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            !out.contains("CREATE DATABASE")
+                && out.contains("\\connect app")
+                && out.contains("CREATE TABLE t"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_owner_column_renamed_is_kept() {
+        let sql = b"ALTER TABLE t RENAME COLUMN owner TO proprietor;\nALTER TABLE t RENAME \"owner\" TO x;\n";
+        let (out, skipped) = run(sql, 5, false);
+        assert_eq!((out.unwrap(), skipped), (sql.to_vec(), 0));
+    }
+
+    #[test]
+    fn setting_words_in_row_data_pass() {
+        let row = b"INSERT INTO docs VALUES ('standard_conforming_strings is off here');\n";
+        let (out, _) = run(row, 5, true);
+        assert_eq!(out.unwrap(), row);
     }
 
     #[test]

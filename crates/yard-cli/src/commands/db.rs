@@ -222,6 +222,14 @@ pub async fn dump(ctx: &Ctx, name: String, how: DumpArgs, at: DbAt, args: Vec<St
         .with_hint("--compress")
         .into());
     }
+    // A directory is only ever pg_dump -Fd's own output: --overwrite must never empty a folder.
+    if out.is_dir() && !(format == DumpFormat::Directory && out.join("toc.dat").is_file()) {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("{} is a directory; name a file to write", out.display()),
+        )
+        .into());
+    }
     if out.exists() && !how.overwrite {
         return Err(YardError::new(ErrorCode::FileExists, format!("{} is already there", out.display()))
             .with_hint("--overwrite")
@@ -317,7 +325,7 @@ pub async fn import(ctx: &Ctx, name: String, how: ImportArgs, at: DbAt, args: Ve
     for note in &cmd.notes {
         eprintln!("{note}");
     }
-    let filter = yard_core::db::filter::Filter::new(&cmd.filter).ok_or_else(|| {
+    let filter = yard_core::db::filter::Filter::new(&cmd.filter, &name).ok_or_else(|| {
         YardError::new(ErrorCode::InvalidArgument, "yardd asked for an import filter this yard does not know")
             .with_hint("yard self-update")
     })?;

@@ -8,7 +8,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
-use yard_core::db::filter::{Filter, Switch};
+use yard_core::db::filter::{Filter, Switch, Verb};
 use yard_core::db::flags::DumpFormat;
 use yard_proto::{DbCommand, ErrorCode, ImportKind, YardError};
 
@@ -105,7 +105,9 @@ fn tool(cmd: &DbCommand, extra: &[String]) -> Command {
         c.env_remove(var);
     }
     c.envs(cmd.env.iter().map(|(k, v)| (k, v)));
-    c.stderr(Stdio::piped()).kill_on_drop(true);
+    // Its own process group: a terminal's Ctrl-C reaches only this process, whose handler
+    // stops the tool and reports a cancel rather than the tool's death.
+    c.stderr(Stdio::piped()).kill_on_drop(true).process_group(0);
     c
 }
 
@@ -180,6 +182,7 @@ async fn run_dump(
             let feed: Stdio = stdout.try_into().map_err(|e| YardError::internal(format!("gzip: {e}")))?;
             let mut g = spawn(
                 Command::new(GZIP)
+                    .process_group(0)
                     .arg("-c")
                     .stdin(feed)
                     .stdout(Stdio::piped())
@@ -271,6 +274,7 @@ pub async fn import(
     let (reader, total): (Box<dyn AsyncRead + Unpin + Send>, Option<u64>) = if gzip {
         let mut g = spawn(
             Command::new(GZIP)
+                .process_group(0)
                 .arg("-dc")
                 .arg(file)
                 .stdin(Stdio::null())
@@ -330,11 +334,21 @@ pub async fn import(
         fed = feed => {
             progress.done();
             let (bytes, switched, status) = fed?;
-            if let Some(mut g) = gunzip {
-                stop(&mut g).await;
-            }
             if let Some(s) = switched {
+                if let Some(mut g) = gunzip {
+                    stop(&mut g).await;
+                }
                 return Err(switch_error(&s, label));
+            }
+            // gzip read the whole file: a truncated or corrupt one fails here, even when the
+            // tool took the prefix it got as a complete dump.
+            if let Some(mut g) = gunzip {
+                let gz_err = collect(g.stderr.take());
+                let status = g.wait().await.map_err(|e| YardError::internal(format!("gzip: {e}")))?;
+                check("gzip", status.success(), gz_err.await).map_err(|e| {
+                    let what = format!("{}; what ran before stays in {label} (yard db shell {label} to look)", e.message);
+                    YardError { message: what, ..e }
+                })?;
             }
             check(&name, status.success(), stderr.await).map_err(|e| {
                 let what = format!("{}; what ran before the error stays in {label} (yard db shell {label} to look)", e.message);
@@ -355,6 +369,13 @@ pub async fn import(
 
 fn switch_error(s: &Switch, label: &str) -> YardError {
     match &s.database {
+        // Dropping a database is refused even when it is the import's own.
+        Some(db) if s.verb == Verb::Drop => YardError::new(
+            ErrorCode::DbDumpSwitchesDatabase,
+            format!("the dump drops database {db} ({}); nothing from there on ran", s.statement),
+        )
+        .with_hint("dump again without --add-drop-database (mysqldump) or --clean (pg_dump)")
+        .with_data(serde_json::json!({ "database": db })),
         Some(db) => YardError::new(
             ErrorCode::DbDumpSwitchesDatabase,
             format!("the dump switches to database {db} ({}); nothing from there on ran", s.statement),
@@ -394,6 +415,7 @@ pub async fn head(file: &Path) -> Result<(Vec<u8>, bool), YardError> {
     }
     let mut g = spawn(
         Command::new(GZIP)
+            .process_group(0)
             .arg("-dc")
             .arg(file)
             .stdin(Stdio::null())
@@ -413,6 +435,9 @@ pub async fn head(file: &Path) -> Result<(Vec<u8>, bool), YardError> {
         unpacked.extend_from_slice(&buf[..n]);
     }
     stop(&mut g).await;
+    if unpacked.is_empty() {
+        return Err(refused(format!("{} is gzipped but holds nothing gzip can unpack", file.display())));
+    }
     unpacked.truncate(512);
     Ok((unpacked, true))
 }

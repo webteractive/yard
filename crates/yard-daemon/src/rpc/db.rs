@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use yard_core::config::services::ServiceEntry;
-use yard_core::db::command::{PG_ENV, Target, build};
+use yard_core::db::command::{MYSQL_ENV, PG_ENV, Target, build};
 use yard_core::db::flags::{Tool, check, check_compress};
 use yard_core::db::resolve::{Candidate, Picked, pick};
 use yard_core::db::{check_name, connect, pick_postgres_keg, sql, supports_connect, supports_db};
@@ -352,7 +352,17 @@ async fn query(
         }
         _ => {
             let mut c = tokio::process::Command::new(bin.join("mysql"));
-            c.args(["--no-defaults", "-N", "-B", &format!("--socket={socket}"), "--user=root"]);
+            c.args([
+                "--no-defaults",
+                "--protocol=socket",
+                "-N",
+                "-B",
+                &format!("--socket={socket}"),
+                "--user=root",
+            ]);
+            for var in MYSQL_ENV {
+                c.env_remove(var);
+            }
             if let Some(db) = database {
                 c.arg(format!("--database={db}"));
             }

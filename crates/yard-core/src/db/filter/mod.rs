@@ -7,9 +7,21 @@ pub mod postgres;
 
 use yard_proto::StreamFilter;
 
+/// What a refused statement does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    /// `USE x`, `\connect x`, the mysql client's `connect x`.
+    Use,
+    Create,
+    Drop,
+    /// A client command (`\!`, `source`) or a change to how strings end.
+    Client,
+}
+
 /// A statement that would switch, create or drop a database (db spec §6.6): never sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Switch {
+    pub verb: Verb,
     /// The database it names, when it can be read.
     pub database: Option<String>,
     /// Its first 80 characters, from its first keyword.
@@ -17,9 +29,21 @@ pub struct Switch {
 }
 
 impl Switch {
-    pub(crate) fn new(stmt: &[u8], from: usize, database: Option<String>) -> Switch {
+    pub(crate) fn new(verb: Verb, stmt: &[u8], from: usize, database: Option<String>) -> Switch {
         let text = String::from_utf8_lossy(&stmt[from.min(stmt.len())..]);
-        Switch { database, statement: text.trim().chars().take(80).collect() }
+        Switch { verb, database, statement: text.trim().chars().take(80).collect() }
+    }
+
+    /// A client command or a string-rule change, refused wherever it is.
+    pub(crate) fn client(stmt: &[u8]) -> Switch {
+        let from = stmt.len() - stmt.trim_ascii_start().len();
+        Switch::new(Verb::Client, stmt, from, None)
+    }
+
+    /// The import's own database being used or created (`mysqldump -B shop` imported as
+    /// `shop`): followed rather than refused.
+    pub(crate) fn is_own(&self, target: &str) -> bool {
+        matches!(self.verb, Verb::Use | Verb::Create) && self.database.as_deref() == Some(target)
     }
 }
 
@@ -33,12 +57,14 @@ pub enum Filter {
 impl Filter {
     /// `None` for a filter this build does not know (a newer yardd's): the import must not run
     /// unfiltered.
-    pub fn new(f: &StreamFilter) -> Option<Filter> {
+    /// `target` is the database the import writes to: its own `USE`/`\connect` are followed and
+    /// its own `CREATE DATABASE` skipped.
+    pub fn new(f: &StreamFilter, target: &str) -> Option<Filter> {
         match f {
             StreamFilter::None => Some(Filter::Pass),
-            StreamFilter::Mysql => Some(Filter::Mysql(mysql::MysqlFilter::new())),
+            StreamFilter::Mysql => Some(Filter::Mysql(mysql::MysqlFilter::new(target))),
             StreamFilter::Postgres { keep_owners } => {
-                Some(Filter::Postgres(postgres::PostgresFilter::new(*keep_owners)))
+                Some(Filter::Postgres(postgres::PostgresFilter::new(*keep_owners, target)))
             }
             _ => None,
         }
@@ -119,6 +145,9 @@ pub(crate) fn words(stmt: &[u8], hash_comments: bool, max: usize) -> Vec<(usize,
 
 /// `needle` (lowercase) appears in `hay`, in any case.
 pub(crate) fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.len() > hay.len() {
+        return false;
+    }
     hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
 }
 
@@ -137,10 +166,10 @@ pub(crate) fn database_statement(stmt: &[u8], mysql: bool) -> Option<Switch> {
     // The mysql client's own `connect`, `source` and `system` (off under --binary-mode, and
     // refused here as well).
     if mysql && (first == "USE" || first == "CONNECT") {
-        return Some(Switch::new(stmt, from, w.get(1).map(|(_, s)| s.clone())));
+        return Some(Switch::new(Verb::Use, stmt, from, w.get(1).map(|(_, s)| s.clone())));
     }
     if mysql && (first == "SOURCE" || first == "SYSTEM") {
-        return Some(Switch::new(stmt, from, None));
+        return Some(Switch::new(Verb::Client, stmt, from, None));
     }
     let database = match up(1).as_deref() {
         Some("DATABASE") => true,
@@ -152,7 +181,8 @@ pub(crate) fn database_statement(stmt: &[u8], mysql: bool) -> Option<Switch> {
         while matches!(up(n).as_deref(), Some("IF" | "NOT" | "EXISTS")) {
             n += 1;
         }
-        return Some(Switch::new(stmt, from, w.get(n).map(|(_, s)| s.clone())));
+        let verb = if first == "CREATE" { Verb::Create } else { Verb::Drop };
+        return Some(Switch::new(verb, stmt, from, w.get(n).map(|(_, s)| s.clone())));
     }
     None
 }
@@ -164,11 +194,11 @@ mod tests {
 
     #[test]
     fn new_picks_the_filter() {
-        assert!(matches!(Filter::new(&StreamFilter::None), Some(Filter::Pass)));
-        assert!(matches!(Filter::new(&StreamFilter::Mysql), Some(Filter::Mysql(_))));
-        assert!(Filter::new(&StreamFilter::Other).is_none());
+        assert!(matches!(Filter::new(&StreamFilter::None, "t"), Some(Filter::Pass)));
+        assert!(matches!(Filter::new(&StreamFilter::Mysql, "t"), Some(Filter::Mysql(_))));
+        assert!(Filter::new(&StreamFilter::Other, "t").is_none());
         assert!(matches!(
-            Filter::new(&StreamFilter::Postgres { keep_owners: false }),
+            Filter::new(&StreamFilter::Postgres { keep_owners: false }, "t"),
             Some(Filter::Postgres(_))
         ));
         let mut pass = Filter::Pass;

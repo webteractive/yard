@@ -1,6 +1,6 @@
 //! MySQL's statement filter: the quoting, comments and `DELIMITER` lines the `mysql` client reads.
 
-use super::{Switch, contains_ci, database_statement};
+use super::{Switch, Verb, contains_ci, database_statement, words};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -29,19 +29,15 @@ pub struct MysqlFilter {
     line_start: usize,
     /// This byte opened a block comment.
     opened: bool,
+    /// The database the import writes to.
+    target: String,
     /// The statement has a `\` outside quotes and comments: a mysql client command.
     client_command: bool,
     switched: Option<Switch>,
 }
 
-impl Default for MysqlFilter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl MysqlFilter {
-    pub fn new() -> MysqlFilter {
+    pub fn new(target: &str) -> MysqlFilter {
         MysqlFilter {
             buf: Vec::new(),
             delimiter: b";".to_vec(),
@@ -52,6 +48,7 @@ impl MysqlFilter {
             content_at_line: 0,
             line_start: 0,
             opened: false,
+            target: target.to_string(),
             client_command: false,
             switched: None,
         }
@@ -138,7 +135,7 @@ impl MysqlFilter {
         match b {
             b'*' if self.prev == b'/' => {
                 self.state = State::Block;
-                self.content -= 1;
+                self.content = self.content.saturating_sub(1);
                 self.opened = true;
                 return;
             }
@@ -196,21 +193,31 @@ impl MysqlFilter {
     }
 
     fn complete(&mut self, out: &mut Vec<u8>) {
-        // NO_BACKSLASH_ESCAPES would have the server end `'a\'` where the client and this
-        // filter do not, so a dump that turns it on is refused (fails closed).
-        let no_escapes = contains_ci(&self.buf, b"no_backslash_escapes");
-        if self.content > 0 && (self.client_command || no_escapes) {
-            let from = self.buf.len() - self.buf.trim_ascii_start().len();
-            self.switched = Some(Switch::new(&self.buf, from, None));
-            self.buf.clear();
-            return;
-        }
-        if self.content > 0
-            && let Some(s) = database_statement(&self.buf, true)
-        {
-            self.switched = Some(s);
-            self.buf.clear();
-            return;
+        if self.content > 0 {
+            // NO_BACKSLASH_ESCAPES would have the server end `'a\'` where the client and this
+            // filter do not, so a SET that turns it on is refused (fails closed); the words in
+            // row data are not a SET.
+            let is_set =
+                words(&self.buf, true, 1).first().is_some_and(|(_, w)| w.eq_ignore_ascii_case("SET"));
+            if self.client_command || (is_set && contains_ci(&self.buf, b"no_backslash_escapes")) {
+                self.switched = Some(Switch::client(&self.buf));
+                self.buf.clear();
+                return;
+            }
+            if let Some(s) = database_statement(&self.buf, true) {
+                if s.is_own(&self.target) {
+                    // `USE <target>` runs as is; `CREATE DATABASE <target>` is yardd's to do.
+                    if s.verb == Verb::Use {
+                        out.append(&mut self.buf);
+                    }
+                    self.buf.clear();
+                    self.reset();
+                    return;
+                }
+                self.switched = Some(s);
+                self.buf.clear();
+                return;
+            }
         }
         out.append(&mut self.buf);
         self.reset();
@@ -231,7 +238,7 @@ mod tests {
     use super::*;
 
     fn run(input: &[u8], chunk: usize) -> Result<Vec<u8>, (Vec<u8>, Switch)> {
-        let mut f = MysqlFilter::new();
+        let mut f = MysqlFilter::new("target");
         let mut out = Vec::new();
         for c in input.chunks(chunk.max(1)) {
             match f.push(c) {
@@ -348,6 +355,29 @@ SELECT 'done';
         ] {
             assert!(run(sql.as_bytes(), 4).is_err(), "{sql}");
         }
+    }
+
+    #[test]
+    fn the_target_database_s_own_statements_are_followed() {
+        // mysqldump -B shop, HeidiSQL's default: imported as shop, it must not be refused.
+        let dump = "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `shop` /*!40100 DEFAULT CHARACTER SET utf8mb4 */;\nUSE `shop`;\nCREATE TABLE a (x int);\n";
+        let mut f = MysqlFilter::new("shop");
+        let mut out = f.push(dump.as_bytes()).unwrap();
+        out.extend(f.finish().unwrap());
+        let out = String::from_utf8(out).unwrap();
+        assert!(!out.contains("CREATE DATABASE"), "{out}");
+        assert!(out.contains("USE `shop`;") && out.contains("CREATE TABLE a"), "{out}");
+        let mut f = MysqlFilter::new("shop");
+        assert!(
+            f.push(b"DROP DATABASE IF EXISTS `shop`;").and_then(|_| f.finish()).is_err(),
+            "DROP stays refused"
+        );
+    }
+
+    #[test]
+    fn setting_words_in_row_data_pass() {
+        let row = b"INSERT INTO posts VALUES (1, 'set sql_mode to NO_BACKSLASH_ESCAPES');\n";
+        assert_eq!(run(row, 7).unwrap(), row);
     }
 
     #[test]

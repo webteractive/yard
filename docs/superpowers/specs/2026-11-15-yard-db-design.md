@@ -210,6 +210,12 @@ Feeds the file to the instance, creating the database first when it does not exi
   quoting: MySQL's quotes, backticks, comments and `DELIMITER` blocks (a `USE` inside a procedure
   body is not a statement); PostgreSQL's quotes, dollar quoting, comments and `COPY … FROM stdin`
   data up to `\.`. An archive for `pg_restore` cannot switch on its own once `-C` is refused (§7).
+- **The import's own database (final review, 2026-11-15).** A switch to the database being
+  imported into is followed, not refused: its `USE` and `\connect` run, and its `CREATE DATABASE`
+  is skipped (yardd made it), so a `mysqldump -B shop` dump (HeidiSQL's default) imports as `shop`.
+  `DROP DATABASE` stays refused even for it. A gzipped import fails when gzip does (a truncated
+  download), even if the tool took the prefix as a whole dump, and a dump to an existing directory
+  is refused unless it is a `pg_dump -Fd` directory, so `--overwrite` never empties a folder.
 - **Client commands (built, after a security review, 2026-11-15).** The mysql client runs its own
   commands from piped input (`\!` a shell command, `\u`, `connect`, `source`), so MySQL imports
   run with `--binary-mode`, which turns them off, and the filter also refuses a bare `\` outside
@@ -218,7 +224,10 @@ Feeds the file to the instance, creating the database first when it does not exi
   statement. The lexers read strings as psql and the server do (an `E'` only where `E` starts a
   token, bytes from 0x80 as identifier bytes, dollar tags included, `COPY` data only after `COPY
   <table> [(…)] FROM STDIN`), and a statement that would change how strings end
-  (`standard_conforming_strings` but `= on`, `NO_BACKSLASH_ESCAPES`) is refused.
+  (`standard_conforming_strings` but `= on`, `NO_BACKSLASH_ESCAPES`) is refused, but only in a
+  statement that can change them (`SET`, `ALTER`, `RESET`, `set_config`), not in row data. An
+  `ALTER` is an ownership statement only when `OWNER TO <role>` ends it, so `RENAME COLUMN owner
+  TO x` is kept.
 - **What the filters are for (builder's call, 2026-11-15).** They guard against accidents, not
   hostile dumps: an import runs as the instance's superuser, and PostgreSQL's superuser runs
   programs through `COPY … FROM PROGRAM`, so no lexer makes an untrusted dump safe. Import only
@@ -268,6 +277,10 @@ Feeds the file to the instance, creating the database first when it does not exi
   `mysqldump`). The plan checks how each tool reads one before relying on it.
 - Yard's own arguments come first and the user's after, so for a flag both set the user's wins
   where the tool takes the last one (`-v ON_ERROR_STOP=0` turns psql's stop back off).
+- Every MySQL tool, `shell` included, runs with `--protocol=socket` and without `MYSQL_HOST`,
+  `MYSQL_TCP_PORT` or `MYSQL_UNIX_PORT` (final review: either would otherwise reach another
+  server, DBngin's on 3306). The CLI starts each tool and gzip in its own process group, so a
+  terminal's Ctrl-C reaches only the CLI, which stops them and reports a cancel.
 - `dump` and `import` start MySQL's tools with `--no-defaults` and clear `PGSERVICEFILE`,
   `PGPASSFILE` and the other `PG*` connection variables for PostgreSQL's, so a `~/.my.cnf` or
   `~/.pgpass` cannot point them elsewhere. `shell` keeps the user's files (a prompt, a pager); its

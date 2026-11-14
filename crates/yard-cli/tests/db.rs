@@ -611,3 +611,94 @@ fn ctrl_c_says_what_stays() {
     let left = std::process::Command::new("/usr/bin/pgrep").args(["-f", &program]).output().unwrap();
     assert!(left.stdout.is_empty(), "the client is still running");
 }
+
+#[test]
+fn dump_never_replaces_a_directory() {
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::create_dir(cwd.path().join("project")).unwrap();
+    std::fs::write(cwd.path().join("project/keep.txt"), "mine").unwrap();
+    let d = MockDaemon::start(&[]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "project", "--overwrite", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("is a directory"), "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(cwd.path().join("project/keep.txt")).unwrap(), "mine");
+    assert!(d.params("db.command").is_empty());
+}
+
+#[test]
+fn a_truncated_gzip_fails() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let plain: String = (0..20_000).map(|i| format!("INSERT INTO t VALUES ({i});\n")).collect();
+    std::fs::write(cwd.path().join("p.sql"), &plain).unwrap();
+    let gz = std::process::Command::new("/usr/bin/gzip")
+        .arg("-c")
+        .arg(cwd.path().join("p.sql"))
+        .output()
+        .unwrap()
+        .stdout;
+    std::fs::write(cwd.path().join("cut.sql.gz"), &gz[..gz.len() / 2]).unwrap();
+    let d = MockDaemon::start(&[(
+        "db.command",
+        Ok(import_command(&capturing(tools.path()), json!({"kind": "mysql"}), false)),
+    )]);
+    let out = d
+        .yard()
+        .args(["db", "import", "shop", "cut.sql.gz", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stderr(&out).contains("gzip"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_gzip_with_nothing_inside_creates_nothing() {
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("junk.sql.gz"), [0x1f, 0x8b, 0, 0, 0, 0]).unwrap();
+    let d = MockDaemon::start(&[]);
+    let out = d
+        .yard()
+        .args(["db", "import", "shop", "junk.sql.gz", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(d.params("db.command").is_empty());
+}
+
+#[test]
+fn ctrl_c_to_the_whole_group_is_a_cancel() {
+    // A terminal's Ctrl-C reaches the whole foreground group, the tool included.
+    use std::os::unix::process::CommandExt;
+    for _ in 0..3 {
+        let tools = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let program = script(tools.path(), "mysqldump", "printf 'started\\n'; while :; do sleep 0.1; done");
+        let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
+        let child = d
+            .yard_process()
+            .args(["db", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
+            .current_dir(cwd.path())
+            .process_group(0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let partial = cwd.path().join("x.sql.partial");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_to_string(&partial).unwrap_or_default().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "no partial file");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        unsafe { libc::kill(-(child.id() as i32), libc::SIGINT) };
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(130), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0);
+    }
+}
