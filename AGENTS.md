@@ -145,9 +145,14 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   after an enabled item, which would cancel the sheet the item opened. The visual design
   (`docs/superpowers/specs/2026-11-09-yard-app-visual-design.md`, the D3 logo in its §6) was built on
   2026-11-10; `checklist.sh` passed 72/72 and `checklist-installs.sh` 14/14 on it
-on 2026-11-11. Its three held-back parts (the blurred sidebar, Open in… as a menu, Ports' controls in
-the toolbar) and the fixes a screenshot review of every screen in both appearances found were built
-on 2026-11-14; its Status lists them.
+  on 2026-11-11. Its three held-back parts (the blurred sidebar, Open in… as a menu, Ports' controls in
+  the toolbar) and the fixes a screenshot review of every screen in both appearances found were built
+  on 2026-11-14 (its Status lists them) and released in 0.1.7 the same day. Against the installed
+  0.1.7, `checklist-real.sh` failed S4 once (the open detail's HTTPS switch still read off 5 s after
+  `yard secure`), then passed 11/11 twice; the failure did not come back in 30 secure and unsecure
+  cycles read through the AX API (every switch flipped 0.16–0.21 s after the command returned), and
+  yardd answered the app's whole post-reconcile batch in 0.02 s even just restarted, so no cause was
+  found. Both checklists' S4 now also report, when it fails, what `yard sites` and the AX API say.
 - M7 (distribution) is done: design `docs/superpowers/specs/2026-11-09-yard-m7-distribution-design.md`,
   plan `docs/superpowers/plans/2026-11-09-yard-m7-distribution.md`. The history was scrubbed and
   force-pushed and `webteractive/yard` went public (MIT) on 2026-11-13, with the tap

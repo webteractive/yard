@@ -198,7 +198,9 @@ watch_end
 if [[ -n "$at" ]] && perl -e "exit(!($at - $done_at <= 1))"; then
   pass "S4 yard secure turns the open detail's HTTPS switch on $(since "$at" "$done_at") s after it returns"
 else
-  fail "S4 HTTPS switch after yard secure" "$(cat "$out/watch.json")"
+  # What yardd and the AX API itself say now, beside what System Events read: a stale
+  # switch, a late refresh and a misread element look the same in watch.json alone.
+  fail "S4 HTTPS switch after yard secure" "$(cat "$out/watch.json"); yard sites says secure $(y sites --json | jq -c '.[] | select(.name == "chk-real") | .secure'); the AX API reads $(swift "$app_dir/scripts/axdump.swift" "$app_pid" | grep AXCheckBox | sed 's/^ *//' | tr '\n' ' ')"
 fi
 y unsecure chk-real >/dev/null
 y unlink chk-real >/dev/null

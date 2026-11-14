@@ -40,7 +40,6 @@ impl Toggle {
         self
     }
 
-    /// Called with the new value.
     /// Shows no label beside it, for a row whose label already names it; VoiceOver still reads
     /// the label.
     pub fn label_hidden(mut self) -> Self {
@@ -48,6 +47,7 @@ impl Toggle {
         self
     }
 
+    /// Called with the new value.
     pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_toggle = Some(Rc::new(f));
         self
