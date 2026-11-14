@@ -884,6 +884,28 @@ pub struct ConnectInfo {
     pub url: String,
 }
 
+/// `yard db dump`'s result (`--json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbDumped {
+    pub instance: String,
+    pub name: String,
+    pub file: String,
+    pub bytes: u64,
+}
+
+/// `yard db import`'s result (`--json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbImported {
+    pub instance: String,
+    pub name: String,
+    pub file: String,
+    /// The import created the database.
+    pub created: bool,
+    pub bytes: u64,
+    /// Ownership and grant statements left out (PostgreSQL, without `--keep-owners`).
+    pub skipped: usize,
+}
+
 /// The statement filter the client runs an import through (db spec §6.6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

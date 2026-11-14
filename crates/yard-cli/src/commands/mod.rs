@@ -169,6 +169,10 @@ pub async fn run(cli: Cli) -> i32 {
             DbSub::Connect { instance, site } => db::connect(&ctx, DbAt { service: instance, site }).await,
             DbSub::Open { name, at } => db::open(&ctx, name, at).await,
             DbSub::Shell { name, at, args } => db::shell(&ctx, name, at, args).await,
+            DbSub::Dump { name, file, compress, overwrite, progress_json, at, args } => {
+                let how = db::DumpArgs { file, compress, overwrite, progress_json };
+                db::dump(&ctx, name, how, at, args).await
+            }
         },
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,

@@ -390,6 +390,30 @@ pub enum DbSub {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Dump a database with mysqldump or pg_dump from the instance's keg. Flags after -- go to
+    /// the tool, e.g. -- --single-transaction --routines, or -- -Fc for pg_dump's custom
+    /// format. The file appears only once the dump has finished.
+    Dump {
+        name: String,
+        /// Where to write it; defaults to <name>-<YYYY-MM-DD-HHMM>.sql in the current
+        /// directory (.sql.gz with --compress, .dump with -Fc, .tar with -Ft, a directory with -Fd).
+        file: Option<std::path::PathBuf>,
+        /// gzip the SQL. pg_dump's -Fc, -Ft and -Fd compress themselves (-- -Z <level>).
+        #[arg(long)]
+        compress: bool,
+        /// Replace a file that is already there.
+        #[arg(long)]
+        overwrite: bool,
+        /// Progress as JSON lines on stderr, for Yard.app.
+        #[arg(long, hide = true)]
+        progress_json: bool,
+        #[command(flatten)]
+        at: DbAt,
+        /// Passed to mysqldump or pg_dump; flags naming another server, database or output file
+        /// are refused.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

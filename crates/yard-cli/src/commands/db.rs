@@ -1,13 +1,16 @@
 //! `yard db` (db spec §6, §8): yardd picks and wakes the instance and builds every command;
 //! this side prints, opens the URL, and runs the client in the user's terminal.
 
-use super::{Ctx, Outcome, cwd_absolute};
+use super::{Ctx, Outcome, cwd, cwd_absolute};
 use crate::cli::DbAt;
+use crate::dbrun::{self, Progress, Ran, human};
 use crate::output::{for_agents, table};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use yard_core::db::flags::{DumpFormat, dump_format};
 use yard_proto::methods::{self, DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
 use yard_proto::{
-    ConnectInfo, DbAction, DbCommand, DbCreated, DbInstanceList, ErrorCode, ServiceState, YardError,
+    ConnectInfo, DbAction, DbCommand, DbCreated, DbDumped, DbInstanceList, ErrorCode, ServiceState, YardError,
 };
 
 /// The params' target. With no flag yardd needs the directory, as an absolute real path.
@@ -194,12 +197,89 @@ fn exec(cmd: &DbCommand) -> YardError {
     YardError::new(ErrorCode::DbToolFailed, format!("cannot run {}: {e}", cmd.program))
 }
 
-/// `3.0 MB`, `80.0 KB`, `512 bytes`.
-pub fn human(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
-        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / (1u64 << 10) as f64),
-        b => format!("{b} bytes"),
+/// `yard db dump`'s own flags.
+pub struct DumpArgs {
+    pub file: Option<PathBuf>,
+    pub compress: bool,
+    pub overwrite: bool,
+    pub progress_json: bool,
+}
+
+pub async fn dump(ctx: &Ctx, name: String, how: DumpArgs, at: DbAt, args: Vec<String>) -> Outcome {
+    let format = dump_format(&args);
+    let here = cwd()?;
+    let out = match &how.file {
+        Some(f) => here.join(f),
+        None => here.join(dbrun::default_dump_name(&name, format, how.compress, &dbrun::local_stamp())),
+    };
+    // Settled before yardd is asked, so a refusal wakes nothing.
+    if how.file.is_some() && out.to_string_lossy().ends_with(".gz") && !how.compress {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            "a .gz name needs --compress, which gzips the dump",
+        )
+        .with_hint("--compress")
+        .into());
+    }
+    if out.exists() && !how.overwrite {
+        return Err(YardError::new(ErrorCode::FileExists, format!("{} is already there", out.display()))
+            .with_hint("--overwrite")
+            .into());
+    }
+    let parent = out.parent().map(PathBuf::from).unwrap_or_default();
+    if !parent.is_dir() {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("{} is not a directory", parent.display()),
+        )
+        .into());
+    }
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    let params = DbCommandParams {
+        target,
+        action: DbAction::Dump,
+        name: Some(name.clone()),
+        args: args.clone(),
+        compress: how.compress,
+        into_existing: false,
+        keep_owners: false,
+        import_kind: None,
+        file: None,
+    };
+    let cmd: DbCommand = client.call(methods::DB_COMMAND, params).await?;
+    drop(client);
+    for note in &cmd.notes {
+        eprintln!("{note}");
+    }
+    let progress = Progress::pick(how.progress_json);
+    let directory = format == DumpFormat::Directory;
+    match dbrun::dump(&cmd, &out, how.compress, directory, &name, progress).await? {
+        Ran::Cancelled => {
+            eprintln!("Cancelled: no file was written.");
+            Ok(130)
+        }
+        Ran::Done(bytes) => {
+            let done =
+                DbDumped { instance: cmd.instance.clone(), name, file: out.display().to_string(), bytes };
+            let mysql_plain =
+                cmd.program.ends_with("/mysqldump") && !args.iter().any(|a| a == "--single-transaction");
+            ctx.emit(&done, || {
+                let mut text = format!(
+                    "Dumped {} from {} to {} ({}).\n",
+                    done.name,
+                    done.instance,
+                    done.file,
+                    human(done.bytes)
+                );
+                if mysql_plain {
+                    text.push_str(
+                        "Tip: -- --single-transaction --routines gives a consistent dump with procedures.\n",
+                    );
+                }
+                text
+            });
+            Ok(0)
+        }
     }
 }

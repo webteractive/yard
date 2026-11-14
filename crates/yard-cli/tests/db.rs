@@ -177,3 +177,218 @@ fn shell_execs_the_answered_program() {
     assert_eq!((p["action"].as_str(), p["name"].as_str()), (Some("shell"), Some("app")));
     assert_eq!(p["args"], json!(["-c", "select 1"]));
 }
+
+/// `db.command`'s answer running `program` with `args`.
+fn command_for(program: &str, args: &[&str]) -> Value {
+    json!({"instance": "mysql-8.4", "program": program, "args": args, "env": [], "env_remove": [],
+        "filter": {"kind": "none"}, "created": false, "notes": []})
+}
+
+/// The one file in `dir` whose name starts with `prefix`.
+fn only_file(dir: &Path, prefix: &str) -> std::path::PathBuf {
+    let found: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(prefix))
+        .collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    found[0].clone()
+}
+
+fn dated(name: &str, prefix: &str, ext: &str) -> bool {
+    let Some(stamp) = name.strip_prefix(prefix).and_then(|r| r.strip_suffix(ext)) else { return false };
+    stamp.len() == 15
+        && stamp
+            .chars()
+            .enumerate()
+            .all(|(i, c)| if [4, 7, 10].contains(&i) { c == '-' } else { c.is_ascii_digit() })
+}
+
+#[test]
+fn dump_writes_plain_by_default() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let program = script(tools.path(), "mysqldump", "printf -- '-- dump\\nCREATE TABLE a (x int);\\n'");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &["shop"])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let file = only_file(cwd.path(), "shop-");
+    let name = file.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(dated(&name, "shop-", ".sql"), "{name}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "-- dump\nCREATE TABLE a (x int);\n");
+    assert!(stdout(&out).contains("Dumped shop from mysql-8.4"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("--single-transaction --routines"), "the tip: {}", stdout(&out));
+    let p = &d.params("db.command")[0];
+    assert_eq!((p["action"].as_str(), p["compress"].as_bool()), (Some("dump"), Some(false)));
+}
+
+#[test]
+fn dump_compress_gzips() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let program = script(tools.path(), "mysqldump", "printf 'CREATE TABLE a (x int);\\n'");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "--compress", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let file = only_file(cwd.path(), "shop-");
+    assert!(file.to_string_lossy().ends_with(".sql.gz"), "{file:?}");
+    let plain = std::process::Command::new("/usr/bin/gzip").arg("-dc").arg(&file).output().unwrap();
+    assert_eq!(plain.stdout, b"CREATE TABLE a (x int);\n");
+    assert_eq!(d.params("db.command")[0]["compress"], true);
+}
+
+#[test]
+fn gz_name_without_compress_is_refused() {
+    let cwd = tempfile::tempdir().unwrap();
+    let d = MockDaemon::start(&[]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "shop.sql.gz", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("--compress"), "{}", stderr(&out));
+    assert!(d.params("db.command").is_empty());
+}
+
+#[test]
+fn existing_file_needs_overwrite() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("shop.sql"), "old").unwrap();
+    let program = script(tools.path(), "mysqldump", "printf 'new\\n'");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("--overwrite"), "{}", stderr(&out));
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "shop.sql", "--overwrite", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(cwd.path().join("shop.sql")).unwrap(), "new\n");
+}
+
+#[test]
+fn failed_dump_leaves_nothing() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let program = script(
+        tools.path(),
+        "mysqldump",
+        "printf 'partial'; echo 'mysqldump: Got error: 1049: Unknown database' >&2; exit 2",
+    );
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("Unknown database"), "{}", stderr(&out));
+    assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0, "no file and no .partial");
+}
+
+#[test]
+fn ctrl_c_leaves_no_partial() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    // Loops in its own process, so its path stays in the process table while it runs.
+    let program = script(tools.path(), "mysqldump", "printf 'started\\n'; while :; do sleep 0.1; done");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
+    let child = d
+        .yard_process()
+        .args(["db", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let partial = cwd.path().join("x.sql.partial");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::fs::read_to_string(&partial).unwrap_or_default().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no partial file");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    unsafe { libc::kill(child.id() as i32, libc::SIGINT) };
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(130), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Cancelled: no file was written."));
+    assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0);
+    let left = std::process::Command::new("/usr/bin/pgrep").args(["-f", &program]).output().unwrap();
+    assert!(left.stdout.is_empty(), "the tool is still running");
+}
+
+#[test]
+fn custom_format_name_and_no_gzip() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let program = script(tools.path(), "pg_dump", "printf 'PGDMP\\001'");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &["-Fc"])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "app", "--service", "postgres-17", "--", "-Fc"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let file = only_file(cwd.path(), "app-");
+    assert!(dated(&file.file_name().unwrap().to_string_lossy(), "app-", ".dump"), "{file:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), b"PGDMP\x01");
+    assert!(!stdout(&out).contains("--single-transaction"), "no MySQL tip for pg_dump");
+}
+
+#[test]
+fn directory_format_is_written_by_the_tool() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let body = "while [ $# -gt 0 ]; do if [ \"$1\" = -f ]; then mkdir -p \"$2\"; echo toc > \"$2/toc.dat\"; fi; shift; done";
+    let program = script(tools.path(), "pg_dump", body);
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &["-Fd"])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "app", "app.dir", "--service", "postgres-17", "--", "-Fd"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(cwd.path().join("app.dir/toc.dat")).unwrap(), "toc\n");
+    assert!(!cwd.path().join("app.dir.partial").exists());
+}
+
+#[test]
+fn progress_json_lines() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let program = script(tools.path(), "mysqldump", "printf 'CREATE TABLE a (x int);\\n'");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
+    let out = d
+        .yard()
+        .args(["db", "dump", "shop", "x.sql", "--progress-json", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let last = stderr(&out).lines().rfind(|l| l.starts_with('{')).unwrap().to_string();
+    let v: Value = serde_json::from_str(&last).unwrap();
+    assert_eq!(v["bytes"], 24);
+}

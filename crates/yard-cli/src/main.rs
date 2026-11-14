@@ -1,6 +1,7 @@
 mod cli;
 mod client;
 mod commands;
+mod dbrun;
 mod output;
 
 use clap::Parser;
