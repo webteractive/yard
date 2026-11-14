@@ -380,11 +380,12 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   word from the git-ignored `.release-scrub-words`, matched as fixed text, case-insensitively;
   `scripts/test-scrub-check.sh` checks it with made-up words.
 - `app/scripts/checklist.sh [--keep]` — the M6 checklist a script can see: a scratch yardd on
-  `/tmp/yard-check` (nginx and dnsmasq pinned to 28080/28443/28053, its instances to 28379-28381
+  `/tmp/yard-check` (nginx and dnsmasq pinned to 28080/28443/28053, its instances to 28379-28382
   and 28900, auto ports 29000-29099), three linked sites (one with a committed `.yard` that needs
   things) and a redis instance, Yard.app driven through `app/scripts/ax.js` (menus, tabs, buttons,
-  switches, pickers, text fields, rows, prompts, the open panel, other apps' windows, the icon's
-  shape), each screen compared with the `yard` CLI and screenshotted, timings read by a 50 ms
+  switches, pickers, text fields, rows, prompts, the open and save panels, other apps' windows, the
+  icon's shape; from 2026-11-15 its DB items connect, create, dump and import on a scratch
+  `mysql-8.4` when brew has `mysql@8.4`, else they are skipped), each screen compared with the `yard` CLI and screenshotted, timings read by a 50 ms
   watcher, then a second launch on an empty root for onboarding. With `YARD_CHECK_OLD_YARDD`
   naming a yardd built from 14716f0 (before protocol 2.11) it also checks the stale banner (O4);
   that yardd predates the helper guard, so build it with yard-core's `HELPER_SOCKET` pointed at a
