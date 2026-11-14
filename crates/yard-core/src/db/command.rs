@@ -92,7 +92,10 @@ pub fn build(
                     StreamFilter::None,
                 ),
                 DbAction::Import => {
-                    let db = vec![format!("--database={}", name.unwrap_or_default())];
+                    // --binary-mode turns off the client's own commands (`\!`, `\u`, `source`)
+                    // in piped input, all but `delimiter` and `charset`.
+                    let db =
+                        vec![format!("--database={}", name.unwrap_or_default()), "--binary-mode".to_string()];
                     (Tool::Mysql, [no_defaults, conn, db].concat(), StreamFilter::Mysql)
                 }
             }
@@ -189,6 +192,7 @@ mod tests {
                 "--socket=/r/run/mysql-8.4.sock",
                 "--user=root",
                 "--database=shop",
+                "--binary-mode",
                 "--force"
             ])
         );

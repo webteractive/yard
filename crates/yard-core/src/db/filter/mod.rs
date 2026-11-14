@@ -3,6 +3,7 @@
 //! when it would switch, create or drop a database, refused before it is sent.
 
 pub mod mysql;
+pub mod postgres;
 
 use yard_proto::StreamFilter;
 
@@ -26,6 +27,7 @@ impl Switch {
 pub enum Filter {
     Pass,
     Mysql(mysql::MysqlFilter),
+    Postgres(postgres::PostgresFilter),
 }
 
 impl Filter {
@@ -35,6 +37,9 @@ impl Filter {
         match f {
             StreamFilter::None => Some(Filter::Pass),
             StreamFilter::Mysql => Some(Filter::Mysql(mysql::MysqlFilter::new())),
+            StreamFilter::Postgres { keep_owners } => {
+                Some(Filter::Postgres(postgres::PostgresFilter::new(*keep_owners)))
+            }
             _ => None,
         }
     }
@@ -45,6 +50,7 @@ impl Filter {
         match self {
             Filter::Pass => Ok(chunk.to_vec()),
             Filter::Mysql(f) => f.push(chunk),
+            Filter::Postgres(f) => f.push(chunk),
         }
     }
 
@@ -53,12 +59,16 @@ impl Filter {
         match self {
             Filter::Pass => Ok(vec![]),
             Filter::Mysql(f) => f.finish(),
+            Filter::Postgres(f) => f.finish(),
         }
     }
 
     /// The statements dropped on purpose (PostgreSQL's ownership and grants).
     pub fn skipped(&self) -> usize {
-        0
+        match self {
+            Filter::Postgres(f) => f.skipped(),
+            _ => 0,
+        }
     }
 }
 
@@ -111,16 +121,28 @@ fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| from + p)
 }
 
-/// `USE x`, or `CREATE|DROP DATABASE|SCHEMA [IF [NOT] EXISTS] x`: the switch, else `None`.
-pub(crate) fn database_statement(stmt: &[u8], hash_comments: bool) -> Option<Switch> {
-    let w = words(stmt, hash_comments, 8);
+/// MySQL's `USE x` and `CREATE|DROP DATABASE|SCHEMA [IF [NOT] EXISTS] x`, or PostgreSQL's
+/// `CREATE|DROP DATABASE x` (a PostgreSQL schema is a namespace inside the database, which
+/// every `pg_dump` creates): the switch, else `None`.
+pub(crate) fn database_statement(stmt: &[u8], mysql: bool) -> Option<Switch> {
+    let w = words(stmt, mysql, 8);
     let up = |i: usize| w.get(i).map(|(_, s)| s.to_ascii_uppercase());
     let first = up(0)?;
     let from = w[0].0;
-    if first == "USE" {
+    // The mysql client's own `connect`, `source` and `system` (off under --binary-mode, and
+    // refused here as well).
+    if mysql && (first == "USE" || first == "CONNECT") {
         return Some(Switch::new(stmt, from, w.get(1).map(|(_, s)| s.clone())));
     }
-    if (first == "CREATE" || first == "DROP") && matches!(up(1).as_deref(), Some("DATABASE" | "SCHEMA")) {
+    if mysql && (first == "SOURCE" || first == "SYSTEM") {
+        return Some(Switch::new(stmt, from, None));
+    }
+    let database = match up(1).as_deref() {
+        Some("DATABASE") => true,
+        Some("SCHEMA") => mysql,
+        _ => false,
+    };
+    if (first == "CREATE" || first == "DROP") && database {
         let mut n = 2;
         while matches!(up(n).as_deref(), Some("IF" | "NOT" | "EXISTS")) {
             n += 1;
@@ -140,6 +162,10 @@ mod tests {
         assert!(matches!(Filter::new(&StreamFilter::None), Some(Filter::Pass)));
         assert!(matches!(Filter::new(&StreamFilter::Mysql), Some(Filter::Mysql(_))));
         assert!(Filter::new(&StreamFilter::Other).is_none());
+        assert!(matches!(
+            Filter::new(&StreamFilter::Postgres { keep_owners: false }),
+            Some(Filter::Postgres(_))
+        ));
         let mut pass = Filter::Pass;
         assert_eq!(pass.push(b"USE x;").unwrap(), b"USE x;");
         assert_eq!(pass.finish().unwrap(), b"");

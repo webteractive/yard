@@ -29,6 +29,8 @@ pub struct MysqlFilter {
     line_start: usize,
     /// This byte opened a block comment.
     opened: bool,
+    /// The statement has a `\` outside quotes and comments: a mysql client command.
+    client_command: bool,
     switched: Option<Switch>,
 }
 
@@ -50,6 +52,7 @@ impl MysqlFilter {
             content_at_line: 0,
             line_start: 0,
             opened: false,
+            client_command: false,
             switched: None,
         }
     }
@@ -148,6 +151,10 @@ impl MysqlFilter {
                 self.state = State::Line;
                 return;
             }
+            b'\\' => {
+                self.client_command = true;
+                self.content += 1;
+            }
             b'\'' | b'"' | b'`' => {
                 self.state = State::Quote(b);
                 self.content += 1;
@@ -189,6 +196,12 @@ impl MysqlFilter {
     }
 
     fn complete(&mut self, out: &mut Vec<u8>) {
+        if self.content > 0 && self.client_command {
+            let from = self.buf.len() - self.buf.trim_ascii_start().len();
+            self.switched = Some(Switch::new(&self.buf, from, None));
+            self.buf.clear();
+            return;
+        }
         if self.content > 0
             && let Some(s) = database_statement(&self.buf, true)
         {
@@ -206,6 +219,7 @@ impl MysqlFilter {
         self.content_at_line = 0;
         self.line_start = 0;
         self.escaped = false;
+        self.client_command = false;
     }
 }
 
@@ -302,6 +316,24 @@ SELECT 'done';
     fn words_in_strings_and_comments_are_not_switches() {
         let input = "SELECT 'USE x';\n-- USE x;\n# USE x;\n/* USE x; */\nCREATE TABLE `use` (`USE` int);\nSELECT \"CREATE DATABASE y\";\nUSER_DEFINED;\n";
         assert_eq!(run(input.as_bytes(), 3).unwrap(), input.as_bytes());
+    }
+
+    #[test]
+    fn client_commands_are_refused() {
+        for sql in [
+            "\\! ls\n",
+            "SELECT 1;\n\\u other\n",
+            "connect other;",
+            "source /tmp/x.sql;",
+            "system ls;",
+            "select 1 \\! ls;\n",
+        ] {
+            assert!(run(sql.as_bytes(), 2).is_err(), "{sql:?} passed");
+        }
+        let (_, s) = run(b"connect other;", 2).unwrap_err();
+        assert_eq!(s.database.as_deref(), Some("other"));
+        let fine = b"SELECT 'a\\b', \"c\\d\";\n";
+        assert_eq!(run(fine, 1).unwrap(), fine);
     }
 
     #[test]
