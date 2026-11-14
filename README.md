@@ -20,6 +20,8 @@ To build Yard yourself or work on it, see [DEVELOPMENT.md](DEVELOPMENT.md).
 - **Extensions** from brew, pecl or a `.so`.
 - **Services**: MySQL, PostgreSQL, Redis and MinIO instances on 127.0.0.1, which sleep when
   unused and wake on use; `yard env` prints their `.env` lines.
+- **Databases**: `yard db` lists, creates, opens, dumps and imports databases on the MySQL and
+  PostgreSQL instances, and `yard db connect` says what TablePlus or another GUI client needs.
 - **Node** per project (`.yard`, `.nvmrc`, `.node-version`), installed with brew's fnm into
   Yard's own directory.
 - **Mail** through [emailulator](https://github.com/webteractive/emailulator) at `mail.yard`.
@@ -125,6 +127,34 @@ requests (the wake's own `error_page` takes its place); PHP's own error pages ar
 with yardd. Setting it back to `off`, or removing the key, wakes an instance that sleeps.
 While nothing may sleep, PHP requests never ask yardd anything.
 
+## Databases
+
+`yard db` works on the databases of the MySQL and PostgreSQL instances. Without `--service` it
+uses the instance the project's `.yard` asks for, else the only one on the Mac, and it wakes a
+sleeping instance first. It never drops a database or makes users: every login is the
+instance's own (`root` with no password on MySQL, your macOS user on PostgreSQL).
+
+Moving a project from DBngin, Postgres.app or Herd: dump the database with the old app's tools
+(Sequel Ace's Export, DBngin's `mysqldump`, `pg_dump -Fc`), then, in the project:
+
+```
+yard db import shop ~/Downloads/shop.sql      # .sql, .sql.gz, or pg_dump's -Fc/-Ft/-Fd
+```
+
+The import creates the database when it is missing and refuses one that already has tables
+(`--into-existing` adds to it). A dump that switches, creates or drops a database (`mysqldump
+--databases`, `pg_dump -C`) stops before that statement runs; dump again without it, or import
+under the name it gives. A PostgreSQL dump's `OWNER TO`, `GRANT` and `REVOKE` name the old
+server's roles, so they are skipped (`--keep-owners` keeps them). Flags after `--` go to the tool
+(`yard db dump shop -- --single-transaction --routines`). Import only dumps you trust: an import
+runs as the instance's superuser, and PostgreSQL's superuser can run programs.
+
+To connect a GUI client, `yard db connect` prints the host, port, user, password, socket and URL,
+and `yard db open shop` opens the database in the app that handles `mysql://` or
+`postgresql://` URLs (TablePlus, Sequel Ace). A sleeping instance has nothing listening until
+something wakes it: `yard db open`, `yard db shell` or `yard service start` do, and a client's
+open connection then keeps it awake.
+
 ## Commands
 
 Every command has `--help`, accepts `--json` for scripts and the global `--root <path>`.
@@ -168,8 +198,15 @@ error, 3 `yardd` is not running.
 | `yard service start\|stop\|restart <instance>` | yes | `start` and `restart` wait until the instance is running, and wake a sleeping one; one that fails prints its last log lines and exits 1. `stop` keeps it stopped across yardd restarts until `start`. |
 | `yard service logs <instance> [-f] [-n <lines>]` | yes | The last 100 lines (at most 10000) of the instance's log; `-f` keeps following until Ctrl-C. |
 | `yard service port <instance> <port>` | yes | Moves an instance to another port; a running one restarts on it. |
-| `yard service sleep-after <instance> <duration\|off\|default>` | yes | Sets how long the instance may go unused before it sleeps (`sleep_after` in `services.toml`; at least `60s`), `off` to keep it awake, or `default` to follow `service_sleep_after` in `yard.toml`. With neither set, an instance sleeps after 15 minutes unused (since 2026-11-03); a GUI client such as TablePlus cannot wake it, so `yard service start <instance>` first, or `off` for an instance you use that way. |
-| `yard env [--site <name>] [--service <instance>]` | yes | Prints `KEY=value` lines under a `# <instance>` comment per service, for you to paste into `.env`; it never writes a file. In a linked project (or with `--site`) it prints the services its `.yard` lists; outside one, every instance. emailulator's block is the seven `MAIL_*` lines, with a `warning:` on stderr while its agent does not answer. While the site is shared through a tunnel, a `# tunnel` block prints its public `APP_URL`. Yard creates no database or bucket, so there is no `DB_DATABASE` or `AWS_BUCKET`. |
+| `yard service sleep-after <instance> <duration\|off\|default>` | yes | Sets how long the instance may go unused before it sleeps (`sleep_after` in `services.toml`; at least `60s`), `off` to keep it awake, or `default` to follow `service_sleep_after` in `yard.toml`. With neither set, an instance sleeps after 15 minutes unused (since 2026-11-03); a GUI client such as TablePlus cannot wake it, so `yard db open`, `yard service start <instance>` first, or `off` for an instance you use that way. |
+| `yard env [--site <name>] [--service <instance>]` | yes | Prints `KEY=value` lines under a `# <instance>` comment per service, for you to paste into `.env`; it never writes a file. In a linked project (or with `--site`) it prints the services its `.yard` lists; outside one, every instance. emailulator's block is the seven `MAIL_*` lines, with a `warning:` on stderr while its agent does not answer. While the site is shared through a tunnel, a `# tunnel` block prints its public `APP_URL`. Yard names no database or bucket, so there is no `DB_DATABASE` or `AWS_BUCKET`: `yard db create <name>` makes a database. |
+| `yard db list [--service <i>]` | yes | Each instance's databases with their size and number of tables; wakes a sleeping instance, and says so first when no `--service` narrows it. |
+| `yard db create <name>` | yes | Creates a database (`utf8mb4_unicode_ci` on MySQL, UTF8 on PostgreSQL); one that exists is left as it is. Names are letters, digits, `_` and `-`, at most 63 characters. |
+| `yard db connect [instance]` | yes | What a GUI client needs: host, port, user, password, socket and URL, and which clients take the URL. Wakes nothing; outside a project, every MySQL, PostgreSQL and Redis instance. |
+| `yard db open [name]` | yes | Wakes the instance and opens the URL in the app that handles it; with none, prints the details and exits 1 (`DB_NO_HANDLER`). |
+| `yard db shell [name] [-- <flags>]` | yes | Runs the instance's own `mysql` or `psql` from its brew keg, logged in. Flags that name another server, user or database are refused (`DB_FLAG_RESERVED`). |
+| `yard db dump <name> [file] [--compress] [--overwrite] [-- <flags>]` | yes | Dumps with `mysqldump` or `pg_dump` to `<name>-<YYYY-MM-DD-HHMM>.sql` (`.sql.gz` with `--compress`, `.dump` with `-Fc`, `.tar` with `-Ft`, a directory with `-Fd`), written to `<file>.partial` and renamed only when the dump finished; Ctrl-C leaves no file. PostgreSQL tools come from the newest installed PostgreSQL at or above the instance's version. |
+| `yard db import <name> <file> [--into-existing] [--keep-owners] [-- <flags>]` | yes | Imports a dump read by its content, not its name (see Databases above). MySQL imports run with `--binary-mode`, so the mysql client's own commands (`\!`, `source`) do not run. |
 | `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), Node (with the spec it pins), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, the managed `.yard` (`managed`), `sites.toml`, `.nvmrc`, `.node-version` or the default. |
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |
 | `yard source trust\|untrust <formula> [--tap]` | yes | Runs `brew trust` / `brew untrust` for one formula, or with `--tap` a whole tap. Needs no terminal. Untrusting something installed does not stop it serving, but brew will no longer load it. |

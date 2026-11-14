@@ -175,7 +175,8 @@ Runs `mysqldump` or `pg_dump` (§7.1 says which keg) against the named database 
 - **Default file name**, in the current directory: `<name>-<YYYY-MM-DD-HHMM>.sql`, `.sql.gz` with
   `--compress`, `.dump` with `-Fc`, `.tar` with `-Ft`, and a directory `<name>-<YYYY-MM-DD-HHMM>`
   with `-Fd`.
-- The dump is written to `<file>.partial` and renamed when the tool (and gzip) exit 0. A failed or
+- The dump is written to `<file>.partial` (created fresh, never through a symlink, mode 0600) and
+  renamed when the tool (and gzip) exit 0. A failed or
   cancelled dump deletes the partial file, so no file that looks complete is left (§3).
 - An existing file is refused (`FILE_EXISTS`, hint `--overwrite`) unless `--overwrite`.
 - Yard adds nothing to the tool's own defaults: `mysqldump` gets no `--single-transaction` or
@@ -199,14 +200,29 @@ Feeds the file to the instance, creating the database first when it does not exi
   checks this when it answers `db.command` (§11).
 - **Only the named database (maintainer).** Plain SQL passes through a statement filter in the
   client (the rules in `yard-core`, pure). It holds each statement until it has read all of it, and
-  a statement that switches or creates a database (MySQL's `USE`, `CREATE DATABASE`, `CREATE
-  SCHEMA`; psql's `\connect`, `\c`, `CREATE DATABASE`) is never sent: the import stops with
+  a statement that switches, creates or drops a database (MySQL's `USE`, `CREATE|DROP
+  DATABASE|SCHEMA`; PostgreSQL's `\connect`, `\c`, `CREATE|DROP DATABASE`; `DROP` added while
+  planning, as `mysqldump --databases --add-drop-database` writes it ahead of the `CREATE`) is
+  never sent; a PostgreSQL `CREATE SCHEMA` passes, being a namespace every `pg_dump` makes: the import stops with
   `DB_DUMP_SWITCHES_DATABASE` naming the database the dump asked for, hint `yard db import <that
   name> <file>` or re-dumping without it (`mysqldump` without `--databases`, `pg_dump` without
   `-C`). What ran before it stays, in the named database. The filter follows each dialect's
   quoting: MySQL's quotes, backticks, comments and `DELIMITER` blocks (a `USE` inside a procedure
   body is not a statement); PostgreSQL's quotes, dollar quoting, comments and `COPY … FROM stdin`
   data up to `\.`. An archive for `pg_restore` cannot switch on its own once `-C` is refused (§7).
+- **Client commands (built, after a security review, 2026-11-15).** The mysql client runs its own
+  commands from piped input (`\!` a shell command, `\u`, `connect`, `source`), so MySQL imports
+  run with `--binary-mode`, which turns them off, and the filter also refuses a bare `\` outside
+  quotes and a statement starting `connect`, `source` or `system`. psql has no such switch: any
+  meta-command but `pg_dump`'s own `\restrict`/`\unrestrict` is refused, wherever it appears in a
+  statement. The lexers read strings as psql and the server do (an `E'` only where `E` starts a
+  token, bytes from 0x80 as identifier bytes, dollar tags included, `COPY` data only after `COPY
+  <table> [(…)] FROM STDIN`), and a statement that would change how strings end
+  (`standard_conforming_strings` but `= on`, `NO_BACKSLASH_ESCAPES`) is refused.
+- **What the filters are for (builder's call, 2026-11-15).** They guard against accidents, not
+  hostile dumps: an import runs as the instance's superuser, and PostgreSQL's superuser runs
+  programs through `COPY … FROM PROGRAM`, so no lexer makes an untrusted dump safe. Import only
+  dumps you trust; README and `--help` say so.
 - **Ownership (maintainer).** Unless `--keep-owners`, `pg_restore` gets `--no-owner
   --no-privileges`, and the plain-SQL filter drops `ALTER … OWNER TO`, `GRANT`, `REVOKE`, `ALTER
   DEFAULT PRIVILEGES` and `SET ROLE`/`SET SESSION AUTHORIZATION`, counting them; the result says how
@@ -223,10 +239,16 @@ Feeds the file to the instance, creating the database first when it does not exi
 - Everything after `--` is appended to the tool's command line as separate arguments, with no
   shell: `mysqldump` or `pg_dump` for `dump`; `mysql`, `psql` or `pg_restore` for `import`; `mysql`
   or `psql` for `shell`.
+- **Argument order (built).** MySQL's tools take Yard's flags, then the database name (`mysqldump`)
+  or `--database=<name>` (`mysql`), then the user's, since MySQL's option parser reads options after
+  the name (checked against mysqldump 8.4). PostgreSQL's take the database as `-d` and nothing
+  positional before the user's flags (macOS's getopt does not reorder); a directory-format path
+  comes last.
 - **Yard owns the server, the database and the output.** yardd refuses, as a whole flag, a
-  `--flag=value`, the short form with its value attached or separate, and (for MySQL's tools, which
-  accept a unique prefix of a long option) any prefix of a refused long option of three characters
-  or more:
+  `--flag=value`, the short form with its value attached or separate, and any prefix of a refused
+  long option of three characters or more (MySQL's option parser and getopt_long both take a unique
+  prefix; MySQL's `_` spelling and `loose-` prefix are read as MySQL reads them). A cluster of short
+  flags is judged by its first letter, so `-Fd` stays `-F d`:
   - every MySQL tool: `-h --host -P --port -u --user -p --password -S --socket --protocol
     --defaults-file --defaults-extra-file --defaults-group-suffix --login-path --no-defaults
     --print-defaults -D --database`;
@@ -284,7 +306,8 @@ mysql-8.4  sleeping — yard db open or yard db shell wakes it; or yard service 
   socket is `.s.PGSQL.<port>` in it, which clients find by host = that directory and the port), and
   `postgresql://<user>@127.0.0.1:<port>`. Redis shows host, port, no user or password, and
   `redis://127.0.0.1:<port>`; it has no socket.
-- `--json` is `ConnectInfo` (instance, engine, state, host, port, user, password, socket, url).
+- `--json` is `ConnectInfo` (instance, engine, state, `sleeping`, host, port, user, password,
+  socket, url); `sleeping` (added while building) tells a sleeping instance from a stopped one.
 - The paths are absolute (a GUI does not expand `~`). The URL carries no password (none exists).
 - A GUI connection keeps the instance awake while it is open (M4e counts TCP and socket
   connections); once the GUI disconnects, the instance sleeps after its `sleep_after` as usual, and
@@ -314,8 +337,9 @@ Redis gets **Connect…**.
 - **Dump…** takes a save panel for the file, a **Compress** switch (off) and an **Extra options**
   text field. The field is split into arguments like a shell would (quotes and backslashes, no
   variables or globbing) **(builder's call)**, and §7's refusals show in the sheet.
-- The app runs dumps and imports itself from `db.command`'s answer, as the CLI does, using the same
-  `yard-core` filter; the open and save panels give it the file. Each shows in Activity with its
+- The app runs dumps and imports through the CLI (`yard db dump|import … --progress-json`, decided
+  while planning: the runner then exists once, and the CLI child inherits the file access the open
+  and save panels grant); the progress JSON lines on stderr feed Activity. Each shows in Activity with its
   bytes and Cancel, as the app's own entries; quitting the app stops them, after asking.
 - The app writes nothing of Yard's (app rule): every decision is yardd's, and the only files it
   writes are the dump the user saved.

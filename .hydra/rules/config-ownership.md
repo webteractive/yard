@@ -35,6 +35,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     the engines' usual ones, and restarts the instance when its config file changed. It creates
     `services/<i>/data` for Redis only (redis-server exits at config load without its `dir`); the
     databases' init needs theirs absent or empty, and MinIO makes its own.
+  - Yard creates a database (never a role or bucket) only when asked: `db.create`, or `db.command`
+    for an import into a name that does not exist (db spec). `yard link`, `init` and a `.yard` never
+    create one, and nothing in Yard drops one.
   - Yard never re-initializes a database's data: `yard doctor` fails `service-data:<i>` for a MySQL or
     PostgreSQL instance whose `data/` is missing or empty and names `yard service remove <i> && yard
     service add …`; it reads Redis's and MinIO's directories not at all.

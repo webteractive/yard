@@ -181,6 +181,15 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   command) were corrected. Checked against the installed 0.1.6: `e2e-m1.sh` (with its privileged
   round trip), `checklist-real.sh` 11/11, and against this checkout `checklist.sh` 72/72 and
   `checklist-installs.sh` 14/14; self-update from 0.1.4 reopened an open Yard.app on 0.1.5.
+- `yard db` (maintainer, 2026-11-15, mainly for moving projects off DBngin and Herd): list, create,
+  connect, open, shell, dump and import on the MySQL and PostgreSQL instances, designed in
+  `docs/superpowers/specs/2026-11-15-yard-db-design.md` and planned in
+  `docs/superpowers/plans/2026-11-15-yard-db.md` (both approved 2026-11-15), built on main the same
+  day with protocol 2.12. yardd picks, wakes and checks; the CLI runs the tools, since yardd as a
+  LaunchAgent cannot open the user's protected folders. Imports read files only, never another
+  server. The statement filters guard against accidents (a `--databases` dump, another server's
+  owners), not hostile dumps: an import runs as the instance's superuser. `scripts/e2e-db.sh` has yet
+  to run on a real machine.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -230,7 +239,8 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   allocated once at `yard service add`, recorded `pinned` and never moved by Yard, and skip
   the ports DBngin and Postgres.app reserve while installed. Yard never runs `brew services`
   or `brew uninstall` for one, never re-initializes or deletes data except `service remove`,
-  and creates no databases, roles or buckets. A MySQL 8 instance makes `mysql_native_password`
+  and creates a database only when asked (`yard db create`/`import`, db spec, 2026-11-15) and never
+  roles or buckets. A MySQL 8 instance makes `mysql_native_password`
   the default (root included) and every MySQL instance uses `utf8mb4_unicode_ci` and
   `sql_mode = NO_ENGINE_SUBSTITUTION`, so PHP 7.0–7.3 projects work (M4b spec §16, the maintainer
   2026-10-28: old projects must install and work). A formula from a third-party tap installs only
@@ -506,6 +516,16 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   (installs nothing), backs up and restores `sites.toml` and `ports.toml`, and fails if Herd's
   resolver changed or `~/.cloudflared` was created; ask the maintainer first.
   `shellcheck scripts/e2e-m5.sh` stays clean.
+
+- `scripts/e2e-db.sh` — real-machine `yard db` check after `e2e-m1.sh`, on the real `mysql-8.4`
+  and `postgres-17` (`YARD_DB_MYSQL`/`YARD_DB_PG` name others): creates scratch databases named
+  `yard_e2e_<pid>_*`, imports plain, gzipped and `pg_dump -Fc` fixtures (one with an owner role the
+  instance lacks, one plain with `OWNER TO`), checks a `mysqldump --databases` dump is refused before
+  its `USE`, dumps and re-imports and compares row counts, checks `DB_NOT_EMPTY`, a passed and a
+  refused flag, and that `yard db list` wakes a sleeping instance. It drops only the databases it
+  created, through the keg client by absolute path, fails if any other database appeared or
+  vanished or the listeners on 3306, 5432 and 6379 changed, and writes to the real instances, so ask
+  the maintainer first. `shellcheck scripts/e2e-db.sh` stays clean.
 
 ## Verifying a change on a real machine
 

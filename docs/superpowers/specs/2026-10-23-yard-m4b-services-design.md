@@ -38,7 +38,9 @@ taps; Yard uses it instead of building one, and stops granting trust silently.
   later engine (2026-11-01); it is not scheduled.
 - **No data import (maintainer).** Yard never reads DBngin's or Postgres.app's data; moving a
   project is a dump and a re-import into the Yard instance.
-- **Yard never creates databases, users or buckets (maintainer).** That stays with the user
+- **Yard never creates users or buckets, and creates a database only when asked (maintainer;
+  databases changed 2026-11-15 by the db spec, `docs/superpowers/specs/2026-11-15-yard-db-design.md`,
+  which adds `yard db create` and `yard db import`).** Linking or a `.yard` still creates nothing; that stays with the user
   and the framework (`php artisan migrate` offers to create a missing database).
 - **No ports in `.yard` (maintainer agreed).** A port belongs to the machine. Instances are
   shared, so a project cannot own one's port.
@@ -69,7 +71,8 @@ Goals:
 Non-goals:
 
 - emailulator (M4d), Node (M4c).
-- Importing data from DBngin or Postgres.app; creating databases, roles or buckets.
+- Importing data from DBngin or Postgres.app (the db spec imports dump files only); creating roles or
+  buckets. Creating a database on request moved to the db spec (2026-11-15).
 - Backups, replication, `pg_upgrade`, or moving an instance's data between versions.
 - Per-project instances (`.yard` cannot ask for its own private server).
 - MariaDB, Valkey, MongoDB, Meilisearch and other engines.
@@ -314,6 +317,8 @@ yard sources
 yard source trust <formula> [--tap]
 yard source untrust <formula> [--tap]
 ```
+
+`yard db list|create|connect|open|shell|dump|import` came later, in the db spec.
 
 `yard services` prints one row per instance: INSTANCE, ENGINE, VERSION, PORT,
 STATE (`running`, `stopped`, `starting`, `failed`), ACCOUNT (§7.5), and USED BY, the
