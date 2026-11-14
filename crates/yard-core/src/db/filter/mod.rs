@@ -117,6 +117,11 @@ pub(crate) fn words(stmt: &[u8], hash_comments: bool, max: usize) -> Vec<(usize,
     out
 }
 
+/// `needle` (lowercase) appears in `hay`, in any case.
+pub(crate) fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| from + p)
 }

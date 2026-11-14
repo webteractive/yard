@@ -1,7 +1,7 @@
 //! PostgreSQL's statement filter: the quoting, comments, psql meta-commands and `COPY` data
 //! that `psql` reads from a plain `pg_dump`.
 
-use super::{Switch, database_statement, words};
+use super::{Switch, contains_ci, database_statement, words};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum State {
@@ -30,6 +30,8 @@ pub struct PostgresFilter {
     buf: Vec<u8>,
     state: State,
     prev: u8,
+    /// The byte before `prev`, to tell `E'…'` from an identifier ending in `E`.
+    prev2: u8,
     escaped: bool,
     opened: bool,
     content: usize,
@@ -47,6 +49,7 @@ impl PostgresFilter {
             buf: Vec::new(),
             state: State::Normal,
             prev: 0,
+            prev2: 0,
             escaped: false,
             opened: false,
             content: 0,
@@ -124,7 +127,11 @@ impl PostgresFilter {
                     close.extend(&tag);
                     close.push(b'$');
                     self.state = State::Dollar(close);
-                } else if b.is_ascii_alphabetic() || b == b'_' || (b.is_ascii_digit() && !tag.is_empty()) {
+                } else if b.is_ascii_alphabetic()
+                    || b == b'_'
+                    || b >= 0x80
+                    || (b.is_ascii_digit() && !tag.is_empty())
+                {
                     tag.push(b);
                     self.state = State::DollarTag(tag);
                 } else {
@@ -161,13 +168,16 @@ impl PostgresFilter {
             State::Copy => unreachable!("handled above"),
         }
         // A `/*` or `*/` just read cannot also be half of the next one.
+        self.prev2 = self.prev;
         self.prev = if std::mem::take(&mut self.opened) { 0 } else { b };
     }
 
     fn normal(&mut self, b: u8, out: &mut Vec<u8>) {
         match b {
             b'\'' => {
-                self.state = State::Single { escapes: matches!(self.prev, b'E' | b'e') };
+                // `E'…'` only where the `E` starts a token, as psql's lexer reads it.
+                let escapes = matches!(self.prev, b'E' | b'e') && !ident_byte(self.prev2);
+                self.state = State::Single { escapes };
                 self.content += 1;
             }
             b'"' => {
@@ -175,7 +185,7 @@ impl PostgresFilter {
                 self.content += 1;
             }
             b'$' => {
-                if !(self.prev.is_ascii_alphanumeric() || self.prev == b'_' || self.prev == b'$') {
+                if !ident_byte(self.prev) {
                     self.state = State::DollarTag(Vec::new());
                 }
                 self.content += 1;
@@ -210,6 +220,12 @@ impl PostgresFilter {
     fn complete(&mut self, out: &mut Vec<u8>) {
         if self.content > 0 {
             if self.inline_meta {
+                let from = self.buf.len() - self.buf.trim_ascii_start().len();
+                self.switched = Some(Switch::new(&self.buf, from, None));
+                self.buf.clear();
+                return;
+            }
+            if changes_string_rules(&self.buf) {
                 let from = self.buf.len() - self.buf.trim_ascii_start().len();
                 self.switched = Some(Switch::new(&self.buf, from, None));
                 self.buf.clear();
@@ -284,11 +300,44 @@ fn is_ownership(stmt: &[u8]) -> bool {
     }
 }
 
-/// `COPY … FROM stdin`, whose data lines follow up to `\.`.
+/// A byte psql's lexer reads as part of an identifier (`ident_cont`): one before `$` makes
+/// it part of the name, not a dollar quote, and one before `E` makes `E'` no E-string.
+fn ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
+}
+
+/// Anything that names `standard_conforming_strings` except `SET … = on`: with it off,
+/// backslashes would end strings where this filter does not (db spec §6.6; fails closed).
+fn changes_string_rules(stmt: &[u8]) -> bool {
+    let w: Vec<String> = words(stmt, false, 6).into_iter().map(|(_, w)| w.to_ascii_lowercase()).collect();
+    if !w.iter().any(|x| x == "standard_conforming_strings")
+        && !contains_ci(stmt, b"standard_conforming_strings")
+    {
+        return false;
+    }
+    let w: Vec<&str> = w.iter().map(String::as_str).collect();
+    !matches!(
+        w.as_slice(),
+        ["set", "standard_conforming_strings", "on"] | ["set", "standard_conforming_strings", "to", "on"]
+    )
+}
+
+/// `COPY <table> [(<columns>)] FROM STDIN …`, whose data lines follow up to `\.`. A query
+/// (`COPY (…) TO`) never reads stdin, and `FROM`/`STDIN` count only unquoted.
 fn is_copy_from_stdin(stmt: &[u8]) -> bool {
     let w = words(stmt, false, usize::MAX);
-    w.first().is_some_and(|(_, f)| f.eq_ignore_ascii_case("COPY"))
-        && w.windows(2).any(|p| p[0].1.eq_ignore_ascii_case("FROM") && p[1].1.eq_ignore_ascii_case("STDIN"))
+    let Some((at, first)) = w.first() else { return false };
+    if !first.eq_ignore_ascii_case("COPY") {
+        return false;
+    }
+    let after = stmt[at + 4..].iter().find(|b| !b.is_ascii_whitespace());
+    if after == Some(&b'(') {
+        return false;
+    }
+    let bare =
+        |(off, word): &(usize, String), want: &str| stmt[*off] != b'"' && word.eq_ignore_ascii_case(want);
+    let Some(from) = w.iter().position(|x| bare(x, "FROM")) else { return false };
+    !w[1..from].iter().any(|x| bare(x, "TO")) && w.get(from + 1).is_some_and(|x| bare(x, "STDIN"))
 }
 
 #[cfg(test)]
@@ -417,6 +466,29 @@ REVOKE ALL ON SCHEMA app FROM PUBLIC;
         }
         let ok = b"\\restrict k1\nSELECT E'a\\\\b';\n\\unrestrict k1\n";
         assert_eq!(run(ok, 1, true).0.unwrap(), ok);
+    }
+
+    #[test]
+    fn lexer_differentials_fail_closed() {
+        for sql in [
+            // psql reads `abcE` as an identifier, so `'x\'` ends and the meta-command runs.
+            "SELECT 1 AS abcE'x\\'; \\! touch /tmp/p\n",
+            // A byte >= 0x80 is an identifier character, so `é$x$` is no dollar quote.
+            "SELECT é$x$ ; \\! ls\n",
+            // No standard_conforming_strings but on: backslashes would change where strings end.
+            "SET standard_conforming_strings = off;\n",
+            "SELECT pg_catalog.set_config('standard_conforming_strings', 'off', false);\n",
+            // Not a COPY that reads stdin: what follows is statements to psql.
+            "COPY (SELECT 1 FROM stdin) TO STDOUT;\n\\! ls\n",
+            "COPY t (\"from\", \"stdin\") TO STDOUT;\n\\! ls\n",
+        ] {
+            let (out, _) = run(sql.as_bytes(), 3, true);
+            assert!(out.is_err(), "{sql:?} passed");
+        }
+        for ok in ["SET standard_conforming_strings = on;\n", "SELECT $é$ \\! ; $é$, E'a\\'b';\n"] {
+            let (out, _) = run(ok.as_bytes(), 2, true);
+            assert_eq!(out.unwrap(), ok.as_bytes(), "{ok:?}");
+        }
     }
 
     #[test]

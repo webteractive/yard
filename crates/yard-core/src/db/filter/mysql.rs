@@ -1,6 +1,6 @@
 //! MySQL's statement filter: the quoting, comments and `DELIMITER` lines the `mysql` client reads.
 
-use super::{Switch, database_statement};
+use super::{Switch, contains_ci, database_statement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -196,7 +196,10 @@ impl MysqlFilter {
     }
 
     fn complete(&mut self, out: &mut Vec<u8>) {
-        if self.content > 0 && self.client_command {
+        // NO_BACKSLASH_ESCAPES would have the server end `'a\'` where the client and this
+        // filter do not, so a dump that turns it on is refused (fails closed).
+        let no_escapes = contains_ci(&self.buf, b"no_backslash_escapes");
+        if self.content > 0 && (self.client_command || no_escapes) {
             let from = self.buf.len() - self.buf.trim_ascii_start().len();
             self.switched = Some(Switch::new(&self.buf, from, None));
             self.buf.clear();
@@ -334,6 +337,17 @@ SELECT 'done';
         assert_eq!(s.database.as_deref(), Some("other"));
         let fine = b"SELECT 'a\\b', \"c\\d\";\n";
         assert_eq!(run(fine, 1).unwrap(), fine);
+    }
+
+    #[test]
+    fn no_backslash_escapes_is_refused() {
+        // The server would then end `'a\'` where the client and this filter do not.
+        for sql in [
+            "SET sql_mode='NO_BACKSLASH_ESCAPES';",
+            "/*!40101 SET SQL_MODE=CONCAT(@@SQL_MODE, ',no_backslash_escapes') */;",
+        ] {
+            assert!(run(sql.as_bytes(), 4).is_err(), "{sql}");
+        }
     }
 
     #[test]
