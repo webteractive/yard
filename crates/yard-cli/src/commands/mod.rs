@@ -173,6 +173,10 @@ pub async fn run(cli: Cli) -> i32 {
                 let how = db::DumpArgs { file, compress, overwrite, progress_json };
                 db::dump(&ctx, name, how, at, args).await
             }
+            DbSub::Import { name, file, into_existing, keep_owners, progress_json, at, args } => {
+                let how = db::ImportArgs { file, into_existing, keep_owners, progress_json };
+                db::import(&ctx, name, how, at, args).await
+            }
         },
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,

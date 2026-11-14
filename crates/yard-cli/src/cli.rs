@@ -414,6 +414,32 @@ pub enum DbSub {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Import a dump into a database, creating it when it is missing: plain or gzipped SQL
+    /// (from mysqldump, Sequel Ace, pg_dump), or pg_dump's -Fc, -Ft or -Fd output, read by
+    /// content, not name. Statements that switch, create or drop a database stop the import
+    /// before they run, and PostgreSQL ownership and grants are skipped. Import only dumps you
+    /// trust: an import runs as the instance's superuser.
+    Import {
+        name: String,
+        /// The dump file, or pg_dump -Fd's directory.
+        file: std::path::PathBuf,
+        /// Import into a database that already has tables.
+        #[arg(long)]
+        into_existing: bool,
+        /// Keep a PostgreSQL dump's OWNER TO, GRANT and REVOKE statements (they name the old
+        /// server's roles).
+        #[arg(long)]
+        keep_owners: bool,
+        /// Progress as JSON lines on stderr, for Yard.app.
+        #[arg(long, hide = true)]
+        progress_json: bool,
+        #[command(flatten)]
+        at: DbAt,
+        /// Passed to mysql, psql or pg_restore; flags naming another server or database, or
+        /// commands that would run instead of the file, are refused.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

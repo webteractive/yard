@@ -8,8 +8,9 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
+use yard_core::db::filter::{Filter, Switch};
 use yard_core::db::flags::DumpFormat;
-use yard_proto::{DbCommand, ErrorCode, YardError};
+use yard_proto::{DbCommand, ErrorCode, ImportKind, YardError};
 
 pub const GZIP: &str = "/usr/bin/gzip";
 const CHUNK: usize = 1 << 16;
@@ -192,9 +193,18 @@ async fn run_dump(
         } else {
             Box::new(stdout)
         };
-        let mut file = tokio::fs::File::create(partial).await.map_err(|e| {
-            YardError::new(ErrorCode::InvalidArgument, format!("cannot write {}: {e}", partial.display()))
-        })?;
+        // A fresh file, never through a symlink someone left at the name; the dump's data is
+        // the user's alone.
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(partial)
+            .await
+            .map_err(|e| {
+                YardError::new(ErrorCode::InvalidArgument, format!("cannot write {}: {e}", partial.display()))
+            })?;
         let copy = pump(reader, &mut file, label, None, progress);
         tokio::select! {
             bytes = copy => {
@@ -218,6 +228,193 @@ async fn run_dump(
             }
         }
     }
+}
+
+/// How an import ended when it was not cancelled.
+pub struct Imported {
+    pub bytes: u64,
+    pub skipped: usize,
+}
+
+/// Feeds `file` to the tool through `filter` (db spec §6.6). A directory goes to the tool as
+/// the path the command already names. A switching statement closes the tool's input before
+/// it is sent, and a tool that fails leaves its last lines.
+pub async fn import(
+    cmd: &DbCommand,
+    file: &Path,
+    kind: ImportKind,
+    gzip: bool,
+    mut filter: Filter,
+    label: &str,
+    progress: Progress,
+) -> Result<Ran<Imported>, YardError> {
+    let name = program_name(cmd);
+    if kind == ImportKind::Directory {
+        let mut child = spawn(tool(cmd, &[]).stdin(Stdio::null()).stdout(Stdio::null()), &name)?;
+        let stderr = collect(child.stderr.take());
+        return tokio::select! {
+            status = child.wait() => {
+                let status = status.map_err(|e| YardError::internal(format!("{name}: {e}")))?;
+                check(&name, status.success(), stderr.await)?;
+                Ok(Ran::Done(Imported { bytes: dir_size(file), skipped: 0 }))
+            }
+            _ = tokio::signal::ctrl_c() => {
+                stop(&mut child).await;
+                Ok(Ran::Cancelled)
+            }
+        };
+    }
+    let mut child = spawn(tool(cmd, &[]).stdin(Stdio::piped()).stdout(Stdio::null()), &name)?;
+    let stderr = collect(child.stderr.take());
+    let mut stdin = child.stdin.take().ok_or_else(|| YardError::internal("no stdin"))?;
+    let mut gunzip = None;
+    let (reader, total): (Box<dyn AsyncRead + Unpin + Send>, Option<u64>) = if gzip {
+        let mut g = spawn(
+            Command::new(GZIP)
+                .arg("-dc")
+                .arg(file)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true),
+            "gzip",
+        )?;
+        let out = g.stdout.take().ok_or_else(|| YardError::internal("no gzip stdout"))?;
+        gunzip = Some(g);
+        // gzip reads the file itself, so progress counts what it unpacked, with no total.
+        (Box::new(out), None)
+    } else {
+        let f = tokio::fs::File::open(file).await.map_err(|e| {
+            YardError::new(ErrorCode::InvalidArgument, format!("cannot read {}: {e}", file.display()))
+        })?;
+        let size = f.metadata().await.ok().map(|m| m.len());
+        (Box::new(f), size)
+    };
+    let feed = async {
+        let mut reader = reader;
+        let mut buf = vec![0u8; CHUNK];
+        let mut bytes = 0u64;
+        let mut shown = Instant::now();
+        let mut switched: Option<Switch> = None;
+        loop {
+            let n = reader.read(&mut buf).await.map_err(|e| YardError::internal(format!("reading: {e}")))?;
+            let (chunk, end) = if n == 0 { (filter.finish(), true) } else { (filter.push(&buf[..n]), false) };
+            match chunk {
+                Ok(out) => {
+                    // The tool may have stopped reading because it failed; its status says why.
+                    if stdin.write_all(&out).await.is_err() {
+                        break;
+                    }
+                }
+                Err(s) => {
+                    switched = Some(s);
+                    break;
+                }
+            }
+            if end {
+                break;
+            }
+            bytes += n as u64;
+            if shown.elapsed() >= TICK {
+                progress.show(label, bytes, total);
+                shown = Instant::now();
+            }
+        }
+        progress.show(label, bytes, total);
+        drop(stdin);
+        // Waited for inside the select too: once Ctrl-C has a handler it no longer kills us.
+        let status = child.wait().await.map_err(|e| YardError::internal(format!("{name}: {e}")))?;
+        Ok::<_, YardError>((bytes, switched, status))
+    };
+    tokio::select! {
+        fed = feed => {
+            progress.done();
+            let (bytes, switched, status) = fed?;
+            if let Some(mut g) = gunzip {
+                stop(&mut g).await;
+            }
+            if let Some(s) = switched {
+                return Err(switch_error(&s, label));
+            }
+            check(&name, status.success(), stderr.await).map_err(|e| {
+                let what = format!("{}; what ran before the error stays in {label} (yard db shell {label} to look)", e.message);
+                YardError { message: what, ..e }
+            })?;
+            Ok(Ran::Done(Imported { bytes, skipped: filter.skipped() }))
+        }
+        _ = tokio::signal::ctrl_c() => {
+            progress.done();
+            stop(&mut child).await;
+            if let Some(g) = gunzip.as_mut() {
+                stop(g).await;
+            }
+            Ok(Ran::Cancelled)
+        }
+    }
+}
+
+fn switch_error(s: &Switch, label: &str) -> YardError {
+    match &s.database {
+        Some(db) => YardError::new(
+            ErrorCode::DbDumpSwitchesDatabase,
+            format!("the dump switches to database {db} ({}); nothing from there on ran", s.statement),
+        )
+        .with_hint(format!(
+            "yard db import {db} <file>, or dump again without --databases (mysqldump) or -C (pg_dump)"
+        ))
+        .with_data(serde_json::json!({ "database": db })),
+        None => YardError::new(
+            ErrorCode::DbDumpSwitchesDatabase,
+            format!("the dump runs a client command ({}), which an import into {label} does not; nothing from there on ran", s.statement),
+        )
+        .with_hint("remove that line from the dump"),
+    }
+}
+
+/// The first bytes of `file` as the tool will see them (unpacked when gzipped), and whether
+/// it is gzipped. A missing, unreadable or empty file is refused before yardd is asked.
+pub async fn head(file: &Path) -> Result<(Vec<u8>, bool), YardError> {
+    let refused = |why: String| YardError::new(ErrorCode::InvalidArgument, why);
+    let meta =
+        std::fs::metadata(file).map_err(|e| refused(format!("cannot read {}: {e}", file.display())))?;
+    if meta.is_dir() {
+        return Ok((vec![], false));
+    }
+    if meta.len() == 0 {
+        return Err(refused(format!("{} is empty", file.display())));
+    }
+    let mut f = tokio::fs::File::open(file)
+        .await
+        .map_err(|e| refused(format!("cannot read {}: {e}", file.display())))?;
+    let mut first = vec![0u8; 512];
+    let n = f.read(&mut first).await.map_err(|e| refused(format!("cannot read {}: {e}", file.display())))?;
+    first.truncate(n);
+    if !yard_core::db::detect::is_gzip(&first) {
+        return Ok((first, false));
+    }
+    let mut g = spawn(
+        Command::new(GZIP)
+            .arg("-dc")
+            .arg(file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true),
+        "gzip",
+    )?;
+    let mut out = g.stdout.take().ok_or_else(|| YardError::internal("no gzip stdout"))?;
+    let mut unpacked = Vec::new();
+    let mut buf = [0u8; 512];
+    while unpacked.len() < 512 {
+        let n = out.read(&mut buf).await.unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        unpacked.extend_from_slice(&buf[..n]);
+    }
+    stop(&mut g).await;
+    unpacked.truncate(512);
+    Ok((unpacked, true))
 }
 
 /// Copies `reader` to `writer`, showing progress; the byte count.
@@ -286,8 +483,9 @@ pub async fn stop(child: &mut Child) {
     let _ = child.wait().await;
 }
 
+/// Removes a file, a symlink (never what it points at) or a directory.
 pub fn remove(path: &Path) {
-    if path.is_dir() {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir()) {
         let _ = std::fs::remove_dir_all(path);
     } else {
         let _ = std::fs::remove_file(path);

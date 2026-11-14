@@ -392,3 +392,222 @@ fn progress_json_lines() {
     let v: Value = serde_json::from_str(&last).unwrap();
     assert_eq!(v["bytes"], 24);
 }
+
+/// `db.command`'s answer for an import through `program`, filtered by `filter`.
+fn import_command(program: &str, filter: Value, created: bool) -> Value {
+    json!({"instance": "mysql-8.4", "program": program, "args": ["--database=shop"], "env": [], "env_remove": [],
+        "filter": filter, "created": created, "notes": []})
+}
+
+/// A client that keeps what it reads in `<dir>/stdin`.
+fn capturing(dir: &Path) -> String {
+    script(dir, "client", &format!("cat > '{}'", dir.join("stdin").display()))
+}
+
+#[test]
+fn import_streams_the_file() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let dump = "CREATE TABLE a (x int);\nINSERT INTO a VALUES (1);\n";
+    std::fs::write(cwd.path().join("shop.sql"), dump).unwrap();
+    let d = MockDaemon::start(&[(
+        "db.command",
+        Ok(import_command(&capturing(tools.path()), json!({"kind": "mysql"}), true)),
+    )]);
+    let out = d
+        .yard()
+        .args(["db", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(tools.path().join("stdin")).unwrap(), dump);
+    assert!(stdout(&out).contains("Imported"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("(created it)"), "{}", stdout(&out));
+    let p = &d.params("db.command")[0];
+    assert_eq!((p["action"].as_str(), p["import_kind"].as_str()), (Some("import"), Some("plain")));
+}
+
+#[test]
+fn import_gunzips_by_content() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let plain = cwd.path().join("dump.sql");
+    std::fs::write(&plain, "CREATE TABLE a (x int);\n").unwrap();
+    let gz = std::process::Command::new("/usr/bin/gzip").arg("-c").arg(&plain).output().unwrap().stdout;
+    std::fs::write(&plain, gz).unwrap(); // gzipped, still named .sql
+    let d = MockDaemon::start(&[(
+        "db.command",
+        Ok(import_command(&capturing(tools.path()), json!({"kind": "mysql"}), false)),
+    )]);
+    let out = d
+        .yard()
+        .args(["db", "import", "shop", "dump.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(tools.path().join("stdin")).unwrap(), "CREATE TABLE a (x int);\n");
+}
+
+#[test]
+fn a_missing_file_creates_nothing() {
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("empty.sql"), "").unwrap();
+    let d = MockDaemon::start(&[]);
+    for file in ["missing.sql", "empty.sql"] {
+        let out = d
+            .yard()
+            .args(["db", "import", "shop", file, "--service", "mysql-8.4"])
+            .current_dir(cwd.path())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{file}");
+        assert!(stderr(&out).contains(file), "{}", stderr(&out));
+    }
+    assert!(d.params("db.command").is_empty(), "yardd was never asked, so nothing was created");
+}
+
+#[test]
+fn a_switching_dump_stops_before_the_statement() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cwd.path().join("all.sql"),
+        "CREATE TABLE a (x int);\nUSE `other`;\nINSERT INTO a VALUES (1);\n",
+    )
+    .unwrap();
+    let d = MockDaemon::start(&[(
+        "db.command",
+        Ok(import_command(&capturing(tools.path()), json!({"kind": "mysql"}), false)),
+    )]);
+    let out = d
+        .yard()
+        .args(["db", "import", "shop", "all.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("switches to database other"), "{}", stderr(&out));
+    let sent = std::fs::read_to_string(tools.path().join("stdin")).unwrap();
+    assert!(sent.contains("CREATE TABLE a") && !sent.contains("USE") && !sent.contains("INSERT"), "{sent}");
+}
+
+#[test]
+fn owner_statements_are_skipped_and_counted() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cwd.path().join("app.sql"),
+        "CREATE TABLE t (a int);\nALTER TABLE t OWNER TO postgres;\nGRANT ALL ON t TO x;\n",
+    )
+    .unwrap();
+    let filter = json!({"kind": "postgres", "keep_owners": false});
+    let d = MockDaemon::start(&[("db.command", Ok(import_command(&capturing(tools.path()), filter, false)))]);
+    let out = d
+        .yard()
+        .args(["db", "import", "app", "app.sql", "--service", "postgres-17"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Skipped 2 ownership and grant statements"), "{}", stdout(&out));
+    assert_eq!(std::fs::read_to_string(tools.path().join("stdin")).unwrap(), "CREATE TABLE t (a int);\n");
+    let out = d
+        .yard()
+        .args([
+            "db",
+            "import",
+            "app",
+            "app.sql",
+            "--keep-owners",
+            "--into-existing",
+            "--service",
+            "postgres-17",
+        ])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let p = &d.params("db.command")[1];
+    assert_eq!((p["keep_owners"].as_bool(), p["into_existing"].as_bool()), (Some(true), Some(true)));
+}
+
+#[test]
+fn archive_goes_to_pg_restore() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("app.dump"), b"PGDMP\x01\x0eGRANT USE x;").unwrap();
+    let d = MockDaemon::start(&[(
+        "db.command",
+        Ok(import_command(&capturing(tools.path()), json!({"kind": "none"}), false)),
+    )]);
+    let out = d
+        .yard()
+        .args(["db", "import", "app", "app.dump", "--service", "postgres-17"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("db.command")[0]["import_kind"], "archive");
+    assert_eq!(std::fs::read(tools.path().join("stdin")).unwrap(), b"PGDMP\x01\x0eGRANT USE x;");
+}
+
+#[test]
+fn failure_says_what_stays() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("shop.sql"), "SELECT 1;\n").unwrap();
+    let program = script(
+        tools.path(),
+        "mysql",
+        "cat > /dev/null; echo 'ERROR 1064 (42000) at line 1: near x' >&2; exit 1",
+    );
+    let d =
+        MockDaemon::start(&[("db.command", Ok(import_command(&program, json!({"kind": "mysql"}), false)))]);
+    let out = d
+        .yard()
+        .args(["db", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("ERROR 1064") && err.contains("stays in shop") && err.contains("yard db shell shop"),
+        "{err}"
+    );
+}
+
+#[test]
+fn ctrl_c_says_what_stays() {
+    let tools = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("shop.sql"), "SELECT 1;\n").unwrap();
+    let started = tools.path().join("started");
+    let program =
+        script(tools.path(), "mysql", &format!("touch '{}'; while :; do sleep 0.1; done", started.display()));
+    let d =
+        MockDaemon::start(&[("db.command", Ok(import_command(&program, json!({"kind": "mysql"}), false)))]);
+    let child = d
+        .yard_process()
+        .args(["db", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .current_dir(cwd.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !started.exists() {
+        assert!(std::time::Instant::now() < deadline, "the client never started");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    unsafe { libc::kill(child.id() as i32, libc::SIGINT) };
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(130));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Cancelled: what was imported so far stays in shop.")
+    );
+    let left = std::process::Command::new("/usr/bin/pgrep").args(["-f", &program]).output().unwrap();
+    assert!(left.stdout.is_empty(), "the client is still running");
+}

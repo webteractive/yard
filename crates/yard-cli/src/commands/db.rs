@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use yard_core::db::flags::{DumpFormat, dump_format};
 use yard_proto::methods::{self, DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
 use yard_proto::{
-    ConnectInfo, DbAction, DbCommand, DbCreated, DbDumped, DbInstanceList, ErrorCode, ServiceState, YardError,
+    ConnectInfo, DbAction, DbCommand, DbCreated, DbDumped, DbImported, DbInstanceList, ErrorCode, ImportKind,
+    ServiceState, YardError,
 };
 
 /// The params' target. With no flag yardd needs the directory, as an absolute real path.
@@ -276,6 +277,76 @@ pub async fn dump(ctx: &Ctx, name: String, how: DumpArgs, at: DbAt, args: Vec<St
                     text.push_str(
                         "Tip: -- --single-transaction --routines gives a consistent dump with procedures.\n",
                     );
+                }
+                text
+            });
+            Ok(0)
+        }
+    }
+}
+
+/// `yard db import`'s own flags.
+pub struct ImportArgs {
+    pub file: PathBuf,
+    pub into_existing: bool,
+    pub keep_owners: bool,
+    pub progress_json: bool,
+}
+
+pub async fn import(ctx: &Ctx, name: String, how: ImportArgs, at: DbAt, args: Vec<String>) -> Outcome {
+    let file = cwd()?.join(&how.file);
+    // The file is read before yardd is asked, so a bad one creates no database.
+    let (head, gzip) = dbrun::head(&file).await?;
+    let is_dir = file.is_dir();
+    let kind = yard_core::db::detect::kind(&head, is_dir, file.join("toc.dat").is_file())?;
+    let target = target(at)?;
+    let mut client = ctx.client().await?;
+    let params = DbCommandParams {
+        target,
+        action: DbAction::Import,
+        name: Some(name.clone()),
+        args,
+        compress: false,
+        into_existing: how.into_existing,
+        keep_owners: how.keep_owners,
+        import_kind: Some(kind),
+        file: (kind == ImportKind::Directory).then(|| file.display().to_string()),
+    };
+    let cmd: DbCommand = client.call(methods::DB_COMMAND, params).await?;
+    drop(client);
+    for note in &cmd.notes {
+        eprintln!("{note}");
+    }
+    let filter = yard_core::db::filter::Filter::new(&cmd.filter).ok_or_else(|| {
+        YardError::new(ErrorCode::InvalidArgument, "yardd asked for an import filter this yard does not know")
+            .with_hint("yard self-update")
+    })?;
+    let progress = Progress::pick(how.progress_json);
+    match dbrun::import(&cmd, &file, kind, gzip, filter, &name, progress).await? {
+        Ran::Cancelled => {
+            eprintln!("Cancelled: what was imported so far stays in {name}.");
+            Ok(130)
+        }
+        Ran::Done(done) => {
+            let result = DbImported {
+                instance: cmd.instance.clone(),
+                name,
+                file: file.display().to_string(),
+                created: cmd.created,
+                bytes: done.bytes,
+                skipped: done.skipped,
+            };
+            ctx.emit(&result, || {
+                let created = if result.created { " (created it)" } else { "" };
+                let mut text = format!(
+                    "Imported {} into {} on {}{created}.\n",
+                    result.file, result.name, result.instance
+                );
+                if result.skipped > 0 {
+                    text.push_str(&format!(
+                        "Skipped {} ownership and grant statements (--keep-owners keeps them).\n",
+                        result.skipped
+                    ));
                 }
                 text
             });
