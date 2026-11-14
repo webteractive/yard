@@ -247,6 +247,12 @@ mysqlx = OFF
 character-set-server = utf8mb4
 collation-server = utf8mb4_unicode_ci
 sql_mode = NO_ENGINE_SUBSTITUTION
+# Memory for a dev machine: instrumentation off, a smaller cache, and none of the last
+# run's cached pages read back on a wake. Raise any of them in the file included below.
+performance_schema = OFF
+innodb_buffer_pool_size = 64M
+innodb_buffer_pool_dump_at_shutdown = OFF
+innodb_buffer_pool_load_at_startup = OFF
 
 !include {overrides}
 ",
@@ -368,6 +374,22 @@ mod tests {
                 "character-set-server = utf8mb4",
                 "collation-server = utf8mb4_unicode_ci",
                 "sql_mode = NO_ENGINE_SUBSTITUTION",
+            ] {
+                assert!(settings.iter().any(|l| l == line), "{instance} lacks {line}: {settings:?}");
+            }
+        }
+    }
+
+    /// Spec 16.1: every line runs lean on memory, and the user's `overrides.conf` comes after.
+    #[test]
+    fn every_mysql_line_runs_lean_on_memory() {
+        for instance in ["mysql-8.0", "mysql-8.4", "mysql-9.7"] {
+            let settings = mysqld_settings(instance);
+            for line in [
+                "performance_schema = OFF",
+                "innodb_buffer_pool_size = 64M",
+                "innodb_buffer_pool_dump_at_shutdown = OFF",
+                "innodb_buffer_pool_load_at_startup = OFF",
             ] {
                 assert!(settings.iter().any(|l| l == line), "{instance} lacks {line}: {settings:?}");
             }

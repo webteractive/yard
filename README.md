@@ -98,6 +98,11 @@ Yard adds makes it the default, for `root` too. Every MySQL instance also defaul
 `[mysqld]` in the instance's `overrides.conf`. MySQL 9 has no `mysql_native_password`: use
 `mysql = "8.4"` for an old project, and `yard doctor` warns when one asks for 9.
 
+Every MySQL instance also runs lean on memory: `performance_schema = OFF`, a 64 MB
+`innodb_buffer_pool_size`, and no buffer pool dump at shutdown or load at startup, so a wake
+from sleep caches only what is queried. Restore any of them in the same `overrides.conf`, for
+example `performance_schema = ON` when a GUI's performance dashboard needs it.
+
 ## Sleeping services
 
 Service instances sleep when nothing uses them, which frees their memory: after 15 minutes

@@ -189,7 +189,7 @@ Projects that need a stable MySQL use a versioned line.
 - Run: `mysqld --defaults-file=<root>/services/<i>/my.cnf`. The generated `my.cnf` sets
   `port`, `bind-address = 127.0.0.1`, `socket = <root>/run/<i>.sock`, `datadir`,
   `mysqlx = OFF` (the X Protocol would otherwise take 33060 for every instance), the legacy
-  PHP settings of §16, and ends with `!include <root>/services/<i>/overrides.conf`, created once and never written
+  PHP settings and the memory settings of §16, and ends with `!include <root>/services/<i>/overrides.conf`, created once and never written
   again. It starts as a comment saying it is the user's file and included last, then
   `[mysqld]`: a file `!include` pulls in needs its own group header, and a setting before one
   makes mysqld exit ("Found option without preceding group").
@@ -787,6 +787,28 @@ MySQL up for them:**
   not log in to any MySQL, was removed. A PHP 7.0 site asking for MySQL 9 still gets
   `php-mysql-login`. The same day a scratch `mysql-8.0` (8.0.46) let PHP 7.1 to 8.5 log in but
   not 7.0, until `default_authentication_plugin` was set as above.
+
+### 16.1 Memory
+
+An instance is shared by every project on its line (§9), and MySQL's defaults are sized for a
+server, not a laptop. On 2026-11-15 an idle `mysql-8.4` (8.4.13, no user databases) on the Mac
+mini held about 509 MB resident; MySQL itself counted 488 MB, of which performance_schema was
+225 MB and the buffer pool 131 MB. **The maintainer chose (2026-11-15) to run every MySQL line lean:**
+
+- `performance_schema = OFF`. It is the largest single cost and nothing in Yard reads it
+  (sleep counts sockets, M4e). `SHOW PROCESSLIST`, `EXPLAIN` and `EXPLAIN ANALYZE` still work;
+  most `sys` views and GUI performance dashboards do not.
+- `innodb_buffer_pool_size = 64M` (MySQL's default is 128M). A local project's working set
+  rarely fills it, and on macOS a page it no longer holds is usually still in the OS file cache.
+- `innodb_buffer_pool_dump_at_shutdown = OFF` and `innodb_buffer_pool_load_at_startup = OFF`.
+  A wake from sleep (M4e) otherwise reads back the last run's hottest pages, idle projects'
+  included; now only what is queried is cached.
+- They sit in the generated `my.cnf`, so a line in `overrides.conf` restores any default for one
+  instance (`innodb_buffer_pool_size` can also be changed live with `SET GLOBAL`). A running
+  instance restarts once when its `my.cnf` changes; a sleeping one picks them up on its wake.
+- Offloading an idle project's database files was considered and dropped: files on disk use
+  no RAM, and InnoDB's data dictionary names every tablespace, so a folder cannot be moved
+  out from under it.
 
 ## 17. Left to the builder
 
