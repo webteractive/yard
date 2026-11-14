@@ -46,8 +46,9 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   2026-10-25) and planned in `docs/superpowers/plans/2026-10-25-yard-m4a1-managed-project-file.md`;
   it is built, merged into main and verified on this machine on 2026-10-25 with
   `scripts/e2e-m4a1.sh` passing (maintainer approved the run; its first pass found that
-  `yard unisolate` dropped the comment above a last key, fixed in a3d41bd). Until the first
-  release, work happens on main, with no feature branches (maintainer, 2026-10-25). The data root
+  `yard unisolate` dropped the comment above a last key, fixed in a3d41bd). Work happens
+  on main, with no feature branches (maintainer, 2026-10-25, "until the first release"; kept after
+  it on 2026-11-14, the always-on Work on main rule). The data root
   moved from `~/Library/Application Support/Yard` to `~/.yard` on 2026-10-25 (maintainer), so no
   path Yard writes or runs from has a space; this machine was moved by hand (no migration code). M4c Node is
   designed in `docs/superpowers/specs/2026-10-25-yard-m4c-node-design.md` (approved
@@ -563,13 +564,22 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
 <!-- hydra:rules:start -->
 ## Rules
 
-**Before you enter plan mode, run a command, or create/edit a file, you MUST
+Always-on rules are inlined below. The rest are lazy-loaded. **Before you enter plan mode, run a command, or create/edit a file, you MUST
 first:** find the index rows whose trigger, glob, or command covers what you are
 about to do and read those rule files, then run
 `grep -rin '<keyword>' .hydra/rules` to catch what the index alone misses. Do not act
 until you are following every matching rule.
 
 Project rules override global rules on conflict.
+
+### Always applies
+
+#### Git Branching
+
+##### Work on main
+- Commit straight to `main` in this repo. Don't create a feature branch, worktree or PR unless the maintainer explicitly asks for one in this session.
+- This overrides any harness or skill default that says to branch first when on the default branch.
+- Committing and pushing still need the maintainer's go-ahead (Conventions).
 
 ### Rules index
 
