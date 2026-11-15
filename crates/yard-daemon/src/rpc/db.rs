@@ -16,7 +16,7 @@ use yard_core::config::services::ServiceEntry;
 use yard_core::db::command::{MYSQL_ENV, PG_ENV, Target, build};
 use yard_core::db::flags::{Tool, check, check_compress};
 use yard_core::db::resolve::{Candidate, Picked, pick};
-use yard_core::db::{check_name, connect, pick_postgres_keg, sql, supports_connect, supports_db};
+use yard_core::db::{check_name, connect, pick_postgres_keg, sql, supports_connect, supports_db, valid_name};
 use yard_core::services::Engine;
 use yard_proto::methods::{DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
 use yard_proto::{
@@ -45,6 +45,11 @@ pub(super) async fn list(ctx: &Context, p: DbListParams) -> Result<Vec<DbInstanc
             sql::parse_list(&query(ctx, &instance, entry, &info, None, sql::list(entry.engine)).await?);
         if entry.engine == Engine::Postgres {
             for db in &mut databases {
+                // A name Yard would not take (another role made it) is listed but never put into
+                // a query or `-d`: it could carry SQL or a connection string.
+                if !valid_name(&db.name) {
+                    continue;
+                }
                 let count = query(
                     ctx,
                     &instance,

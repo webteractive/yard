@@ -259,3 +259,25 @@ async fn command_postgres_uses_the_newest_keg_and_import_kinds() {
     assert_eq!(cmd["filter"], json!({"kind": "postgres", "keep_owners": false}));
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn list_never_queries_a_database_whose_name_yard_would_not_take() {
+    // A name another role made can hold SQL; it is listed, but never put into a query or -d.
+    let d = with_db("", false, true).await;
+    std::fs::write(
+        keg(&d, "postgresql@17").join("fake-db-answer"),
+        "app\t10\t0\nx'; DROP ROLE r; --\t20\t0\n",
+    )
+    .unwrap();
+    std::fs::write(keg(&d, "postgresql@17").join("fake-db-tables"), "4\n").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    until(&mut c, "postgres-17", running).await;
+    let list = c.call("db.list", json!({"service": "postgres-17"})).await.unwrap();
+    let dbs = &list[0]["databases"];
+    assert_eq!(dbs[0], json!({"name": "app", "size_bytes": 10, "tables": 4}));
+    assert_eq!(dbs[1], json!({"name": "x'; DROP ROLE r; --", "size_bytes": 20, "tables": 0}));
+    let calls = log(&d, "postgresql@17");
+    assert!(!calls.iter().flatten().any(|a| a.contains("DROP ROLE")), "{calls:?}");
+    d.shutdown().await.unwrap();
+}

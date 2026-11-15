@@ -133,7 +133,9 @@ are left out (`mysql`, `sys`, `information_schema`, `performance_schema`; Postgr
 `template0`, `template1` and `postgres`). With no `--service` outside a project, every MySQL and
 PostgreSQL instance, one block each. Sleeping instances are woken to answer; a list that would
 wake several says so on stderr first **(builder's call)**. yardd runs the queries itself, with the
-instance's client by keg path over its socket.
+instance's client by keg path over its socket. A database whose name Yard would not take (another role made it)
+is listed with 0 tables and never put into a query or `-d`, since it could carry SQL or a
+connection string (release security review, 2026-11-15).
 
 ### 6.2 `yard db create <name>`
 
