@@ -319,7 +319,9 @@ pub async fn import(ctx: &Ctx, name: String, how: ImportArgs, at: DbAt, args: Ve
         into_existing: how.into_existing,
         keep_owners: how.keep_owners,
         import_kind: Some(kind),
-        file: (kind == ImportKind::Directory).then(|| file.display().to_string()),
+        // pg_restore reads a directory, or an archive that is not gzipped, by path (so -j works).
+        file: (kind == ImportKind::Directory || (kind == ImportKind::Archive && !gzip))
+            .then(|| file.display().to_string()),
     };
     let cmd: DbCommand = client.call(methods::DB_COMMAND, params).await?;
     drop(client);

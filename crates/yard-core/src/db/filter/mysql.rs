@@ -29,6 +29,8 @@ pub struct MysqlFilter {
     line_start: usize,
     /// This byte opened a block comment.
     opened: bool,
+    /// The block comment just opened has not had a byte yet (`/*!` is no comment).
+    fresh_block: bool,
     /// The database the import writes to.
     target: String,
     /// The statement has a `\` outside quotes and comments: a mysql client command.
@@ -48,6 +50,7 @@ impl MysqlFilter {
             content_at_line: 0,
             line_start: 0,
             opened: false,
+            fresh_block: false,
             target: target.to_string(),
             client_command: false,
             switched: None,
@@ -100,7 +103,12 @@ impl MysqlFilter {
                 }
             }
             State::Block => {
-                if self.prev == b'*' && b == b'/' {
+                if std::mem::take(&mut self.fresh_block) && b == b'!' {
+                    // The client reads an executable comment as SQL: its quotes and its
+                    // delimiter count, and `*/` is just text.
+                    self.state = State::Normal;
+                    self.content += 3;
+                } else if self.prev == b'*' && b == b'/' {
                     self.state = State::Normal;
                     self.prev = 0;
                     return;
@@ -137,6 +145,7 @@ impl MysqlFilter {
                 self.state = State::Block;
                 self.content = self.content.saturating_sub(1);
                 self.opened = true;
+                self.fresh_block = true;
                 return;
             }
             b'-' if self.prev == b'-' => {
@@ -385,6 +394,15 @@ SELECT 'done';
     fn setting_words_in_row_data_pass() {
         let row = b"INSERT INTO posts VALUES (1, 'set sql_mode to NO_BACKSLASH_ESCAPES');\n";
         assert_eq!(run(row, 7).unwrap(), row);
+    }
+
+    #[test]
+    fn an_executable_comment_is_statement_text() {
+        // The mysql client reads /*! … */ as SQL: quotes inside it, and its delimiter.
+        let (_, s) = run(b"/*!32312 USE other*/", 3).unwrap_err();
+        assert_eq!(s.database.as_deref(), Some("other"), "no delimiter at the end of the file");
+        let (_, s) = run(b"/*!50001 CREATE VIEW v AS select '*/' AS x */;\nUSE other;\n", 5).unwrap_err();
+        assert_eq!(s.database.as_deref(), Some("other"), "a quoted */ does not end it");
     }
 
     #[test]

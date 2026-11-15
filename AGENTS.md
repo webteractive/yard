@@ -195,7 +195,10 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   against yardd built from a64abeb (maintainer approved the run; `mysql-8.4` was awake, so the wake
   check was skipped), with every TOML unchanged. After the release security review's fix (fe5bc30),
   `e2e-db.sh` passed again against yardd built from de1502f with `mysql-8.4` put to sleep first
-  (`sleep-after 60s`, then `default`), so the wake check ran too.
+  (`sleep-after 60s`, then `default`), so the wake check ran too. 0.1.8 was released the same day. Its follow-ups
+  (the two late security findings, the deferred minors, `innodb_log_buffer_size = 16M`, and
+  PostgreSQL flags read as getopt reads them) passed `e2e-db.sh` with the wake check against this
+  checkout's yardd before 0.1.9.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.

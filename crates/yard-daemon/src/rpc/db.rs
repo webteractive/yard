@@ -232,11 +232,12 @@ async fn ready(ctx: &Context, instance: &str) -> Result<ServiceInfo, YardError> 
         return Err(YardError::new(ErrorCode::ServiceStopped, format!("{instance} is stopped"))
             .with_hint(format!("yard service start {instance}")));
     }
+    // One deadline for the wake and the wait after it, well inside the client's call timeout.
+    let deadline = Instant::now() + ctx.db_wake_wait;
     let held = sleep::wake(ctx, &[instance.to_string()], ctx.db_wake_wait).await;
     if !held.is_empty() {
         return Err(YardError::new(ErrorCode::PortInUse, held.join("; ")).with_hint("yard services"));
     }
-    let deadline = Instant::now() + ctx.db_wake_wait;
     loop {
         let snap = snapshot(ctx).await?;
         let info = service_info(&snap, ctx.supervisor(), &ctx.sleeper, instance)

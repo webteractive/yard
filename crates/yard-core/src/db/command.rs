@@ -70,11 +70,13 @@ pub fn build(
                     (Tool::PgRestore, a, StreamFilter::None)
                 }
                 (DbAction::Import, _) => {
+                    // ON_ERROR_STOP=1 goes after the user's flags (below), so it always wins:
+                    // an import that carries on past an error could be read wrongly.
                     let a = [
                         vec!["--no-psqlrc".to_string()],
                         conn,
                         db(name.unwrap_or_default()),
-                        vec!["-v".into(), "ON_ERROR_STOP=1".into(), "-q".into()],
+                        vec!["-q".into()],
                     ]
                     .concat();
                     (Tool::Psql, a, StreamFilter::Postgres { keep_owners })
@@ -111,7 +113,12 @@ pub fn build(
         }
     };
     argv.extend(args.iter().cloned());
-    if let Some((ImportKind::Directory, Some(path))) = import {
+    if matches!(filter, StreamFilter::Postgres { .. }) {
+        argv.extend(["-v".to_string(), "ON_ERROR_STOP=1".to_string()]);
+    }
+    // pg_restore reads an archive by path (so `-j` works) or a directory; the client sends the
+    // path when the archive is not gzipped.
+    if let Some((ImportKind::Directory | ImportKind::Archive, Some(path))) = import {
         argv.push(path.to_string());
     }
     DbCommand {
@@ -230,6 +237,36 @@ mod tests {
     }
 
     #[test]
+    fn psql_imports_always_stop_on_error() {
+        let c = build(
+            &pg(),
+            DbAction::Import,
+            Some("app"),
+            &s(&["-v", "ON_ERROR_STOP=0"]),
+            Some((ImportKind::Plain, None)),
+            false,
+        );
+        assert_eq!(
+            c.args[c.args.len() - 2..],
+            s(&["-v", "ON_ERROR_STOP=1"]),
+            "Yard's comes last, so it wins"
+        );
+    }
+
+    #[test]
+    fn an_archive_is_read_by_path() {
+        let c = build(
+            &pg(),
+            DbAction::Import,
+            Some("app"),
+            &s(&["-j", "8"]),
+            Some((ImportKind::Archive, Some("/d/app.dump"))),
+            false,
+        );
+        assert_eq!(c.args.last().map(String::as_str), Some("/d/app.dump"));
+    }
+
+    #[test]
     fn postgres_commands() {
         let conn = ["-h", "/r/run", "-p", "5433", "-U", "me"];
         let c = build(&pg(), DbAction::Shell, None, &[], None, false);
@@ -258,7 +295,7 @@ mod tests {
             s(&[
                 &["--no-psqlrc"][..],
                 &conn,
-                &["-d", "app", "-v", "ON_ERROR_STOP=1", "-q", "-v", "ON_ERROR_STOP=0"]
+                &["-d", "app", "-q", "-v", "ON_ERROR_STOP=0", "-v", "ON_ERROR_STOP=1"]
             ]
             .concat())
         );

@@ -549,8 +549,11 @@ fn archive_goes_to_pg_restore() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(d.params("db.command")[0]["import_kind"], "archive");
-    assert_eq!(std::fs::read(tools.path().join("stdin")).unwrap(), b"PGDMP\x01\x0eGRANT USE x;");
+    let p = &d.params("db.command")[0];
+    assert_eq!(p["import_kind"], "archive");
+    // By path, so pg_restore can seek it (-j); nothing comes on stdin.
+    assert!(p["file"].as_str().unwrap().ends_with("/app.dump"), "{p}");
+    assert_eq!(std::fs::read(tools.path().join("stdin")).unwrap(), b"");
 }
 
 #[test]

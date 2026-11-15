@@ -253,7 +253,8 @@ pub async fn import(
     progress: Progress,
 ) -> Result<Ran<Imported>, YardError> {
     let name = program_name(cmd);
-    if kind == ImportKind::Directory {
+    // The tool reads these itself, by the path the command names.
+    if kind == ImportKind::Directory || (kind == ImportKind::Archive && !gzip) {
         let mut child = spawn(tool(cmd, &[]).stdin(Stdio::null()).stdout(Stdio::null()), &name)?;
         let stderr = collect(child.stderr.take());
         return tokio::select! {

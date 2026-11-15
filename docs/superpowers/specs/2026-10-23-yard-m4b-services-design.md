@@ -808,6 +808,9 @@ mini held about 509 MB resident; MySQL itself counted 488 MB, of which performan
 - `innodb_buffer_pool_dump_at_shutdown = OFF` and `innodb_buffer_pool_load_at_startup = OFF`.
   A wake from sleep (M4e) otherwise reads back the last run's hottest pages, idle projects'
   included; now only what is queried is cached.
+- `innodb_log_buffer_size = 16M` (0.1.9). MySQL 8.4 raised its default to 64M, which MySQL counted
+  among the idle instance's largest allocations; 16M was 8.0's default, and a local import that
+  outgrows it only flushes more often.
 - They sit in the generated `my.cnf`, so a line in `overrides.conf` restores any default for one
   instance (`innodb_buffer_pool_size` can also be changed live with `SET GLOBAL`). A running
   instance restarts once when its `my.cnf` changes; a sleeping one picks them up on its wake.

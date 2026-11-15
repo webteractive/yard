@@ -281,3 +281,21 @@ async fn list_never_queries_a_database_whose_name_yard_would_not_take() {
     assert!(!calls.iter().flatten().any(|a| a.contains("DROP ROLE")), "{calls:?}");
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_wake_has_one_deadline() {
+    // The wake and the wait for the instance share db_wake_wait, so a slow wake is reported
+    // before the client's own call timeout, not after twice the wait.
+    let mut d = with_db("sleep_after = \"60s\"\n", false, false).await;
+    d.opts.db_wake_wait = Duration::from_secs(1);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    until(&mut c, "mysql-8.4", asleep).await;
+    std::fs::write(d.fx.brew.path().join("fake-listen-delay"), "5000").unwrap();
+    let started = std::time::Instant::now();
+    let e = c.call("db.connect", json!({"wake": true})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::ServiceWakeTimeout);
+    assert!(started.elapsed() < Duration::from_millis(1600), "took {:?}", started.elapsed());
+    std::fs::remove_file(d.fx.brew.path().join("fake-listen-delay")).unwrap();
+    d.shutdown().await.unwrap();
+}

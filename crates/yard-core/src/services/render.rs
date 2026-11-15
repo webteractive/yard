@@ -253,6 +253,7 @@ performance_schema = OFF
 innodb_buffer_pool_size = 64M
 innodb_buffer_pool_dump_at_shutdown = OFF
 innodb_buffer_pool_load_at_startup = OFF
+innodb_log_buffer_size = 16M
 
 !include {overrides}
 ",
@@ -390,6 +391,7 @@ mod tests {
                 "innodb_buffer_pool_size = 64M",
                 "innodb_buffer_pool_dump_at_shutdown = OFF",
                 "innodb_buffer_pool_load_at_startup = OFF",
+                "innodb_log_buffer_size = 16M",
             ] {
                 assert!(settings.iter().any(|l| l == line), "{instance} lacks {line}: {settings:?}");
             }

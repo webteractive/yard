@@ -118,7 +118,8 @@ Where the data for an import comes from was the open question; the maintainer ch
   service add mysql`. The params carry the CLI's `path`, as `EnvParams` does.
 - A Redis, MinIO or emailulator instance named for anything but `connect` is
   `DB_UNSUPPORTED_ENGINE`.
-- A database name is `[A-Za-z0-9_-]`, 1 to 63 characters (PostgreSQL's limit, under MySQL's 64)
+- A database name is `[A-Za-z0-9_-]`, not starting with `-` (it would read as a flag; 0.1.9), 1
+  to 63 characters (PostgreSQL's limit, under MySQL's 64)
   **(builder's call)**; anything else is `INVALID_ARGUMENT`. Yard quotes it as an identifier in
   every statement it runs. There is no default database name: Yard cannot read `DB_DATABASE`.
 
@@ -195,8 +196,11 @@ Feeds the file to the instance, creating the database first when it does not exi
 
 - **What reads it.** MySQL: `mysql`, the file on stdin. PostgreSQL, by content, not name: a file
   starting `PGDMP` (custom format), a tar archive, or a directory holding `toc.dat` (directory
-  format) goes to `pg_restore -d <name>`; anything else is plain SQL for `psql`, run with
-  `-v ON_ERROR_STOP=1` first, so an error fails the import (§3). A file starting with gzip's magic is
+  format) goes to `pg_restore -d <name>`, by path when it is not gzipped, so `-- -j 8` works
+  (0.1.9; before, every archive came on stdin, which pg_restore cannot restore in parallel); anything
+  else is plain SQL for `psql`, run with `-v ON_ERROR_STOP=1` after the user's flags, so an error
+  always fails the import (§3; 0.1.9, after a security review: before, `-- -v ON_ERROR_STOP=0` turned
+  it off, and a statement psql did not run as `COPY` let what followed pass unfiltered). A file starting with gzip's magic is
   gunzipped (`/usr/bin/gzip -dc`) first, whatever its name.
 - **A database that has tables** (in any schema but PostgreSQL's system ones) is refused
   (`DB_NOT_EMPTY`, hint the same command with `--into-existing`) unless `--into-existing`. yardd
@@ -221,6 +225,9 @@ Feeds the file to the instance, creating the database first when it does not exi
   `DROP DATABASE` stays refused even for it. A gzipped import fails when gzip does (a truncated
   download), even if the tool took the prefix as a whole dump, and a dump to an existing directory
   is refused unless it is a `pg_dump -Fd` directory, so `--overwrite` never empties a folder.
+- **Executable comments (0.1.9).** The mysql client reads `/*! … */` as SQL, its quotes and its
+  delimiter included, so the filter does too: a `USE` in one at the end of a file, or after a
+  quoted `*/` inside one, is caught.
 - **Client commands (built, after a security review, 2026-11-15).** The mysql client runs its own
   commands from piped input (`\!` a shell command, `\u`, `connect`, `source`), so MySQL imports
   run with `--binary-mode`, which turns them off, and the filter also refuses a bare `\` outside
@@ -281,7 +288,13 @@ Feeds the file to the instance, creating the database first when it does not exi
 - A positional argument after `--` reaches the tool after the database name (a table list for
   `mysqldump`). The plan checks how each tool reads one before relying on it.
 - Yard's own arguments come first and the user's after, so for a flag both set the user's wins
-  where the tool takes the last one (`-v ON_ERROR_STOP=0` turns psql's stop back off).
+  where the tool takes the last one, except psql's `ON_ERROR_STOP=1`, which comes last (§6.6).
+- For PostgreSQL's tools, the arguments are read as getopt reads them: a short flag known to take
+  a value (psql's `-c`, `-v`, `-o`…; pg_dump's `-t`, `-n`…; never pg_dump's `-v`, which is
+  `--verbose`) consumes the next one, and any positional left that holds `=` (libpq reads it as a
+  connection string, spaces around `=` included) or is a `postgres://` URI is refused. A flag left
+  off those lists only makes the check stricter. A long option's prefix down to one letter (`--d=`,
+  `--ho=`) is refused, since getopt_long takes any unique prefix (0.1.9).
 - Every MySQL tool, `shell` included, runs with `--protocol=socket` and without `MYSQL_HOST`,
   `MYSQL_TCP_PORT` or `MYSQL_UNIX_PORT` (final review: either would otherwise reach another
   server, DBngin's on 3306). The CLI starts each tool and gzip in its own process group, so a
@@ -334,7 +347,8 @@ mysql-8.4  sleeping — yard db open or yard db shell wakes it; or yard service 
 ## 9. Sleep and stopped instances
 
 - `db.*` methods (and `db.connect` with `wake`) wake a sleeping instance through yardd's `Sleeper`,
-  the same path as the wake hook, and wait up to 30 s for its port to answer. `sleep::wake` today
+  the same path as the wake hook, and wait for its port to answer; the wake and the wait share
+  one 30 s deadline (0.1.9; before, they could take 30 s each, as long as the client's own call). `sleep::wake` today
   returns when its wait runs out without saying so, so this adds `SERVICE_WAKE_TIMEOUT`
   (`<instance> did not come up within 30 s`, hint `yard service logs <instance>`).
 - A stopped instance (`stopped = true`) is refused with `SERVICE_STOPPED`, hint `yard service
@@ -359,7 +373,8 @@ Redis gets **Connect…**.
   while planning: the runner then exists once, and the CLI child inherits the file access the open
   and save panels grant); the progress JSON lines on stderr feed Activity. **Built:** the sheet stays
   open until the run has started, so a refusal shows in it; a file the save panel already asked
-  about replacing gets `--overwrite`; **Keep owners** shows for PostgreSQL only; the Databases list
+  about replacing gets `--overwrite`; **Keep owners** shows for PostgreSQL only; with **Compress** on, a name without `.gz`
+  gets it, and then replaces nothing (0.1.9); the Databases list
   is fetched only while the instance runs (**List databases** wakes it), so the app never wakes an
   instance on its own; and Quit asks while a dump or import runs. Each shows in Activity with its
   bytes and Cancel, as the app's own entries; quitting the app stops them, after asking.

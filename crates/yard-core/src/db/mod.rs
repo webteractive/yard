@@ -18,7 +18,8 @@ pub const MAX_NAME: usize = 63;
 
 /// `[A-Za-z0-9_-]`, 1 to 63 characters (db spec §5).
 pub fn valid_name(name: &str) -> bool {
-    !name.is_empty()
+    // A leading `-` would read as a flag wherever the name is an argument.
+    name.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
         && name.len() <= MAX_NAME
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
@@ -30,7 +31,7 @@ pub fn check_name(name: &str) -> Result<(), YardError> {
     Err(YardError::new(
         ErrorCode::InvalidArgument,
         format!(
-            "{name:?} is not a database name Yard takes: use letters, digits, _ and -, at most {MAX_NAME} characters"
+            "{name:?} is not a database name Yard takes: use letters, digits, _ and -, not starting with -, at most {MAX_NAME} characters"
         ),
     ))
 }
@@ -69,6 +70,12 @@ mod tests {
         let e = check_name("my app").unwrap_err();
         assert_eq!(e.code, ErrorCode::InvalidArgument);
         assert!(e.message.contains("63"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_name_cannot_start_like_a_flag() {
+        assert!(!valid_name("-x") && !valid_name("-"));
+        assert!(valid_name("_x") && valid_name("x-1"));
     }
 
     #[test]

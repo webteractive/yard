@@ -112,9 +112,22 @@ fn long_name(tool: Tool, arg: &str) -> Option<String> {
 /// short flag is read by its first letter only: `-Fd` is `-F` with `d`, not `-d`.
 pub fn check(tool: Tool, action: DbAction, args: &[String]) -> Result<(), YardError> {
     let reserved = reserved(tool, action);
+    let mut value_next = false;
     for arg in args {
+        // The value a short flag takes, as a separate argument, is not a positional.
+        // A value is never itself a flag (`-o -v`: `-v` is -o's file).
+        let is_value = value_next;
+        value_next = !is_value && takes_value(tool, arg);
+        if !tool.is_mysql() && !is_value && is_conninfo(arg) {
+            return Err(YardError::new(ErrorCode::DbFlagReserved, format!("{arg}: {SERVER}"))
+                .with_hint("leave the connection string out; yard db sets the server and the database"));
+        }
+        // getopt_long takes any unique prefix, down to one letter; MySQL 8.4 takes none.
+        let shortest = if tool.is_mysql() { 3 } else { 1 };
         let hit = if let Some(name) = long_name(tool, arg) {
-            reserved.iter().find(|r| r.1 == name || (name.len() >= 3 && r.1.starts_with(name.as_str())))
+            reserved
+                .iter()
+                .find(|r| r.1 == name || (name.len() >= shortest && r.1.starts_with(name.as_str())))
         } else if let Some(rest) = arg.strip_prefix('-') {
             let letter = rest.chars().next();
             reserved.iter().find(|r| r.0.is_some() && r.0 == letter)
@@ -129,6 +142,29 @@ pub fn check(tool: Tool, action: DbAction, args: &[String]) -> Result<(), YardEr
         }
     }
     Ok(())
+}
+
+/// A PostgreSQL connection string or URI, which a tool takes as its database argument and
+/// which could name another server. libpq reads any argument holding `=` as one, spaces around
+/// it allowed, so every such positional is refused.
+fn is_conninfo(arg: &str) -> bool {
+    !arg.starts_with('-')
+        && (arg.contains('=') || arg.starts_with("postgres://") || arg.starts_with("postgresql://"))
+}
+
+/// `arg` is a bare short flag (`-o`, not `-ofile`) whose value is the next argument, as the
+/// tool's getopt reads it. Only flags known to take a value are listed: leaving one out only
+/// makes the check stricter, while listing a flag that takes none (pg_dump's `-v` is
+/// `--verbose`) would let it hide a connection string after it.
+fn takes_value(tool: Tool, arg: &str) -> bool {
+    let letters: &[u8] = match tool {
+        Tool::Psql => b"cfoLPTRFv",
+        Tool::PgDump => b"fFjnNtTZESe",
+        Tool::PgRestore => b"fFjnNtTILPS",
+        Tool::Mysql | Tool::Mysqldump => b"",
+    };
+    let b = arg.as_bytes();
+    b.len() == 2 && b[0] == b'-' && letters.contains(&b[1])
 }
 
 /// `pg_dump`'s format from `-F`/`--format` among the passed-through flags.
@@ -299,6 +335,34 @@ mod tests {
     }
 
     #[test]
+    fn postgres_connection_strings_and_short_prefixes_are_refused() {
+        for a in [
+            &["host=elsewhere dbname=x"][..],
+            &["postgresql://u@elsewhere/x"],
+            &["--ho=elsewhere"],
+            &["service=other"],
+            &["host = elsewhere"],
+            &["--d=host=elsewhere"],
+            &["--u"],
+        ] {
+            assert!(check(Tool::PgDump, DbAction::Dump, &args(a)).is_err(), "{a:?}");
+        }
+        for a in [&["-t", "orders"][..], &["--schema-only"], &["-n", "app"]] {
+            assert!(check(Tool::PgDump, DbAction::Dump, &args(a)).is_ok(), "{a:?}");
+        }
+        // Read as getopt reads them: a flag that takes a value consumes the next argument.
+        for ok in [&["-vx=1"][..], &["--set=x=1"], &["-v", "x=1"], &["-c", "select 1 where a = 1"]] {
+            assert!(check(Tool::Psql, DbAction::Shell, &args(ok)).is_ok(), "{ok:?}");
+        }
+        // -o takes "-v" as its value, so the connection string is psql's database.
+        for bad in [&["-o", "-v", "host=elsewhere"][..], &["-q", "host=elsewhere"]] {
+            assert!(check(Tool::Psql, DbAction::Shell, &args(bad)).is_err(), "{bad:?}");
+        }
+        assert!(check(Tool::PgDump, DbAction::Dump, &args(&["-t", "a=b"])).is_ok(), "a table pattern");
+        assert!(check(Tool::PgDump, DbAction::Dump, &args(&["-v", "host=elsewhere"])).is_err());
+    }
+
+    #[test]
     fn shell_may_execute() {
         assert!(!refused(Tool::Mysql, DbAction::Shell, &["-e", "select 1"]));
         assert!(refused(Tool::Mysql, DbAction::Import, &["-e", "select 1"]));
@@ -309,7 +373,7 @@ mod tests {
     #[test]
     fn pg_restore_create_refused_and_w_allowed() {
         assert!(refused(Tool::PgRestore, DbAction::Import, &["--create"]));
-        for flag in ["-w", "--no-password", "-O", "--no-owner", "-j", "4", "-v", "ON_ERROR_STOP=0"] {
+        for flag in ["-w", "--no-password", "-O", "--no-owner", "-j", "4"] {
             assert!(!refused(Tool::PgRestore, DbAction::Import, &[flag]), "{flag}");
         }
     }

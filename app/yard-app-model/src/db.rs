@@ -57,11 +57,15 @@ pub struct DumpRequest {
 /// `yard db dump <name> <file> [--compress] [--overwrite] --progress-json --service <i> [-- <words>]`.
 pub fn dump_args(r: &DumpRequest) -> Result<Vec<String>, YardError> {
     let words = extra_words(&r.extra)?;
-    let mut args = vec!["db".to_string(), "dump".into(), r.database.clone(), r.file.clone()];
+    // Compressed output is gzip, so its name says so; the save panel asked about replacing the
+    // name it returned, so a name changed here replaces nothing.
+    let renamed = r.compress && !r.file.ends_with(".gz");
+    let file = if renamed { format!("{}.gz", r.file) } else { r.file.clone() };
+    let mut args = vec!["db".to_string(), "dump".into(), r.database.clone(), file];
     if r.compress {
         args.push("--compress".into());
     }
-    if r.overwrite {
+    if r.overwrite && !renamed {
         args.push("--overwrite".into());
     }
     args.extend(["--progress-json".to_string(), "--service".into(), r.instance.clone()]);
@@ -254,6 +258,26 @@ mod tests {
         assert!(!has_databases("redis") && !has_databases("minio") && !has_databases("emailulator"));
         assert!(has_connect("redis") && has_connect("mysql") && !has_connect("minio"));
         assert!(has_owners("postgres") && !has_owners("mysql"));
+    }
+
+    #[test]
+    fn compress_names_the_file_gz() {
+        let r = DumpRequest {
+            instance: "mysql-8.4".into(),
+            database: "shop".into(),
+            file: "/tmp/x.sql".into(),
+            compress: true,
+            overwrite: true,
+            extra: String::new(),
+        };
+        let args = dump_args(&r).unwrap();
+        assert_eq!(args[3], "/tmp/x.sql.gz");
+        // The save panel asked about x.sql, not x.sql.gz, so nothing is replaced unasked.
+        assert!(!args.contains(&"--overwrite".to_string()), "{args:?}");
+        let gz = DumpRequest { file: "/tmp/x.sql.gz".into(), ..r };
+        let args = dump_args(&gz).unwrap();
+        assert_eq!(args[3], "/tmp/x.sql.gz");
+        assert!(args.contains(&"--overwrite".to_string()));
     }
 
     #[test]
