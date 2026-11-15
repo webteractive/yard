@@ -4,6 +4,7 @@
 
 use crate::shell_words::split_words;
 use yard_core::db::supports_db;
+pub use yard_core::present::bytes_text;
 use yard_core::services::Engine;
 use yard_proto::{ConnectInfo, DbDumped, DbImported, ErrorCode, ServiceState, YardError};
 
@@ -225,16 +226,6 @@ pub fn outcome_text(answer: &serde_json::Value) -> String {
     match serde_json::from_value::<DbDumped>(answer.clone()) {
         Ok(d) => format!("Dumped {} from {} to {} ({}).", d.name, d.instance, d.file, bytes_text(d.bytes)),
         Err(_) => String::new(),
-    }
-}
-
-/// `3.0 MB`, `80.0 KB`, `512 bytes`, as `yard db list` writes sizes.
-pub fn bytes_text(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
-        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / (1u64 << 10) as f64),
-        b => format!("{b} bytes"),
     }
 }
 

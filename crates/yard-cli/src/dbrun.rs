@@ -10,6 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use yard_core::db::filter::{Filter, Switch, Verb};
 use yard_core::db::flags::DumpFormat;
+use yard_core::present::bytes_text as human;
 use yard_proto::{DbCommand, ErrorCode, ImportKind, YardError};
 
 pub const GZIP: &str = "/usr/bin/gzip";
@@ -521,16 +522,6 @@ pub fn dir_size(path: &Path) -> u64 {
     match std::fs::read_dir(path) {
         Ok(entries) => entries.flatten().map(|e| dir_size(&e.path())).sum(),
         Err(_) => std::fs::metadata(path).map_or(0, |m| m.len()),
-    }
-}
-
-/// `3.0 MB`, `80.0 KB`, `512 bytes`.
-pub fn human(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
-        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / (1u64 << 10) as f64),
-        b => format!("{b} bytes"),
     }
 }
 

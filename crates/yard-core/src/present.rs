@@ -121,6 +121,16 @@ pub fn env_text(blocks: &[EnvBlock]) -> String {
     rendered.join("\n")
 }
 
+/// `3.0 MB`, `80.0 KB`, `512 bytes`: the size `yard db` and `yard uninstall` print, and Yard.app shows.
+pub fn bytes_text(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
+        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
+        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / (1u64 << 10) as f64),
+        b => format!("{b} bytes"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +191,13 @@ mod tests {
         assert_eq!(state_text(&s, now), "waking");
         assert_eq!(state_text(&service(ServiceState::Starting, None), now), "starting");
         assert_eq!(sleep_text(&s), "15m");
+    }
+
+    #[test]
+    fn bytes_read_as_the_largest_whole_unit() {
+        assert_eq!(bytes_text(512), "512 bytes");
+        assert_eq!(bytes_text(81_920), "80.0 KB");
+        assert_eq!(bytes_text(3_145_728), "3.0 MB");
+        assert_eq!(bytes_text(5 << 30), "5.0 GB");
     }
 }

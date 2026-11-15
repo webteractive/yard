@@ -3,11 +3,12 @@
 
 use super::{Ctx, Outcome, cwd, cwd_absolute};
 use crate::cli::DbAt;
-use crate::dbrun::{self, Progress, Ran, human};
+use crate::dbrun::{self, Progress, Ran};
 use crate::output::{for_agents, table};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use yard_core::db::flags::{DumpFormat, dump_format};
+use yard_core::present::bytes_text as human;
 use yard_proto::methods::{self, DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
 use yard_proto::{
     ConnectInfo, DbAction, DbCommand, DbCreated, DbDumped, DbImported, DbInstanceList, ErrorCode, ImportKind,

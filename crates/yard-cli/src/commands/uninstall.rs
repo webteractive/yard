@@ -9,6 +9,7 @@ use std::process::Command;
 use yard_core::brew::Brew;
 use yard_core::install::{InstallKind, UninstallFacts, UninstallStep, install_kind, uninstall_plan};
 use yard_core::paths::HELPER_BINARY;
+use yard_core::present::bytes_text as human;
 use yard_proto::{ErrorCode, YardError};
 
 const PREFS_DOMAIN: &str = "dev.more.yard.app";
@@ -247,15 +248,6 @@ fn dir_size(path: &Path) -> u64 {
     std::fs::read_dir(path)
         .map(|es| es.filter_map(Result::ok).map(|e| dir_size(&e.path())).sum())
         .unwrap_or(0)
-}
-
-fn human(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
-        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / (1u64 << 10) as f64),
-        b => format!("{b} bytes"),
-    }
 }
 
 #[cfg(test)]
