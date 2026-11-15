@@ -193,7 +193,9 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `save` for the save panel). A final whole-change review and three security reviews were fixed in
   2037b99 and a64abeb. On 2026-11-15 the Mac mini passed `scripts/e2e-m1.sh` and `scripts/e2e-db.sh`
   against yardd built from a64abeb (maintainer approved the run; `mysql-8.4` was awake, so the wake
-  check was skipped), with every TOML unchanged.
+  check was skipped), with every TOML unchanged. After the release security review's fix (fe5bc30),
+  `e2e-db.sh` passed again against yardd built from de1502f with `mysql-8.4` put to sleep first
+  (`sleep-after 60s`, then `default`), so the wake check ran too.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
