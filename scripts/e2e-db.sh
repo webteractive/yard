@@ -7,7 +7,8 @@
 #   - `yard db create` makes one and leaves an existing one alone;
 #   - `yard db import` of plain SQL (with strings that look like statements), of the same file
 #     gzipped and named .sql, and of a dump `yard db dump` wrote, each gives the same rows;
-#   - a `mysqldump --databases` dump stops before its USE (DB_DUMP_SWITCHES_DATABASE);
+#   - a `mysqldump --databases` dump stops before its USE (DB_DUMP_SWITCHES_DATABASE), and one
+#     imported under the name it carries is followed;
 #   - an import into a database with tables is DB_NOT_EMPTY;
 #   - a flag passed after -- reaches the tool (--no-data), and --host is DB_FLAG_RESERVED;
 #   - PostgreSQL: a plain dump whose OWNER TO names a role the instance lacks imports with that
@@ -122,6 +123,12 @@ pass "plain and gzipped imports give the same rows"
 "$my_keg/bin/mysqldump" --no-defaults --socket="$run_dir/$mysql_instance.sock" --user=root --databases "${prefix}_a" > databases.sql
 [[ $(code "$yard" db import "${prefix}_c" databases.sql --service "$mysql_instance") == DB_DUMP_SWITCHES_DATABASE ]] || fail "a --databases dump was not stopped"
 pass "a mysqldump --databases dump stops before its USE"
+# The same kind of dump imported under the name it carries is followed: its CREATE DATABASE is
+# skipped (yard made it) and its USE runs.
+sed "s/${prefix}_a/${prefix}_f/g" databases.sql > own.sql
+"$yard" db import "${prefix}_f" own.sql --service "$mysql_instance" >/dev/null || fail "a -B dump under its own name"
+[[ $(rows_my "${prefix}_f") == 3 ]] || fail "-B dump rows"
+pass "a mysqldump -B dump imports under the name it carries"
 
 [[ $(code "$yard" db import "${prefix}_a" plain.sql --service "$mysql_instance") == DB_NOT_EMPTY ]] || fail "import into tables was not DB_NOT_EMPTY"
 pass "an import into a database with tables is refused"

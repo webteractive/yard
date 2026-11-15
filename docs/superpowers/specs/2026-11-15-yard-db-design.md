@@ -1,6 +1,7 @@
 # Yard databases: `yard db` and connection details — design
 
-Status: **approved by the maintainer on 2026-11-15.** A builder read it cold the same day; its
+Status: **approved by the maintainer on 2026-11-15; built on main the same day (protocol 2.12) and
+verified on the Mac mini with `scripts/e2e-db.sh`.** A builder read it cold the same day; its
 questions are answered below (§15 lists what they changed). It changes one M4b decision ("Yard never
 creates databases", M4b spec §2) as §2 says, and builds on the M4b service model
 (`docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md`) and M4e's sleep
