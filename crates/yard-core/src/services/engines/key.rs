@@ -1,0 +1,113 @@
+//! Engine keys and release lines: the facts every crate checks without loading recipes.
+
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// An engine's key: `^[a-z][a-z0-9-]{0,31}$`. Serializes as the string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct EngineKey(String);
+
+/// The keys of the engines in Yard's code, and emailulator's, which Yard only points at.
+const RESERVED: [&str; 4] = ["mysql", "postgres", "minio", "emailulator"];
+
+impl EngineKey {
+    /// Checks the syntax only; whether an engine has the key is the set's to say.
+    pub fn new(key: &str) -> Result<EngineKey, String> {
+        let mut bytes = key.bytes();
+        let ok = key.len() <= 32
+            && bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+            && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if ok {
+            Ok(EngineKey(key.to_string()))
+        } else {
+            Err(format!(
+                "{key:?} is not an engine key: a lowercase letter, then lowercase letters, digits and -, \
+                 at most 32 characters"
+            ))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// A built-in's key, emailulator's, or one a versioned instance name could be read as
+    /// (`mysql-x`): a recipe may not take it.
+    pub fn is_reserved(&self) -> bool {
+        RESERVED.contains(&self.0.as_str()) || self.0.starts_with("mysql-") || self.0.starts_with("postgres-")
+    }
+}
+
+impl TryFrom<String> for EngineKey {
+    type Error = String;
+    fn try_from(key: String) -> Result<Self, String> {
+        EngineKey::new(&key)
+    }
+}
+
+impl From<EngineKey> for String {
+    fn from(key: EngineKey) -> String {
+        key.0
+    }
+}
+
+impl fmt::Display for EngineKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// How a release line is spelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineShape {
+    /// `8.4`.
+    MajorMinor,
+    /// `17`.
+    Major,
+}
+
+/// An engine brew ships several release lines of: `<base>@<line>` formulas, and the plain
+/// formula's own line.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LineSpec {
+    pub base_formula: &'static str,
+    pub default_line: &'static str,
+    pub shape: LineShape,
+}
+
+pub static MYSQL_LINES: LineSpec =
+    LineSpec { base_formula: "mysql", default_line: "8.4", shape: LineShape::MajorMinor };
+pub static POSTGRES_LINES: LineSpec =
+    LineSpec { base_formula: "postgresql", default_line: "17", shape: LineShape::Major };
+
+impl LineSpec {
+    pub fn valid(&self, line: &str) -> bool {
+        let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        match self.shape {
+            LineShape::MajorMinor => matches!(line.split_once('.'), Some((a, b)) if digits(a) && digits(b)),
+            LineShape::Major => digits(line),
+        }
+    }
+
+    /// The line a formula's `version` is on: `8.4.13` is `8.4`, `18.1` is `18`.
+    pub fn plain_line(&self, version: &str) -> Option<String> {
+        let mut parts = version.split('.');
+        let major = parts.next()?;
+        let line = match self.shape {
+            LineShape::MajorMinor => format!("{major}.{}", parts.next()?),
+            LineShape::Major => major.to_string(),
+        };
+        self.valid(&line).then_some(line)
+    }
+}
+
+/// The lines of the engine with `key`, when it is one of the two versioned built-ins. Fixed,
+/// so `.yard` and `services.toml` are checked with no engine set (recipes are unversioned).
+pub fn versioned_lines(key: &str) -> Option<&'static LineSpec> {
+    match key {
+        "mysql" => Some(&MYSQL_LINES),
+        "postgres" => Some(&POSTGRES_LINES),
+        _ => None,
+    }
+}

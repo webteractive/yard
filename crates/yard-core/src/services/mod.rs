@@ -4,6 +4,7 @@
 
 pub mod brew_info;
 pub mod engine;
+pub mod engines;
 pub mod render;
 pub mod reserved;
 pub mod sleep;
