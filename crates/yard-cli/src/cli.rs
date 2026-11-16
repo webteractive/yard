@@ -1,6 +1,7 @@
 //! Command-line surface of `yard`. Parsing only; commands live in `commands/`.
 
 use clap::{Parser, Subcommand};
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 /// `0.1.0 (abc1234, 2026-10-19)` — the first line of every version report.
@@ -11,7 +12,9 @@ pub const LONG_VERSION: &str =
 #[command(
     name = "yard",
     about = "Local PHP development environment for macOS",
-    after_help = "For agents and scripts: every command accepts --json.",
+    after_help = "Engines:\n  yard <engine> [verb] uses a service instance: yard mysql, yard postgres (or pgsql), yard redis,\n  and every engine yard engines lists. Verbs: shell (the default), list, create, dump, import,\n  connect, open; an engine has the ones it supports.\n\nFor agents and scripts: every command accepts --json.",
+    // `yard <engine>` arrives as an external subcommand (recipes spec §9.1).
+    allow_external_subcommands = true,
     // `--version` also asks yardd and the helper, so it is ours rather than clap's.
     disable_version_flag = true
 )]
@@ -187,7 +190,9 @@ pub enum Command {
         action: ServiceAction,
     },
     /// Work with the databases on the MySQL and PostgreSQL instances: list, create, connect,
-    /// open, shell, dump and import. Nothing here drops a database or makes users.
+    /// open, shell, dump and import. Nothing here drops a database or makes users. Going away:
+    /// use yard mysql and yard postgres.
+    #[command(hide = true)]
     Db {
         #[command(subcommand)]
         action: DbSub,
@@ -266,6 +271,9 @@ pub enum Command {
         #[command(subcommand)]
         action: HelperAction,
     },
+    /// `yard <engine> [verb] …`: a service engine's own command (recipes spec §9.1).
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -349,6 +357,9 @@ pub struct DbAt {
     /// the current directory.
     #[arg(long)]
     pub site: Option<String>,
+    /// The engine `yard <engine>` limits the choice to; never a flag.
+    #[arg(skip)]
+    pub engine: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -675,4 +686,25 @@ pub enum HelperAction {
     Install,
     /// Unload the helper and remove it and Yard's /etc/resolver files.
     Uninstall,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+    use yard_core::services::engines::YARD_COMMANDS;
+
+    /// A recipe key may not be a Yard command, so `yard <key>` always reaches its engine: the
+    /// reserved list is exactly the CLI's commands and aliases, plus `help` and `pgsql`.
+    #[test]
+    fn yard_commands_cover_the_cli() {
+        let mut names: BTreeSet<String> = BTreeSet::from(["help".to_string(), "pgsql".to_string()]);
+        for c in Cli::command().get_subcommands() {
+            names.insert(c.get_name().to_string());
+            names.extend(c.get_all_aliases().map(str::to_string));
+        }
+        let reserved: BTreeSet<String> = YARD_COMMANDS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(names, reserved);
+    }
 }

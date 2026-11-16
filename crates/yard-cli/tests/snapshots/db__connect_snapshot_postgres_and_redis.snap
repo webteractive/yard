@@ -10,8 +10,9 @@ postgres-17  running
   Socket    /Users/me/.yard/run  (the directory; a client takes it as the host)
   URL       postgresql://me@127.0.0.1:5433
 
-  TablePlus: yard db open [database], or paste the URL
+  TablePlus: open the URL, or paste it
   DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above
+  yard postgres open [database] opens the URL in your client
 
 redis  running
   Host      127.0.0.1
@@ -21,5 +22,6 @@ redis  running
 
   TablePlus: paste the URL
   Another Redis client: a connection to the host and port above
+  yard redis open opens the URL in your client
 
-For agents and scripts: yard db connect --json
+For agents and scripts: yard <engine> connect --json

@@ -329,6 +329,68 @@ impl Engines {
     }
 }
 
+/// What `yard <engine> <verb>` can do with an engine (recipes spec §9.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Shell,
+    List,
+    Create,
+    Dump,
+    Import,
+    Connect,
+    Open,
+}
+
+impl Verb {
+    pub const ALL: [Verb; 7] =
+        [Verb::Shell, Verb::List, Verb::Create, Verb::Dump, Verb::Import, Verb::Connect, Verb::Open];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Verb::Shell => "shell",
+            Verb::List => "list",
+            Verb::Create => "create",
+            Verb::Dump => "dump",
+            Verb::Import => "import",
+            Verb::Connect => "connect",
+            Verb::Open => "open",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Verb> {
+        Verb::ALL.into_iter().find(|v| v.name() == word)
+    }
+}
+
+/// The verbs `engine` has: a database engine all seven; one with connect details a prompt (when
+/// it names one), `connect` and `open`; one with a console `open`.
+pub fn engine_verbs(engine: &dyn ServiceEngine) -> Vec<Verb> {
+    if engine.databases().is_some() {
+        return Verb::ALL.to_vec();
+    }
+    let paths = Paths::new("/");
+    let ctx = InstanceCtx {
+        instance: engine.key(),
+        home: Path::new("/"),
+        paths: &paths,
+        ports: &[],
+        macos_user: "",
+        node: None,
+    };
+    let connect = engine.connect(&ctx);
+    let mut verbs = vec![];
+    if connect.as_ref().is_some_and(|c| c.shell.is_some()) {
+        verbs.push(Verb::Shell);
+    }
+    if connect.is_some() {
+        verbs.push(Verb::Connect);
+    }
+    if connect.is_some() || engine.console().is_some() {
+        verbs.push(Verb::Open);
+    }
+    verbs
+}
+
 /// The database family of the engine with `key`, when it has one. Only built-ins do, and a
 /// recipe can never take a built-in's key, so the built-in set answers for every Mac.
 pub fn db_flavor(key: &str) -> Option<DbFlavor> {

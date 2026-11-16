@@ -18,7 +18,7 @@ use yard_proto::{
 /// The params' target. With no flag yardd needs the directory, as an absolute real path.
 pub fn target(at: DbAt) -> Result<DbTarget, YardError> {
     let path = if at.site.is_none() && at.service.is_none() { Some(cwd_absolute()?) } else { None };
-    Ok(DbTarget { path, site: at.site, service: at.service, engine: None })
+    Ok(DbTarget { path, site: at.site, service: at.service, engine: at.engine })
 }
 
 pub async fn list(ctx: &Ctx, at: DbAt) -> Outcome {
@@ -43,8 +43,8 @@ fn list_text(lists: &[DbInstanceList]) -> String {
         out.push_str(&format!("{}\n", list.instance));
         if list.databases.is_empty() {
             out.push_str(&format!(
-                "No databases on {} yet. yard db create <name> makes one.\n\n",
-                list.instance
+                "No databases on {} yet. yard {} create <name> makes one.\n\n",
+                list.instance, list.engine
             ));
             continue;
         }
@@ -59,7 +59,7 @@ fn list_text(lists: &[DbInstanceList]) -> String {
     if lists.is_empty() {
         out.push_str("No MySQL or PostgreSQL instances yet. Add one with yard service add mysql.\n\n");
     }
-    out.push_str(&for_agents("yard db list"));
+    out.push_str(&for_agents(&format!("yard {} list", one_engine(lists.iter().map(|l| l.engine.as_str())))));
     out
 }
 
@@ -81,9 +81,16 @@ pub async fn connect(ctx: &Ctx, at: DbAt) -> Outcome {
         client.call(methods::DB_CONNECT, DbConnectParams { target, wake: false }).await?;
     ctx.emit(&infos, || {
         let blocks: Vec<String> = infos.iter().map(connect_text).collect();
-        format!("{}\n{}", blocks.join("\n"), for_agents("yard db connect"))
+        let engine = one_engine(infos.iter().map(|i| i.engine.as_str()));
+        format!("{}\n{}", blocks.join("\n"), for_agents(&format!("yard {engine} connect")))
     });
     Ok(0)
+}
+
+/// The engine every item is of, else `<engine>`: the command a reader reruns.
+fn one_engine<'a>(mut engines: impl Iterator<Item = &'a str>) -> &'a str {
+    let Some(first) = engines.next() else { return "<engine>" };
+    if engines.all(|e| e == first) { first } else { "<engine>" }
 }
 
 /// What a GUI client needs, as spec §8 lays it out.
@@ -92,7 +99,8 @@ pub fn connect_text(i: &ConnectInfo) -> String {
     let state = match &i.state {
         ServiceState::Running => "running".to_string(),
         ServiceState::Stopped if i.sleeping => {
-            format!("sleeping — yard db open or yard db shell wakes it; or yard service start {n}")
+            let e = &i.engine;
+            format!("sleeping — yard {e} open or yard {e} shell wakes it; or yard service start {n}")
         }
         ServiceState::Stopped => format!("stopped — yard service start {n}"),
         ServiceState::Starting => "starting".to_string(),
@@ -114,23 +122,13 @@ pub fn connect_text(i: &ConnectInfo) -> String {
     }
     field("URL", &i.url);
     out.push('\n');
-    let clients = match i.engine.as_str() {
-        "postgres" => [
-            "TablePlus: yard db open [database], or paste the URL".to_string(),
-            "DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above".to_string(),
-        ],
-        "redis" => [
-            "TablePlus: paste the URL".to_string(),
-            "Another Redis client: a connection to the host and port above".to_string(),
-        ],
-        _ => [
-            "TablePlus, Sequel Ace: yard db open [database], or paste the URL".to_string(),
-            "DBeaver, DataGrip: a new MySQL connection with the fields above".to_string(),
-        ],
-    };
-    for line in clients {
+    // The clients come from the engine (protocol 2.13); an older yardd sends none.
+    for line in &i.clients {
         out.push_str(&format!("  {line}\n"));
     }
+    let database =
+        if yard_core::services::engines::db_flavor(&i.engine).is_some() { " [database]" } else { "" };
+    out.push_str(&format!("  yard {} open{database} opens the URL in your client\n", i.engine));
     out
 }
 

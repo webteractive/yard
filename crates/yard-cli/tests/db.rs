@@ -20,19 +20,22 @@ fn lists() -> Value {
 fn mysql_connect(state: &str, sleeping: bool) -> Value {
     json!({"instance": "mysql-8.4", "engine": "mysql", "state": state, "sleeping": sleeping,
         "host": "127.0.0.1", "port": 3307, "user": "root", "password": null,
-        "socket": "/Users/me/.yard/run/mysql-8.4.sock", "url": "mysql://root@127.0.0.1:3307"})
+        "socket": "/Users/me/.yard/run/mysql-8.4.sock", "url": "mysql://root@127.0.0.1:3307",
+        "clients": ["TablePlus, Sequel Ace: open the URL, or paste it", "DBeaver, DataGrip: a new MySQL connection with the fields above"]})
 }
 
 fn pg_connect() -> Value {
     json!({"instance": "postgres-17", "engine": "postgres", "state": "running", "sleeping": false,
         "host": "127.0.0.1", "port": 5433, "user": "me", "password": null,
-        "socket": "/Users/me/.yard/run", "url": "postgresql://me@127.0.0.1:5433"})
+        "socket": "/Users/me/.yard/run", "url": "postgresql://me@127.0.0.1:5433",
+        "clients": ["TablePlus: open the URL, or paste it", "DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above"]})
 }
 
 fn redis_connect() -> Value {
     json!({"instance": "redis", "engine": "redis", "state": "running", "sleeping": false,
         "host": "127.0.0.1", "port": 6380, "user": null, "password": null, "socket": null,
-        "url": "redis://127.0.0.1:6380"})
+        "url": "redis://127.0.0.1:6380",
+        "clients": ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]})
 }
 
 /// An executable script in `dir`.
@@ -577,7 +580,7 @@ fn failure_says_what_stays() {
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
-        err.contains("ERROR 1064") && err.contains("stays in shop") && err.contains("yard db shell shop"),
+        err.contains("ERROR 1064") && err.contains("stays in shop") && err.contains("yard mysql shell shop"),
         "{err}"
     );
 }

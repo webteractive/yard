@@ -299,3 +299,37 @@ async fn a_wake_has_one_deadline() {
     std::fs::remove_file(d.fx.brew.path().join("fake-listen-delay")).unwrap();
     d.shutdown().await.unwrap();
 }
+
+/// `yard mysql` limits the choice to MySQL's instances, and `--service` must be one (recipes
+/// spec §9.1).
+#[tokio::test]
+async fn db_engine_limits_choice() {
+    let d = with_db("", false, true).await.start().await;
+    let mut c = d.client().await;
+    until(&mut c, "mysql-8.4", running).await;
+    until(&mut c, "postgres-17", running).await;
+    let list = c.call("db.list", json!({"engine": "postgres"})).await.unwrap();
+    let names: Vec<&str> = list.as_array().unwrap().iter().map(|l| l["instance"].as_str().unwrap()).collect();
+    assert_eq!(names, ["postgres-17"]);
+    let e = c.call("db.list", json!({"engine": "mysql", "service": "postgres-17"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument, "{e:?}");
+    assert!(e.message.contains("postgres-17") && e.message.contains("mysql"), "{}", e.message);
+    d.shutdown().await.unwrap();
+}
+
+/// A recipe engine's prompt: `db.command` answers its `connect.shell` with the user's arguments.
+#[tokio::test]
+async fn shell_answers_a_recipe_prompt() {
+    let redis = free_port();
+    let d = prepared(&pin("redis", redis)).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    until(&mut c, "redis", running).await;
+    let cmd =
+        c.call("db.command", json!({"engine": "redis", "action": "shell", "args": ["PING"]})).await.unwrap();
+    assert_eq!(cmd["program"], keg(&d, "redis").join("bin/redis-cli").display().to_string(), "{cmd}");
+    assert_eq!(cmd["args"], json!(["-p", redis.to_string(), "PING"]));
+    d.shutdown().await.unwrap();
+}

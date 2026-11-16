@@ -8,6 +8,6 @@ blog      3.0 MB   12
 shop      80.0 KB  3
 
 postgres-17
-No databases on postgres-17 yet. yard db create <name> makes one.
+No databases on postgres-17 yet. yard postgres create <name> makes one.
 
-For agents and scripts: yard db list --json
+For agents and scripts: yard <engine> list --json

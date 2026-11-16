@@ -41,9 +41,14 @@ pub fn supports_db(c: &Candidate) -> bool {
     c.databases
 }
 
-/// The instances `yard <engine> connect` describes and whose prompt it opens.
+/// The instances `yard <engine> connect` describes.
 pub fn supports_connect(c: &Candidate) -> bool {
     c.connect
+}
+
+/// The instances `yard <engine>` opens a prompt on.
+pub fn supports_shell(c: &Candidate) -> bool {
+    c.shell
 }
 
 /// The newest installed PostgreSQL keg at or above the instance's major (db spec §7.1): a

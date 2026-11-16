@@ -16,7 +16,9 @@ use yard_core::config::services::ServiceEntry;
 use yard_core::db::command::{MYSQL_ENV, PG_ENV, Target, build};
 use yard_core::db::flags::{Tool, check, check_compress};
 use yard_core::db::resolve::{Candidate, Picked, pick};
-use yard_core::db::{check_name, connect, pick_postgres_keg, sql, supports_connect, supports_db, valid_name};
+use yard_core::db::{
+    check_name, connect, pick_postgres_keg, sql, supports_connect, supports_db, supports_shell, valid_name,
+};
 use yard_core::services::engines::{DbFlavor, db_flavor};
 use yard_proto::methods::{DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
 use yard_proto::{
@@ -33,7 +35,7 @@ pub(super) async fn list(ctx: &Context, p: DbListParams) -> Result<Vec<DbInstanc
     let snap = snapshot(ctx).await?;
     let wants = project_wants(&snap, &p.target)?;
     let instances: Vec<String> = if p.target.service.is_none() && wants.is_none() {
-        candidates(&snap).into_iter().filter(supports_db).map(|c| c.name).collect()
+        candidates(&snap, &p.target).into_iter().filter(supports_db).map(|c| c.name).collect()
     } else {
         vec![resolve(&snap, &p.target, wants.as_deref(), supports_db)?.instance]
     };
@@ -82,7 +84,7 @@ pub(super) async fn connect(ctx: &Context, p: DbConnectParams) -> Result<Vec<Con
         return Ok(vec![connect_info(ctx, &snap, &instance, &info)?]);
     }
     let instances: Vec<String> = if p.target.service.is_none() && wants.is_none() {
-        candidates(&snap).into_iter().filter(supports_connect).map(|c| c.name).collect()
+        candidates(&snap, &p.target).into_iter().filter(supports_connect).map(|c| c.name).collect()
     } else {
         vec![resolve(&snap, &p.target, wants.as_deref(), supports_connect)?.instance]
     };
@@ -99,9 +101,13 @@ pub(super) async fn connect(ctx: &Context, p: DbConnectParams) -> Result<Vec<Con
 pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbCommand, YardError> {
     let snap = snapshot(ctx).await?;
     let wants = project_wants(&snap, &p.target)?;
-    let picked = resolve(&snap, &p.target, wants.as_deref(), supports_db)?;
+    let allow = if p.action == DbAction::Shell { supports_shell } else { supports_db };
+    let picked = resolve(&snap, &p.target, wants.as_deref(), allow)?;
     let instance = picked.instance.clone();
     let entry = entry(&snap, &instance)?;
+    if p.action == DbAction::Shell && db_flavor(entry.engine.as_str()).is_none() {
+        return recipe_shell(ctx, &snap, &instance, p.args).await;
+    }
     let engine = flavor(entry)?;
     if p.action != DbAction::Shell && p.name.is_none() {
         return Err(YardError::new(ErrorCode::InvalidArgument, "name the database"));
@@ -185,13 +191,54 @@ async fn ensure(
     Ok(true)
 }
 
-/// Every instance whose engine this Mac knows, with what its engine supports.
-fn candidates(snap: &Snapshot) -> Vec<Candidate> {
+/// Every instance whose engine this Mac knows, with what its engine supports; only `engine`'s
+/// when the target names one (`yard mysql`).
+fn candidates(snap: &Snapshot, target: &DbTarget) -> Vec<Candidate> {
     snap.services
         .services
         .iter()
+        .filter(|(_, e)| target.engine.as_deref().is_none_or(|k| e.engine.as_str() == k))
         .filter_map(|(name, e)| Some(Candidate::of(name, snap.engines.get(e.engine.as_str())?.as_ref())))
         .collect()
+}
+
+/// A prompt on an engine with no databases: its `connect.shell` (redis-cli, a recipe's), woken
+/// first, with the user's arguments after the engine's.
+async fn recipe_shell(
+    ctx: &Context,
+    snap: &Snapshot,
+    instance: &str,
+    args: Vec<String>,
+) -> Result<DbCommand, YardError> {
+    let entry = entry(snap, instance)?;
+    let engine = snap
+        .engines
+        .get(entry.engine.as_str())
+        .ok_or_else(|| crate::services::unknown_engine(instance, &entry.engine))?;
+    let info = ready(ctx, instance).await?;
+    let home = crate::services::home(&ctx.brew, &ctx.paths, engine.as_ref(), entry)
+        .ok_or_else(|| crate::services::not_installed(instance, &entry.engine))?;
+    let user = macos_user();
+    let ictx = crate::services::instance_ctx(instance, &home, &ctx.paths, &info.ports, &user);
+    let mut shell = engine
+        .connect(&ictx)
+        .and_then(|c| c.shell)
+        .ok_or_else(|| {
+            YardError::new(ErrorCode::DbUnsupportedEngine, format!("{} has no prompt", engine.display()))
+        })?
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned());
+    let program = shell.next().unwrap_or_default();
+    Ok(DbCommand {
+        instance: instance.to_string(),
+        program,
+        args: shell.chain(args).collect(),
+        env: vec![],
+        env_remove: vec![],
+        filter: yard_proto::StreamFilter::None,
+        created: false,
+        notes: vec![],
+    })
 }
 
 /// The instance's database family: `yard db` resolved it with `supports_db`, so another engine
@@ -232,7 +279,17 @@ fn resolve(
     wants: Option<&[String]>,
     allow: fn(&Candidate) -> bool,
 ) -> Result<Picked, YardError> {
-    pick(target.service.as_deref(), wants, &candidates(snap), allow)
+    if let (Some(engine), Some(service)) = (&target.engine, &target.service)
+        && let Some(entry) = snap.services.services.get(service)
+        && entry.engine.as_str() != engine
+    {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("{service} is a {} instance, not a {engine} one", entry.engine),
+        )
+        .with_hint(format!("yard {} … --service {service}", entry.engine)));
+    }
+    pick(target.service.as_deref(), wants, &candidates(snap, target), allow)
 }
 
 /// Wakes `instance` and waits until it runs (db spec §9): a stopped one is refused, a failed

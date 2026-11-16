@@ -2,7 +2,7 @@
 source: crates/yard-cli/tests/db.rs
 expression: stdout(&out)
 ---
-mysql-8.4  sleeping — yard db open or yard db shell wakes it; or yard service start mysql-8.4
+mysql-8.4  sleeping — yard mysql open or yard mysql shell wakes it; or yard service start mysql-8.4
   Host      127.0.0.1
   Port      3307
   User      root
@@ -10,7 +10,8 @@ mysql-8.4  sleeping — yard db open or yard db shell wakes it; or yard service 
   Socket    /Users/me/.yard/run/mysql-8.4.sock
   URL       mysql://root@127.0.0.1:3307
 
-  TablePlus, Sequel Ace: yard db open [database], or paste the URL
+  TablePlus, Sequel Ace: open the URL, or paste it
   DBeaver, DataGrip: a new MySQL connection with the fields above
+  yard mysql open [database] opens the URL in your client
 
-For agents and scripts: yard db connect --json
+For agents and scripts: yard mysql connect --json

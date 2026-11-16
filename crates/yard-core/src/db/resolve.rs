@@ -12,6 +12,8 @@ pub struct Candidate {
     pub display: String,
     pub databases: bool,
     pub connect: bool,
+    /// Whether it has a prompt: a database's client, or a recipe's `connect.shell`.
+    pub shell: bool,
 }
 
 impl Candidate {
@@ -23,6 +25,8 @@ impl Candidate {
             display: engine.display().to_string(),
             databases: engine.databases().is_some(),
             connect: engine.has_connect(),
+            shell: crate::services::engines::engine_verbs(engine)
+                .contains(&crate::services::engines::Verb::Shell),
         }
     }
 }

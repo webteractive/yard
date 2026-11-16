@@ -341,3 +341,15 @@ mod user_recipes {
         assert!(last_good.is_empty());
     }
 }
+
+#[test]
+fn verbs_follow_the_contract() {
+    use Verb::*;
+    assert_eq!(engine_verbs(get("mysql").as_ref()), [Shell, List, Create, Dump, Import, Connect, Open]);
+    assert_eq!(engine_verbs(get("postgres").as_ref()), [Shell, List, Create, Dump, Import, Connect, Open]);
+    assert_eq!(engine_verbs(get("redis").as_ref()), [Shell, Connect, Open], "redis-cli, its URL");
+    assert_eq!(engine_verbs(get("minio").as_ref()), [Open], "its console only");
+    assert_eq!(Verb::parse("dump"), Some(Dump));
+    assert_eq!(Verb::parse("prompt"), None);
+    assert_eq!(Dump.name(), "dump");
+}

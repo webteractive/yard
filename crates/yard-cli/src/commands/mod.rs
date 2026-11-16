@@ -3,6 +3,7 @@
 
 mod db;
 mod doctor;
+mod engine_cmd;
 mod engines;
 mod env;
 mod ext;
@@ -60,6 +61,44 @@ impl Ctx {
             print_json(value);
         } else {
             print!("{}", human());
+        }
+    }
+}
+
+/// The verb a `yard db` subcommand is, for the notice that names its replacement.
+fn db_verb(action: &DbSub) -> &'static str {
+    match action {
+        DbSub::List { .. } => "list",
+        DbSub::Create { .. } => "create",
+        DbSub::Connect { .. } => "connect",
+        DbSub::Open { .. } => "open",
+        DbSub::Shell { .. } => "shell",
+        DbSub::Dump { .. } => "dump",
+        DbSub::Import { .. } => "import",
+    }
+}
+
+/// Runs a database verb; `engine` limits the instance to that engine's (`yard mysql`).
+pub(crate) async fn db_action(ctx: &Ctx, action: DbSub, engine: Option<String>) -> Outcome {
+    let with = |mut at: DbAt| {
+        at.engine = engine.clone();
+        at
+    };
+    match action {
+        DbSub::List { at } => db::list(ctx, with(at)).await,
+        DbSub::Create { name, at } => db::create(ctx, name, with(at)).await,
+        DbSub::Connect { instance, site } => {
+            db::connect(ctx, with(DbAt { service: instance, site, engine: None })).await
+        }
+        DbSub::Open { name, at } => db::open(ctx, name, with(at)).await,
+        DbSub::Shell { name, at, args } => db::shell(ctx, name, with(at), args).await,
+        DbSub::Dump { name, file, compress, overwrite, progress_json, at, args } => {
+            let how = db::DumpArgs { file, compress, overwrite, progress_json };
+            db::dump(ctx, name, how, with(at), args).await
+        }
+        DbSub::Import { name, file, into_existing, keep_owners, progress_json, at, args } => {
+            let how = db::ImportArgs { file, into_existing, keep_owners, progress_json };
+            db::import(ctx, name, how, with(at), args).await
         }
     }
 }
@@ -164,21 +203,14 @@ pub async fn run(cli: Cli) -> i32 {
                 services::sleep_after(&ctx, instance, after).await
             }
         },
-        Command::Db { action } => match action {
-            DbSub::List { at } => db::list(&ctx, at).await,
-            DbSub::Create { name, at } => db::create(&ctx, name, at).await,
-            DbSub::Connect { instance, site } => db::connect(&ctx, DbAt { service: instance, site }).await,
-            DbSub::Open { name, at } => db::open(&ctx, name, at).await,
-            DbSub::Shell { name, at, args } => db::shell(&ctx, name, at, args).await,
-            DbSub::Dump { name, file, compress, overwrite, progress_json, at, args } => {
-                let how = db::DumpArgs { file, compress, overwrite, progress_json };
-                db::dump(&ctx, name, how, at, args).await
-            }
-            DbSub::Import { name, file, into_existing, keep_owners, progress_json, at, args } => {
-                let how = db::ImportArgs { file, into_existing, keep_owners, progress_json };
-                db::import(&ctx, name, how, at, args).await
-            }
-        },
+        Command::Db { action } => {
+            eprintln!(
+                "yard db is going away: use yard <engine> <verb> (yard mysql {0}, yard postgres {0})",
+                db_verb(&action)
+            );
+            db_action(&ctx, action, None).await
+        }
+        Command::External(args) => engine_cmd::run(&ctx, args).await,
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,
         Command::Engines { action: None } => engines::list(&ctx).await,

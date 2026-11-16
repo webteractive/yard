@@ -109,3 +109,96 @@ fn services_shows_unknown_engine() {
     let text = stdout(&out);
     assert!(text.contains("no engine named ghost"), "{text}");
 }
+
+fn script(dir: &std::path::Path, body: &str) -> String {
+    let path = dir.join("client");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    path.display().to_string()
+}
+
+fn command_for(program: &str) -> Value {
+    json!({"instance": "mysql-8.4", "program": program, "args": ["-e", "select 1"], "env": [], "env_remove": [],
+        "filter": {"kind": "none"}, "created": false, "notes": []})
+}
+
+#[test]
+fn yard_mysql_bare_is_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = script(dir.path(), "echo \"args: $*\"");
+    let d = MockDaemon::start(&[("db.command", Ok(command_for(&program)))]);
+    let out = d.yard().arg("mysql").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "args: -e select 1\n");
+    let p = &d.params("db.command")[0];
+    assert_eq!((p["action"].as_str(), p["engine"].as_str()), (Some("shell"), Some("mysql")));
+}
+
+#[test]
+fn yard_pgsql_is_postgres() {
+    let d = MockDaemon::start(&[("db.list", Ok(json!([])))]);
+    let out = d.yard().args(["pgsql", "list", "--service", "postgres-17"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let p = &d.params("db.list")[0];
+    assert_eq!((p["engine"].as_str(), p["service"].as_str()), (Some("postgres"), Some("postgres-17")));
+}
+
+#[test]
+fn yard_mysql_service_of_other_engine_refused() {
+    let refused = yard_proto::YardError::new(
+        yard_proto::ErrorCode::InvalidArgument,
+        "postgres-17 is a postgres instance, not a mysql one",
+    );
+    let d = MockDaemon::start(&[("db.list", Err(refused))]);
+    let out = d.yard().args(["mysql", "list", "--service", "postgres-17"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("not a mysql one"), "{}", stderr(&out));
+    assert_eq!(d.params("db.list")[0]["engine"], "mysql");
+}
+
+#[test]
+fn yard_redis_list_names_its_verbs() {
+    let root = short_root();
+    let out = yard_at(root.path()).args(["redis", "list"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("redis has no list: it has shell, connect, open"), "{}", stderr(&out));
+}
+
+#[test]
+fn recipe_engine_command_needs_yardd_not_a_known_command() {
+    let root = short_root();
+    std::fs::create_dir_all(root.path().join("engines")).unwrap();
+    let recipe = GOOD.to_string() + "\n[connect]\nurl = \"echo://127.0.0.1:{port.main}\"\n";
+    std::fs::write(root.path().join("engines/echo.toml"), recipe).unwrap();
+    let out = yard_at(root.path()).args(["echo", "connect"]).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "yardd is not running, which a known command says: {}",
+        stderr(&out)
+    );
+    let unknown = yard_at(root.path()).arg("nope").output().unwrap();
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(stderr(&unknown).contains("nope"), "{}", stderr(&unknown));
+}
+
+#[test]
+fn yard_db_still_works_with_notice() {
+    let d = MockDaemon::start(&[("db.list", Ok(json!([])))]);
+    let out = d.yard().args(["db", "list", "--service", "mysql-8.4"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("yard db is going away: use yard <engine> <verb>"), "{}", stderr(&out));
+    assert!(d.params("db.list")[0].get("engine").is_none());
+}
+
+#[test]
+fn help_lists_engine_commands() {
+    let root = short_root();
+    let out = yard_at(root.path()).arg("--help").output().unwrap();
+    let text = stdout(&out);
+    assert!(
+        text.contains("yard mysql") && text.contains("yard postgres") && text.contains("yard redis"),
+        "{text}"
+    );
+    assert!(!text.contains("\n  db "), "yard db is hidden: {text}");
+}

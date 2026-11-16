@@ -253,6 +253,7 @@ pub async fn import(
     progress: Progress,
 ) -> Result<Ran<Imported>, YardError> {
     let name = program_name(cmd);
+    let engine = engine_of(&cmd.instance);
     // The tool reads these itself, by the path the command names.
     if kind == ImportKind::Directory || (kind == ImportKind::Archive && !gzip) {
         let mut child = spawn(tool(cmd, &[]).stdin(Stdio::null()).stdout(Stdio::null()), &name)?;
@@ -340,7 +341,7 @@ pub async fn import(
                 if let Some(mut g) = gunzip {
                     stop(&mut g).await;
                 }
-                return Err(switch_error(&s, label));
+                return Err(switch_error(&s, label, &engine));
             }
             // gzip read the whole file: a truncated or corrupt one fails here, even when the
             // tool took the prefix it got as a complete dump.
@@ -348,12 +349,12 @@ pub async fn import(
                 let gz_err = collect(g.stderr.take());
                 let status = g.wait().await.map_err(|e| YardError::internal(format!("gzip: {e}")))?;
                 check("gzip", status.success(), gz_err.await).map_err(|e| {
-                    let what = format!("{}; what ran before stays in {label} (yard db shell {label} to look)", e.message);
+                    let what = format!("{}; what ran before stays in {label} (yard {engine} shell {label} to look)", e.message);
                     YardError { message: what, ..e }
                 })?;
             }
             check(&name, status.success(), stderr.await).map_err(|e| {
-                let what = format!("{}; what ran before the error stays in {label} (yard db shell {label} to look)", e.message);
+                let what = format!("{}; what ran before the error stays in {label} (yard {engine} shell {label} to look)", e.message);
                 YardError { message: what, ..e }
             })?;
             Ok(Ran::Done(Imported { bytes, skipped: filter.skipped() }))
@@ -369,7 +370,13 @@ pub async fn import(
     }
 }
 
-fn switch_error(s: &Switch, label: &str) -> YardError {
+/// The engine command an instance's databases are reached through: `mysql` for `mysql-8.4`.
+pub fn engine_of(instance: &str) -> String {
+    yard_core::services::parse_instance(instance)
+        .map_or_else(|| "mysql".to_string(), |(key, _)| key.to_string())
+}
+
+fn switch_error(s: &Switch, label: &str, engine: &str) -> YardError {
     match &s.database {
         // Dropping a database is refused even when it is the import's own.
         Some(db) if s.verb == Verb::Drop => YardError::new(
@@ -383,7 +390,7 @@ fn switch_error(s: &Switch, label: &str) -> YardError {
             format!("the dump switches to database {db} ({}); nothing from there on ran", s.statement),
         )
         .with_hint(format!(
-            "yard db import {db} <file>, or dump again without --databases (mysqldump) or -C (pg_dump)"
+            "yard {engine} import {db} <file>, or dump again without --databases (mysqldump) or -C (pg_dump)"
         ))
         .with_data(serde_json::json!({ "database": db })),
         None => YardError::new(

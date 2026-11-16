@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# `yard db` end-to-end check on a real Mac (db spec §12), after e2e-m1.sh passes.
+# `yard mysql` and `yard postgres` (once `yard db`) end-to-end check on a real Mac (db spec §12), after e2e-m1.sh passes.
 #
 # On the real MySQL and PostgreSQL instances (YARD_DB_MYSQL, default mysql-8.4, and YARD_DB_PG,
 # default postgres-17; a missing PostgreSQL instance skips its half) it creates scratch
 # databases named yard_e2e_<pid>_* and checks:
-#   - `yard db create` makes one and leaves an existing one alone;
-#   - `yard db import` of plain SQL (with strings that look like statements), of the same file
-#     gzipped and named .sql, and of a dump `yard db dump` wrote, each gives the same rows;
+#   - `yard mysql create` makes one and leaves an existing one alone;
+#   - `yard mysql import` of plain SQL (with strings that look like statements), of the same file
+#     gzipped and named .sql, and of a dump `yard mysql dump` wrote, each gives the same rows;
 #   - a `mysqldump --databases` dump stops before its USE (DB_DUMP_SWITCHES_DATABASE), and one
 #     imported under the name it carries is followed;
 #   - an import into a database with tables is DB_NOT_EMPTY;
 #   - a flag passed after -- reaches the tool (--no-data), and --host is DB_FLAG_RESERVED;
 #   - PostgreSQL: a plain dump whose OWNER TO names a role the instance lacks imports with that
-#     statement skipped, and a `yard db dump -- -Fc` archive imports through pg_restore;
-#   - when an instance is asleep at the start, `yard db list` wakes it.
+#     statement skipped, and a `yard postgres dump -- -Fc` archive imports through pg_restore;
+#   - when an instance is asleep at the start, `yard mysql list` wakes it.
 #
 # Needs: yardd running, built from this tree, the instances above, and jq. Installs nothing,
 # changes no TOML. It writes to the real instances, so ask the maintainer first. It drops only
@@ -85,13 +85,13 @@ cleanup() {
 trap cleanup EXIT
 
 if (( my_asleep_at_start )); then
-  "$yard" db list --service "$mysql_instance" >/dev/null || fail "db list on a sleeping $mysql_instance"
+  "$yard" mysql list --service "$mysql_instance" >/dev/null || fail "db list on a sleeping $mysql_instance"
   [[ $(field "$mysql_instance" '.state') == running ]] || fail "db list did not wake $mysql_instance"
   pass "db list woke a sleeping $mysql_instance"
 else
   echo "skip the wake check: $mysql_instance was awake"
 fi
-(( with_pg )) && "$yard" db list --service "$pg_instance" >/dev/null
+(( with_pg )) && "$yard" postgres list --service "$pg_instance" >/dev/null
 
 my_dbs_before="$(my -e "SELECT schema_name FROM information_schema.schemata ORDER BY 1")"
 (( with_pg )) && pg_dbs_before="$(pg -d postgres -c "SELECT datname FROM pg_database ORDER BY 1")"
@@ -108,40 +108,44 @@ INSERT INTO t VALUES (1, 'it''s; USE elsewhere'), (2, 'a "CREATE DATABASE x"'), 
 SQL
 rows_my() { my -e "SELECT COUNT(*) FROM \`$1\`.t"; }
 
-[[ $(code "$yard" db create "${prefix}_e" --service "$mysql_instance") == ok ]] || fail "db create"
-[[ $("$yard" db create "${prefix}_e" --service "$mysql_instance" --json | jq -r .created) == false ]] || fail "a second create said created"
+[[ $(code "$yard" mysql create "${prefix}_e" --service "$mysql_instance") == ok ]] || fail "db create"
+[[ $("$yard" mysql create "${prefix}_e" --service "$mysql_instance" --json | jq -r .created) == false ]] || fail "a second create said created"
 pass "db create makes a database once"
+# yard db still works for one release, and says what replaces it (recipes spec §9.1).
+"$yard" db list --service "$mysql_instance" 2>&1 >/dev/null | grep -q "yard db is going away" \
+  || fail "yard db did not print its notice"
+pass "yard db still works and names yard <engine>"
 
-"$yard" db import "${prefix}_a" plain.sql --service "$mysql_instance" >/dev/null || fail "plain import"
+"$yard" mysql import "${prefix}_a" plain.sql --service "$mysql_instance" >/dev/null || fail "plain import"
 [[ $(rows_my "${prefix}_a") == 3 ]] || fail "plain import rows"
 [[ $(my -e "SELECT note FROM \`${prefix}_a\`.t WHERE id = 1") == "it's; USE elsewhere" ]] || fail "a string that looks like USE was changed"
 gzip -c plain.sql > gzipped.sql
-"$yard" db import "${prefix}_b" gzipped.sql --service "$mysql_instance" >/dev/null || fail "gzipped import"
+"$yard" mysql import "${prefix}_b" gzipped.sql --service "$mysql_instance" >/dev/null || fail "gzipped import"
 [[ $(rows_my "${prefix}_b") == 3 ]] || fail "gzipped import rows"
 pass "plain and gzipped imports give the same rows"
 
 "$my_keg/bin/mysqldump" --no-defaults --socket="$run_dir/$mysql_instance.sock" --user=root --databases "${prefix}_a" > databases.sql
-[[ $(code "$yard" db import "${prefix}_c" databases.sql --service "$mysql_instance") == DB_DUMP_SWITCHES_DATABASE ]] || fail "a --databases dump was not stopped"
+[[ $(code "$yard" mysql import "${prefix}_c" databases.sql --service "$mysql_instance") == DB_DUMP_SWITCHES_DATABASE ]] || fail "a --databases dump was not stopped"
 pass "a mysqldump --databases dump stops before its USE"
 # The same kind of dump imported under the name it carries is followed: its CREATE DATABASE is
 # skipped (yard made it) and its USE runs.
 sed "s/${prefix}_a/${prefix}_f/g" databases.sql > own.sql
-"$yard" db import "${prefix}_f" own.sql --service "$mysql_instance" >/dev/null || fail "a -B dump under its own name"
+"$yard" mysql import "${prefix}_f" own.sql --service "$mysql_instance" >/dev/null || fail "a -B dump under its own name"
 [[ $(rows_my "${prefix}_f") == 3 ]] || fail "-B dump rows"
 pass "a mysqldump -B dump imports under the name it carries"
 
-[[ $(code "$yard" db import "${prefix}_a" plain.sql --service "$mysql_instance") == DB_NOT_EMPTY ]] || fail "import into tables was not DB_NOT_EMPTY"
+[[ $(code "$yard" mysql import "${prefix}_a" plain.sql --service "$mysql_instance") == DB_NOT_EMPTY ]] || fail "import into tables was not DB_NOT_EMPTY"
 pass "an import into a database with tables is refused"
 
-"$yard" db dump "${prefix}_a" dumped.sql --service "$mysql_instance" -- --single-transaction >/dev/null || fail "db dump"
+"$yard" mysql dump "${prefix}_a" dumped.sql --service "$mysql_instance" -- --single-transaction >/dev/null || fail "db dump"
 [[ ! -e dumped.sql.partial ]] || fail "a .partial was left"
-"$yard" db import "${prefix}_d" dumped.sql --service "$mysql_instance" >/dev/null || fail "re-import of the dump"
+"$yard" mysql import "${prefix}_d" dumped.sql --service "$mysql_instance" >/dev/null || fail "re-import of the dump"
 [[ $(rows_my "${prefix}_d") == 3 ]] || fail "re-imported rows"
 pass "a dump re-imports with the same rows"
 
-"$yard" db dump "${prefix}_a" schema.sql --service "$mysql_instance" -- --no-data >/dev/null || fail "dump --no-data"
+"$yard" mysql dump "${prefix}_a" schema.sql --service "$mysql_instance" -- --no-data >/dev/null || fail "dump --no-data"
 ! grep -q 'INSERT INTO' schema.sql || fail "--no-data did not reach mysqldump"
-[[ $(code "$yard" db dump "${prefix}_a" x.sql --service "$mysql_instance" -- --host=elsewhere) == DB_FLAG_RESERVED ]] || fail "--host was not refused"
+[[ $(code "$yard" mysql dump "${prefix}_a" x.sql --service "$mysql_instance" -- --host=elsewhere) == DB_FLAG_RESERVED ]] || fail "--host was not refused"
 pass "a flag after -- reaches mysqldump, and --host is refused"
 
 # --- PostgreSQL ----------------------------------------------------------------------------
@@ -152,14 +156,14 @@ ALTER TABLE t OWNER TO yard_e2e_no_such_role;
 INSERT INTO t VALUES (1, 'it''s; \connect elsewhere'), (2, $$GRANT ALL$$), (3, E'back\\slash');
 SQL
   rows_pg() { pg -d "$1" -c "SELECT COUNT(*) FROM t"; }
-  skipped="$("$yard" db import "${prefix}_pa" pg.sql --service "$pg_instance" --json | jq -r .skipped)" || fail "pg plain import"
+  skipped="$("$yard" postgres import "${prefix}_pa" pg.sql --service "$pg_instance" --json | jq -r .skipped)" || fail "pg plain import"
   [[ $skipped == 1 ]] || fail "the foreign OWNER TO was not skipped ($skipped)"
   [[ $(rows_pg "${prefix}_pa") == 3 ]] || fail "pg plain import rows"
   pass "a PostgreSQL dump naming a missing role imports with OWNER TO skipped"
 
-  "$yard" db dump "${prefix}_pa" archive.dump --service "$pg_instance" -- -Fc >/dev/null || fail "pg_dump -Fc"
+  "$yard" postgres dump "${prefix}_pa" archive.dump --service "$pg_instance" -- -Fc >/dev/null || fail "pg_dump -Fc"
   [[ $(head -c 5 archive.dump) == PGDMP ]] || fail "not a custom-format archive"
-  "$yard" db import "${prefix}_pb" archive.dump --service "$pg_instance" >/dev/null || fail "archive import"
+  "$yard" postgres import "${prefix}_pb" archive.dump --service "$pg_instance" >/dev/null || fail "archive import"
   [[ $(rows_pg "${prefix}_pb") == 3 ]] || fail "archive rows"
   pass "a pg_dump -Fc archive imports through pg_restore"
 fi
