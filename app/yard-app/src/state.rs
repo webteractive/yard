@@ -67,6 +67,9 @@ pub struct AppState {
     pub ports: Resource<Vec<PortInfo>>,
     pub sources: Resource<Vec<SourceInfo>>,
     pub ca: Resource<CaInfo>,
+    /// `engines.list`: the Add picker's engines and the recipe errors (protocol 2.13); an older
+    /// yardd answers it with an error, and the picker falls back to the fixed list.
+    pub engines: Resource<yard_proto::EnginesListResult>,
     pub extensions: HashMap<String, Resource<Vec<ExtInfo>>>,
     pub site_detail: HashMap<String, Resource<SiteDetail>>,
     /// `db.list` per MySQL or PostgreSQL instance (db spec §10).
@@ -127,6 +130,7 @@ impl AppState {
                 ports: Resource::default(),
                 sources: Resource::default(),
                 ca: Resource::default(),
+                engines: Resource::default(),
                 extensions: HashMap::new(),
                 site_detail: HashMap::new(),
                 databases: HashMap::new(),
@@ -378,6 +382,7 @@ impl AppState {
             ResourceKey::Ports => (api::PORTS_LIST.name, Value::Null),
             ResourceKey::Sources => (api::SOURCES_LIST.name, Value::Null),
             ResourceKey::Ca => (api::CA_INFO.name, Value::Null),
+            ResourceKey::Engines => (api::ENGINES_LIST.name, Value::Null),
             ResourceKey::Extensions(v) => {
                 self.extensions.entry(v.clone()).or_default().loading = true;
                 (api::EXT_LIST.name, json!({"php": v}))
@@ -406,6 +411,7 @@ impl AppState {
             ResourceKey::Ports => self.ports.put(answer),
             ResourceKey::Sources => self.sources.put(answer),
             ResourceKey::Ca => self.ca.put(answer),
+            ResourceKey::Engines => self.engines.put(answer),
             ResourceKey::Extensions(v) => self.extensions.entry(v.clone()).or_default().put(answer),
             ResourceKey::SiteDetail(n) => self.site_detail.entry(n.clone()).or_default().put(answer),
             ResourceKey::Databases(n) => self.databases.entry(n.clone()).or_default().put(answer),

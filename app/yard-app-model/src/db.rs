@@ -14,9 +14,12 @@ pub fn has_databases(engine: &str) -> bool {
 }
 
 /// Whether an instance of `engine` has Connect… (MySQL, PostgreSQL, Redis and any engine whose
-/// recipe says how to connect).
-pub fn has_connect(engine: &str) -> bool {
-    Engines::builtin_shared().get(engine).is_some_and(|e| e.has_connect())
+/// recipe says how to connect): what yardd's `engines.list` says, else what this build carries.
+pub fn has_connect(engine: &str, list: Option<&yard_proto::EnginesListResult>) -> bool {
+    match list {
+        Some(list) => list.engines.iter().any(|e| e.key == engine && e.connect),
+        None => Engines::builtin_shared().get(engine).is_some_and(|e| e.has_connect()),
+    }
 }
 
 /// Whether Import… offers Keep owners: only a PostgreSQL dump names roles (db spec §6.6).
@@ -56,13 +59,19 @@ pub struct DumpRequest {
 }
 
 /// `yard db dump <name> <file> [--compress] [--overwrite] --progress-json --service <i> [-- <words>]`.
+/// The engine command an instance's databases go through: `postgres` for `postgres-17`.
+fn engine_of(instance: &str) -> String {
+    yard_core::services::parse_instance(instance)
+        .map_or_else(|| "mysql".to_string(), |(key, _)| key.to_string())
+}
+
 pub fn dump_args(r: &DumpRequest) -> Result<Vec<String>, YardError> {
     let words = extra_words(&r.extra)?;
     // Compressed output is gzip, so its name says so; the save panel asked about replacing the
     // name it returned, so a name changed here replaces nothing.
     let renamed = r.compress && !r.file.ends_with(".gz");
     let file = if renamed { format!("{}.gz", r.file) } else { r.file.clone() };
-    let mut args = vec!["db".to_string(), "dump".into(), r.database.clone(), file];
+    let mut args = vec![engine_of(&r.instance), "dump".into(), r.database.clone(), file];
     if r.compress {
         args.push("--compress".into());
     }
@@ -93,7 +102,7 @@ pub struct ImportRequest {
 pub fn import_args(r: &ImportRequest) -> Result<Vec<String>, YardError> {
     let database = database_name(&r.database)?;
     let words = extra_words(&r.extra)?;
-    let mut args = vec!["db".to_string(), "import".into(), database, r.file.clone()];
+    let mut args = vec![engine_of(&r.instance), "import".into(), database, r.file.clone()];
     if r.into_existing {
         args.push("--into-existing".into());
     }
@@ -185,9 +194,13 @@ pub fn connect_fields(i: &ConnectInfo) -> Vec<ConnectField> {
     out
 }
 
-/// Which clients take the fields, as `yard db connect` says.
-pub fn connect_clients(engine: &str) -> [&'static str; 2] {
-    match engine {
+/// Which clients take the fields: what yardd says (protocol 2.13), else the app's own table for an
+/// older yardd.
+pub fn connect_clients(info: &ConnectInfo) -> Vec<String> {
+    if !info.clients.is_empty() {
+        return info.clients.clone();
+    }
+    let lines: [&str; 2] = match info.engine.as_str() {
         "postgres" => [
             "TablePlus: Open, or paste the URL",
             "DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above",
@@ -199,7 +212,8 @@ pub fn connect_clients(engine: &str) -> [&'static str; 2] {
             "TablePlus, Sequel Ace: Open, or paste the URL",
             "DBeaver, DataGrip: a new MySQL connection with the fields above",
         ],
-    }
+    };
+    lines.iter().map(|l| l.to_string()).collect()
 }
 
 /// The URL Open on a database row opens: the instance's URL with the database as its path.
@@ -258,7 +272,12 @@ mod tests {
     fn which_engines_have_what() {
         assert!(has_databases("mysql") && has_databases("postgres"));
         assert!(!has_databases("redis") && !has_databases("minio") && !has_databases("emailulator"));
-        assert!(has_connect("redis") && has_connect("mysql") && !has_connect("minio"));
+        assert!(has_connect("redis", None) && has_connect("mysql", None) && !has_connect("minio", None));
+        let list: yard_proto::EnginesListResult = serde_json::from_value(serde_json::json!({"engines": [
+            {"key": "echo", "name": "Echo", "source": "path", "origin": {"kind": "built_in"}, "installed": true,
+             "ports": [], "console": false, "databases": false, "connect": true}]}))
+        .unwrap();
+        assert!(has_connect("echo", Some(&list)) && !has_connect("redis", Some(&list)));
         assert!(has_owners("postgres") && !has_owners("mysql"));
     }
 
@@ -295,7 +314,7 @@ mod tests {
         assert_eq!(
             dump_args(&r).unwrap(),
             [
-                "db",
+                "mysql",
                 "dump",
                 "shop",
                 "/tmp/x.sql.gz",
@@ -313,7 +332,7 @@ mod tests {
         assert_eq!(
             dump_args(&r).unwrap(),
             [
-                "db",
+                "mysql",
                 "dump",
                 "shop",
                 "/tmp/x.sql.gz",
@@ -341,7 +360,7 @@ mod tests {
         assert_eq!(
             import_args(&r).unwrap(),
             [
-                "db",
+                "postgres",
                 "import",
                 "shop",
                 "/Users/me/shop.dump",
@@ -442,5 +461,28 @@ mod tests {
         assert_eq!(bytes_text(80 * 1024), "80.0 KB");
         assert_eq!(bytes_text(3 << 20), "3.0 MB");
         assert_eq!(bytes_text(5 << 30), "5.0 GB");
+    }
+
+    #[test]
+    fn connect_clients_from_answer() {
+        let mut info = mysql();
+        info.clients = vec!["Any client: the URL".into()];
+        assert_eq!(connect_clients(&info), ["Any client: the URL"]);
+        // An older yardd sends none: the app's own table for the engine.
+        info.clients = vec![];
+        assert_eq!(connect_clients(&info).len(), 2);
+    }
+
+    #[test]
+    fn dump_and_import_run_the_engine_command() {
+        let pg = DumpRequest {
+            instance: "postgres-17".into(),
+            database: "shop".into(),
+            file: "/tmp/x.sql".into(),
+            compress: false,
+            overwrite: false,
+            extra: String::new(),
+        };
+        assert_eq!(dump_args(&pg).unwrap()[..2], ["postgres", "dump"]);
     }
 }

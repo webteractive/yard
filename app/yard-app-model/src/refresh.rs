@@ -16,6 +16,8 @@ pub enum ResourceKey {
     Ports,
     Sources,
     Ca,
+    /// `engines.list` (protocol 2.13): refetched on `engines_changed` and after a job.
+    Engines,
     /// `ext.list` for one PHP version.
     Extensions(String),
     /// `sites.info` for one site.
@@ -66,6 +68,7 @@ pub mod invalidation {
         ResourceKey::Sources,
         ResourceKey::TunnelDomains,
         ResourceKey::Ca,
+        ResourceKey::Engines,
     ];
 
     /// The table in design §7.2. `services` names the service instances, whose unit changes
@@ -97,8 +100,10 @@ pub mod invalidation {
                 i.keys.insert(ResourceKey::Ports);
             }
             Event::TunnelChanged { tunnel } => i.upsert_tunnel = Some((**tunnel).clone()),
-            // The Add picker's engine list follows this from Task 13 of the recipes plan.
-            Event::JobProgress { .. } | Event::LogLine { .. } | Event::EnginesChanged | Event::Unknown => {}
+            Event::EnginesChanged => {
+                i.keys.insert(ResourceKey::Engines);
+            }
+            Event::JobProgress { .. } | Event::LogLine { .. } | Event::Unknown => {}
         }
         i
     }
@@ -273,5 +278,11 @@ mod tests {
             q.finished(k);
         }
         assert_eq!(q.loaded(), set(&[ResourceKey::Sites, ResourceKey::Extensions("8.4".into())]));
+    }
+
+    #[test]
+    fn engines_changed_refetches_the_engines() {
+        let i = keys(&Event::EnginesChanged, &HashSet::new());
+        assert!(i.keys.contains(&ResourceKey::Engines) && i.keys.len() == 1, "{:?}", i.keys);
     }
 }

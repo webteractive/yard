@@ -412,7 +412,7 @@ printf '%s' '{"instance":"mysql-8.4","name":"shop","file":"/tmp/x.sql.gz","bytes
     assert_eq!(
         args[3..],
         [
-            "db",
+            "mysql",
             "dump",
             "shop",
             "/tmp/x.sql.gz",
@@ -550,7 +550,7 @@ async fn import_runs_the_cli(cx: &mut TestAppContext) {
     assert_eq!(
         recorded_args(&yard)[3..],
         [
-            "db",
+            "postgres",
             "import",
             "app",
             "/tmp/app.dump",

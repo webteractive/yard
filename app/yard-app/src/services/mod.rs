@@ -64,6 +64,20 @@ pub fn services(env: &AppEnv, window: &mut Window, cx: &mut App) -> AnyElement {
             }
         }
     }
+    // Recipes that did not load, or run on their last good version (recipes spec §11).
+    if let Some(list) = env.state.read(cx).engines.value.as_ref() {
+        for (i, e) in list.engines.iter().filter_map(|e| e.error.as_ref()).chain(&list.errors).enumerate() {
+            let env = env.clone();
+            errors.push(
+                ErrorView::new(
+                    format!("engines:error:{i}"),
+                    e,
+                    HintAction::parse(e.hint.as_deref().unwrap_or("")),
+                )
+                .on_action(move |a, _, cx| env.perform(a, cx)),
+            );
+        }
+    }
     let log = env.nav.read(cx).service_log.as_ref().map(|(name, tail)| {
         let lines: Vec<SharedString> =
             tail.read(cx).buffer.visible().map(|l| SharedString::from(l.text.clone())).collect();

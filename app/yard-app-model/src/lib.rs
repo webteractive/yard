@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod db;
+pub mod engines;
 pub mod health;
 pub mod hint;
 pub mod jobs;

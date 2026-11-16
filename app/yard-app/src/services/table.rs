@@ -42,9 +42,12 @@ pub fn row_texts(env: &AppEnv, cx: &App) -> Vec<Vec<String>> {
 }
 
 fn cells(s: &ServiceInfo, now: OffsetDateTime) -> Vec<String> {
+    // The engine's own name (protocol 2.13; a recipe's), else the table an older yardd implies.
+    let name =
+        if s.engine_name.is_empty() { engine_display(&s.engine).to_string() } else { s.engine_name.clone() };
     let engine = match &s.version {
-        Some(v) if s.engine != "emailulator" => format!("{} {v}", engine_display(&s.engine)),
-        _ => engine_display(&s.engine).to_string(),
+        Some(v) if s.engine != "emailulator" => format!("{name} {v}"),
+        _ => name,
     };
     let ports = s.ports.iter().map(|p| p.port.to_string()).collect::<Vec<_>>().join(", ");
     let managed = match s.managed_by {
@@ -191,7 +194,9 @@ fn controls(env: &AppEnv, s: &ServiceInfo, cx: &mut App) -> Vec<(&'static str, A
             .small()
             .into_any_element(),
     ));
-    if s.managed_by == ServiceManager::Yard && yard_app_model::db::has_connect(&s.engine) {
+    if s.managed_by == ServiceManager::Yard
+        && yard_app_model::db::has_connect(&s.engine, env.state.read(cx).engines.value.as_ref())
+    {
         let (e8, n8) = (env.clone(), n.clone());
         out.push((
             "connect",

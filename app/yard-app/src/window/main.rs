@@ -52,8 +52,10 @@ pub fn visible_keys(screen: &Screen) -> Vec<ResourceKey> {
         Screen::Sites(None) => vec![ResourceKey::Sites],
         // A selected MySQL or PostgreSQL instance's databases; AppState fetches them only while
         // it runs, since listing wakes it.
-        Screen::Services(Some(name)) => vec![ResourceKey::Services, ResourceKey::Databases(name.clone())],
-        Screen::Services(None) => vec![ResourceKey::Services],
+        Screen::Services(Some(name)) => {
+            vec![ResourceKey::Services, ResourceKey::Engines, ResourceKey::Databases(name.clone())]
+        }
+        Screen::Services(None) => vec![ResourceKey::Services, ResourceKey::Engines],
         Screen::Php => vec![ResourceKey::Php],
         Screen::Node => vec![ResourceKey::Node],
         Screen::Tunnels => vec![ResourceKey::Tunnels, ResourceKey::TunnelDomains, ResourceKey::Sites],

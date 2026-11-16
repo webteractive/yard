@@ -11,9 +11,13 @@ use yard_app_model::actions::port_input;
 use yard_app_model::jobs::JobPhase;
 use yard_client::api;
 use yard_proto::methods::{ServiceAddParams, ServicePortParams, ServiceSleepParams};
-use yard_proto::{ErrorCode, YardError, engine_display};
+use yard_proto::{ErrorCode, YardError};
 
-pub const ENGINES: [&str; 5] = ["mysql", "postgres", "redis", "minio", "emailulator"];
+/// The Add picker's engines as `(key, name)`: yardd's `engines.list`, or the fixed list an older
+/// yardd implies (`yard_app_model::engines::picker`).
+fn engines(env: &AppEnv, cx: &App) -> Vec<(String, String)> {
+    yard_app_model::engines::picker(env.state.read(cx).engines.value.as_ref())
+}
 
 fn close(env: &AppEnv, cx: &mut App) {
     env.nav.update(cx, |n, cx| {
@@ -104,8 +108,9 @@ pub fn move_unit(env: &AppEnv, unit: &str, field: &Field, cx: &mut App) {
 pub fn add_service(env: &AppEnv, engine: usize, line: &Field, port: &Field, cx: &mut App) {
     let Some(port) = port_or_say(env, "service:add", port, cx) else { return };
     let version = Some(line.read(cx).value().trim().to_string()).filter(|v| !v.is_empty());
-    let params = ServiceAddParams { engine: ENGINES[engine].to_string(), version, port, path: None };
-    let title = format!("Add {}", engine_display(ENGINES[engine]));
+    let Some((key, name)) = engines(env, cx).into_iter().nth(engine) else { return };
+    let params = ServiceAddParams { engine: key, version, port, path: None };
+    let title = format!("Add {name}");
     let env = env.clone();
     let task = env
         .runner
@@ -140,7 +145,7 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, _window: &mut Window, cx: &mut App) ->
     let form = match sheet {
         Sheet::AddService { engine, line, port, lines } => {
             let names: Vec<SharedString> =
-                ENGINES.iter().map(|e| SharedString::from(engine_display(e).to_string())).collect();
+                engines(env, cx).into_iter().map(|(_, name)| SharedString::from(name)).collect();
             let pick = env.clone();
             let mut form = Form::new("sheet:add-service", "Add a service").field(
                 Picker::new("sheet:add-service:engine", "Engine", names, Some(*engine)).on_select(

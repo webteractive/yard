@@ -602,7 +602,7 @@ fn connect_form(
                 ),
         );
     }
-    let clients = model::connect_clients(&info.engine);
+    let clients = model::connect_clients(info);
     let (url, open_env, n) = (info.url.clone(), env.clone(), name.to_string());
     form.field(
         div()
@@ -611,16 +611,9 @@ fn connect_form(
             .child(text("sheet:connect:state", format!("{name}  {}", model::connect_state(info)))),
     )
     .field(fields)
-    .field(
-        div()
-            .flex()
-            .flex_col()
-            .gap(space::XS)
-            .type_secondary()
-            .text_color(t.c.text_secondary)
-            .child(text("sheet:connect:clients:0", clients[0]))
-            .child(text("sheet:connect:clients:1", clients[1])),
-    )
+    .field(div().flex().flex_col().gap(space::XS).type_secondary().text_color(t.c.text_secondary).children(
+        clients.into_iter().enumerate().map(|(i, line)| text(format!("sheet:connect:clients:{i}"), line)),
+    ))
     .field(
         crate::widgets::bar().child(
             Button::new("sheet:connect:copy-url", "Copy URL")
