@@ -47,12 +47,25 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         security: PathBuf::from("/nonexistent/security"),
         // Every engine's usual port comes from the OS, so no test binds 3306, 5432, 6379,
         // 9000 or 9001.
-        usual_ports: Some(
-            ["mysql", "postgres", "redis", "minio", "minio-console"]
-                .into_iter()
-                .map(|key| (key.to_string(), free_port()))
-                .collect(),
-        ),
+        usual_ports: Some({
+            let mut usual: std::collections::BTreeMap<String, u16> = [
+                "mysql",
+                "postgres",
+                "redis",
+                "minio",
+                "minio-console",
+                "memcached",
+                "meilisearch",
+                "typesense",
+                "typesense-peering",
+            ]
+            .into_iter()
+            .map(|key| (key.to_string(), free_port()))
+            .collect();
+            // Valkey's usual port is Redis's, as it is for real (6379).
+            usual.insert("valkey".into(), usual["redis"]);
+            usual
+        }),
         // No DBngin.app or Postgres.app here, whatever this machine has installed.
         app_dirs: vec![no_apps],
         // A sample every 50 ms and a millisecond for each second of a `sleep_after`, so

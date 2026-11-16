@@ -15,7 +15,7 @@ fn main() -> ExitCode {
     let argv0 = argv.next().unwrap_or_default();
     let args: Vec<String> = argv.collect();
     let name = Path::new(&argv0).file_name().and_then(|n| n.to_str());
-    if matches!(name, Some("mysqld" | "postgres" | "redis-server" | "minio")) {
+    if matches!(name, Some("mysqld" | "postgres" | "redis-server" | "valkey-server" | "minio")) {
         stop_slowly(Path::new(&argv0));
     }
     match name {
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
         Some("initdb") => initdb(Path::new(&argv0), &args),
         Some("postgres") => postgres(&args),
         Some("postgres-backend") => backend(),
-        Some("redis-server") => redis_server(Path::new(&argv0), &args),
+        Some("redis-server" | "valkey-server") => redis_server(Path::new(&argv0), &args),
         Some("minio") => minio(&args),
         Some("emailulator") => emailulator(Path::new(&argv0), &args),
         Some("cloudflared") => cloudflared(Path::new(&argv0), &args),

@@ -1,0 +1,39 @@
+# Meilisearch, in development mode (no master key). Its data is bound to its version: after a
+# brew upgrade across a format change it refuses its old data, which a project rebuilds with
+# php artisan scout:import after yard service remove meilisearch and add.
+schema = 1
+key = "meilisearch"
+name = "Meilisearch"
+description = "Search engine for Laravel Scout"
+
+[source]
+kind = "brew"
+formula = "meilisearch"
+
+[ports]
+main = 7700
+
+[run]
+command = [
+  "{home}/bin/meilisearch",
+  "--http-addr", "127.0.0.1:{port.main}",
+  "--db-path", "{data}/data.ms",
+  "--dump-dir", "{data}/dumps",
+  "--snapshot-dir", "{data}/snapshots",
+  "--env", "development",
+  "--no-analytics",
+]
+dirs = ["data"]
+
+[health]
+tcp = "main"
+
+[console]
+port = "main"
+
+[env]
+lines = ["MEILISEARCH_HOST=http://127.0.0.1:{port.main}", "MEILISEARCH_KEY="]
+
+[connect]
+url = "http://127.0.0.1:{port.main}"
+clients = ["Its dashboard: yard meilisearch open", "Laravel Scout: the yard env lines"]

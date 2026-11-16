@@ -1,0 +1,39 @@
+# Valkey: the BSD-licensed fork of Redis, spoken to with Laravel's redis client.
+schema = 1
+key = "valkey"
+name = "Valkey"
+description = "Redis-compatible in-memory data store"
+
+[source]
+kind = "brew"
+formula = "valkey"
+
+[ports]
+main = 6379
+
+[run]
+command = ["{home}/bin/valkey-server", "{conf}"]
+dirs = ["data"]
+
+[run.config]
+file = "valkey.conf"
+text = """
+bind 127.0.0.1
+port {port.main}
+dir {data:quoted}
+daemonize no
+{include_overrides}
+"""
+include = "include {overrides:quoted}"
+overrides = ""
+
+[health]
+tcp = "main"
+
+[env]
+lines = ["REDIS_HOST=127.0.0.1", "REDIS_PORT={port.main}", "REDIS_PASSWORD=null"]
+
+[connect]
+url = "redis://127.0.0.1:{port.main}"
+shell = ["{home}/bin/valkey-cli", "-p", "{port.main}"]
+clients = ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]

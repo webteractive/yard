@@ -129,6 +129,8 @@ impl Fixture {
             &["postgres", "initdb", "psql", "pg_dump", "pg_restore"]
         } else if name == "redis" {
             &["redis-server"]
+        } else if name == "valkey" {
+            &["valkey-server"]
         } else if name == "minio" {
             &["minio"]
         } else {

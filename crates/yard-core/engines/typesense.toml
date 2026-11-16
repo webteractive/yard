@@ -1,0 +1,39 @@
+# Typesense, from its own Apple Silicon build (brew has it only in its own tap). The API key is
+# a fixed local one; Typesense listens for peers too, so both ports stay on loopback.
+schema = 1
+key = "typesense"
+name = "Typesense"
+description = "Search engine for Laravel Scout"
+
+[source]
+kind = "download"
+version = "30.2"
+url = "https://dl.typesense.org/releases/30.2/typesense-server-30.2-darwin-arm64.tar.gz"
+sha256 = "7d8d6d0c33930ad20ea23dd184250547b16615944be891b2078e8a075152fa7e"
+
+[ports]
+main = 8108
+peering = 8107
+
+[run]
+command = [
+  "{home}/typesense-server",
+  "--data-dir", "{data}",
+  "--api-key", "yard",
+  "--api-address", "127.0.0.1",
+  "--api-port", "{port.main}",
+  "--peering-address", "127.0.0.1",
+  "--peering-port", "{port.peering}",
+  "--enable-cors",
+]
+dirs = ["data"]
+
+[health]
+tcp = "main"
+
+[env]
+lines = ["TYPESENSE_HOST=127.0.0.1", "TYPESENSE_PORT={port.main}", "TYPESENSE_PROTOCOL=http", "TYPESENSE_API_KEY=yard"]
+
+[connect]
+url = "http://127.0.0.1:{port.main}"
+clients = ["Any HTTP client: the URL above, with the header X-TYPESENSE-API-KEY: yard"]

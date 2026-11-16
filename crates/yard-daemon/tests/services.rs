@@ -1125,6 +1125,28 @@ async fn remove_of_an_unknown_instance_is_not_found() {
     d.shutdown().await.unwrap();
 }
 
+/// Valkey's usual port is Redis's: added beside Redis it takes the next free one, and its
+/// `yard env` names that (recipes spec §8).
+#[tokio::test]
+async fn valkey_beside_redis_takes_next_port() {
+    let d = prepared("").await;
+    d.fx.add_formula("redis");
+    d.fx.add_formula("valkey");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    for engine in ["redis", "valkey"] {
+        let (lines, error) = add(&mut c, engine, None).await;
+        assert_eq!(error, None, "{engine}: {lines:?}");
+    }
+    let redis = port_of(&d, "redis").unwrap().0;
+    let valkey = port_of(&d, "valkey").unwrap().0;
+    assert_ne!(redis, valkey);
+    assert!(served(redis) && served(valkey));
+    let blocks = c.call("env.print", json!({"service": "valkey"})).await.unwrap();
+    assert_eq!(blocks[0]["lines"][1], format!("REDIS_PORT={valkey}"));
+    d.shutdown().await.unwrap();
+}
+
 /// An instance whose engine this Mac has no recipe for (recipes spec §7): yardd runs nothing for
 /// it and says why, and `yard service remove` still forgets it, its ports and, with
 /// `--keep-data`, leaves its data.

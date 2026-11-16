@@ -25,7 +25,10 @@ fn ctx<'a>(instance: &'a str, home: &'a str, paths: &'a Paths, ports: &'a [PortR
 #[test]
 fn the_set_is_the_builtins_and_the_carried_recipes() {
     let engines = Engines::builtin();
-    assert_eq!(engines.keys(), ["minio", "mysql", "postgres", "redis"]);
+    assert_eq!(
+        engines.keys(),
+        ["meilisearch", "memcached", "minio", "mysql", "postgres", "redis", "typesense", "valkey"]
+    );
     for key in ["mysql", "postgres", "minio"] {
         assert_eq!(get(key).origin(), Origin::BuiltIn, "{key}");
     }
@@ -352,4 +355,97 @@ fn verbs_follow_the_contract() {
     assert_eq!(Verb::parse("dump"), Some(Dump));
     assert_eq!(Verb::parse("prompt"), None);
     assert_eq!(Dump.name(), "dump");
+}
+
+/// The carried recipes beside Redis (recipes spec §8), rendered with fixed ports.
+#[test]
+fn carried_recipes_render() {
+    let paths = Paths::new("/u/.yard");
+    let strs = |c: &crate::services::render::UnitCommand| -> Vec<String> {
+        std::iter::once(c.program.display().to_string())
+            .chain(c.args.iter().map(|a| a.to_string_lossy().into_owned()))
+            .collect()
+    };
+    assert_eq!(
+        Engines::builtin().keys(),
+        ["meilisearch", "memcached", "minio", "mysql", "postgres", "redis", "typesense", "valkey"]
+    );
+
+    let ports = [port("valkey", 26380)];
+    let valkey = get("valkey");
+    let c = ctx("valkey", "/opt/homebrew/opt/valkey", &paths, &ports);
+    assert_eq!(
+        strs(&valkey.command(&c)),
+        ["/opt/homebrew/opt/valkey/bin/valkey-server", "/u/.yard/services/valkey/valkey.conf"]
+    );
+    assert_eq!(valkey.env_lines(&c), ["REDIS_HOST=127.0.0.1", "REDIS_PORT=26380", "REDIS_PASSWORD=null"]);
+    let (_, conf) = valkey.config_file(&c).unwrap();
+    assert!(conf.contains("bind 127.0.0.1\nport 26380\n"), "{conf}");
+    assert_eq!(valkey.dirs(), ["data"]);
+    assert_eq!(engine_verbs(valkey.as_ref()), [Verb::Shell, Verb::Connect, Verb::Open]);
+
+    let ports = [port("memcached", 21211)];
+    let memcached = get("memcached");
+    let c = ctx("memcached", "/opt/homebrew/opt/memcached", &paths, &ports);
+    assert_eq!(
+        strs(&memcached.command(&c)),
+        [
+            "/opt/homebrew/opt/memcached/bin/memcached",
+            "-l",
+            "127.0.0.1",
+            "-p",
+            "21211",
+            "-U",
+            "0",
+            "-m",
+            "64"
+        ]
+    );
+    assert_eq!(memcached.env_lines(&c), ["MEMCACHED_HOST=127.0.0.1", "MEMCACHED_PORT=21211"]);
+
+    let ports = [port("meilisearch", 27700)];
+    let meili = get("meilisearch");
+    let c = ctx("meilisearch", "/opt/homebrew/opt/meilisearch", &paths, &ports);
+    let cmd = strs(&meili.command(&c));
+    assert_eq!(cmd[..3], ["/opt/homebrew/opt/meilisearch/bin/meilisearch", "--http-addr", "127.0.0.1:27700"]);
+    assert!(
+        cmd.contains(&"--no-analytics".to_string()) && cmd.contains(&"development".to_string()),
+        "{cmd:?}"
+    );
+    assert!(cmd.contains(&"/u/.yard/services/meilisearch/data/data.ms".to_string()), "{cmd:?}");
+    assert_eq!(meili.env_lines(&c), ["MEILISEARCH_HOST=http://127.0.0.1:27700", "MEILISEARCH_KEY="]);
+    assert_eq!(
+        meili.console(),
+        Some(Console { port: String::new(), host_header: HostHeader::Client, nginx_overrides: false })
+    );
+
+    let ports = [port("typesense", 28108), port("typesense-peering", 28107)];
+    let typesense = get("typesense");
+    let c = ctx("typesense", "/u/.yard/programs/typesense/30.2", &paths, &ports);
+    let cmd = strs(&typesense.command(&c));
+    assert_eq!(cmd[0], "/u/.yard/programs/typesense/30.2/typesense-server");
+    for pair in [
+        ["--api-address", "127.0.0.1"],
+        ["--api-port", "28108"],
+        ["--peering-address", "127.0.0.1"],
+        ["--peering-port", "28107"],
+        ["--api-key", "yard"],
+    ] {
+        assert!(cmd.windows(2).any(|w| w == pair), "{pair:?} in {cmd:?}");
+    }
+    assert_eq!(
+        typesense.env_lines(&c),
+        [
+            "TYPESENSE_HOST=127.0.0.1",
+            "TYPESENSE_PORT=28108",
+            "TYPESENSE_PROTOCOL=http",
+            "TYPESENSE_API_KEY=yard"
+        ]
+    );
+    let SourceSpec::Download { version, url, sha256, strip } = typesense.source() else {
+        panic!("a download")
+    };
+    assert_eq!((version.as_str(), strip), ("30.2", 0));
+    assert!(url.starts_with("https://dl.typesense.org/releases/30.2/"), "{url}");
+    assert_eq!(sha256.len(), 64);
 }

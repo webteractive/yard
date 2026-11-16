@@ -8,7 +8,13 @@ use std::sync::Arc;
 
 /// `(key, text)` for each carried recipe.
 pub fn texts() -> Vec<(&'static str, &'static str)> {
-    vec![("redis", include_str!("../../../engines/redis.toml"))]
+    vec![
+        ("meilisearch", include_str!("../../../engines/meilisearch.toml")),
+        ("memcached", include_str!("../../../engines/memcached.toml")),
+        ("redis", include_str!("../../../engines/redis.toml")),
+        ("typesense", include_str!("../../../engines/typesense.toml")),
+        ("valkey", include_str!("../../../engines/valkey.toml")),
+    ]
 }
 
 /// The carried recipes that load: every one does, which `every_carried_recipe_loads` checks,

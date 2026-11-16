@@ -1,0 +1,22 @@
+# Memcached: in memory only, so an instance that sleeps wakes empty (a cache, so that is fine).
+schema = 1
+key = "memcached"
+name = "Memcached"
+description = "In-memory cache"
+
+[source]
+kind = "brew"
+formula = "memcached"
+
+[ports]
+main = 11211
+
+[run]
+# -U 0: no UDP listener; -m 64: a dev machine's share of memory, in MB.
+command = ["{home}/bin/memcached", "-l", "127.0.0.1", "-p", "{port.main}", "-U", "0", "-m", "64"]
+
+[health]
+tcp = "main"
+
+[env]
+lines = ["MEMCACHED_HOST=127.0.0.1", "MEMCACHED_PORT={port.main}"]
