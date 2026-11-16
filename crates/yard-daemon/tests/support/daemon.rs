@@ -71,6 +71,8 @@ pub fn options(paths: Paths, brew: &Path, helper_socket: PathBuf, resolver_dir: 
         // No test asks the real DNS: a host starting `kept.` still resolves, any other is gone.
         resolve_host: |host| Some(host.starts_with("kept.")),
         db_wake_wait: Duration::from_secs(5),
+        // A download recipe's test serves its archive from a file.
+        allow_file_urls: true,
     }
 }
 

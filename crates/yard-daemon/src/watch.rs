@@ -35,6 +35,14 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
         }
     };
     let overrides = canonical(&ctx.paths.nginx_dir().join("overrides"));
+    // The user's recipes: made here so a first recipe dropped in is seen (recipes spec §7).
+    if let Err(e) = std::fs::create_dir_all(ctx.paths.engines_dir()) {
+        tracing::warn!(
+            "cannot create {}: {e}; new recipes need `yard restart`",
+            ctx.paths.engines_dir().display()
+        );
+    }
+    let engines = canonical(&ctx.paths.engines_dir());
     let tunnel_overrides = canonical(&ctx.paths.tunnel_overrides_dir());
     let tomls: BTreeSet<PathBuf> =
         [ctx.paths.yard_toml(), ctx.paths.sites_toml(), ctx.paths.ports_toml(), ctx.paths.services_toml()]
@@ -47,7 +55,8 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
     let managed_root = canonical(&ctx.paths.managed_sites_dir());
     let mut managed = managed_dirs(&ctx.paths);
     let mut includes = nginx_include_dirs(&ctx.paths);
-    let mut watch = vec![canonical(ctx.paths.root()), overrides.clone(), tunnel_overrides.clone()];
+    let mut watch =
+        vec![canonical(ctx.paths.root()), overrides.clone(), tunnel_overrides.clone(), engines.clone()];
     watch.extend(projects.iter().cloned());
     watch.extend(managed.iter().cloned());
     watch.extend(includes.iter().cloned());
@@ -101,7 +110,10 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
             }
             let relevant = managed_moved
                 || changed.iter().any(|p| {
-                    tomls.contains(p) || is_project_file(p, &projects) || is_project_file(p, &managed)
+                    tomls.contains(p)
+                        || is_project_file(p, &projects)
+                        || is_project_file(p, &managed)
+                        || p.parent() == Some(engines.as_path())
                 });
             let overridden = changed.iter().any(|p| {
                 p.parent() == Some(overrides.as_path())

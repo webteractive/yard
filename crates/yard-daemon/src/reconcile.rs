@@ -175,6 +175,12 @@ impl Reconciler {
         self
     }
 
+    /// How recipes load: `allow_file_urls` lets a `download` name a `file://` URL (tests).
+    pub fn with_recipe_options(mut self, opts: yard_core::services::engines::LoadOptions) -> Self {
+        self.state.get_mut().recipes = crate::engines::RecipeLoader::new(opts);
+        self
+    }
+
     pub fn with_shim(mut self, shim: Option<PathBuf>) -> Self {
         self.shim = shim;
         self
@@ -375,6 +381,9 @@ impl Reconciler {
         state.last_error = result.as_ref().err().cloned();
         // Once per call, after last_error is set: a client refetches what it shows (protocol 2.11).
         self.bus.emit(Event::Reconciled { config_error: state.last_error.clone() });
+        if std::mem::take(&mut state.engines_changed) {
+            self.bus.emit(Event::EnginesChanged);
+        }
         result
     }
 
@@ -384,6 +393,13 @@ impl Reconciler {
         mail: Option<emailulator::Probe>,
     ) -> Result<ReconcileReport, YardError> {
         let mut report = ReconcileReport::default();
+
+        // 0. The engines: the built-ins, the carried recipes and the user's (recipes spec §7). A
+        // recipe that does not load is a warning; its last good version keeps running.
+        let (engines, engines_changed) = state.recipes.load(&state.paths);
+        state.engines_changed |= engines_changed;
+        report.warnings.extend(crate::engines::errors(&engines).into_iter().map(|e| e.message));
+        let engines = Arc::new(engines);
 
         // 1. Load config. A parse error keeps the last good state serving.
         let loaded = load_yard(&state.paths).and_then(|y| {
@@ -453,7 +469,6 @@ impl Reconciler {
         // A service's ports were pinned when it was added. Reconcile only reads them, and
         // pins a new one the same way when `ports.toml` lost its entry.
         let mut left_out = BTreeMap::new();
-        let engines = Arc::new(Engines::builtin());
         let service_ports = self.settle_service_ports(
             &engines,
             &services_cfg,
@@ -1264,6 +1279,7 @@ fn prepare_dirs(
         paths.nginx_setup_dir(),
         paths.nginx_services_dir(),
         paths.nginx_dir().join("overrides"),
+        paths.engines_dir(),
         paths.tunnels_dir(),
         paths.tunnel_overrides_dir(),
     ] {

@@ -66,9 +66,16 @@ pub struct DaemonOptions {
     pub resolve_host: fn(&str) -> Option<bool>,
     /// How long a `db.*` call waits for the instance it wakes (db spec §9).
     pub db_wake_wait: Duration,
+    /// Whether a `download` recipe may name a `file://` URL: tests only (recipes spec §5).
+    pub allow_file_urls: bool,
 }
 
 impl DaemonOptions {
+    /// How the user's recipes load.
+    pub fn recipe_options(&self) -> yard_core::services::engines::LoadOptions {
+        yard_core::services::engines::LoadOptions { allow_file_urls: self.allow_file_urls }
+    }
+
     /// The spec's intervals: 500 ms FSEvents debounce, a port scan every 30 s.
     pub fn production(paths: Paths, brew_prefix: PathBuf) -> Self {
         Self {
@@ -91,6 +98,7 @@ impl DaemonOptions {
             tunnel_ready_wait: Duration::from_secs(30),
             resolve_host: tunnel::resolves_with_getaddrinfo,
             db_wake_wait: Duration::from_secs(30),
+            allow_file_urls: false,
         }
     }
 }
@@ -175,7 +183,8 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         .with_services(opts.usual_ports.clone(), opts.app_dirs.clone())
         .with_sleeper(sleeper.clone())
         .with_tunnels(tunnels.clone())
-        .with_home(opts.home.clone()),
+        .with_home(opts.home.clone())
+        .with_recipe_options(opts.recipe_options()),
     );
     let jobs = Jobs::new(bus.clone());
     let ctx = Arc::new(Context {
@@ -212,8 +221,12 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     // A service a killed yardd left running holds its port and data directory. This runs one
     // instance after another, up to the stop timeout (30 s) for each orphan that ignores its
     // stop signal, before the watchers start; the socket is bound, so clients wait meanwhile.
-    for (instance, pid) in
-        services::stop_orphans(&opts.paths, &ctx.brew, &yard_core::services::Engines::builtin()).await
+    for (instance, pid) in services::stop_orphans(
+        &opts.paths,
+        &ctx.brew,
+        &crate::engines::load_once(&opts.paths, &opts.recipe_options()),
+    )
+    .await
     {
         tracing::warn!("stopped {instance} (pid {pid}), which an earlier yardd left running");
     }

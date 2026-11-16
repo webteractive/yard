@@ -4,6 +4,7 @@ pub mod conns;
 pub mod daemon;
 pub mod doctor;
 pub mod emailulator;
+pub mod engines;
 pub mod events;
 pub mod ext;
 mod fdpass;

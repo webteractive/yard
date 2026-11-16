@@ -38,6 +38,7 @@ fn main() -> ExitCode {
         Some("minio") => minio(&args),
         Some("emailulator") => emailulator(Path::new(&argv0), &args),
         Some("cloudflared") => cloudflared(Path::new(&argv0), &args),
+        Some("fake-service") => fake_service(Path::new(&argv0), &args),
         _ => mode(&args),
     }
 }
@@ -1059,6 +1060,45 @@ fn minio(args: &[String]) -> ExitCode {
         Err(e) => return fail(format!("cannot listen on {console}: {e}")),
     }
     listen_tcp(Some(api))
+}
+
+/// Any recipe engine (recipes plan Task 6): listens on every `127.0.0.1:<port>` or
+/// `0.0.0.0:<port>` argument and every `--port <n>`, and appends its arguments and PATH to
+/// `fake-service.log` beside itself. SIGTERM ends it.
+fn fake_service(argv0: &Path, args: &[String]) -> ExitCode {
+    let log = argv0.parent().unwrap_or(Path::new(".")).join("fake-service.log");
+    let line = format!("{} PATH={}\n", args.join(" "), std::env::var("PATH").unwrap_or_default());
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+    let mut addrs: Vec<(String, u16)> = vec![];
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--port" {
+            if let Some(port) = it.next().and_then(|p| p.parse().ok()) {
+                addrs.push(("127.0.0.1".into(), port));
+            }
+        } else if let Some((host, port)) = arg.rsplit_once(':')
+            && matches!(host, "127.0.0.1" | "0.0.0.0")
+            && let Ok(port) = port.parse()
+        {
+            addrs.push((host.into(), port));
+        }
+    }
+    let mut listeners = vec![];
+    for (host, port) in addrs {
+        match TcpListener::bind((host.as_str(), port)) {
+            Ok(listener) => listeners.push(listener),
+            Err(e) => return fail(format!("cannot listen on {host}:{port}: {e}")),
+        }
+    }
+    let Some(last) = listeners.pop() else { return fail(format!("fake-service needs an address: {args:?}")) };
+    for listener in listeners {
+        std::thread::spawn(move || serve(listener, false));
+    }
+    serve(last, false)
 }
 
 fn listen_tcp(port: Option<u16>) -> ExitCode {

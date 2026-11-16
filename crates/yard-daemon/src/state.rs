@@ -63,6 +63,10 @@ pub struct State {
     /// asleep instance would run: a wake starts from these while a TOML does not parse.
     pub applied: Vec<UnitSpec>,
     pub slept: BTreeMap<String, UnitSpec>,
+    /// The user's recipes, with each one's last good version (recipes spec §7).
+    pub recipes: crate::engines::RecipeLoader,
+    /// The recipe files changed at the last reconcile: `engines_changed` follows `reconciled`.
+    pub engines_changed: bool,
 }
 
 impl State {
@@ -79,6 +83,8 @@ impl State {
             emailulator: None,
             applied: vec![],
             slept: BTreeMap::new(),
+            recipes: crate::engines::RecipeLoader::default(),
+            engines_changed: false,
         })
     }
 }

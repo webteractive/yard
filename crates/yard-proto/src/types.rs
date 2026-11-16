@@ -460,6 +460,10 @@ pub struct StatusInfo {
     /// Service instances that sleep (protocol 2.8); they have no unit while they do.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sleeping: Vec<SleepingInstance>,
+    /// The user's recipes that did not load (`ENGINE_RECIPE_INVALID`, `<file>:<line>: <why>`;
+    /// protocol 2.13), including those whose engine runs on its last good version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engine_errors: Vec<YardError>,
 }
 
 /// A service instance asleep, in `status`.

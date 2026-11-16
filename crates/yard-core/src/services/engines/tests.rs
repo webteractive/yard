@@ -4,6 +4,7 @@
 use super::*;
 use crate::Paths;
 use crate::services::render::SIGTERM;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use yard_proto::PortRef;
 
@@ -217,5 +218,126 @@ fn instance_names() {
     assert_eq!(parse("meili-search"), Some(("meili-search".into(), None)));
     for bad in ["mysql", "mysql-8", "postgres-17.2", "mysql-latest", "Mongo", ""] {
         assert_eq!(parse(bad), None, "{bad}");
+    }
+}
+
+mod user_recipes {
+    use super::*;
+
+    fn recipe(key: &str, env: &str) -> String {
+        format!(
+            "schema = 1\nkey = \"{key}\"\nname = \"{key}\"\n\n[source]\nkind = \"brew\"\nformula = \"{key}\"\n\n\
+             [ports]\nmain = 7000\n\n[run]\ncommand = [\"{{home}}/bin/{key}\"]\n\n[health]\ntcp = \"main\"\n\n\
+             [env]\nlines = [\"{env}\"]\n"
+        )
+    }
+
+    fn file(key: &str) -> PathBuf {
+        PathBuf::from(format!("/u/.yard/engines/{key}.toml"))
+    }
+
+    fn parse(key: &str, text: &str) -> Result<RecipeEngine, RecipeError> {
+        recipe::parse_recipe(text, &file(key), Origin::User(file(key)), &LoadOptions::default())
+    }
+
+    fn env_of(engines: &Engines, key: &str) -> Vec<String> {
+        let paths = Paths::new("/u/.yard");
+        engines.get(key).unwrap().env_lines(&ctx(key, "/k", &paths, &[]))
+    }
+
+    #[test]
+    fn a_user_recipe_is_added() {
+        let mut last_good = BTreeMap::new();
+        let engines = Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("echo", &recipe("echo", "A=1"))],
+            &mut last_good,
+        );
+        assert_eq!(engines.get("echo").unwrap().origin(), Origin::User(file("echo")));
+        assert!(engines.errors().is_empty());
+        assert!(last_good.contains_key("echo"));
+        assert!(engines.get("mysql").is_some(), "the built-ins stay");
+    }
+
+    #[test]
+    fn user_recipe_replaces_carried() {
+        let mut last_good = BTreeMap::new();
+        let engines = Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("redis", &recipe("redis", "MINE=1"))],
+            &mut last_good,
+        );
+        assert_eq!(engines.get("redis").unwrap().origin(), Origin::User(file("redis")));
+        assert_eq!(env_of(&engines, "redis"), ["MINE=1"]);
+    }
+
+    #[test]
+    fn user_recipe_cannot_replace_builtin() {
+        let mut last_good = BTreeMap::new();
+        let engines = Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("mysql", &recipe("mysql", "X=1"))],
+            &mut last_good,
+        );
+        assert_eq!(engines.get("mysql").unwrap().origin(), Origin::BuiltIn);
+        assert_eq!(engines.errors().len(), 1);
+        assert!(engines.errors()[0].message.contains("reserved"), "{:?}", engines.errors());
+    }
+
+    #[test]
+    fn broken_edit_keeps_last_good() {
+        let mut last_good = BTreeMap::new();
+        Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("echo", &recipe("echo", "A=1"))],
+            &mut last_good,
+        );
+        let engines = Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("echo", "schema = 1\nkey = ")],
+            &mut last_good,
+        );
+        assert_eq!(env_of(&engines, "echo"), ["A=1"], "the last good version stays in force");
+        assert!(engines.errors().is_empty(), "the engine exists, so the error is its own");
+        let stale = engines.stale("echo").expect("the error rides on the engine");
+        assert_eq!(stale.file, file("echo"));
+        assert!(stale.line.is_some());
+    }
+
+    #[test]
+    fn broken_with_no_last_good_is_an_error_and_no_engine() {
+        let mut last_good = BTreeMap::new();
+        let engines = Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("echo", "schema = 1\nkey = ")],
+            &mut last_good,
+        );
+        assert!(engines.get("echo").is_none());
+        assert_eq!(engines.errors().len(), 1);
+    }
+
+    #[test]
+    fn broken_user_recipe_shadowing_carried_falls_back_to_it() {
+        let mut last_good = BTreeMap::new();
+        let engines = Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("redis", "schema = 1\nkey = ")],
+            &mut last_good,
+        );
+        assert_eq!(engines.get("redis").unwrap().origin(), Origin::Carried);
+        assert!(engines.stale("redis").is_some());
+    }
+
+    #[test]
+    fn a_deleted_recipe_is_forgotten() {
+        let mut last_good = BTreeMap::new();
+        Engines::with_user(
+            Engines::builtin_shared(),
+            vec![parse("echo", &recipe("echo", "A=1"))],
+            &mut last_good,
+        );
+        let engines = Engines::with_user(Engines::builtin_shared(), vec![], &mut last_good);
+        assert!(engines.get("echo").is_none());
+        assert!(last_good.is_empty());
     }
 }

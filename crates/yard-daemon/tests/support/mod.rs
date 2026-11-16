@@ -139,6 +139,19 @@ impl Fixture {
         }
     }
 
+    /// A brew keg `opt/<formula>` whose `bin/fake-service` is the fake acting as any recipe
+    /// engine's program (recipes plan Task 6); a test recipe runs `{home}/bin/fake-service`.
+    pub fn add_fake_formula(&self, formula: &str) {
+        let bin = self.brew.path().join("opt").join(formula).join("bin");
+        place(&bin.join("fake-service"), |dst| symlink(&self.fake, dst));
+    }
+
+    /// Writes `engines/<key>.toml`, a user recipe.
+    pub fn add_recipe(&self, key: &str, text: &str) {
+        std::fs::create_dir_all(self.paths.engines_dir()).unwrap();
+        std::fs::write(self.paths.engines_dir().join(format!("{key}.toml")), text).unwrap();
+    }
+
     /// Appends one `[services."<instance>"]` table to `services.toml`, as `yard service add`
     /// would write it.
     pub fn add_service(&self, instance: &str, formula: &str, stopped: bool) {

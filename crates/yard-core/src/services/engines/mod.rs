@@ -237,10 +237,15 @@ pub fn main_port(engine: &dyn ServiceEngine, instance: &str, ports: &[PortRef]) 
         .map_or_else(|| specs.first().map_or(0, |p| p.usual), |p| p.port)
 }
 
-/// The engines Yard knows, by key.
+/// The engines Yard knows, by key, and the user's recipes that did not load.
 #[derive(Debug, Clone, Default)]
 pub struct Engines {
     engines: BTreeMap<String, Arc<dyn ServiceEngine>>,
+    /// Recipe files that did not load and left no engine behind.
+    errors: Vec<RecipeError>,
+    /// Recipe files that did not load while an engine of their key runs on: the file's last
+    /// good version, or the carried recipe it shadowed (recipes spec §7).
+    stale: BTreeMap<String, RecipeError>,
 }
 
 impl Engines {
@@ -264,6 +269,57 @@ impl Engines {
     /// Every key, sorted.
     pub fn keys(&self) -> Vec<String> {
         self.engines.keys().cloned().collect()
+    }
+
+    /// The recipe files that did not load and left no engine.
+    pub fn errors(&self) -> &[RecipeError] {
+        &self.errors
+    }
+
+    /// Why `key`'s recipe file did not load, while its engine runs on an older version.
+    pub fn stale(&self, key: &str) -> Option<&RecipeError> {
+        self.stale.get(key)
+    }
+
+    /// `base` (the built-ins and carried recipes) with the user's recipes, `user`, one result per
+    /// file (recipes spec §7). A recipe replaces a carried one with its key; one that names a
+    /// built-in's key is an error and changes nothing. A file that does not load keeps its key's
+    /// last good version from `last_good` in force, else the carried recipe it shadowed, else
+    /// leaves no engine. `last_good` is updated to this load: a file that loaded, or the version
+    /// kept for a broken one; a key with no file any more is forgotten.
+    pub fn with_user(
+        base: &Engines,
+        user: Vec<Result<RecipeEngine, RecipeError>>,
+        last_good: &mut BTreeMap<String, Arc<RecipeEngine>>,
+    ) -> Engines {
+        let mut engines =
+            Engines { engines: base.engines.clone(), errors: Vec::new(), stale: BTreeMap::new() };
+        let mut kept = BTreeMap::new();
+        for result in user {
+            match result {
+                Ok(recipe) => {
+                    let recipe = Arc::new(recipe);
+                    let key = recipe.key().to_string();
+                    kept.insert(key.clone(), recipe.clone());
+                    engines.engines.insert(key, recipe);
+                }
+                Err(e) => {
+                    let key = e.file.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+                    let base_engine = base.engines.get(&key);
+                    if let Some(good) = last_good.get(&key) {
+                        kept.insert(key.clone(), good.clone());
+                        engines.engines.insert(key.clone(), good.clone());
+                        engines.stale.insert(key, e);
+                    } else if base_engine.is_some_and(|b| b.origin() == Origin::Carried) {
+                        engines.stale.insert(key, e);
+                    } else {
+                        engines.errors.push(e);
+                    }
+                }
+            }
+        }
+        *last_good = kept;
+        engines
     }
 
     /// [`Engines::builtin`], built once: the carried recipes are parsed the first time only.

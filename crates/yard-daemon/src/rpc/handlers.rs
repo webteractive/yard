@@ -270,6 +270,7 @@ async fn status(ctx: &Context) -> Result<StatusInfo, YardError> {
         units: ctx.supervisor().list().into_iter().filter(|u| !asleep.contains_key(&u.name)).collect(),
         sites: snapshot.as_ref().map_or(0, |s| s.resolution.sites.len()),
         config_error: ctx.reconciler.last_error().await,
+        engine_errors: snapshot.as_ref().map(|s| crate::engines::errors(&s.engines)).unwrap_or_default(),
         sleeping: asleep
             .into_iter()
             .filter_map(|(name, since)| {

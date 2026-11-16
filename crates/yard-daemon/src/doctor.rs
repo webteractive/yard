@@ -126,7 +126,7 @@ impl View {
             (Ok(y), Ok(_)) => Some(y.effective_tld().to_string()),
             _ => None,
         };
-        let engines = std::sync::Arc::new(yard_core::services::Engines::builtin());
+        let engines = std::sync::Arc::new(crate::engines::load_once(paths, &Default::default()));
         let mut projects = Projects::new();
         let sites = match (&yard, &sites_cfg, &registry, &tld) {
             (Ok(y), Ok(s), Ok(r), Some(tld)) => {
