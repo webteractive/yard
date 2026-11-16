@@ -1,10 +1,9 @@
-//! The contract's built-ins must say exactly what the enum's match arms say (recipes plan
-//! Task 2); Task 5 deletes the arms and keeps these as the built-ins' own tests.
+//! The built-ins and the carried recipes, through the contract. Their commands and config text
+//! are pinned by `services::render`'s tests and snapshots, which predate the contract.
 
 use super::*;
 use crate::Paths;
-use crate::services::render;
-use crate::services::{DATABASE_START_TIMEOUT, Engine};
+use crate::services::render::SIGTERM;
 use std::path::{Path, PathBuf};
 use yard_proto::PortRef;
 
@@ -14,140 +13,30 @@ fn port(name: &str, port: u16) -> PortRef {
     PortRef { name: name.into(), port }
 }
 
-/// Each instance with the ports a test daemon would give it, and its enum engine.
-fn cases() -> Vec<(&'static str, Engine, Vec<PortRef>, &'static str)> {
-    vec![
-        ("mysql-8.0", Engine::Mysql, vec![port("mysql-8.0", 23306)], "/opt/homebrew/opt/mysql@8.0"),
-        ("mysql-8.4", Engine::Mysql, vec![port("mysql-8.4", 23307)], "/opt/homebrew/opt/mysql@8.4"),
-        ("mysql-9.7", Engine::Mysql, vec![port("mysql-9.7", 23308)], "/opt/homebrew/opt/mysql@9.7"),
-        (
-            "postgres-17",
-            Engine::Postgres,
-            vec![port("postgres-17", 25432)],
-            "/opt/homebrew/opt/postgresql@17",
-        ),
-        ("redis", Engine::Redis, vec![port("redis", 26379)], "/opt/homebrew/opt/redis"),
-        (
-            "minio",
-            Engine::Minio,
-            vec![port("minio", 29000), port("minio-console", 29001)],
-            "/opt/homebrew/opt/minio",
-        ),
-    ]
+fn get(key: &str) -> Arc<dyn ServiceEngine> {
+    Engines::builtin().get(key).unwrap_or_else(|| panic!("{key} missing")).clone()
+}
+
+fn ctx<'a>(instance: &'a str, home: &'a str, paths: &'a Paths, ports: &'a [PortRef]) -> InstanceCtx<'a> {
+    InstanceCtx { instance, home: Path::new(home), paths, ports, macos_user: "me", node: None }
 }
 
 #[test]
-fn parity_with_the_enum() {
-    let paths = Paths::new(ROOT);
+fn the_set_is_the_builtins_and_the_carried_recipes() {
     let engines = Engines::builtin();
-    for (instance, engine, ports, keg) in cases() {
-        let e = engines.get(engine.key()).unwrap_or_else(|| panic!("{} missing", engine.key()));
-        let ctx = InstanceCtx {
-            instance,
-            home: Path::new(keg),
-            paths: &paths,
-            ports: &ports,
-            macos_user: "me",
-            node: None,
-        };
-        assert_eq!(e.key(), engine.key());
-        assert_eq!(e.display(), engine.display(), "{instance}");
-        assert_eq!(
-            e.command(&ctx),
-            render::command(engine, instance, Path::new(keg), &paths, &ports),
-            "{instance}"
-        );
-        assert_eq!(
-            e.init(&ctx),
-            render::init_command(engine, instance, Path::new(keg), &paths, "me"),
-            "{instance}"
-        );
-        assert_eq!(e.config_file(&ctx), render::config_file(engine, instance, &paths, &ports), "{instance}");
-        assert_eq!(e.user_overrides().as_deref(), render::user_overrides(engine), "{instance}");
-        let account = engine.account("me");
-        assert_eq!(e.account("me"), account, "{instance}");
-        assert_eq!(e.env_lines(&ctx), crate::services::env_lines(engine, &ports, &account), "{instance}");
-        let usual: Vec<(String, u16)> =
-            engine.usual_ports().iter().map(|(s, p)| (s.to_string(), *p)).collect();
-        let got: Vec<(String, u16)> = e.ports().into_iter().map(|p| (p.suffix, p.usual)).collect();
-        assert_eq!(got, usual, "{instance}");
-        assert_eq!(e.lines().is_some(), engine.versioned(), "{instance}");
-        if let Some(lines) = e.lines() {
-            assert_eq!(Some(lines.default_line), engine.default_line());
-            assert_eq!(lines.base_formula, engine.base_formula());
-            for line in ["8.4", "17", "8", "x", "8.4.1", ""] {
-                assert_eq!(lines.valid(line), engine.valid_line(line), "{instance} {line}");
-            }
-        }
-        let timeout = matches!(engine, Engine::Mysql | Engine::Postgres).then_some(DATABASE_START_TIMEOUT);
-        assert_eq!(e.start_timeout(), timeout, "{instance}");
-        assert!(e.may_sleep());
-        let origin = if engine == Engine::Redis { Origin::Carried } else { Origin::BuiltIn };
-        assert_eq!(e.origin(), origin, "{instance}");
+    assert_eq!(engines.keys(), ["minio", "mysql", "postgres", "redis"]);
+    for key in ["mysql", "postgres", "minio"] {
+        assert_eq!(get(key).origin(), Origin::BuiltIn, "{key}");
     }
-}
-
-/// Redis moved to a carried recipe (recipes spec §10): under a data root with a space and a
-/// quote its unit, `redis.conf` (every byte), overrides, dirs, env lines and connect details are
-/// the enum's.
-#[test]
-fn redis_recipe_matches_the_builtin() {
-    let paths = Paths::new("/Users/me/Library/Application Support/Ya\"rd");
-    let ports = [port("redis", 26379)];
-    let keg = Path::new("/opt/homebrew/opt/redis");
-    let engines = Engines::builtin();
-    let redis = engines.get("redis").unwrap();
-    let ctx = InstanceCtx {
-        instance: "redis",
-        home: keg,
-        paths: &paths,
-        ports: &ports,
-        macos_user: "me",
-        node: None,
-    };
-    assert_eq!(redis.command(&ctx), render::command(Engine::Redis, "redis", keg, &paths, &ports));
-    assert_eq!(redis.config_file(&ctx), render::config_file(Engine::Redis, "redis", &paths, &ports));
-    assert_eq!(redis.user_overrides().as_deref(), Some(""));
-    assert_eq!(redis.dirs(), ["data"]);
-    assert_eq!(redis.start_timeout(), None);
-    assert_eq!(redis.command(&ctx).stop_signal, render::SIGTERM);
-    assert_eq!(redis.account("me"), Engine::Redis.account("me"));
+    assert_eq!(get("redis").origin(), Origin::Carried);
     assert_eq!(
-        redis.env_lines(&ctx),
-        crate::services::env_lines(Engine::Redis, &ports, &Engine::Redis.account("me"))
+        [get("mysql").display(), get("postgres").display(), get("redis").display(), get("minio").display()],
+        ["MySQL", "PostgreSQL", "Redis", "MinIO"]
     );
-    let connect = redis.connect(&ctx).unwrap();
-    assert_eq!(connect.url, "redis://127.0.0.1:26379");
-    assert_eq!(
-        connect.shell,
-        Some(vec!["/opt/homebrew/opt/redis/bin/redis-cli".into(), "-p".into(), "26379".into()])
-    );
-    assert_eq!(
-        connect.clients,
-        ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]
-    );
-    assert_eq!(redis.source(), SourceSpec::Brew { formula: "redis".into() });
-    assert_eq!(redis.display(), "Redis");
-}
-
-#[test]
-fn every_carried_recipe_loads() {
-    let texts = carried::texts();
-    assert!(!texts.is_empty());
-    let loaded = carried::all();
-    assert_eq!(loaded.len(), texts.len(), "a carried recipe failed to load");
-    for (name, text) in texts {
-        let file = PathBuf::from(format!("{name}.toml"));
-        if let Err(e) = recipe::parse_recipe(text, &file, Origin::Carried, &LoadOptions::default()) {
-            panic!("{name}: {e:?}");
-        }
-    }
 }
 
 #[test]
 fn each_builtin_says_what_it_supports() {
-    let engines = Engines::builtin();
-    let get = |k: &str| engines.get(k).unwrap().clone();
     assert_eq!(get("mysql").databases(), Some(DbFlavor::Mysql));
     assert_eq!(get("postgres").databases(), Some(DbFlavor::Postgres));
     assert_eq!(get("redis").databases(), None);
@@ -162,52 +51,130 @@ fn each_builtin_says_what_it_supports() {
     assert_eq!(get("minio").source(), SourceSpec::Brew { formula: "minio/stable/minio".into() });
     assert_eq!(get("redis").source(), SourceSpec::Brew { formula: "redis".into() });
     assert_eq!(get("mysql").source(), SourceSpec::BrewLines(&MYSQL_LINES));
-    assert_eq!(engines.keys(), ["minio", "mysql", "postgres", "redis"]);
+    assert_eq!(get("mysql").lines(), Some(&MYSQL_LINES));
+    assert_eq!(get("redis").lines(), None);
+    let timeout = Some(crate::services::DATABASE_START_TIMEOUT);
+    assert_eq!((get("mysql").start_timeout(), get("postgres").start_timeout()), (timeout, timeout));
+    assert_eq!((get("redis").start_timeout(), get("minio").start_timeout()), (None, None));
+    let ports = |k: &str| get(k).ports().into_iter().map(|p| (p.suffix, p.usual)).collect::<Vec<_>>();
+    assert_eq!(ports("minio"), [(String::new(), 9000), ("console".into(), 9001)]);
+    assert_eq!(ports("mysql"), [(String::new(), 3306)]);
+    assert_eq!(ports("postgres"), [(String::new(), 5432)]);
+    assert_eq!(ports("redis"), [(String::new(), 6379)]);
+}
+
+#[test]
+fn accounts_and_env_lines() {
+    let paths = Paths::new(ROOT);
+    let acct = |u: Option<&str>, p: Option<&str>| yard_proto::Account {
+        user: u.map(str::to_string),
+        password: p.map(str::to_string),
+    };
+    assert_eq!(get("mysql").account("me"), acct(Some("root"), Some("")));
+    assert_eq!(get("postgres").account("me"), acct(Some("me"), Some("")));
+    assert_eq!(get("redis").account("me"), acct(None, None));
+    assert_eq!(get("minio").account("me"), acct(Some("minioadmin"), Some("minioadmin")));
+    let my = [port("mysql-8.4", 3307)];
+    assert_eq!(
+        get("mysql").env_lines(&ctx("mysql-8.4", "/k", &paths, &my)),
+        ["DB_CONNECTION=mysql", "DB_HOST=127.0.0.1", "DB_PORT=3307", "DB_USERNAME=root", "DB_PASSWORD="]
+    );
+    let pg = [port("postgres-17", 5433)];
+    assert_eq!(
+        get("postgres").env_lines(&ctx("postgres-17", "/k", &paths, &pg)),
+        ["DB_CONNECTION=pgsql", "DB_HOST=127.0.0.1", "DB_PORT=5433", "DB_USERNAME=me", "DB_PASSWORD="]
+    );
+    let redis = [port("redis", 6380)];
+    assert_eq!(
+        get("redis").env_lines(&ctx("redis", "/k", &paths, &redis)),
+        ["REDIS_HOST=127.0.0.1", "REDIS_PORT=6380", "REDIS_PASSWORD=null"]
+    );
+    // The API port, not the console's, whichever comes first.
+    let minio = [port("minio-console", 9101), port("minio", 9100)];
+    assert_eq!(
+        get("minio").env_lines(&ctx("minio", "/k", &paths, &minio)),
+        [
+            "AWS_ACCESS_KEY_ID=minioadmin",
+            "AWS_SECRET_ACCESS_KEY=minioadmin",
+            "AWS_DEFAULT_REGION=us-east-1",
+            "AWS_ENDPOINT=http://127.0.0.1:9100",
+            "AWS_USE_PATH_STYLE_ENDPOINT=true",
+        ]
+    );
+}
+
+/// Redis moved to a carried recipe (recipes spec §10); its conf is pinned byte for byte by
+/// `services::render`'s `redis_conf` snapshot, taken from the code it replaced.
+#[test]
+fn redis_runs_as_it_did() {
+    let paths = Paths::new("/Users/me/Library/Application Support/Ya\"rd");
+    let ports = [port("redis", 26379)];
+    let redis = get("redis");
+    let c = ctx("redis", "/opt/homebrew/opt/redis", &paths, &ports);
+    let cmd = redis.command(&c);
+    assert_eq!(cmd.program, PathBuf::from("/opt/homebrew/opt/redis/bin/redis-server"));
+    assert_eq!(cmd.args, [paths.service_conf("redis", "redis.conf").into_os_string()]);
+    assert!(cmd.env.is_empty());
+    assert_eq!(cmd.stop_signal, SIGTERM);
+    assert_eq!(redis.init(&c), None);
+    assert_eq!(redis.user_overrides().as_deref(), Some(""));
+    let (file, text) = redis.config_file(&c).unwrap();
+    assert_eq!(file, paths.service_conf("redis", "redis.conf"));
+    assert!(
+        text.contains("dir \"/Users/me/Library/Application Support/Ya\\\"rd/services/redis/data\"\n"),
+        "{text}"
+    );
 }
 
 #[test]
 fn connect_details() {
     let paths = Paths::new(ROOT);
-    let engines = Engines::builtin();
-    let ctx = |instance: &'static str, ports: &'static [PortRef], home: &'static str| InstanceCtx {
-        instance,
-        home: Path::new(home),
-        paths: Box::leak(Box::new(paths.clone())),
-        ports,
-        macos_user: "me",
-        node: None,
-    };
-    let redis_ports: &'static [PortRef] = Box::leak(Box::new([port("redis", 26379)]));
-    let redis =
-        engines.get("redis").unwrap().connect(&ctx("redis", redis_ports, "/opt/homebrew/opt/redis")).unwrap();
+    let redis_ports = [port("redis", 26379)];
+    let redis = get("redis").connect(&ctx("redis", "/opt/homebrew/opt/redis", &paths, &redis_ports)).unwrap();
     assert_eq!(redis.url, "redis://127.0.0.1:26379");
     assert_eq!(redis.socket, None);
     assert_eq!(
         redis.shell,
         Some(vec!["/opt/homebrew/opt/redis/bin/redis-cli".into(), "-p".into(), "26379".into()])
     );
-    assert_eq!(redis.clients.len(), 2);
-    let my_ports: &'static [PortRef] = Box::leak(Box::new([port("mysql-8.4", 23307)]));
-    let mysql = engines.get("mysql").unwrap().connect(&ctx("mysql-8.4", my_ports, "/k")).unwrap();
+    assert_eq!(
+        redis.clients,
+        ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]
+    );
+    let my_ports = [port("mysql-8.4", 23307)];
+    let mysql = get("mysql").connect(&ctx("mysql-8.4", "/k", &paths, &my_ports)).unwrap();
     assert_eq!(mysql.url, "mysql://root@127.0.0.1:23307");
     assert_eq!(mysql.socket, Some(paths.mysql_socket("mysql-8.4")));
     assert_eq!(mysql.shell, None);
-    let pg_ports: &'static [PortRef] = Box::leak(Box::new([port("postgres-17", 25432)]));
-    let pg = engines.get("postgres").unwrap().connect(&ctx("postgres-17", pg_ports, "/k")).unwrap();
+    assert_eq!(mysql.clients.len(), 2);
+    let pg_ports = [port("postgres-17", 25432)];
+    let pg = get("postgres").connect(&ctx("postgres-17", "/k", &paths, &pg_ports)).unwrap();
     assert_eq!(pg.url, "postgresql://me@127.0.0.1:25432");
     assert_eq!(pg.socket, Some(paths.run_dir()));
-    let minio_ports: &'static [PortRef] = Box::leak(Box::new([port("minio", 29000)]));
-    assert_eq!(engines.get("minio").unwrap().connect(&ctx("minio", minio_ports, "/k")), None);
+    let minio_ports = [port("minio", 29000)];
+    assert_eq!(get("minio").connect(&ctx("minio", "/k", &paths, &minio_ports)), None);
 }
 
 #[test]
 fn main_port_skips_the_console() {
-    let engines = Engines::builtin();
-    let minio = engines.get("minio").unwrap();
+    let minio = get("minio");
     let ports = [port("minio-console", 29001), port("minio", 29000)];
     assert_eq!(main_port(minio.as_ref(), "minio", &ports), 29000);
     assert_eq!(main_port(minio.as_ref(), "minio", &[]), 9000);
     assert_eq!(main_port(minio.as_ref(), "minio", &[port("minio-console", 29001)]), 9000);
+}
+
+#[test]
+fn every_carried_recipe_loads() {
+    let texts = carried::texts();
+    assert!(!texts.is_empty());
+    assert_eq!(carried::all().len(), texts.len(), "a carried recipe failed to load");
+    for (name, text) in texts {
+        let file = PathBuf::from(format!("{name}.toml"));
+        if let Err(e) = recipe::parse_recipe(text, &file, Origin::Carried, &LoadOptions::default()) {
+            panic!("{name}: {e:?}");
+        }
+    }
 }
 
 #[test]
@@ -234,4 +201,21 @@ fn versioned_lines_without_a_set() {
     assert_eq!(versioned_lines("redis"), None);
     assert_eq!(MYSQL_LINES.plain_line("8.4.13"), Some("8.4".into()));
     assert_eq!(POSTGRES_LINES.plain_line("18.1"), Some("18".into()));
+}
+
+#[test]
+fn instance_names() {
+    assert_eq!(instance_name("mysql", None), "mysql-8.4");
+    assert_eq!(instance_name("mysql", Some("8.0")), "mysql-8.0");
+    assert_eq!(instance_name("postgres", None), "postgres-17");
+    assert_eq!(instance_name("redis", None), "redis");
+    assert_eq!(instance_name("memcached", None), "memcached");
+    let parse = |n: &str| parse_instance(n).map(|(k, l)| (k.to_string(), l));
+    assert_eq!(parse("mysql-8.4"), Some(("mysql".into(), Some("8.4".into()))));
+    assert_eq!(parse("postgres-17"), Some(("postgres".into(), Some("17".into()))));
+    assert_eq!(parse("redis"), Some(("redis".into(), None)));
+    assert_eq!(parse("meili-search"), Some(("meili-search".into(), None)));
+    for bad in ["mysql", "mysql-8", "postgres-17.2", "mysql-latest", "Mongo", ""] {
+        assert_eq!(parse(bad), None, "{bad}");
+    }
 }

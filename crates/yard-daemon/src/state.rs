@@ -10,6 +10,7 @@ use yard_core::config::{ServicesConfig, SitesConfig, YardConfig};
 use yard_core::generated::Hashes;
 use yard_core::ports::Registry;
 use yard_core::project::{IgnoredFiles, Projects};
+use yard_core::services::Engines;
 use yard_core::sites::Resolution;
 use yard_proto::YardError;
 
@@ -25,6 +26,9 @@ pub struct Snapshot {
     /// The managed `.yard` files that exist but are not used, by site.
     pub ignored_managed: IgnoredFiles,
     pub registry: Registry,
+    /// The engines this reconcile ran with: the built-ins, the carried recipes and the user's
+    /// (recipes spec §7). Every reader of the snapshot sees the same set.
+    pub engines: std::sync::Arc<Engines>,
     pub tld: String,
     pub resolution: Resolution,
     /// The instances in `services` that are not stopped but have no unit, and why: their keg

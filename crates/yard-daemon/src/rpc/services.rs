@@ -12,8 +12,9 @@ use crate::sources::require_trusted;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
 use yard_core::config::load_services;
+use yard_core::services::engines::{EngineKey, ServiceEngine};
+use yard_core::services::instance_name;
 use yard_core::services::sleep::SleepAfter;
-use yard_core::services::{Engine, instance_name};
 use yard_core::sources::tap_of;
 use yard_proto::methods::{
     ServiceAddParams, ServiceLogsParams, ServiceParams, ServicePortParams, ServiceRemoveParams,
@@ -27,18 +28,15 @@ fn bad(message: String) -> YardError {
 
 /// The line `add` is asked for: the engine's default when none is given, `None` for an
 /// engine that has no lines.
-fn line_of(engine: Engine, version: Option<&str>) -> Result<Option<String>, YardError> {
-    match (engine.versioned(), version) {
-        (false, None) => Ok(None),
-        (false, Some(v)) => Err(bad(format!("{} has no versions, so {v:?} means nothing", engine.display()))
+fn line_of(engine: &dyn ServiceEngine, version: Option<&str>) -> Result<Option<String>, YardError> {
+    match (engine.lines(), version) {
+        (None, None) => Ok(None),
+        (None, Some(v)) => Err(bad(format!("{} has no versions, so {v:?} means nothing", engine.display()))
             .with_hint(format!("yard service add {}", engine.key()))),
-        (true, None) => Ok(engine.default_line().map(str::to_string)),
-        (true, Some(v)) if engine.valid_line(v) => Ok(Some(v.to_string())),
-        (true, Some(v)) => {
-            let example = engine.default_line().unwrap_or_default();
-            Err(bad(format!("{v:?} is not a {} release line", engine.display()))
-                .with_hint(format!("yard service add {} --version {example}", engine.key())))
-        }
+        (Some(lines), None) => Ok(Some(lines.default_line.to_string())),
+        (Some(lines), Some(v)) if lines.valid(v) => Ok(Some(v.to_string())),
+        (Some(lines), Some(v)) => Err(bad(format!("{v:?} is not a {} release line", engine.display()))
+            .with_hint(format!("yard service add {} --version {}", engine.key(), lines.default_line))),
     }
 }
 
@@ -46,19 +44,23 @@ pub(super) async fn add(ctx: &Context, p: ServiceAddParams) -> Result<JobStarted
     if emailulator::is_emailulator(&p.engine) {
         return emailulator::add(ctx, p).await;
     }
-    let engine = Engine::from_key(&p.engine).ok_or_else(|| {
-        bad(format!("{:?} is not a service Yard runs", p.engine))
-            .with_hint("the engines are mysql, postgres, redis, minio and emailulator")
+    let snap = snapshot(ctx).await?;
+    let engine = snap.engines.get(&p.engine).cloned().ok_or_else(|| {
+        let keys = snap.engines.keys();
+        bad(format!("{:?} is not a service Yard runs", p.engine)).with_hint(format!(
+            "the engines are {} and emailulator (yard engines lists them)",
+            keys.join(", ")
+        ))
     })?;
-    let line = line_of(engine, p.version.as_deref())?;
+    let line = line_of(engine.as_ref(), p.version.as_deref())?;
     if p.port == Some(0) {
         return Err(bad("0 is not a port".into()).with_hint("pass a port such as --port 3307"));
     }
-    let instance = instance_name(engine, line.as_deref());
+    let instance = instance_name(engine.key(), line.as_deref());
     if load_services(&ctx.paths)?.services.contains_key(&instance) {
         return Err(services::exists(&instance));
     }
-    let resolved = services::resolve(&ctx.brew, engine, line.as_deref()).await?;
+    let resolved = services::resolve(&ctx.brew, engine.as_ref(), line.as_deref()).await?;
     // Nothing is asked of brew for a keg that is already there, and homebrew/core needs no trust.
     let Resolved { formula, .. } = &resolved;
     if !services::keg(&ctx.brew, formula).exists() && tap_of(formula).is_some() {
@@ -103,7 +105,7 @@ pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), 
         return Err(services::not_found(&p.name));
     };
     let snap = snapshot(ctx).await?;
-    let sites = services::used_by(&snap, entry.engine, &p.name);
+    let sites = services::used_by(&snap, &entry.engine, &p.name);
     if !sites.is_empty() {
         let files: Vec<String> = sites
             .iter()
@@ -119,7 +121,7 @@ pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), 
         return Err(refused);
     }
     // Its reconcile forgets the instance's sleep and drops its sites from `run/sleeping`.
-    services::remove(&ctx.paths, &ctx.reconciler, entry.engine, &p.name, p.keep_data).await?;
+    services::remove(&ctx.paths, &ctx.reconciler, &p.name, p.keep_data).await?;
     Ok(())
 }
 
@@ -163,11 +165,15 @@ pub(super) fn instance_info(
 
 /// The engine of the instance `services.toml` lists as `name`, read from the file as it is now.
 /// emailulator is `SERVICE_EXTERNAL`: its LaunchAgent runs it, not Yard.
-async fn engine_of(ctx: &Context, name: &str) -> Result<Engine, YardError> {
+async fn engine_of(ctx: &Context, name: &str) -> Result<EngineKey, YardError> {
     if emailulator::is_emailulator(name) {
         return Err(emailulator::refuse(ctx, false).await);
     }
-    load_services(&ctx.paths)?.services.get(name).map(|e| e.engine).ok_or_else(|| services::not_found(name))
+    load_services(&ctx.paths)?
+        .services
+        .get(name)
+        .map(|e| e.engine.clone())
+        .ok_or_else(|| services::not_found(name))
 }
 
 /// `services.stop` and `services.start`: `stopped` is written through `TomlFile` (a start
@@ -260,14 +266,20 @@ pub(super) async fn logs(ctx: &Context, p: ServiceLogsParams) -> Result<Vec<Stri
 /// `yard ports set minio-console`), then reconciles, which restarts a running instance on
 /// it. A stopped instance's port moves too and it stays stopped.
 pub(super) async fn port(ctx: &Context, p: ServicePortParams) -> Result<ServiceInfo, YardError> {
-    let engine = engine_of(ctx, &p.name).await?;
+    let key = engine_of(ctx, &p.name).await?;
+    let engine = snapshot(ctx)
+        .await?
+        .engines
+        .get(key.as_str())
+        .cloned()
+        .ok_or_else(|| services::unknown_engine(&p.name, &key))?;
     if p.port == 0 {
         return Err(bad("0 is not a port".into())
             .with_hint(format!("yard service port {} <port>, such as 3307", p.name)));
     }
     let (paths, name, port) = (ctx.paths.clone(), p.name.clone(), p.port);
     // The probe binds a socket and the holder lookup runs lsof.
-    tokio::task::spawn_blocking(move || services::move_port(&paths, engine, &name, port))
+    tokio::task::spawn_blocking(move || services::move_port(&paths, engine.as_ref(), &name, port))
         .await
         .map_err(YardError::internal)??;
     reconcile(ctx).await?;

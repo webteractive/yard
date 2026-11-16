@@ -103,6 +103,8 @@ pub const DB_LIST: Method<DbListParams, Vec<DbInstanceList>> = Method::slow(meth
 pub const DB_CREATE: Method<DbCreateParams, DbCreated> = Method::slow(methods::DB_CREATE);
 pub const DB_CONNECT: Method<DbConnectParams, Vec<ConnectInfo>> = Method::slow(methods::DB_CONNECT);
 pub const DB_COMMAND: Method<DbCommandParams, DbCommand> = Method::slow(methods::DB_COMMAND);
+pub const ENGINES_LIST: Method<(), EnginesListResult> = Method::quick(methods::ENGINES_LIST);
+pub const ENGINES_INSTALL: Method<EngineInstallParams, JobStarted> = Method::quick(methods::ENGINES_INSTALL);
 pub const JOBS_CANCEL: Method<JobParams, IgnoredAny> = Method::quick(methods::JOBS_CANCEL);
 
 /// Each entry's method name once (`node.list` has two entries), `hello` and `subscribe` aside.
@@ -171,5 +173,7 @@ pub const NAMES: &[&str] = &[
     DB_CREATE.name,
     DB_CONNECT.name,
     DB_COMMAND.name,
+    ENGINES_LIST.name,
+    ENGINES_INSTALL.name,
     JOBS_CANCEL.name,
 ];

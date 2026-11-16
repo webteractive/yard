@@ -111,3 +111,28 @@ pub fn versioned_lines(key: &str) -> Option<&'static LineSpec> {
         _ => None,
     }
 }
+
+/// The instance name: `mysql-8.4`, `postgres-17`, `redis`, `memcached`. A versioned engine with
+/// no line gets its default line; any other engine's instance is named for its key.
+pub fn instance_name(key: &str, line: Option<&str>) -> String {
+    match versioned_lines(key) {
+        Some(spec) => format!("{key}-{}", line.unwrap_or(spec.default_line)),
+        None => key.to_string(),
+    }
+}
+
+/// The inverse of [`instance_name`], with no engine set: `mysql-8.4` is MySQL's 8.4 line, and
+/// any other valid engine key is that engine's one instance. `None` for `mysql` alone,
+/// `mysql-8` or a name that is not a key.
+pub fn parse_instance(name: &str) -> Option<(EngineKey, Option<String>)> {
+    for key in ["mysql", "postgres"] {
+        if name == key {
+            return None;
+        }
+        if let Some(line) = name.strip_prefix(key).and_then(|rest| rest.strip_prefix('-')) {
+            let spec = versioned_lines(key)?;
+            return spec.valid(line).then(|| (EngineKey(key.to_string()), Some(line.to_string())));
+        }
+    }
+    EngineKey::new(name).ok().map(|k| (k, None))
+}

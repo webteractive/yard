@@ -12,7 +12,8 @@ use tokio::process::Command;
 use yard_core::brew::Brew;
 use yard_core::config::ServicesConfig;
 use yard_core::config::yard::{ExtSource, YardConfig};
-use yard_core::services::{Engine, brew_info};
+use yard_core::services::engines::SourceSpec;
+use yard_core::services::{Engines, brew_info};
 use yard_core::shim::child_path;
 use yard_core::sources::{self, TRUST_SINCE, TrustStore, YARD_TAPS};
 use yard_proto::{ErrorCode, SourceInfo, YardError};
@@ -160,34 +161,39 @@ pub async fn require_trusted_if_listed(brew: &Brew, formula: &str) -> Result<(),
     if listed { Err(refusal) } else { Ok(()) }
 }
 
-/// MinIO's formula in the `minio/stable` tap. homebrew/core's `minio` shares its keg
-/// (`opt/minio`), so the keg alone does not say which one is installed.
-pub const MINIO_TAP_FORMULA: &str = "minio/stable/minio";
-
-/// Whether the MinIO keg at `opt/minio` is the tap's: when `services.toml` has a MinIO
-/// instance, the formula it records says; with none, brew is asked (`brew info --json=v2
-/// minio`, which describes the formula of the installed keg, within `limit`) and anything it
-/// does not say is the tap's is not: a brew that fails or does not answer in time included.
-/// The tap's formula is never reported for a core MinIO.
-async fn minio_from_tap(brew: &Brew, services: Option<&ServicesConfig>, limit: Duration) -> bool {
-    if !brew.prefix.join("opt/minio").exists() {
+/// Whether the keg of the engine's tap formula (`minio/stable/minio` at `opt/minio`) is the
+/// tap's: homebrew/core's formula of the same name shares the keg, so the keg alone does not
+/// say. When `services.toml` has an instance of the engine, the formula it records says; with
+/// none, brew is asked (`brew info --json=v2 <name>`, which describes the formula of the
+/// installed keg, within `limit`) and anything it does not say is the tap's is not: a brew that
+/// fails or does not answer in time included. The tap's formula is never reported for a core
+/// keg.
+async fn keg_from_tap(
+    brew: &Brew,
+    key: &str,
+    formula: &str,
+    services: Option<&ServicesConfig>,
+    limit: Duration,
+) -> bool {
+    let base = formula.rsplit('/').next().unwrap_or(formula);
+    if !brew.prefix.join("opt").join(base).exists() {
         return false;
     }
     let recorded: Vec<&str> = services
         .into_iter()
         .flat_map(|s| s.services.values())
-        .filter(|entry| entry.engine == Engine::Minio)
-        .map(|entry| entry.formula.as_str())
+        .filter(|entry| entry.engine.as_str() == key)
+        .filter_map(|entry| entry.formula.as_deref())
         .collect();
     if !recorded.is_empty() {
-        return recorded.contains(&MINIO_TAP_FORMULA);
+        return recorded.contains(&formula);
     }
-    let asked = tokio::time::timeout(limit, brew_stdout(brew, &["info", "--json=v2", "minio"])).await;
+    let asked = tokio::time::timeout(limit, brew_stdout(brew, &["info", "--json=v2", base])).await;
     let Ok(Ok((true, out, _))) = asked else { return false };
     brew_info::parse(&out)
         .ok()
         .and_then(|formulae| formulae.into_iter().next())
-        .is_some_and(|f| sources::tap_of(&f.full_name) == sources::tap_of(MINIO_TAP_FORMULA))
+        .is_some_and(|f| sources::tap_of(&f.full_name) == sources::tap_of(formula))
 }
 
 /// The formulae from Yard's taps that Yard knows are installed: the PHP versions' kegs,
@@ -216,8 +222,13 @@ pub async fn installed_within(
             exts.iter().filter(|(_, e)| e.source == ExtSource::Brew).map(|(m, _)| ext_formula(m, *v)),
         );
     }
-    if minio_from_tap(brew, services, limit).await {
-        found.insert(MINIO_TAP_FORMULA.to_string());
+    for engine in Engines::builtin().all() {
+        let SourceSpec::Brew { formula } = engine.source() else { continue };
+        if sources::tap_of(&formula).is_some()
+            && keg_from_tap(brew, engine.key(), &formula, services, limit).await
+        {
+            found.insert(formula);
+        }
     }
     found
 }

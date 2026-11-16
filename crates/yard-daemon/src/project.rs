@@ -66,7 +66,8 @@ pub fn fill_needs(
     sites: &mut [SiteInfo],
     projects: &Projects,
     yard: &YardConfig,
-    services: Option<&ServicesConfig>,
+    // The instances and the engines they run on; `None` while `services.toml` does not parse.
+    services: Option<(&ServicesConfig, &yard_core::services::Engines)>,
     emailulator: Option<&Probe>,
     brew: &Brew,
     paths: &Paths,
@@ -99,7 +100,8 @@ pub fn fill_needs(
                 || loaded.contains(&m.to_lowercase())
         };
         site.needs = project::needs(file, v, &installed, &has);
-        site.needs.extend(services.into_iter().flat_map(|s| project::service_needs(file, s)));
+        site.needs
+            .extend(services.into_iter().flat_map(|(s, engines)| project::service_needs(file, s, engines)));
         site.needs.extend(project::emailulator_need(file, mail_reachable, emailulator.is_some()));
     }
 }

@@ -3,8 +3,8 @@
 
 use super::{config_error, read_optional};
 use crate::Paths;
+use crate::services::engines::{EngineKey, parse_instance, versioned_lines};
 use crate::services::sleep::SleepAfter;
-use crate::services::{Engine, parse_instance};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -29,9 +29,13 @@ pub struct EmailulatorEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceEntry {
-    pub engine: Engine,
+    pub engine: EngineKey,
+    /// MySQL's or PostgreSQL's line; for a `download` or `npm` engine, the program version the
+    /// instance was installed with and keeps running (recipes spec §5.1).
     pub version: Option<String>,
-    pub formula: String,
+    /// The brew formula: always for MySQL and PostgreSQL and any brew engine, never for a
+    /// `download`, `npm` or `path` one.
+    pub formula: Option<String>,
     pub stopped: bool,
     /// Overrides `yard.toml`'s `service_sleep_after` (M4e spec §4).
     pub sleep_after: Option<SleepAfter>,
@@ -46,9 +50,9 @@ pub fn load_services(paths: &Paths) -> Result<ServicesConfig, YardError> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEntry {
-    engine: Spanned<Engine>,
+    engine: Spanned<String>,
     version: Option<Spanned<String>>,
-    formula: String,
+    formula: Option<String>,
     #[serde(default)]
     stopped: bool,
     sleep_after: Option<SleepAfter>,
@@ -68,8 +72,11 @@ struct RawEmailulator {
     path: Option<Spanned<PathBuf>>,
 }
 
-/// `CONFIG_INVALID` for an unknown key, a missing `engine` or `formula`, an instance name
-/// `parse_instance` rejects, or an `engine` / `version` that disagree with the name.
+/// `CONFIG_INVALID` for an unknown key, a missing `engine`, an instance name `parse_instance`
+/// rejects, an `engine` that disagrees with the name, a MySQL or PostgreSQL entry whose
+/// `version` is not its name's line or that has no `formula`, or any other entry with both a
+/// `formula` and a `version`. Whether an engine exists is not checked here: that is the engine
+/// set's to say at run time (`ENGINE_UNKNOWN`).
 pub fn parse_services(text: Option<&str>, file: &Path) -> Result<ServicesConfig, YardError> {
     let Some(text) = text else {
         return Ok(ServicesConfig::default());
@@ -83,30 +90,46 @@ pub fn parse_services(text: Option<&str>, file: &Path) -> Result<ServicesConfig,
             return Err(invalid(
                 name.span(),
                 format!(
-                    "{instance:?} is not a service instance; names are mysql-<line>, postgres-<line>, redis and minio"
+                    "{instance:?} is not a service instance; names are mysql-<line>, postgres-<line>, or an engine's key \
+                     (redis, minio, memcached)"
                 ),
             ));
         };
-        if *entry.engine.get_ref() != engine {
+        if entry.engine.get_ref() != engine.as_str() {
             return Err(invalid(
                 entry.engine.span(),
                 format!(
-                    "{instance} is {} but engine is {:?}; the name and the engine must agree",
-                    engine.key(),
-                    entry.engine.get_ref().key()
+                    "{instance} is {engine} but engine is {:?}; the name and the engine must agree",
+                    entry.engine.get_ref()
                 ),
             ));
         }
         let version = entry.version.as_ref().map(|v| v.get_ref().as_str());
-        if version != line.as_deref() {
-            let span = entry.version.as_ref().map_or_else(|| entry.engine.span(), |v| v.span());
-            let said = |v: Option<&str>| v.map_or("no version".to_string(), |v| format!("version {v:?}"));
+        if versioned_lines(engine.as_str()).is_some() {
+            if version != line.as_deref() {
+                let span = entry.version.as_ref().map_or_else(|| entry.engine.span(), |v| v.span());
+                let said = |v: Option<&str>| v.map_or("no version".to_string(), |v| format!("version {v:?}"));
+                return Err(invalid(
+                    span,
+                    format!(
+                        "{instance} needs {} but has {}; the name and the version must agree",
+                        said(line.as_deref()),
+                        said(version)
+                    ),
+                ));
+            }
+            if entry.formula.is_none() {
+                return Err(invalid(
+                    name.span(),
+                    format!("{instance} has no formula: brew installs it from one"),
+                ));
+            }
+        } else if let (Some(v), Some(_)) = (entry.version.as_ref(), entry.formula.as_ref()) {
             return Err(invalid(
-                span,
+                v.span(),
                 format!(
-                    "{instance} needs {} but has {}; the name and the version must agree",
-                    said(line.as_deref()),
-                    said(version)
+                    "{instance} has a formula and a version: a brew engine records its formula, a download or npm \
+                     one the version it runs"
                 ),
             ));
         }
@@ -114,7 +137,7 @@ pub fn parse_services(text: Option<&str>, file: &Path) -> Result<ServicesConfig,
             instance.clone(),
             ServiceEntry {
                 engine,
-                version: line,
+                version: entry.version.map(Spanned::into_inner),
                 formula: entry.formula,
                 stopped: entry.stopped,
                 sleep_after: entry.sleep_after,
@@ -170,11 +193,11 @@ mod tests {
         assert_eq!(c.services.len(), 2);
         let my = &c.services["mysql-8.4"];
         assert_eq!(
-            (my.engine, my.version.as_deref(), my.formula.as_str(), my.stopped),
-            (Engine::Mysql, Some("8.4"), "mysql@8.4", false)
+            (my.engine.as_str(), my.version.as_deref(), my.formula.as_deref(), my.stopped),
+            ("mysql", Some("8.4"), Some("mysql@8.4"), false)
         );
         let pg = &c.services["postgres-17"];
-        assert_eq!((pg.engine, pg.version.as_deref(), pg.stopped), (Engine::Postgres, Some("17"), true));
+        assert_eq!((pg.engine.as_str(), pg.version.as_deref(), pg.stopped), ("postgres", Some("17"), true));
     }
 
     #[test]
@@ -237,8 +260,51 @@ mod tests {
     }
 
     #[test]
+    fn services_toml_reads_recipe_entries() {
+        let c = parse(
+            "[services.memcached]\nengine = \"memcached\"\nformula = \"memcached\"\n\n\
+             [services.typesense]\nengine = \"typesense\"\nversion = \"30.1\"\n\n\
+             [services.pathed]\nengine = \"pathed\"\n",
+        )
+        .unwrap();
+        let m = &c.services["memcached"];
+        assert_eq!(
+            (m.engine.as_str(), m.formula.as_deref(), m.version.as_deref()),
+            ("memcached", Some("memcached"), None)
+        );
+        let t = &c.services["typesense"];
+        assert_eq!(
+            (t.engine.as_str(), t.formula.as_deref(), t.version.as_deref()),
+            ("typesense", None, Some("30.1"))
+        );
+        let p = &c.services["pathed"];
+        assert_eq!((p.formula.as_deref(), p.version.as_deref()), (None, None));
+    }
+
+    #[test]
+    fn a_recipe_entry_has_a_formula_or_a_version_not_both() {
+        let e = parse("[services.redis]\nengine = \"redis\"\nversion = \"8\"\nformula = \"redis\"\n")
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        assert_eq!(e.data.as_ref().unwrap()["line"], 3);
+    }
+
+    #[test]
+    fn a_recipe_instance_is_named_for_its_engine() {
+        // Recipe keys may hold digits and -, so these are instance names; their engine must match.
+        for name in ["redis-8", "mongo-1"] {
+            let text = format!("[services.\"{name}\"]\nengine = \"mysql\"\nformula = \"x\"\n");
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ConfigInvalid, "{name}");
+            assert_eq!(e.data.as_ref().unwrap()["line"], 2, "{name}");
+        }
+        let e = parse("[services.mongo]\nengine = \"mongodb\"\nformula = \"x\"\n").unwrap_err();
+        assert_eq!(e.data.as_ref().unwrap()["line"], 2);
+    }
+
+    #[test]
     fn a_name_that_is_not_an_instance_is_invalid() {
-        for name in ["mysql", "mysql-8", "redis-8", "mongo-1", "mysql-latest"] {
+        for name in ["mysql", "mysql-8", "Mongo", "mongo_1", "mysql-latest"] {
             let text = format!("[services.\"{name}\"]\nengine = \"mysql\"\nformula = \"x\"\n");
             let e = parse(&text).unwrap_err();
             assert_eq!(e.code, ErrorCode::ConfigInvalid, "{name}");
@@ -247,14 +313,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_engine_and_missing_formula_are_invalid() {
-        let e = parse("[services.mongo]\nengine = \"mongo\"\nformula = \"mongodb\"\n").unwrap_err();
+    fn an_engine_no_recipe_names_still_parses_and_a_versioned_one_needs_its_formula() {
+        // Whether an engine exists is the engine set's to say, at run time (ENGINE_UNKNOWN).
+        assert!(parse("[services.mongo]\nengine = \"mongo\"\nformula = \"mongodb\"\n").is_ok());
+        let e = parse("[services.\"mysql-8.4\"]\nengine = \"mysql\"\nversion = \"8.4\"\n").unwrap_err();
         assert_eq!(e.code, ErrorCode::ConfigInvalid);
-        assert_eq!(e.data.as_ref().unwrap()["line"], 2);
-        assert_eq!(
-            parse("[services.redis]\nengine = \"redis\"\n").unwrap_err().code,
-            ErrorCode::ConfigInvalid
-        );
+        assert_eq!(e.data.as_ref().unwrap()["line"], 1);
     }
 
     #[test]

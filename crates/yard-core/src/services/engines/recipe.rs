@@ -349,6 +349,9 @@ impl ServiceEngine for RecipeEngine {
     fn console(&self) -> Option<Console> {
         self.console.clone()
     }
+    fn has_connect(&self) -> bool {
+        self.connect.is_some()
+    }
     fn connect(&self, ctx: &InstanceCtx) -> Option<Connect> {
         let c = self.connect.as_ref()?;
         Some(Connect {

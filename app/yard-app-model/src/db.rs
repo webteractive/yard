@@ -3,24 +3,25 @@
 //! fields and state line, and byte sizes in words.
 
 use crate::shell_words::split_words;
-use yard_core::db::supports_db;
 pub use yard_core::present::bytes_text;
-use yard_core::services::Engine;
+use yard_core::services::Engines;
+use yard_core::services::engines::{DbFlavor, db_flavor};
 use yard_proto::{ConnectInfo, DbDumped, DbImported, ErrorCode, ServiceState, YardError};
 
 /// Whether an instance of `engine` has Databases, Create database…, Import… and Dump….
 pub fn has_databases(engine: &str) -> bool {
-    Engine::from_key(engine).is_some_and(supports_db)
+    db_flavor(engine).is_some()
 }
 
-/// Whether an instance of `engine` has Connect… (MySQL, PostgreSQL and Redis).
+/// Whether an instance of `engine` has Connect… (MySQL, PostgreSQL, Redis and any engine whose
+/// recipe says how to connect).
 pub fn has_connect(engine: &str) -> bool {
-    Engine::from_key(engine).is_some_and(yard_core::db::supports_connect)
+    Engines::builtin_shared().get(engine).is_some_and(|e| e.has_connect())
 }
 
 /// Whether Import… offers Keep owners: only a PostgreSQL dump names roles (db spec §6.6).
 pub fn has_owners(engine: &str) -> bool {
-    engine == Engine::Postgres.key()
+    db_flavor(engine) == Some(DbFlavor::Postgres)
 }
 
 /// The words typed into Extra options, split as a shell would (quotes and backslashes, nothing
@@ -173,7 +174,7 @@ pub fn connect_fields(i: &ConnectInfo) -> Vec<ConnectField> {
         i.password.clone().unwrap_or_default(),
     ));
     if let Some(socket) = &i.socket {
-        let shown = if i.engine == Engine::Postgres.key() {
+        let shown = if db_flavor(&i.engine) == Some(DbFlavor::Postgres) {
             format!("{socket}  (the directory; a client takes it as the host)")
         } else {
             socket.clone()

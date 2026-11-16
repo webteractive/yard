@@ -212,7 +212,9 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
     // A service a killed yardd left running holds its port and data directory. This runs one
     // instance after another, up to the stop timeout (30 s) for each orphan that ignores its
     // stop signal, before the watchers start; the socket is bound, so clients wait meanwhile.
-    for (instance, pid) in services::stop_orphans(&opts.paths, &ctx.brew).await {
+    for (instance, pid) in
+        services::stop_orphans(&opts.paths, &ctx.brew, &yard_core::services::Engines::builtin()).await
+    {
         tracing::warn!("stopped {instance} (pid {pid}), which an earlier yardd left running");
     }
     for (unit, pid) in crate::tunnel::stop_orphans(&opts.paths, &ctx.brew).await {

@@ -176,6 +176,21 @@ impl Paths {
         self.service_dir(instance).join("overrides.conf")
     }
 
+    /// `engines/`: the user's recipes, one `<key>.toml` each (recipes spec §7).
+    pub fn engines_dir(&self) -> PathBuf {
+        self.root.join("engines")
+    }
+
+    /// `programs/`: what `download` and `npm` recipes install (recipes spec §5).
+    pub fn programs_dir(&self) -> PathBuf {
+        self.root.join("programs")
+    }
+
+    /// `programs/<key>/<version>/`: one install root.
+    pub fn program_root(&self, key: &str, version: &str) -> PathBuf {
+        self.programs_dir().join(key).join(version)
+    }
+
     pub fn service_pid(&self, instance: &str) -> PathBuf {
         self.run_dir().join(format!("{instance}.pid"))
     }

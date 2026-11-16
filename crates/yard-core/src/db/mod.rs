@@ -9,7 +9,7 @@ pub mod flags;
 pub mod resolve;
 pub mod sql;
 
-use crate::services::Engine;
+use resolve::Candidate;
 use std::path::PathBuf;
 use yard_proto::{ErrorCode, YardError};
 
@@ -36,14 +36,14 @@ pub fn check_name(name: &str) -> Result<(), YardError> {
     ))
 }
 
-/// The engines `yard db` lists, creates, opens, dumps and imports.
-pub fn supports_db(engine: Engine) -> bool {
-    matches!(engine, Engine::Mysql | Engine::Postgres)
+/// The instances whose databases `yard <engine> list|create|dump|import` work on.
+pub fn supports_db(c: &Candidate) -> bool {
+    c.databases
 }
 
-/// The engines `yard db connect` describes.
-pub fn supports_connect(engine: Engine) -> bool {
-    supports_db(engine) || engine == Engine::Redis
+/// The instances `yard <engine> connect` describes and whose prompt it opens.
+pub fn supports_connect(c: &Candidate) -> bool {
+    c.connect
 }
 
 /// The newest installed PostgreSQL keg at or above the instance's major (db spec §7.1): a
@@ -55,7 +55,6 @@ pub fn pick_postgres_keg(instance_major: u32, installed: &[(u32, PathBuf)]) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::Engine;
     use std::path::PathBuf;
     use yard_proto::ErrorCode;
 
@@ -80,9 +79,11 @@ mod tests {
 
     #[test]
     fn engines_yard_db_works_on() {
-        assert!(supports_db(Engine::Mysql) && supports_db(Engine::Postgres));
-        assert!(!supports_db(Engine::Redis) && !supports_db(Engine::Minio));
-        assert!(supports_connect(Engine::Redis) && !supports_connect(Engine::Minio));
+        let engines = crate::services::Engines::builtin();
+        let c = |key: &str| Candidate::of(key, engines.get(key).unwrap().as_ref());
+        assert!(supports_db(&c("mysql")) && supports_db(&c("postgres")));
+        assert!(!supports_db(&c("redis")) && !supports_db(&c("minio")));
+        assert!(supports_connect(&c("redis")) && !supports_connect(&c("minio")));
     }
 
     #[test]

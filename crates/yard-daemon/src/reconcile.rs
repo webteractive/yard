@@ -35,8 +35,7 @@ use yard_core::render::nginx::{
     MailHost, TunnelListener, default_index, mail_host, nginx_main, nginx_site, service_site, setup_page,
 };
 use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
-use yard_core::services::Engine;
-use yard_core::services::render::{config_file, user_overrides};
+use yard_core::services::Engines;
 use yard_core::services::sleep::effective_sleep;
 use yard_core::shim::SHIMS;
 use yard_core::sites;
@@ -306,7 +305,14 @@ impl Reconciler {
         let Some(snap) = &state.snapshot else { return false };
         let mut secure = snap.resolution.sites.iter().filter(|s| s.secure).peekable();
         let mail = emailulator::serving_agent(snap.emailulator.as_ref()).is_some();
-        let hosts = secure_service_hosts(&snap.services, &snap.resolution.sites, &snap.yard, &snap.tld, mail);
+        let hosts = secure_service_hosts(
+            &snap.engines,
+            &snap.services,
+            &snap.resolution.sites,
+            &snap.yard,
+            &snap.tld,
+            mail,
+        );
         if secure.peek().is_none() && hosts.is_empty() {
             return false;
         }
@@ -447,8 +453,15 @@ impl Reconciler {
         // A service's ports were pinned when it was added. Reconcile only reads them, and
         // pins a new one the same way when `ports.toml` lost its entry.
         let mut left_out = BTreeMap::new();
-        let service_ports =
-            self.settle_service_ports(&services_cfg, &mut registry, &is_free, &mut report, &mut left_out);
+        let engines = Arc::new(Engines::builtin());
+        let service_ports = self.settle_service_ports(
+            &engines,
+            &services_cfg,
+            &mut registry,
+            &is_free,
+            &mut report,
+            &mut left_out,
+        );
 
         // 3. Resolve sites.
         let (projects, ignored_managed) = crate::project::read_projects(&sites_cfg, &state.paths);
@@ -459,7 +472,7 @@ impl Reconciler {
             &mut resolution.sites,
             &projects,
             &yard,
-            Some(&services_cfg),
+            Some((&services_cfg, &engines)),
             state.emailulator.as_ref(),
             &state.brew,
             &state.paths,
@@ -479,8 +492,14 @@ impl Reconciler {
 
         // 4. Issue the certificates secured sites need, which `nginx -t` loads.
         let paths = state.paths.clone();
-        let service_hosts =
-            secure_service_hosts(&services_cfg, &resolution.sites, &yard, &tld, mail_agent.is_some());
+        let service_hosts = secure_service_hosts(
+            &engines,
+            &services_cfg,
+            &resolution.sites,
+            &yard,
+            &tld,
+            mail_agent.is_some(),
+        );
         if issue_certs(&paths, &resolution.sites, &service_hosts, &mut report)? {
             state.nginx_reload_pending = true;
         }
@@ -550,21 +569,34 @@ impl Reconciler {
                 }
             }
         }
-        // Each instance's own config, and `minio.<tld>` unless a site has the name.
+        // Each instance's own config, and each console's `<instance>.<tld>` unless a site has
+        // the name.
         let mut service_confs = BTreeMap::new();
+        let user = services::macos_user();
         for (instance, entry) in &services_cfg.services {
             let Some(ports) = service_ports.get(instance) else { continue };
-            if let Some((file, text)) = config_file(entry.engine, instance, &paths, ports) {
+            let Some(engine) = engines.get(entry.engine.as_str()) else { continue };
+            let Some(home) = services::home(&state.brew, &paths, engine.as_ref(), entry) else { continue };
+            let ictx = services::instance_ctx(instance, &home, &paths, ports, &user);
+            if let Some((file, text)) = engine.config_file(&ictx) {
                 service_confs.insert(instance.clone(), file.clone());
                 rendered.insert(file, text);
             }
-        }
-        if serves_console(&services_cfg, &resolution.sites)
-            && let Some(ports) = service_ports.get("minio")
-            && let Some(console) = ports.iter().find(|p| p.name == "minio-console")
-        {
-            let secure = yard.secure_by_default;
-            rendered.insert(paths.nginx_service("minio"), service_site(&ctx, "minio", console.port, secure));
+            if let Some(console) = engine.console()
+                && serves_console(&engines, &services_cfg, &resolution.sites, instance)
+            {
+                let port = ictx.port(engine.as_ref(), &console.port);
+                let overrides = console_overrides(&paths, instance, console.nginx_overrides);
+                let site = service_site(
+                    &ctx,
+                    instance,
+                    port,
+                    yard.secure_by_default,
+                    console.host_header,
+                    &overrides,
+                );
+                rendered.insert(paths.nginx_service(instance), site);
+            }
         }
         let serve_mail = mail_agent.is_some() && serves_mail(&resolution.sites);
         if let Some(agent) = mail_agent.as_ref().filter(|_| serve_mail) {
@@ -577,7 +609,7 @@ impl Reconciler {
             rendered.insert(paths.nginx_service(EMAILULATOR), mail_host(&ctx, &host));
         }
         tunnel::render(&paths, &tunnels, &mut rendered);
-        prepare_dirs(&paths, &resolution.sites, &inis, &services_cfg, serve_mail, &tunnels)
+        prepare_dirs(&paths, &resolution.sites, &inis, &engines, &services_cfg, serve_mail, &tunnels)
             .map_err(io_error)?;
 
         // 6. Write.
@@ -640,7 +672,7 @@ impl Reconciler {
         }
         state.hashes = hashes;
         // Only now: until the new confs passed, the old ones still named these files.
-        let keep: BTreeSet<&str> = service_hosts.iter().map(|(name, _)| *name).collect();
+        let keep: BTreeSet<&str> = service_hosts.iter().map(|(name, _)| name.as_str()).collect();
         report.removed.extend(prune_certs(&paths, &resolution.sites, &keep));
 
         // 8. Apply units; restart the ones whose files changed and reload nginx. In the
@@ -726,27 +758,31 @@ impl Reconciler {
         for (instance, entry) in services_cfg.services.iter().filter(|(_, e)| !e.stopped) {
             let Some(ports) = service_ports.get(instance) else { continue };
             let asleep = self.sleeper.is_asleep(instance);
-            let cmd =
-                services::unit_command(&state.brew, &paths, entry.engine, instance, &entry.formula, ports);
-            if let Some(missing) = services::missing_program(&state.brew, &entry.formula, &cmd.program) {
-                if !asleep {
-                    report.warnings.push(left_out_warning(instance, &missing));
-                    left_out.insert(instance.clone(), missing);
-                }
-                continue;
-            }
+            let (engine, cmd) =
+                match services::runnable(&state.brew, &paths, &engines, instance, entry, ports) {
+                    Ok(found) => found,
+                    Err(missing) => {
+                        if !asleep {
+                            report.warnings.push(left_out_warning(instance, &missing));
+                            left_out.insert(instance.clone(), missing);
+                        }
+                        continue;
+                    }
+                };
+            let health = engine.health_port();
+            let health_port = ictx_port(engine.as_ref(), instance, ports, &health);
             let spec = UnitSpec {
                 name: instance.clone(),
                 program: cmd.program,
                 args: cmd.args,
                 env: cmd.env,
-                health: Health::Tcp(ports.first().map_or(0, |p| p.port)),
+                health: Health::Tcp(health_port),
                 ports: ports.iter().map(|p| (p.port, Proto::Tcp)).collect(),
                 reload: Reload::Restart,
                 stop: cmd.stop_signal,
                 inherit: vec![],
                 stop_timeout: Some(services::STOP_TIMEOUT),
-                start_timeout: services::start_timeout(entry.engine),
+                start_timeout: engine.start_timeout(),
                 pid_file: Some(paths.service_pid(instance)),
             };
             if asleep {
@@ -850,6 +886,7 @@ impl Reconciler {
             projects,
             ignored_managed,
             registry,
+            engines,
             tld,
             resolution,
             left_out,
@@ -868,15 +905,23 @@ impl Reconciler {
     /// cannot be had is a warning and has no unit.
     fn settle_service_ports(
         &self,
+        engines: &Engines,
         services: &ServicesConfig,
         registry: &mut Registry,
         is_free: &dyn Fn(u16) -> bool,
         report: &mut ReconcileReport,
         left_out: &mut BTreeMap<String, YardError>,
     ) -> BTreeMap<String, Vec<PortRef>> {
-        let missing = services.services.iter().any(|(i, e)| {
-            services::port_entries(e.engine, i).iter().any(|(n, ..)| !registry.entries.contains_key(n))
-        });
+        let entries = |i: &str, e: &yard_core::config::services::ServiceEntry| {
+            engines
+                .get(e.engine.as_str())
+                .map(|engine| services::port_entries(engine.as_ref(), i))
+                .unwrap_or_default()
+        };
+        let missing = services
+            .services
+            .iter()
+            .any(|(i, e)| entries(i, e).iter().any(|(n, ..)| !registry.entries.contains_key(n)));
         let reserved = if missing {
             services::reserved(&self.app_dirs, self.usual_ports.as_ref())
         } else {
@@ -884,8 +929,9 @@ impl Reconciler {
         };
         let mut settled = BTreeMap::new();
         'instances: for (instance, entry) in &services.services {
+            // An instance whose engine is unknown keeps the ports it has, and gets no new ones.
             let mut ports = vec![];
-            for (name, key, usual) in services::port_entries(entry.engine, instance) {
+            for (name, key, usual) in entries(instance, entry) {
                 let port = match registry.entries.get(&name) {
                     Some(e) => e.port,
                     None => {
@@ -922,7 +968,7 @@ impl Reconciler {
             .registry
             .entries
             .iter()
-            .filter(|(unit, _)| running.contains(port_owner(unit)))
+            .filter(|(unit, _)| running.contains(port_owner(unit, &snapshot.services)))
             .map(|(_, e)| e.port)
             .collect()
     }
@@ -939,15 +985,43 @@ fn inherited_ports(snapshot: Option<&Snapshot>) -> Vec<u16> {
 }
 
 /// The supervised unit behind a registry entry: nginx owns both nginx ports and each tunnel's
-/// listener (`nginx-tunnel-<site>`), and MinIO's console port belongs to the `minio` unit that
-/// also holds its API port.
-pub fn port_owner(entry: &str) -> &str {
+/// listener (`nginx-tunnel-<site>`), and an instance's other ports (`minio-console`,
+/// `<instance>-<port name>`) belong to the instance, the longest name that fits.
+pub fn port_owner<'a>(entry: &'a str, services: &ServicesConfig) -> &'a str {
+    owner_among(entry, &services.services.keys().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// [`port_owner`] among the instances named `instances`.
+pub fn owner_among<'a>(entry: &'a str, instances: &[&str]) -> &'a str {
     match entry {
         NGINX_HTTP | NGINX_HTTPS => "nginx",
-        "minio-console" => "minio",
         _ if entry.starts_with("nginx-tunnel-") => "nginx",
-        _ => entry,
+        _ if instances.contains(&entry) => entry,
+        _ => instances
+            .iter()
+            .filter(|i| {
+                entry.len() > i.len() + 1 && entry.starts_with(**i) && entry.as_bytes()[i.len()] == b'-'
+            })
+            .max_by_key(|i| i.len())
+            .map_or(entry, |i| &entry[..i.len()]),
     }
+}
+
+/// The port of `instance`'s entry with `suffix` (`""`, the main one).
+fn ictx_port(
+    engine: &dyn yard_core::services::ServiceEngine,
+    instance: &str,
+    ports: &[PortRef],
+    suffix: &str,
+) -> u16 {
+    let paths = Paths::new("/");
+    services::instance_ctx(instance, std::path::Path::new("/"), &paths, ports, "").port(engine, suffix)
+}
+
+/// What a console's nginx block ends with: MinIO's `services/minio/overrides.conf` (nginx
+/// directives, M4b §5.4), else the override a site named `instance` would have.
+fn console_overrides(paths: &Paths, instance: &str, own: bool) -> std::path::PathBuf {
+    if own { paths.service_overrides(instance) } else { paths.nginx_override(instance) }
 }
 
 pub fn fpm_unit(v: PhpVersion) -> String {
@@ -972,7 +1046,7 @@ fn php_versions(sites: &[SiteInfo]) -> BTreeSet<PhpVersion> {
 fn issue_certs(
     paths: &Paths,
     sites: &[SiteInfo],
-    hosts: &[(&str, String)],
+    hosts: &[(String, String)],
     report: &mut ReconcileReport,
 ) -> Result<bool, YardError> {
     let secure: Vec<&SiteInfo> = sites.iter().filter(|s| s.secure).collect();
@@ -1002,9 +1076,20 @@ fn issue_certs(
     Ok(issued)
 }
 
-/// Whether `minio.<tld>` is served: there is a `minio` instance and no site took the name.
-pub(crate) fn serves_console(services: &ServicesConfig, sites: &[SiteInfo]) -> bool {
-    services.services.contains_key("minio") && !sites.iter().any(|s| s.name == "minio")
+/// Whether `<instance>.<tld>` is served: the instance exists, its engine has a console, and no
+/// site took the name.
+pub(crate) fn serves_console(
+    engines: &Engines,
+    services: &ServicesConfig,
+    sites: &[SiteInfo],
+    instance: &str,
+) -> bool {
+    services
+        .services
+        .get(instance)
+        .and_then(|e| engines.get(e.engine.as_str()))
+        .is_some_and(|e| e.console().is_some())
+        && !sites.iter().any(|s| s.name == instance)
 }
 
 /// Whether `mail.<tld>` may be served: no site took the name `mail`.
@@ -1016,18 +1101,24 @@ pub(crate) fn serves_mail(sites: &[SiteInfo]) -> bool {
 /// `mail.<tld>` while emailulator's agent serves mail (`mail`). `secure_by_default` decides:
 /// a service has no `secure` setting of its own.
 fn secure_service_hosts(
+    engines: &Engines,
     services: &ServicesConfig,
     sites: &[SiteInfo],
     yard: &yard_core::config::YardConfig,
     tld: &str,
     mail: bool,
-) -> Vec<(&'static str, String)> {
+) -> Vec<(String, String)> {
     if !yard.secure_by_default {
         return vec![];
     }
-    let console = serves_console(services, sites).then(|| ("minio", format!("minio.{tld}")));
-    let mail = (mail && serves_mail(sites)).then(|| (EMAILULATOR, format!("{MAIL_HOST_LABEL}.{tld}")));
-    console.into_iter().chain(mail).collect()
+    let consoles = services
+        .services
+        .keys()
+        .filter(|i| serves_console(engines, services, sites, i))
+        .map(|i| (i.clone(), format!("{i}.{tld}")));
+    let mail =
+        (mail && serves_mail(sites)).then(|| (EMAILULATOR.to_string(), format!("{MAIL_HOST_LABEL}.{tld}")));
+    consoles.chain(mail).collect()
 }
 
 /// Waits, up to `POOL_READY_WAIT`, until each of `pools` has left `Starting` (its health check,
@@ -1161,6 +1252,7 @@ fn prepare_dirs(
     paths: &Paths,
     sites: &[SiteInfo],
     versions: &BTreeSet<PhpVersion>,
+    engines: &Engines,
     services: &ServicesConfig,
     mail: bool,
     tunnels: &BTreeMap<String, tunnel::Planned>,
@@ -1194,14 +1286,20 @@ fn prepare_dirs(
         generated::ensure_user_file(&paths.php_overrides(*v), USER_OWNED_INI)?;
     }
     for (instance, entry) in &services.services {
+        let Some(engine) = engines.get(entry.engine.as_str()) else { continue };
         // The file my.cnf, redis.conf or minio.<tld>'s block includes; PostgreSQL has none.
-        if let Some(initial) = user_overrides(entry.engine) {
-            generated::ensure_user_file(&paths.service_overrides(instance), initial)?;
+        if let Some(initial) = engine.user_overrides() {
+            generated::ensure_user_file(&paths.service_overrides(instance), &initial)?;
         }
-        // redis-server exits at config load when its `dir` is missing. MySQL's and PostgreSQL's
-        // init needs the data directory empty or absent, and MinIO makes its own.
-        if entry.engine == Engine::Redis {
-            std::fs::create_dir_all(paths.service_data(instance))?;
+        // A console whose block ends with the override a site of its name would have.
+        if engine.console().is_some_and(|c| !c.nginx_overrides) {
+            generated::ensure_user_file(&paths.nginx_override(instance), USER_OWNED_NGINX)?;
+        }
+        // The directories the engine lists (redis-server exits at config load when its `dir`
+        // is missing). MySQL's and PostgreSQL's init needs the data directory empty or absent,
+        // and MinIO makes its own, so they list none.
+        for dir in engine.dirs() {
+            std::fs::create_dir_all(paths.service_dir(instance).join(dir))?;
         }
     }
     Ok(())

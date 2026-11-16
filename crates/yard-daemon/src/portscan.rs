@@ -8,17 +8,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use yard_core::config::ServicesConfig;
 use yard_core::ports::Registry;
 use yard_proto::{Event, PortInfo, PortMode, PortStatus, UnitInfo, UnitState};
 
 /// Every registered port as `ports.list`, `ports check` and `doctor` show it. A port its
 /// own unit holds (`own_units`) is `Yard`; any other holder is named. Blocks while it probes.
-pub fn infos(registry: &Registry, running: &BTreeSet<String>) -> Vec<PortInfo> {
+pub fn infos(registry: &Registry, services: &ServicesConfig, running: &BTreeSet<String>) -> Vec<PortInfo> {
     registry
         .entries
         .iter()
         .map(|(unit, e)| {
-            let owner = port_owner(unit);
+            let owner = port_owner(unit, services);
             let (status, holder) = if e.mode == PortMode::External {
                 let up = probe::is_listening(e.port);
                 (if up { PortStatus::ExternalListening } else { PortStatus::ExternalNotListening }, None)
@@ -65,18 +66,22 @@ pub fn spawn(ctx: Arc<Context>, interval: Duration) -> JoinHandle<()> {
             }
             let Some(snapshot) = ctx.reconciler.snapshot().await else { continue };
             let busy_units = own_units(&ctx.supervisor().list());
-            let idle: Vec<(String, u16)> = snapshot
+            let idle: Vec<(String, u16, probe::Proto)> = snapshot
                 .registry
                 .entries
                 .iter()
-                .filter(|(unit, e)| e.mode != PortMode::External && !busy_units.contains(port_owner(unit)))
-                .map(|(unit, e)| (unit.clone(), e.port))
+                .filter(|(unit, e)| {
+                    e.mode != PortMode::External && !busy_units.contains(port_owner(unit, &snapshot.services))
+                })
+                .map(|(unit, e)| {
+                    (unit.clone(), e.port, probe::proto_for(port_owner(unit, &snapshot.services)))
+                })
                 .collect();
-            held.retain(|unit, _| idle.iter().any(|(u, _)| u == unit));
+            held.retain(|unit, _| idle.iter().any(|(u, ..)| u == unit));
             let probed = tokio::task::spawn_blocking(move || {
                 idle.into_iter()
-                    .map(|(unit, port)| {
-                        let busy = !probe::is_free(port, probe::proto_for(port_owner(&unit)));
+                    .map(|(unit, port, proto)| {
+                        let busy = !probe::is_free(port, proto);
                         (unit, port, busy)
                     })
                     .collect::<Vec<_>>()
@@ -118,7 +123,7 @@ mod tests {
             last_error: None,
         }];
 
-        let infos = infos(&registry, &own_units(&units));
+        let infos = infos(&registry, &ServicesConfig::default(), &own_units(&units));
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].status, PortStatus::Yard, "{infos:?}");
     }
@@ -134,6 +139,11 @@ mod tests {
             console.local_addr().unwrap().port()
         );
         let registry = Registry::parse(Some(&text), Path::new("/r/ports.toml")).unwrap();
+        let services = yard_core::config::services::parse_services(
+            Some("[services.minio]\nengine = \"minio\"\nformula = \"minio/stable/minio\"\n"),
+            Path::new("/r/services.toml"),
+        )
+        .unwrap();
         let units = [UnitInfo {
             name: "minio".into(),
             state: UnitState::Running,
@@ -142,7 +152,7 @@ mod tests {
             last_error: None,
         }];
 
-        let infos = infos(&registry, &own_units(&units));
+        let infos = infos(&registry, &services, &own_units(&units));
         assert_eq!(infos.len(), 2);
         assert!(infos.iter().all(|i| i.status == PortStatus::Yard), "{infos:?}");
     }

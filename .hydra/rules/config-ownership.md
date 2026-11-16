@@ -33,8 +33,10 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     `overrides.conf`; `nginx/services` is a managed directory, so a block nothing renders any more
     is removed. Reconcile renders them with the instance's pinned ports from the registry, never
     the engines' usual ones, and restarts the instance when its config file changed. It creates
-    `services/<i>/data` for Redis only (redis-server exits at config load without its `dir`); the
-    databases' init needs theirs absent or empty, and MinIO makes its own.
+    the directories an engine lists (`dirs`: Redis's `data`, since redis-server exits at config load
+    without its `dir`); the databases' init needs theirs absent or empty, and MinIO makes its own.
+    A recipe's generated config (`run.config.file`, any name but `overrides.conf`) is generated the
+    same way, headed with the line naming its `overrides.conf` (recipes spec §6).
   - Yard creates a database (never a role or bucket) only when asked: `db.create`, or `db.command`
     for an import into a name that does not exist (db spec). `yard link`, `init` and a `.yard` never
     create one, and nothing in Yard drops one.
@@ -46,7 +48,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     are created once with `ensure_user_file` (empty, or a comment saying whose they are) and never
     written again. A MySQL instance's `overrides.conf` starts with that comment and `[mysqld]`, since
     an `!include`d file needs its own group (`services::render::user_overrides`); a PostgreSQL
-    instance has none, since its user file is `data/postgresql.conf`, which `initdb` writes. The one
+    instance has none, since its user file is `data/postgresql.conf`, which `initdb` writes; a recipe's
+    starts as its `run.config.overrides` says, and a recipe with none has none. The one
     exception to "never written" is
     `99-overrides.ini` through `yard php config set|unset` (`rpc/php.rs`
     `config_edit`, via `yard_core::ini`, which keeps every other line as written,

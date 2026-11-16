@@ -18,16 +18,16 @@ use std::time::{Duration, Instant};
 use toml_edit::value;
 use yard_core::Paths;
 use yard_core::brew::Brew;
+use yard_core::config::services::ServiceEntry;
 use yard_core::config::{ServicesConfig, TomlFile, load_services};
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::project::ServiceWant;
 use yard_core::services::brew_info::{self, Formula};
-use yard_core::services::render::{UnitCommand, command, init_command};
+use yard_core::services::engines::{EngineKey, Engines, InstanceCtx, ServiceEngine, SourceSpec};
+use yard_core::services::render::UnitCommand;
 use yard_core::services::reserved::reserved_ports;
 use yard_core::services::sleep::{SleepAfter, effective_sleep};
-use yard_core::services::{
-    DATABASE_START_TIMEOUT, Engine, READY_WAIT, candidate_names, instance_name, line_formula, resolve_line,
-};
+use yard_core::services::{READY_WAIT, candidate_names, instance_name, line_formula, resolve_line};
 use yard_core::sources::tap_of;
 use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, UnitState, YardError};
 
@@ -35,29 +35,28 @@ use yard_proto::{ErrorCode, PortRef, ServiceInfo, ServiceState, UnitState, YardE
 /// finishes its checkpoint (spec §15).
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The unit's `start_timeout` for an instance of `engine`; `None` is the supervisor's grace.
-pub fn start_timeout(engine: Engine) -> Option<Duration> {
-    match engine {
-        Engine::Mysql | Engine::Postgres => Some(DATABASE_START_TIMEOUT),
-        Engine::Redis | Engine::Minio => None,
-    }
-}
-
 /// The names of an instance's registry entries, in the order the unit lists its ports and
 /// with the engine's usual port for each: `mysql-8.4` for MySQL, `minio` and `minio-console`
 /// for MinIO. The key is the one `DaemonOptions.usual_ports` uses.
-pub fn port_entries(engine: Engine, instance: &str) -> Vec<(String, String, u16)> {
+pub fn port_entries(engine: &dyn ServiceEngine, instance: &str) -> Vec<(String, String, u16)> {
     engine
-        .usual_ports()
-        .iter()
-        .map(|(suffix, usual)| {
-            if suffix.is_empty() {
-                (instance.to_string(), engine.key().to_string(), *usual)
+        .ports()
+        .into_iter()
+        .map(|p| {
+            if p.suffix.is_empty() {
+                (instance.to_string(), engine.key().to_string(), p.usual)
             } else {
-                (format!("{instance}-{suffix}"), format!("{}-{suffix}", engine.key()), *usual)
+                (format!("{instance}-{}", p.suffix), format!("{}-{}", engine.key(), p.suffix), p.usual)
             }
         })
         .collect()
+}
+
+/// `ENGINE_UNKNOWN` for an instance whose engine this Mac has no recipe for: its data stays,
+/// and `yard service remove` still works (recipes spec §7).
+pub fn unknown_engine(instance: &str, key: &EngineKey) -> YardError {
+    YardError::new(ErrorCode::EngineUnknown, format!("no engine named {key}: its recipe is missing"))
+        .with_hint(format!("restore ~/.yard/engines/{key}.toml, or yard service remove {instance}"))
 }
 
 /// brew's keg for a recorded formula: `opt/<name>`, whose name is the last segment of
@@ -81,26 +80,93 @@ pub fn missing_program(brew: &Brew, formula: &str, program: &std::path::Path) ->
     )
 }
 
+/// `ENGINE_NOT_INSTALLED` for an instance whose program is not where its entry says (a
+/// download or npm install root that is gone, a `path` program that was removed).
+pub fn not_installed(instance: &str, key: &EngineKey) -> YardError {
+    YardError::new(ErrorCode::EngineNotInstalled, format!("{instance}'s program is not installed"))
+        .with_hint(format!("yard engines install {key}"))
+}
+
+/// Where an instance's programs are (recipes spec §5): the keg of its recorded formula, a `path`
+/// program's directory, or a download's or npm package's install root for the version the
+/// instance recorded. `None` when the entry does not say (a brew entry with no formula).
+pub fn home(brew: &Brew, paths: &Paths, engine: &dyn ServiceEngine, entry: &ServiceEntry) -> Option<PathBuf> {
+    match engine.source() {
+        SourceSpec::Path { program } => program.parent().map(std::path::Path::to_path_buf),
+        SourceSpec::Download { .. } | SourceSpec::Npm { .. } => {
+            Some(paths.program_root(engine.key(), entry.version.as_deref()?))
+        }
+        SourceSpec::Brew { .. } | SourceSpec::BrewLines(_) => Some(keg(brew, entry.formula.as_deref()?)),
+    }
+}
+
+/// The context an instance's engine renders it in.
+pub fn instance_ctx<'a>(
+    instance: &'a str,
+    home: &'a std::path::Path,
+    paths: &'a Paths,
+    ports: &'a [PortRef],
+    macos_user: &'a str,
+) -> InstanceCtx<'a> {
+    InstanceCtx { instance, home, paths, ports, macos_user, node: None }
+}
+
 /// What running `instance` takes, with its ports read from the registry: the unit command.
+/// `None` when the entry does not say where its programs are.
 pub fn unit_command(
     brew: &Brew,
     paths: &Paths,
-    engine: Engine,
+    engine: &dyn ServiceEngine,
     instance: &str,
-    formula: &str,
+    entry: &ServiceEntry,
     ports: &[PortRef],
-) -> UnitCommand {
-    command(engine, instance, &keg(brew, formula), paths, ports)
+) -> Option<UnitCommand> {
+    let home = home(brew, paths, engine, entry)?;
+    let user = macos_user();
+    Some(engine.command(&instance_ctx(instance, &home, paths, ports, &user)))
+}
+
+/// The engine and unit command `instance` runs with, or why it cannot run as its entry says:
+/// its engine is unknown (`ENGINE_UNKNOWN`), its keg is missing (`FORMULA_MISSING`), or its
+/// installed program is gone (`ENGINE_NOT_INSTALLED`). Reconcile leaves such an instance out,
+/// and doctor says why.
+pub fn runnable(
+    brew: &Brew,
+    paths: &Paths,
+    engines: &Engines,
+    instance: &str,
+    entry: &ServiceEntry,
+    ports: &[PortRef],
+) -> Result<(Arc<dyn ServiceEngine>, UnitCommand), YardError> {
+    let engine =
+        engines.get(entry.engine.as_str()).cloned().ok_or_else(|| unknown_engine(instance, &entry.engine))?;
+    let cmd = unit_command(brew, paths, engine.as_ref(), instance, entry, ports)
+        .ok_or_else(|| not_installed(instance, &entry.engine))?;
+    match entry.formula.as_deref() {
+        Some(formula) => {
+            if let Some(missing) = missing_program(brew, formula, &cmd.program) {
+                return Err(missing);
+            }
+        }
+        None if !cmd.program.exists() => return Err(not_installed(instance, &entry.engine)),
+        None => {}
+    }
+    Ok((engine, cmd))
 }
 
 /// Stops the service processes an earlier yardd left running (spec §15), for every
 /// instance `services.toml` lists, and returns `(instance, pid)` for each it stopped. A
 /// `services.toml` that does not parse is the reconcile's to report, not this.
-pub async fn stop_orphans(paths: &Paths, brew: &Brew) -> Vec<(String, u32)> {
+pub async fn stop_orphans(paths: &Paths, brew: &Brew, engines: &Engines) -> Vec<(String, u32)> {
     let Ok(services) = load_services(paths) else { return vec![] };
     let mut stopped = vec![];
     for (instance, entry) in &services.services {
-        let cmd = unit_command(brew, paths, entry.engine, instance, &entry.formula, &[]);
+        let Some(cmd) = engines
+            .get(entry.engine.as_str())
+            .and_then(|engine| unit_command(brew, paths, engine.as_ref(), instance, entry, &[]))
+        else {
+            continue;
+        };
         let pid_file = paths.service_pid(instance);
         if let Some(pid) = orphans::stop(&pid_file, &cmd.program, STOP_TIMEOUT, cmd.stop_signal).await {
             stopped.push((instance.clone(), pid));
@@ -117,34 +183,34 @@ pub fn macos_user() -> String {
 
 /// The instance a `.yard` value of `true` means for `engine`: the default line's if it
 /// exists, else the first by name (spec §9).
-pub fn default_instance(services: &ServicesConfig, engine: Engine) -> Option<&str> {
-    let default = instance_name(engine, None);
+pub fn default_instance<'a>(services: &'a ServicesConfig, engine: &EngineKey) -> Option<&'a str> {
+    let default = instance_name(engine.as_str(), None);
     if services.services.contains_key(&default) {
         return services.services.get_key_value(&default).map(|(name, _)| name.as_str());
     }
-    services.services.iter().find(|(_, e)| e.engine == engine).map(|(name, _)| name.as_str())
+    services.services.iter().find(|(_, e)| &e.engine == engine).map(|(name, _)| name.as_str())
 }
 
 /// The sites whose `.yard` asks for `instance`: by its line, or by `true` when it is the
 /// instance `true` means.
-pub fn used_by(snapshot: &Snapshot, engine: Engine, instance: &str) -> Vec<String> {
+pub fn used_by(snapshot: &Snapshot, engine: &EngineKey, instance: &str) -> Vec<String> {
     let services = &snapshot.services;
     snapshot
         .projects
         .iter()
-        .filter_map(|(site, project)| Some((site, project.ok()?.services.get(&engine)?)))
+        .filter_map(|(site, project)| Some((site, project.ok()?.services.get(engine)?)))
         .filter(|(_, want)| match want {
-            ServiceWant::Line(line) => instance_name(engine, Some(line)) == instance,
+            ServiceWant::Line(line) => instance_name(engine.as_str(), Some(line)) == instance,
             ServiceWant::Default => default_instance(services, engine) == Some(instance),
         })
         .map(|(site, _)| site.clone())
         .collect()
 }
 
-/// `http(s)://minio.<tld>` with nginx's port for that scheme, left out when it is the
-/// scheme's own (80, 443).
-pub fn console_url(tld: &str, secure: bool, http: u16, https: u16) -> String {
-    host_url("minio", tld, secure, http, https)
+/// `http(s)://<instance>.<tld>` (`minio.<tld>`) with nginx's port for that scheme, left out
+/// when it is the scheme's own (80, 443).
+pub fn console_url(instance: &str, tld: &str, secure: bool, http: u16, https: u16) -> String {
+    host_url(instance, tld, secure, http, https)
 }
 
 /// `http(s)://<label>.<tld>`, as `console_url` spells it, for a host Yard serves for a service.
@@ -169,14 +235,30 @@ pub fn service_info(
     name: &str,
 ) -> Option<ServiceInfo> {
     let entry = snapshot.services.services.get(name)?;
-    let engine = entry.engine;
-    let ports: Vec<PortRef> = port_entries(engine, name)
-        .into_iter()
-        .filter_map(|(entry_name, ..)| {
-            let port = snapshot.registry.entries.get(&entry_name)?.port;
-            Some(PortRef { name: entry_name, port })
-        })
-        .collect();
+    let engine = snapshot.engines.get(entry.engine.as_str());
+    // An instance whose engine is unknown still shows what the registry holds for it.
+    let ports: Vec<PortRef> = match engine {
+        Some(engine) => port_entries(engine.as_ref(), name)
+            .into_iter()
+            .map(|(entry_name, ..)| entry_name)
+            .collect::<Vec<_>>(),
+        None => {
+            let prefix = format!("{name}-");
+            snapshot
+                .registry
+                .entries
+                .keys()
+                .filter(|k| *k == name || k.starts_with(&prefix))
+                .cloned()
+                .collect()
+        }
+    }
+    .into_iter()
+    .filter_map(|entry_name: String| {
+        let port = snapshot.registry.entries.get(&entry_name)?.port;
+        Some(PortRef { name: entry_name, port })
+    })
+    .collect();
     let asleep = sleeper.asleep().get(name).copied();
     let waking = sleeper.waking_since(name);
     let state = if entry.stopped || asleep.is_some() {
@@ -205,25 +287,26 @@ pub fn service_info(
     let (sleep_after_secs, sleep_after_source) =
         effective_sleep(entry.sleep_after, snapshot.yard.service_sleep_after, sleeper.default_after());
     let port_of = |unit: &str, usual: u16| snapshot.registry.entries.get(unit).map_or(usual, |e| e.port);
-    let console = (engine == Engine::Minio && serves_console(&snapshot.services, &snapshot.resolution.sites))
+    let console = serves_console(&snapshot.engines, &snapshot.services, &snapshot.resolution.sites, name)
         .then(|| {
             let profile = snapshot.registry.profile;
             let http = port_of(NGINX_HTTP, profile.http_port());
             let https = port_of(NGINX_HTTPS, profile.https_port());
-            console_url(&snapshot.tld, snapshot.yard.secure_by_default, http, https)
+            console_url(name, &snapshot.tld, snapshot.yard.secure_by_default, http, https)
         });
     Some(ServiceInfo {
         name: name.to_string(),
-        engine: engine.key().to_string(),
-        engine_name: engine.display().to_string(),
+        engine: entry.engine.to_string(),
+        engine_name: engine.map_or_else(|| entry.engine.to_string(), |e| e.display().to_string()),
         version: entry.version.clone(),
-        formula: entry.formula.clone(),
+        formula: entry.formula.clone().unwrap_or_default(),
         ports,
         state,
         stopped_by_user: entry.stopped,
-        account: engine.account(&macos_user()),
+        account: engine
+            .map_or(yard_proto::Account { user: None, password: None }, |e| e.account(&macos_user())),
         console,
-        used_by: used_by(snapshot, engine, name),
+        used_by: used_by(snapshot, &entry.engine, name),
         sleeping_since: sleeping_since.and_then(rfc3339),
         sleep_after_secs,
         sleep_after_source,
@@ -264,10 +347,14 @@ pub fn usual_port(usual_ports: Option<&BTreeMap<String, u16>>, key: &str, defaul
 /// on 3306, 5432 or 6379.
 pub fn reserved(app_dirs: &[PathBuf], usual_ports: Option<&BTreeMap<String, u16>>) -> BTreeSet<u16> {
     let real = reserved_ports(app_dirs, &|p: &std::path::Path| p.exists());
+    // DBngin's and Postgres.app's ports are MySQL's, PostgreSQL's and Redis's usual ones.
+    let engines = Engines::builtin();
     real.into_iter()
         .map(|port| {
-            let owner = Engine::ALL.into_iter().find(|e| e.usual_ports()[0].1 == port);
-            owner.map_or(port, |e| usual_port(usual_ports, e.key(), port))
+            let owner = ["mysql", "postgres", "redis"]
+                .into_iter()
+                .find(|k| engines.get(k).and_then(|e| e.ports().first().map(|p| p.usual)) == Some(port));
+            owner.map_or(port, |k| usual_port(usual_ports, k, port))
         })
         .collect()
 }
@@ -306,8 +393,8 @@ async fn describe(brew: &Brew, name: &str) -> Result<Option<Formula>, YardError>
 
 /// The names `brew search --formula "/^<base>(@|$)/"` finds. A search with no match fails
 /// in real brew, which is no names here.
-async fn search(brew: &Brew, engine: Engine) -> Result<Vec<String>, YardError> {
-    let pattern = format!("/^{}(@|$)/", engine.base_formula());
+async fn search(brew: &Brew, base_formula: &str) -> Result<Vec<String>, YardError> {
+    let pattern = format!("/^{base_formula}(@|$)/");
     let (ok, out, _) = brew_stdout(brew, &["search", "--formula", &pattern]).await?;
     if !ok {
         return Ok(Vec::new());
@@ -339,11 +426,15 @@ pub struct Resolved {
 /// Which formula serves `engine`'s `line` (spec §5), asking brew once per formula.
 /// `SERVICE_VERSION_UNSUPPORTED` names the lines brew does have; a formula brew cannot
 /// describe is `FORMULA_MISSING`, not a missing line.
-pub async fn resolve(brew: &Brew, engine: Engine, line: Option<&str>) -> Result<Resolved, YardError> {
-    match engine {
-        Engine::Mysql | Engine::Postgres => {
+pub async fn resolve(
+    brew: &Brew,
+    engine: &dyn ServiceEngine,
+    line: Option<&str>,
+) -> Result<Resolved, YardError> {
+    match engine.source() {
+        SourceSpec::BrewLines(spec) => {
             let line = line.ok_or_else(|| YardError::internal("a versioned engine needs a line"))?;
-            let names = search(brew, engine).await?;
+            let names = search(brew, spec.base_formula).await?;
             let mut infos: BTreeMap<String, Option<Formula>> = BTreeMap::new();
             for name in candidate_names(engine, &names) {
                 let info = describe(brew, &name).await?;
@@ -357,28 +448,35 @@ pub async fn resolve(brew: &Brew, engine: Engine, line: Option<&str>) -> Result<
             let found = resolve_line(engine, line, &names, &|name| infos.get(name).cloned().flatten())?;
             Ok(Resolved { formula: found.full_name.clone(), info: Some(found) })
         }
-        Engine::Redis => {
-            let formula = engine.base_formula();
-            let info = describe(brew, formula).await?;
-            if info.is_none() && !keg(brew, formula).exists() {
-                return Err(cannot_describe(formula));
-            }
-            Ok(Resolved { formula: formula.to_string(), info })
-        }
-        Engine::Minio => {
-            const TAP_FORMULA: &str = "minio/stable/minio";
-            // homebrew/core's minio and the tap's share `opt/minio`, so an installed keg's
-            // tap is brew's to say (spec §15). A core one is used as it is.
-            if keg(brew, TAP_FORMULA).exists() {
-                let info = describe(brew, engine.base_formula()).await?;
+        SourceSpec::Brew { formula } if tap_of(&formula).is_some() => {
+            // A tap's formula and homebrew/core's of the same name share `opt/<name>`, so an
+            // installed keg's tap is brew's to say (M4b spec §15, MinIO's). A core one is used
+            // as it is.
+            if keg(brew, &formula).exists() {
+                let base = formula.rsplit('/').next().unwrap_or(&formula);
+                let info = describe(brew, base).await?;
                 return Ok(match info {
                     Some(f) if f.tap == "homebrew/core" => {
                         Resolved { formula: f.full_name.clone(), info: Some(f) }
                     }
-                    info => Resolved { formula: TAP_FORMULA.to_string(), info },
+                    info => Resolved { formula, info },
                 });
             }
-            Ok(Resolved { formula: TAP_FORMULA.to_string(), info: None })
+            // brew refuses to describe an untrusted tap's formula, so there is nothing to ask yet.
+            Ok(Resolved { formula, info: None })
+        }
+        SourceSpec::Brew { formula } => {
+            let info = describe(brew, &formula).await?;
+            if info.is_none() && !keg(brew, &formula).exists() {
+                return Err(cannot_describe(&formula));
+            }
+            Ok(Resolved { formula, info })
+        }
+        SourceSpec::Path { .. } | SourceSpec::Download { .. } | SourceSpec::Npm { .. } => {
+            Err(YardError::new(
+                ErrorCode::EngineNotInstalled,
+                format!("{} is not installed from brew", engine.display()),
+            ))
         }
     }
 }
@@ -423,7 +521,7 @@ pub struct Add {
     pub paths: Paths,
     pub brew: Brew,
     pub reconciler: Arc<Reconciler>,
-    pub engine: Engine,
+    pub engine: Arc<dyn ServiceEngine>,
     pub instance: String,
     /// The line (`8.4`), `None` for an engine with none.
     pub version: Option<String>,
@@ -456,9 +554,9 @@ impl Add {
             }
             job.run(&self.brew.brew_bin(), &["install", &self.resolved.formula], &Brew::job_env()).await?;
         }
+        let user = macos_user();
         let program =
-            unit_command(&self.brew, &self.paths, self.engine, &self.instance, &self.resolved.formula, &[])
-                .program;
+            self.engine.command(&instance_ctx(&self.instance, &keg, &self.paths, &[], &user)).program;
         if !program.exists() {
             return Err(YardError::new(
                 ErrorCode::FormulaMissing,
@@ -493,7 +591,8 @@ impl Add {
 
         let data = paths.service_data(instance);
         if is_empty(&data) {
-            if let Some(init) = init_command(self.engine, instance, keg, paths, &macos_user()) {
+            let user = macos_user();
+            if let Some(init) = self.engine.init(&instance_ctx(instance, keg, paths, &ports, &user)) {
                 // mysqld makes `data`, but not the directory above it.
                 std::fs::create_dir_all(paths.service_dir(instance)).map_err(|e| {
                     YardError::internal(format!(
@@ -535,7 +634,7 @@ impl Add {
 
     /// Takes the instance's ports from `ports.toml` (`--port` for its first), pinned.
     async fn allocate(&self) -> Result<Vec<PortRef>, YardError> {
-        let (paths, engine, instance) = (self.paths.clone(), self.engine, self.instance.clone());
+        let (paths, engine, instance) = (self.paths.clone(), self.engine.clone(), self.instance.clone());
         let (wanted, usual_ports, app_dirs) = (self.port, self.usual_ports.clone(), self.app_dirs.clone());
         // The probes bind sockets and the holder lookup runs lsof.
         tokio::task::spawn_blocking(move || {
@@ -544,7 +643,9 @@ impl Add {
             TomlFile::edit(&paths.ports_toml(), |file| {
                 let mut registry = Registry::load(&paths)?;
                 let mut granted = vec![];
-                for (i, (name, key, usual)) in port_entries(engine, &instance).into_iter().enumerate() {
+                for (i, (name, key, usual)) in
+                    port_entries(engine.as_ref(), &instance).into_iter().enumerate()
+                {
                     let port = match (i, wanted) {
                         (0, Some(port)) => {
                             let registered_to = registry.holder_of(port, &name).map(str::to_string);
@@ -621,7 +722,7 @@ impl Add {
     /// job's error, which stays the one that caused the rollback.
     async fn roll_back(&self, job: &JobCtx, created: &Created) {
         let (paths, instance) = (&self.paths, self.instance.as_str());
-        let undone = forget(paths, self.engine, instance, created.entry, created.ports);
+        let undone = forget(paths, instance, created.entry, created.ports);
         let stopped = match undone {
             Ok(()) if created.entry => stop_and_wait(&self.reconciler, instance).await,
             other => other,
@@ -643,8 +744,13 @@ fn unit_error(supervisor: &Supervisor, instance: &str) -> Option<String> {
 
 // ---- Removing ----
 
-/// Drops `instance`'s `services.toml` entry (`entry`) and its port entries (`ports`).
-fn forget(paths: &Paths, engine: Engine, instance: &str, entry: bool, ports: bool) -> Result<(), YardError> {
+/// Drops `instance`'s `services.toml` entry (`entry`) and every registry entry it owns
+/// (`ports`): `<instance>` and `<instance>-<port name>`, found by name, so an instance whose
+/// engine is unknown is forgotten as fully as any other.
+fn forget(paths: &Paths, instance: &str, entry: bool, ports: bool) -> Result<(), YardError> {
+    let mut instances: Vec<String> =
+        load_services(paths).map(|s| s.services.into_keys().collect()).unwrap_or_default();
+    instances.push(instance.to_string());
     if entry {
         TomlFile::edit(&paths.services_toml(), |file| {
             file.remove(&["services", instance]);
@@ -654,9 +760,8 @@ fn forget(paths: &Paths, engine: Engine, instance: &str, entry: bool, ports: boo
     if ports {
         TomlFile::edit(&paths.ports_toml(), |file| {
             let mut registry = Registry::load(paths)?;
-            for (name, ..) in port_entries(engine, instance) {
-                registry.entries.remove(&name);
-            }
+            let names: Vec<&str> = instances.iter().map(String::as_str).collect();
+            registry.entries.retain(|name, _| crate::reconcile::owner_among(name, &names) != instance);
             registry.save(file);
             Ok(())
         })?;
@@ -750,11 +855,10 @@ async fn delete_new(paths: &Paths, instance: &str, created: &Created) -> Result<
 pub async fn remove(
     paths: &Paths,
     reconciler: &Reconciler,
-    engine: Engine,
     instance: &str,
     keep_data: bool,
 ) -> Result<(), YardError> {
-    forget(paths, engine, instance, true, true)?;
+    forget(paths, instance, true, true)?;
     stop_and_wait(reconciler, instance).await?;
     delete_dir(paths, instance, keep_data).await
 }
@@ -802,7 +906,12 @@ pub fn set_sleep_after(paths: &Paths, instance: &str, after: Option<SleepAfter>)
 /// `services.port`: pins the instance's first port (MinIO's API port) to `port`, which must
 /// be unregistered or the instance's own, and free. A refusal names the holder and hints at
 /// asking again. The port is probed and the holder looked up with lsof, so this blocks.
-pub fn move_port(paths: &Paths, engine: Engine, instance: &str, port: u16) -> Result<(), YardError> {
+pub fn move_port(
+    paths: &Paths,
+    engine: &dyn ServiceEngine,
+    instance: &str,
+    port: u16,
+) -> Result<(), YardError> {
     let Some((name, ..)) = port_entries(engine, instance).into_iter().next() else {
         return Err(YardError::internal(format!("{instance} has no port")));
     };
@@ -874,12 +983,12 @@ mod tests {
 
     #[test]
     fn the_console_url_leaves_out_a_default_port() {
-        assert_eq!(console_url("yard", false, 8080, 8443), "http://minio.yard:8080");
-        assert_eq!(console_url("yard", true, 8080, 8443), "https://minio.yard:8443");
-        assert_eq!(console_url("test", false, 80, 443), "http://minio.test");
-        assert_eq!(console_url("test", true, 80, 443), "https://minio.test");
+        assert_eq!(console_url("minio", "yard", false, 8080, 8443), "http://minio.yard:8080");
+        assert_eq!(console_url("minio", "yard", true, 8080, 8443), "https://minio.yard:8443");
+        assert_eq!(console_url("minio", "test", false, 80, 443), "http://minio.test");
+        assert_eq!(console_url("minio", "test", true, 80, 443), "https://minio.test");
         // The scheme's own port decides: https on 8443 keeps it even when http is on 80.
-        assert_eq!(console_url("test", true, 80, 8443), "https://minio.test:8443");
+        assert_eq!(console_url("minio", "test", true, 80, 8443), "https://minio.test:8443");
     }
 
     #[test]
@@ -891,7 +1000,8 @@ mod tests {
 
     #[test]
     fn port_entries_name_each_port() {
-        let names: Vec<(String, String, u16)> = port_entries(Engine::Minio, "minio");
+        let names: Vec<(String, String, u16)> =
+            port_entries(Engines::builtin().get("minio").unwrap().as_ref(), "minio");
         assert_eq!(
             names,
             [
@@ -900,7 +1010,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            port_entries(Engine::Mysql, "mysql-8.4"),
+            port_entries(Engines::builtin().get("mysql").unwrap().as_ref(), "mysql-8.4"),
             [("mysql-8.4".to_string(), "mysql".to_string(), 3306)]
         );
     }

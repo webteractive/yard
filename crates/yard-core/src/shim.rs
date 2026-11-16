@@ -433,6 +433,21 @@ php = "7.4"
         }
     }
 
+    /// A teammate's `.yard` may name an engine only the maintainer has a recipe for: the shims
+    /// read no recipes, and `composer install` must still run (recipes spec §2).
+    #[test]
+    fn shim_runs_with_unknown_service() {
+        let (yard, sites) = configs(SITES);
+        let files = BTreeMap::from([(
+            PathBuf::from("/code/old/.yard"),
+            "php = \"8.4\"\n\n[services]\nsoketi = true\nmysql = \"8.4\"\n".to_string(),
+        )]);
+        let read = |p: &Path| files.get(p).cloned().map(Ok);
+        let got =
+            resolve_version(Path::new("/code/old"), &yard, &sites, &Paths::new("/r"), &read, &same).unwrap();
+        assert_eq!(got, (v("8.4"), Source::Project("/code/old/.yard".into())));
+    }
+
     #[test]
     fn project_file_beats_isolation_and_yard_php() {
         let (yard, sites) = configs(SITES);

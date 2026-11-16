@@ -1,155 +1,218 @@
-//! The engines in Yard's code. Until the enum goes (recipes plan Task 5) each one answers from
-//! the enum's existing functions, so the contract is proved against them before they move.
+//! The engines in Yard's code: MySQL, PostgreSQL and MinIO (recipes spec §2). Their logic is
+//! more than a recipe can say: MySQL's legacy-PHP logins, PostgreSQL's locale and `initdb`,
+//! `yard <engine>`'s database commands, and MinIO's tap and console.
 
 use super::{
     Connect, Console, DbFlavor, HostHeader, InstanceCtx, LineSpec, MYSQL_LINES, Origin, POSTGRES_LINES,
-    PortSpec, ServiceEngine, SourceSpec, main_port,
+    PortSpec, ServiceEngine, SourceSpec,
 };
+use crate::services::DATABASE_START_TIMEOUT;
 use crate::services::render::{self, UnitCommand};
-use crate::services::{DATABASE_START_TIMEOUT, Engine};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use yard_proto::Account;
 
-/// MySQL, PostgreSQL and MinIO; Redis is a carried recipe.
 pub fn all() -> Vec<Arc<dyn ServiceEngine>> {
-    [Engine::Mysql, Engine::Postgres, Engine::Minio]
-        .into_iter()
-        .map(|e| Arc::new(Builtin(e)) as Arc<dyn ServiceEngine>)
-        .collect()
+    vec![Arc::new(Mysql), Arc::new(Postgres), Arc::new(Minio)]
 }
 
-#[derive(Debug)]
-struct Builtin(Engine);
+fn account(user: Option<&str>, password: Option<&str>) -> Account {
+    Account { user: user.map(str::to_string), password: password.map(str::to_string) }
+}
 
-/// The lines a GUI client needs, by engine (the CLI's and Yard.app's tables until now).
-fn clients(engine: Engine) -> Vec<String> {
-    let lines: [&str; 2] = match engine {
-        Engine::Postgres => [
-            "TablePlus: open the URL, or paste it",
-            "DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above",
-        ],
-        Engine::Redis => {
-            ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]
-        }
-        _ => [
-            "TablePlus, Sequel Ace: open the URL, or paste it",
-            "DBeaver, DataGrip: a new MySQL connection with the fields above",
-        ],
-    };
+fn lines(lines: &[&str]) -> Vec<String> {
     lines.iter().map(|l| l.to_string()).collect()
 }
 
-impl ServiceEngine for Builtin {
+/// The `DB_*` lines Laravel reads, for MySQL and PostgreSQL.
+fn db_env(connection: &str, port: u16, account: &Account) -> Vec<String> {
+    vec![
+        format!("DB_CONNECTION={connection}"),
+        "DB_HOST=127.0.0.1".to_string(),
+        format!("DB_PORT={port}"),
+        format!("DB_USERNAME={}", account.user.clone().unwrap_or_default()),
+        format!("DB_PASSWORD={}", account.password.clone().unwrap_or_default()),
+    ]
+}
+
+fn db_url(scheme: &str, account: &Account, port: u16) -> String {
+    let login = account.user.as_deref().map(|u| format!("{u}@")).unwrap_or_default();
+    format!("{scheme}://{login}127.0.0.1:{port}")
+}
+
+fn one_port(usual: u16) -> Vec<PortSpec> {
+    vec![PortSpec { suffix: String::new(), usual }]
+}
+
+#[derive(Debug)]
+struct Mysql;
+
+impl ServiceEngine for Mysql {
     fn key(&self) -> &str {
-        self.0.key()
+        "mysql"
     }
-
     fn display(&self) -> &str {
-        self.0.display()
+        "MySQL"
     }
-
     fn origin(&self) -> Origin {
         Origin::BuiltIn
     }
-
     fn source(&self) -> SourceSpec {
-        match self.0 {
-            Engine::Mysql => SourceSpec::BrewLines(&MYSQL_LINES),
-            Engine::Postgres => SourceSpec::BrewLines(&POSTGRES_LINES),
-            Engine::Redis => SourceSpec::Brew { formula: "redis".into() },
-            Engine::Minio => SourceSpec::Brew { formula: "minio/stable/minio".into() },
-        }
+        SourceSpec::BrewLines(&MYSQL_LINES)
     }
-
     fn lines(&self) -> Option<&'static LineSpec> {
-        match self.0 {
-            Engine::Mysql => Some(&MYSQL_LINES),
-            Engine::Postgres => Some(&POSTGRES_LINES),
-            Engine::Redis | Engine::Minio => None,
-        }
+        Some(&MYSQL_LINES)
     }
-
     fn ports(&self) -> Vec<PortSpec> {
-        self.0
-            .usual_ports()
-            .iter()
-            .map(|(suffix, usual)| PortSpec { suffix: suffix.to_string(), usual: *usual })
-            .collect()
+        one_port(3306)
     }
-
-    fn account(&self, macos_user: &str) -> Account {
-        self.0.account(macos_user)
+    fn account(&self, _macos_user: &str) -> Account {
+        account(Some("root"), Some(""))
     }
-
-    fn dirs(&self) -> Vec<String> {
-        if self.0 == Engine::Redis { vec!["data".into()] } else { Vec::new() }
-    }
-
     fn command(&self, ctx: &InstanceCtx) -> UnitCommand {
-        render::command(self.0, ctx.instance, ctx.home, ctx.paths, ctx.ports)
+        render::mysql_command(ctx.instance, ctx.home, ctx.paths)
     }
-
     fn init(&self, ctx: &InstanceCtx) -> Option<UnitCommand> {
-        render::init_command(self.0, ctx.instance, ctx.home, ctx.paths, ctx.macos_user)
+        Some(render::mysql_init(ctx.instance, ctx.home, ctx.paths))
     }
-
     fn config_file(&self, ctx: &InstanceCtx) -> Option<(PathBuf, String)> {
-        render::config_file(self.0, ctx.instance, ctx.paths, ctx.ports)
+        Some(render::mysql_cnf(ctx.instance, ctx.paths, ctx.port(self, "")))
     }
-
     fn user_overrides(&self) -> Option<String> {
-        render::user_overrides(self.0).map(str::to_string)
+        Some(render::MYSQL_OVERRIDES.to_string())
     }
-
     fn start_timeout(&self) -> Option<Duration> {
-        matches!(self.0, Engine::Mysql | Engine::Postgres).then_some(DATABASE_START_TIMEOUT)
+        Some(DATABASE_START_TIMEOUT)
     }
-
     fn env_lines(&self, ctx: &InstanceCtx) -> Vec<String> {
-        crate::services::env_lines(self.0, ctx.ports, &self.account(ctx.macos_user))
+        db_env("mysql", ctx.port(self, ""), &self.account(ctx.macos_user))
     }
-
-    fn console(&self) -> Option<Console> {
-        (self.0 == Engine::Minio).then(|| Console {
-            port: "console".into(),
-            host_header: HostHeader::Upstream,
-            nginx_overrides: true,
-        })
-    }
-
     fn databases(&self) -> Option<DbFlavor> {
-        match self.0 {
-            Engine::Mysql => Some(DbFlavor::Mysql),
-            Engine::Postgres => Some(DbFlavor::Postgres),
-            Engine::Redis | Engine::Minio => None,
-        }
+        Some(DbFlavor::Mysql)
     }
-
+    fn has_connect(&self) -> bool {
+        true
+    }
     fn connect(&self, ctx: &InstanceCtx) -> Option<Connect> {
-        let port = main_port(self, ctx.instance, ctx.ports);
-        let account = self.account(ctx.macos_user);
-        let login = account.user.as_deref().map(|u| format!("{u}@")).unwrap_or_default();
-        let (scheme, socket, shell) = match self.0 {
-            Engine::Mysql => ("mysql", Some(ctx.paths.mysql_socket(ctx.instance)), None),
-            Engine::Postgres => ("postgresql", Some(ctx.paths.run_dir()), None),
-            Engine::Redis => (
-                "redis",
-                None,
-                Some(vec![
-                    ctx.home.join("bin/redis-cli").into_os_string(),
-                    "-p".into(),
-                    port.to_string().into(),
-                ]),
-            ),
-            Engine::Minio => return None,
-        };
         Some(Connect {
-            url: format!("{scheme}://{login}127.0.0.1:{port}"),
-            shell,
-            clients: clients(self.0),
-            socket,
+            url: db_url("mysql", &self.account(ctx.macos_user), ctx.port(self, "")),
+            shell: None,
+            clients: lines(&[
+                "TablePlus, Sequel Ace: open the URL, or paste it",
+                "DBeaver, DataGrip: a new MySQL connection with the fields above",
+            ]),
+            socket: Some(ctx.paths.mysql_socket(ctx.instance)),
         })
+    }
+}
+
+#[derive(Debug)]
+struct Postgres;
+
+impl ServiceEngine for Postgres {
+    fn key(&self) -> &str {
+        "postgres"
+    }
+    fn display(&self) -> &str {
+        "PostgreSQL"
+    }
+    fn origin(&self) -> Origin {
+        Origin::BuiltIn
+    }
+    fn source(&self) -> SourceSpec {
+        SourceSpec::BrewLines(&POSTGRES_LINES)
+    }
+    fn lines(&self) -> Option<&'static LineSpec> {
+        Some(&POSTGRES_LINES)
+    }
+    fn ports(&self) -> Vec<PortSpec> {
+        one_port(5432)
+    }
+    /// The superuser is the macOS user with no password, as in Postgres.app (M4b §5.2).
+    fn account(&self, macos_user: &str) -> Account {
+        account(Some(macos_user), Some(""))
+    }
+    fn command(&self, ctx: &InstanceCtx) -> UnitCommand {
+        render::postgres_command(ctx.instance, ctx.home, ctx.paths, ctx.port(self, ""))
+    }
+    fn init(&self, ctx: &InstanceCtx) -> Option<UnitCommand> {
+        Some(render::postgres_init(ctx.instance, ctx.home, ctx.paths, ctx.macos_user))
+    }
+    fn start_timeout(&self) -> Option<Duration> {
+        Some(DATABASE_START_TIMEOUT)
+    }
+    fn env_lines(&self, ctx: &InstanceCtx) -> Vec<String> {
+        db_env("pgsql", ctx.port(self, ""), &self.account(ctx.macos_user))
+    }
+    fn databases(&self) -> Option<DbFlavor> {
+        Some(DbFlavor::Postgres)
+    }
+    fn has_connect(&self) -> bool {
+        true
+    }
+    fn connect(&self, ctx: &InstanceCtx) -> Option<Connect> {
+        Some(Connect {
+            url: db_url("postgresql", &self.account(ctx.macos_user), ctx.port(self, "")),
+            shell: None,
+            clients: lines(&[
+                "TablePlus: open the URL, or paste it",
+                "DBeaver, DataGrip, Postico: a new PostgreSQL connection with the fields above",
+            ]),
+            socket: Some(ctx.paths.run_dir()),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Minio;
+
+impl ServiceEngine for Minio {
+    fn key(&self) -> &str {
+        "minio"
+    }
+    fn display(&self) -> &str {
+        "MinIO"
+    }
+    fn origin(&self) -> Origin {
+        Origin::BuiltIn
+    }
+    /// The `minio/stable` tap's, so the install outlives homebrew/core's deprecated formula.
+    fn source(&self) -> SourceSpec {
+        SourceSpec::Brew { formula: "minio/stable/minio".into() }
+    }
+    fn ports(&self) -> Vec<PortSpec> {
+        vec![
+            PortSpec { suffix: String::new(), usual: 9000 },
+            PortSpec { suffix: "console".into(), usual: 9001 },
+        ]
+    }
+    fn account(&self, _macos_user: &str) -> Account {
+        account(Some("minioadmin"), Some("minioadmin"))
+    }
+    fn command(&self, ctx: &InstanceCtx) -> UnitCommand {
+        render::minio_command(
+            ctx.instance,
+            ctx.home,
+            ctx.paths,
+            ctx.port(self, ""),
+            ctx.port(self, "console"),
+        )
+    }
+    fn user_overrides(&self) -> Option<String> {
+        Some(render::MINIO_OVERRIDES.to_string())
+    }
+    fn env_lines(&self, ctx: &InstanceCtx) -> Vec<String> {
+        let account = self.account(ctx.macos_user);
+        vec![
+            format!("AWS_ACCESS_KEY_ID={}", account.user.unwrap_or_default()),
+            format!("AWS_SECRET_ACCESS_KEY={}", account.password.unwrap_or_default()),
+            "AWS_DEFAULT_REGION=us-east-1".to_string(),
+            format!("AWS_ENDPOINT=http://127.0.0.1:{}", ctx.port(self, "")),
+            "AWS_USE_PATH_STYLE_ENDPOINT=true".to_string(),
+        ]
+    }
+    fn console(&self) -> Option<Console> {
+        Some(Console { port: "console".into(), host_header: HostHeader::Upstream, nginx_overrides: true })
     }
 }

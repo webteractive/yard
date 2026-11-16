@@ -7,7 +7,10 @@ pub mod carried;
 mod key;
 pub mod recipe;
 
-pub use key::{EngineKey, LineShape, LineSpec, MYSQL_LINES, POSTGRES_LINES, versioned_lines};
+pub use key::{
+    EngineKey, LineShape, LineSpec, MYSQL_LINES, POSTGRES_LINES, instance_name, parse_instance,
+    versioned_lines,
+};
 pub use recipe::{LoadOptions, RecipeEngine, RecipeError, parse_recipe};
 
 /// Every top-level `yard` command and alias: a recipe key may not be one, so `yard <key>`
@@ -215,6 +218,10 @@ pub trait ServiceEngine: Send + Sync + Debug {
     fn connect(&self, _ctx: &InstanceCtx) -> Option<Connect> {
         None
     }
+    /// Whether [`connect`](Self::connect) says anything, whatever the instance.
+    fn has_connect(&self) -> bool {
+        false
+    }
 }
 
 /// The instance's main port: the entry named for the instance, else the first entry that is
@@ -258,6 +265,18 @@ impl Engines {
     pub fn keys(&self) -> Vec<String> {
         self.engines.keys().cloned().collect()
     }
+
+    /// [`Engines::builtin`], built once: the carried recipes are parsed the first time only.
+    pub fn builtin_shared() -> &'static Engines {
+        static BUILTIN: std::sync::LazyLock<Engines> = std::sync::LazyLock::new(Engines::builtin);
+        &BUILTIN
+    }
+}
+
+/// The database family of the engine with `key`, when it has one. Only built-ins do, and a
+/// recipe can never take a built-in's key, so the built-in set answers for every Mac.
+pub fn db_flavor(key: &str) -> Option<DbFlavor> {
+    Engines::builtin_shared().get(key)?.databases()
 }
 
 #[cfg(test)]

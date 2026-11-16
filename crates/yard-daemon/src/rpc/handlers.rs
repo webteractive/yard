@@ -459,15 +459,17 @@ async fn doctor(ctx: &Context, params: DoctorParams) -> DoctorReport {
 
 /// Every registered port with its status; `portscan::infos` does the probing.
 async fn port_infos(ctx: &Context) -> Vec<PortInfo> {
-    let registry = match ctx.reconciler.snapshot().await {
-        Some(s) => s.registry,
+    let (registry, services) = match ctx.reconciler.snapshot().await {
+        Some(s) => (s.registry, s.services),
         None => match Registry::load(&ctx.paths) {
-            Ok(r) => r,
+            Ok(r) => (r, yard_core::config::load_services(&ctx.paths).unwrap_or_default()),
             Err(_) => return vec![],
         },
     };
     let running = portscan::own_units(&ctx.supervisor().list());
-    tokio::task::spawn_blocking(move || portscan::infos(&registry, &running)).await.unwrap_or_default()
+    tokio::task::spawn_blocking(move || portscan::infos(&registry, &services, &running))
+        .await
+        .unwrap_or_default()
 }
 
 /// Changes `ports.toml` and applies it. A change the reconcile refuses (nginx rejecting the

@@ -234,8 +234,8 @@ pub fn instances_for(services: &ServicesConfig, projects: &Projects, site: &str)
     project
         .services
         .iter()
-        .filter_map(|(&engine, want)| match want {
-            ServiceWant::Line(line) => Some(instance_name(engine, Some(line))),
+        .filter_map(|(engine, want)| match want {
+            ServiceWant::Line(line) => Some(instance_name(engine.as_str(), Some(line))),
             ServiceWant::Default => default_instance(services, engine).map(str::to_string),
         })
         .filter(|name| services.services.contains_key(name))
@@ -430,7 +430,7 @@ fn instance_ports(snapshot: &Snapshot, instance: &str) -> Vec<u16> {
         .registry
         .entries
         .iter()
-        .filter(|(unit, _)| port_owner(unit) == instance)
+        .filter(|(unit, _)| port_owner(unit, &snapshot.services) == instance)
         .map(|(_, e)| e.port)
         .collect()
 }

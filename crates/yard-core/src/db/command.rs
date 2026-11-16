@@ -1,7 +1,7 @@
 //! The command `db.command` answers: the tool, Yard's arguments, then the user's (db spec §7, §11).
 
 use super::flags::Tool;
-use crate::services::Engine;
+use crate::services::engines::DbFlavor;
 use std::path::Path;
 use yard_proto::{DbAction, DbCommand, ImportKind, StreamFilter};
 
@@ -24,7 +24,7 @@ pub const PG_ENV: [&str; 9] = [
 
 /// The instance a command runs against.
 pub struct Target<'a> {
-    pub engine: Engine,
+    pub engine: DbFlavor,
     pub instance: &'a str,
     /// The keg's `bin` directory the tools come from (db spec §7.1).
     pub bin_dir: &'a Path,
@@ -49,7 +49,7 @@ pub fn build(
     let socket = t.socket.display().to_string();
     let mut env_remove = vec![];
     let (tool, mut argv, filter): (Tool, Vec<String>, StreamFilter) = match t.engine {
-        Engine::Postgres => {
+        DbFlavor::Postgres => {
             let conn = vec!["-h".into(), socket, "-p".into(), t.port.to_string(), "-U".into(), t.user.into()];
             if action != DbAction::Shell {
                 env_remove = PG_ENV.iter().map(|v| v.to_string()).collect();
@@ -136,7 +136,6 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::Engine;
     use std::path::Path;
     use yard_proto::{DbAction, ImportKind, StreamFilter};
 
@@ -146,7 +145,7 @@ mod tests {
 
     fn my() -> Target<'static> {
         Target {
-            engine: Engine::Mysql,
+            engine: DbFlavor::Mysql,
             instance: "mysql-8.4",
             bin_dir: Path::new("/k/bin"),
             socket: Path::new("/r/run/mysql-8.4.sock"),
@@ -157,7 +156,7 @@ mod tests {
 
     fn pg() -> Target<'static> {
         Target {
-            engine: Engine::Postgres,
+            engine: DbFlavor::Postgres,
             instance: "postgres-17",
             bin_dir: Path::new("/k/bin"),
             socket: Path::new("/r/run"),

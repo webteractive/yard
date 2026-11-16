@@ -3,7 +3,6 @@
 //! answers are passed in.
 
 pub mod brew_info;
-pub mod engine;
 pub mod engines;
 pub mod render;
 pub mod reserved;
@@ -13,7 +12,7 @@ use brew_info::Formula;
 use std::time::Duration;
 use yard_proto::{ErrorCode, YardError};
 
-pub use engine::{Engine, env_lines, instance_name, parse_instance};
+pub use engines::{Engines, ServiceEngine, instance_name, parse_instance};
 
 /// How long a database gets to open its port after it starts: mysqld does only after crash
 /// recovery or after upgrading its data in place (`brew upgrade mysql`, spec §5), and a SIGTERM
@@ -32,31 +31,23 @@ fn line_key(line: &str) -> Vec<u64> {
 }
 
 /// The line a formula's `version` is on: `8.4.13` is MySQL `8.4`, `18.1` is PostgreSQL `18`
-/// (a keg's `9.7.1_1` is `9.7`).
-pub fn plain_line(engine: Engine, version: &str) -> Option<String> {
-    let mut parts = version.split('.');
-    let major = parts.next()?;
-    let line = match engine {
-        Engine::Mysql => format!("{major}.{}", parts.next()?),
-        Engine::Postgres => major.to_string(),
-        Engine::Redis | Engine::Minio => return None,
-    };
-    engine.valid_line(&line).then_some(line)
+/// (a keg's `9.7.1_1` is `9.7`); `None` for an engine with no lines.
+pub fn plain_line(engine: &dyn ServiceEngine, version: &str) -> Option<String> {
+    engine.lines()?.plain_line(version)
 }
 
 /// The names in `names` (what `brew search` found) that can be a line of `engine`: the
 /// plain formula and every `<base>@<line>` with a valid line. These are the ones whose
 /// `brew info` `lines` and `resolve_line` read.
-pub fn candidate_names(engine: Engine, names: &[String]) -> Vec<String> {
-    if !engine.versioned() {
+pub fn candidate_names(engine: &dyn ServiceEngine, names: &[String]) -> Vec<String> {
+    let Some(spec) = engine.lines() else {
         return Vec::new();
-    }
-    let prefix = format!("{}@", engine.base_formula());
+    };
+    let prefix = format!("{}@", spec.base_formula);
     let mut found: Vec<String> = names
         .iter()
         .filter(|n| {
-            n.as_str() == engine.base_formula()
-                || n.strip_prefix(&prefix).is_some_and(|line| engine.valid_line(line))
+            n.as_str() == spec.base_formula || n.strip_prefix(&prefix).is_some_and(|line| spec.valid(line))
         })
         .cloned()
         .collect();
@@ -69,11 +60,12 @@ pub fn candidate_names(engine: Engine, names: &[String]) -> Vec<String> {
 /// version: `<base>@<line>` when `names` has it, else the plain formula. The caller needs
 /// brew's `info` for exactly this one; without it the line cannot be told apart from one
 /// brew does not have.
-pub fn line_formula(engine: Engine, line: &str, names: &[String]) -> Option<String> {
-    let versioned = format!("{}@{line}", engine.base_formula());
-    [versioned.as_str(), engine.base_formula()]
+pub fn line_formula(engine: &dyn ServiceEngine, line: &str, names: &[String]) -> Option<String> {
+    let spec = engine.lines()?;
+    let versioned = format!("{}@{line}", spec.base_formula);
+    [versioned.as_str(), spec.base_formula]
         .into_iter()
-        .find(|name| engine.versioned() && names.iter().any(|n| n == name))
+        .find(|name| names.iter().any(|n| n == name))
         .map(str::to_string)
 }
 
@@ -81,33 +73,33 @@ pub fn line_formula(engine: Engine, line: &str, names: &[String]) -> Option<Stri
 /// `<base>@<line>` formula wins over the plain formula when both name the same line.
 /// A formula brew has disabled is never offered.
 fn candidates(
-    engine: Engine,
+    engine: &dyn ServiceEngine,
     names: &[String],
     info: &dyn Fn(&str) -> Option<Formula>,
 ) -> Vec<(String, Formula)> {
-    if !engine.versioned() {
+    let Some(spec) = engine.lines() else {
         return Vec::new();
-    }
-    let prefix = format!("{}@", engine.base_formula());
+    };
+    let prefix = format!("{}@", spec.base_formula);
     let mut found: Vec<(String, Formula)> = names
         .iter()
         .filter_map(|name| {
             let line = name.strip_prefix(&prefix)?;
-            if !engine.valid_line(line) {
+            if !spec.valid(line) {
                 return None;
             }
             Some((line.to_string(), info(name)?))
         })
         .filter(|(_, formula)| !formula.disabled)
         .collect();
-    let plain = engine.base_formula();
+    let plain = spec.base_formula;
     let plain_found = names
         .iter()
         .any(|n| n == plain)
         .then(|| info(plain))
         .flatten()
         .filter(|formula| !formula.disabled)
-        .and_then(|formula| Some((plain_line(engine, &formula.version)?, formula)));
+        .and_then(|formula| Some((spec.plain_line(&formula.version)?, formula)));
     // The plain formula goes last, so the stable sort and `dedup_by` keep the versioned
     // formula when both name the same line.
     found.extend(plain_found);
@@ -118,7 +110,11 @@ fn candidates(
 
 /// Every line of `engine` that brew offers, sorted by version (`8.0, 8.4, 9.7, 26.10`).
 /// `names` are the formula names `brew search` found; `info` is `brew info` for one.
-pub fn lines(engine: Engine, names: &[String], info: &dyn Fn(&str) -> Option<Formula>) -> Vec<String> {
+pub fn lines(
+    engine: &dyn ServiceEngine,
+    names: &[String],
+    info: &dyn Fn(&str) -> Option<Formula>,
+) -> Vec<String> {
     candidates(engine, names, info).into_iter().map(|(line, _)| line).collect()
 }
 
@@ -126,7 +122,7 @@ pub fn lines(engine: Engine, names: &[String], info: &dyn Fn(&str) -> Option<For
 /// formula when its version is on that line. Anything else is
 /// `SERVICE_VERSION_UNSUPPORTED`, naming the lines brew does offer.
 pub fn resolve_line(
-    engine: Engine,
+    engine: &dyn ServiceEngine,
     line: &str,
     names: &[String],
     info: &dyn Fn(&str) -> Option<Formula>,
@@ -139,7 +135,7 @@ pub fn resolve_line(
     let name = engine.display();
     let offered: Vec<&str> = found.iter().map(|(l, _)| l.as_str()).collect();
     let (message, hint) = match found.first() {
-        None if !engine.versioned() => (format!("{name} has no versions to choose between"), None),
+        None if engine.lines().is_none() => (format!("{name} has no versions to choose between"), None),
         None => {
             (format!("brew offers no {name} release lines"), Some("brew update, then try again".to_string()))
         }
@@ -162,8 +158,14 @@ pub fn resolve_line(
 #[cfg(test)]
 mod tests {
     use super::brew_info::Formula;
+    use super::engines::POSTGRES_LINES;
     use super::*;
+    use std::sync::Arc;
     use yard_proto::ErrorCode;
+
+    fn e(key: &str) -> Arc<dyn ServiceEngine> {
+        Engines::builtin().get(key).unwrap().clone()
+    }
 
     #[test]
     fn the_ready_wait_outlasts_a_database_start() {
@@ -194,7 +196,7 @@ mod tests {
     fn resolve_prefers_versioned_formula() {
         let names = names(&["mysql", "mysql@8.0", "mysql@8.4", "mysql@9.7"]);
         let info = |n: &str| Some(formula(n, "8.4.13"));
-        let f = resolve_line(Engine::Mysql, "8.4", &names, &info).unwrap();
+        let f = resolve_line(e("mysql").as_ref(), "8.4", &names, &info).unwrap();
         assert_eq!(f.name, "mysql@8.4");
     }
 
@@ -202,10 +204,10 @@ mod tests {
     fn resolve_falls_back_to_plain_formula() {
         let names = names(&["mysql", "mysql@8.0", "mysql@8.4", "mysql@9.7"]);
         let info = |n: &str| Some(formula(n, if n == "mysql" { "26.10.0" } else { "9.7.0" }));
-        let f = resolve_line(Engine::Mysql, "26.10", &names, &info).unwrap();
+        let f = resolve_line(e("mysql").as_ref(), "26.10", &names, &info).unwrap();
         assert_eq!(f.name, "mysql");
 
-        let err = resolve_line(Engine::Mysql, "26.11", &names, &info).unwrap_err();
+        let err = resolve_line(e("mysql").as_ref(), "26.11", &names, &info).unwrap_err();
         assert_eq!(err.code, ErrorCode::ServiceVersionUnsupported);
         assert!(err.message.contains("8.0, 8.4, 9.7, 26.10"), "{}", err.message);
         assert_eq!(err.hint.as_deref(), Some("yard service add mysql --version 8.0"));
@@ -217,22 +219,22 @@ mod tests {
     fn lines_are_sorted_by_version_and_skip_a_plain_duplicate() {
         let names = names(&["postgresql", "postgresql@17", "postgresql@9", "postgresql@18", "postgresql@14"]);
         let info = |n: &str| Some(formula(n, if n == "postgresql" { "18.1" } else { "1" }));
-        assert_eq!(lines(Engine::Postgres, &names, &info), ["9", "14", "17", "18"]);
+        assert_eq!(lines(e("postgres").as_ref(), &names, &info), ["9", "14", "17", "18"]);
     }
 
     #[test]
     fn a_plain_formula_is_not_a_line_for_an_unversioned_engine() {
         let names = names(&["redis"]);
         let info = |n: &str| Some(formula(n, "8.0.1"));
-        assert!(lines(Engine::Redis, &names, &info).is_empty());
-        let err = resolve_line(Engine::Redis, "8.0", &names, &info).unwrap_err();
+        assert!(lines(e("redis").as_ref(), &names, &info).is_empty());
+        let err = resolve_line(e("redis").as_ref(), "8.0", &names, &info).unwrap_err();
         assert_eq!(err.code, ErrorCode::ServiceVersionUnsupported);
     }
 
     #[test]
     fn no_formulae_at_all_is_unsupported_with_a_hint() {
         let info = |_: &str| None;
-        let err = resolve_line(Engine::Mysql, "8.4", &[], &info).unwrap_err();
+        let err = resolve_line(e("mysql").as_ref(), "8.4", &[], &info).unwrap_err();
         assert_eq!(err.code, ErrorCode::ServiceVersionUnsupported);
         assert!(err.hint.is_some());
     }
@@ -246,13 +248,13 @@ mod tests {
             f.disable_date = f.disabled.then(|| "2026-01-01".to_string());
             Some(f)
         };
-        assert_eq!(lines(Engine::Postgres, &names, &info), ["17"]);
-        let err = resolve_line(Engine::Postgres, "13", &names, &info).unwrap_err();
+        assert_eq!(lines(e("postgres").as_ref(), &names, &info), ["17"]);
+        let err = resolve_line(e("postgres").as_ref(), "13", &names, &info).unwrap_err();
         assert_eq!(err.code, ErrorCode::ServiceVersionUnsupported);
         assert!(err.message.contains("it offers 17"), "{}", err.message);
         // A disabled plain formula is no line either, whatever version it is on.
-        assert_eq!(lines(Engine::Mysql, &names, &info), ["8.4"]);
-        assert!(resolve_line(Engine::Mysql, "9.9", &names, &info).is_err());
+        assert_eq!(lines(e("mysql").as_ref(), &names, &info), ["8.4"]);
+        assert!(resolve_line(e("mysql").as_ref(), "9.9", &names, &info).is_err());
     }
 
     #[test]
@@ -264,32 +266,32 @@ mod tests {
             f.disable_date = Some("2027-04-30".into());
             Some(f)
         };
-        assert_eq!(lines(Engine::Mysql, &names, &info), ["8.0"]);
+        assert_eq!(lines(e("mysql").as_ref(), &names, &info), ["8.0"]);
     }
 
     #[test]
     fn candidate_names_are_the_plain_formula_and_valid_lines() {
         let found = names(&["mysql", "mysql@8.4", "mysql@8.0", "mysql@x", "mysql-client", "mysql@8.4"]);
-        assert_eq!(candidate_names(Engine::Mysql, &found), ["mysql", "mysql@8.0", "mysql@8.4"]);
-        assert!(candidate_names(Engine::Redis, &names(&["redis"])).is_empty());
+        assert_eq!(candidate_names(e("mysql").as_ref(), &found), ["mysql", "mysql@8.0", "mysql@8.4"]);
+        assert!(candidate_names(e("redis").as_ref(), &names(&["redis"])).is_empty());
     }
 
     #[test]
     fn the_line_formula_is_the_versioned_one_when_brew_lists_it() {
         let found = names(&["mysql", "mysql@8.4"]);
-        assert_eq!(line_formula(Engine::Mysql, "8.4", &found).as_deref(), Some("mysql@8.4"));
-        assert_eq!(line_formula(Engine::Mysql, "26.10", &found).as_deref(), Some("mysql"));
-        assert_eq!(line_formula(Engine::Mysql, "8.4", &names(&["mysql@8.0"])), None);
-        assert_eq!(line_formula(Engine::Redis, "8.4", &names(&["redis"])), None);
+        assert_eq!(line_formula(e("mysql").as_ref(), "8.4", &found).as_deref(), Some("mysql@8.4"));
+        assert_eq!(line_formula(e("mysql").as_ref(), "26.10", &found).as_deref(), Some("mysql"));
+        assert_eq!(line_formula(e("mysql").as_ref(), "8.4", &names(&["mysql@8.0"])), None);
+        assert_eq!(line_formula(e("redis").as_ref(), "8.4", &names(&["redis"])), None);
     }
 
     #[test]
     fn postgres_lines_are_majors() {
         let names = names(&["postgresql@16", "postgresql@17"]);
         let info = |n: &str| Some(formula(n, "17.2"));
-        let f = resolve_line(Engine::Postgres, "17", &names, &info).unwrap();
+        let f = resolve_line(e("postgres").as_ref(), "17", &names, &info).unwrap();
         assert_eq!(f.name, "postgresql@17");
-        assert!(!Engine::Postgres.valid_line("17.2"));
-        assert!(resolve_line(Engine::Postgres, "17.2", &names, &info).is_err());
+        assert!(!POSTGRES_LINES.valid("17.2"));
+        assert!(resolve_line(e("postgres").as_ref(), "17.2", &names, &info).is_err());
     }
 }

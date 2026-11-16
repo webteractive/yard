@@ -17,7 +17,7 @@ use yard_core::db::command::{MYSQL_ENV, PG_ENV, Target, build};
 use yard_core::db::flags::{Tool, check, check_compress};
 use yard_core::db::resolve::{Candidate, Picked, pick};
 use yard_core::db::{check_name, connect, pick_postgres_keg, sql, supports_connect, supports_db, valid_name};
-use yard_core::services::Engine;
+use yard_core::services::engines::{DbFlavor, db_flavor};
 use yard_proto::methods::{DbCommandParams, DbConnectParams, DbCreateParams, DbListParams, DbTarget};
 use yard_proto::{
     ConnectInfo, DbAction, DbCommand, DbCreated, DbInstanceList, ErrorCode, ImportKind, ServiceInfo,
@@ -33,36 +33,31 @@ pub(super) async fn list(ctx: &Context, p: DbListParams) -> Result<Vec<DbInstanc
     let snap = snapshot(ctx).await?;
     let wants = project_wants(&snap, &p.target)?;
     let instances: Vec<String> = if p.target.service.is_none() && wants.is_none() {
-        candidates(&snap).into_iter().filter(|c| supports_db(c.engine)).map(|c| c.name).collect()
+        candidates(&snap).into_iter().filter(supports_db).map(|c| c.name).collect()
     } else {
         vec![resolve(&snap, &p.target, wants.as_deref(), supports_db)?.instance]
     };
     let mut out = Vec::new();
     for instance in instances {
         let entry = entry(&snap, &instance)?;
+        let flavor = flavor(entry)?;
         let info = ready(ctx, &instance).await?;
         let mut databases =
-            sql::parse_list(&query(ctx, &instance, entry, &info, None, sql::list(entry.engine)).await?);
-        if entry.engine == Engine::Postgres {
+            sql::parse_list(&query(ctx, &instance, entry, &info, None, sql::list(flavor)).await?);
+        if flavor == DbFlavor::Postgres {
             for db in &mut databases {
                 // A name Yard would not take (another role made it) is listed but never put into
                 // a query or `-d`: it could carry SQL or a connection string.
                 if !valid_name(&db.name) {
                     continue;
                 }
-                let count = query(
-                    ctx,
-                    &instance,
-                    entry,
-                    &info,
-                    Some(&db.name),
-                    &sql::table_count(entry.engine, &db.name),
-                )
-                .await?;
+                let count =
+                    query(ctx, &instance, entry, &info, Some(&db.name), &sql::table_count(flavor, &db.name))
+                        .await?;
                 db.tables = count.trim().parse().unwrap_or(0);
             }
         }
-        out.push(DbInstanceList { instance, engine: entry.engine.key().to_string(), databases });
+        out.push(DbInstanceList { instance, engine: entry.engine.to_string(), databases });
     }
     Ok(out)
 }
@@ -84,10 +79,10 @@ pub(super) async fn connect(ctx: &Context, p: DbConnectParams) -> Result<Vec<Con
     if p.wake {
         let instance = resolve(&snap, &p.target, wants.as_deref(), supports_connect)?.instance;
         let info = ready(ctx, &instance).await?;
-        return Ok(vec![connect_info(ctx, &instance, entry(&snap, &instance)?.engine, &info)]);
+        return Ok(vec![connect_info(ctx, &snap, &instance, &info)?]);
     }
     let instances: Vec<String> = if p.target.service.is_none() && wants.is_none() {
-        candidates(&snap).into_iter().filter(|c| supports_connect(c.engine)).map(|c| c.name).collect()
+        candidates(&snap).into_iter().filter(supports_connect).map(|c| c.name).collect()
     } else {
         vec![resolve(&snap, &p.target, wants.as_deref(), supports_connect)?.instance]
     };
@@ -96,7 +91,7 @@ pub(super) async fn connect(ctx: &Context, p: DbConnectParams) -> Result<Vec<Con
         .map(|instance| {
             let info = service_info(&snap, ctx.supervisor(), &ctx.sleeper, instance)
                 .ok_or_else(|| service_not_found(instance))?;
-            Ok(connect_info(ctx, instance, entry(&snap, instance)?.engine, &info))
+            connect_info(ctx, &snap, instance, &info)
         })
         .collect()
 }
@@ -107,7 +102,7 @@ pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbComma
     let picked = resolve(&snap, &p.target, wants.as_deref(), supports_db)?;
     let instance = picked.instance.clone();
     let entry = entry(&snap, &instance)?;
-    let engine = entry.engine;
+    let engine = flavor(entry)?;
     if p.action != DbAction::Shell && p.name.is_none() {
         return Err(YardError::new(ErrorCode::InvalidArgument, "name the database"));
     }
@@ -116,10 +111,10 @@ pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbComma
     }
     let kind = p.import_kind.unwrap_or(ImportKind::Plain);
     let tool = match (engine, p.action, kind) {
-        (Engine::Postgres, DbAction::Shell, _) => Tool::Psql,
-        (Engine::Postgres, DbAction::Dump, _) => Tool::PgDump,
-        (Engine::Postgres, DbAction::Import, ImportKind::Plain) => Tool::Psql,
-        (Engine::Postgres, DbAction::Import, _) => Tool::PgRestore,
+        (DbFlavor::Postgres, DbAction::Shell, _) => Tool::Psql,
+        (DbFlavor::Postgres, DbAction::Dump, _) => Tool::PgDump,
+        (DbFlavor::Postgres, DbAction::Import, ImportKind::Plain) => Tool::Psql,
+        (DbFlavor::Postgres, DbAction::Import, _) => Tool::PgRestore,
         (_, DbAction::Dump, _) => Tool::Mysqldump,
         (_, _, ImportKind::Plain) => Tool::Mysql,
         (_, _, _) => {
@@ -143,7 +138,7 @@ pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbComma
         let name = p.name.as_deref().unwrap_or_default();
         created = ensure(ctx, &instance, entry, &info, name).await?;
         if !created && !p.into_existing {
-            let db = (engine == Engine::Postgres).then_some(name);
+            let db = (engine == DbFlavor::Postgres).then_some(name);
             let tables = query(ctx, &instance, entry, &info, db, &sql::table_count(engine, name)).await?;
             if tables.trim().parse::<u64>().unwrap_or(0) > 0 {
                 return Err(YardError::new(
@@ -154,7 +149,7 @@ pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbComma
             }
         }
     }
-    let socket = socket_of(ctx, &instance, engine).unwrap_or_default();
+    let socket = socket_of(ctx, &instance, engine);
     let user = user_of(engine);
     let target = Target {
         engine,
@@ -182,20 +177,36 @@ async fn ensure(
     info: &ServiceInfo,
     name: &str,
 ) -> Result<bool, YardError> {
-    let exists = query(ctx, instance, entry, info, None, &sql::exists(entry.engine, name)).await?;
+    let exists = query(ctx, instance, entry, info, None, &sql::exists(flavor(entry)?, name)).await?;
     if exists.trim().parse::<u64>().unwrap_or(0) > 0 {
         return Ok(false);
     }
-    query(ctx, instance, entry, info, None, &sql::create(entry.engine, name)).await?;
+    query(ctx, instance, entry, info, None, &sql::create(flavor(entry)?, name)).await?;
     Ok(true)
 }
 
+/// Every instance whose engine this Mac knows, with what its engine supports.
 fn candidates(snap: &Snapshot) -> Vec<Candidate> {
     snap.services
         .services
         .iter()
-        .map(|(name, e)| Candidate { name: name.clone(), engine: e.engine })
+        .filter_map(|(name, e)| Some(Candidate::of(name, snap.engines.get(e.engine.as_str())?.as_ref())))
         .collect()
+}
+
+/// The instance's database family: `yard db` resolved it with `supports_db`, so another engine
+/// here is a mistake in the caller, answered as the unsupported engine it is.
+fn flavor(entry: &ServiceEntry) -> Result<DbFlavor, YardError> {
+    db_flavor(entry.engine.as_str()).ok_or_else(|| {
+        YardError::new(ErrorCode::DbUnsupportedEngine, format!("{} has no databases", entry.engine))
+            .with_hint("yard services lists the instances")
+    })
+}
+
+/// The keg a database instance's tools come from: MySQL's and PostgreSQL's entries always
+/// record their formula.
+fn formula(entry: &ServiceEntry) -> &str {
+    entry.formula.as_deref().unwrap_or_default()
 }
 
 fn entry<'a>(snap: &'a Snapshot, instance: &str) -> Result<&'a ServiceEntry, YardError> {
@@ -219,7 +230,7 @@ fn resolve(
     snap: &Snapshot,
     target: &DbTarget,
     wants: Option<&[String]>,
-    allow: fn(Engine) -> bool,
+    allow: fn(&Candidate) -> bool,
 ) -> Result<Picked, YardError> {
     pick(target.service.as_deref(), wants, &candidates(snap), allow)
 }
@@ -263,42 +274,60 @@ fn port_of(info: &ServiceInfo) -> u16 {
     info.ports.first().map_or(0, |p| p.port)
 }
 
-fn user_of(engine: Engine) -> String {
+fn user_of(engine: DbFlavor) -> String {
     match engine {
-        Engine::Postgres => macos_user(),
-        _ => "root".to_string(),
+        DbFlavor::Postgres => macos_user(),
+        DbFlavor::Mysql => "root".to_string(),
     }
 }
 
-/// MySQL's socket file, PostgreSQL's socket directory; Redis has none.
-fn socket_of(ctx: &Context, instance: &str, engine: Engine) -> Option<PathBuf> {
+/// MySQL's socket file, PostgreSQL's socket directory.
+fn socket_of(ctx: &Context, instance: &str, engine: DbFlavor) -> PathBuf {
     match engine {
-        Engine::Mysql => Some(ctx.paths.mysql_socket(instance)),
-        Engine::Postgres => Some(ctx.paths.run_dir()),
-        _ => None,
+        DbFlavor::Mysql => ctx.paths.mysql_socket(instance),
+        DbFlavor::Postgres => ctx.paths.run_dir(),
     }
 }
 
-fn connect_info(ctx: &Context, instance: &str, engine: Engine, info: &ServiceInfo) -> ConnectInfo {
-    let socket = socket_of(ctx, instance, engine);
+/// What the instance's engine says a client connects with.
+fn connect_info(
+    ctx: &Context,
+    snap: &Snapshot,
+    instance: &str,
+    info: &ServiceInfo,
+) -> Result<ConnectInfo, YardError> {
+    let entry = entry(snap, instance)?;
+    let engine = snap
+        .engines
+        .get(entry.engine.as_str())
+        .ok_or_else(|| crate::services::unknown_engine(instance, &entry.engine))?;
+    let user = macos_user();
+    let ictx = crate::services::instance_ctx(instance, Path::new("/"), &ctx.paths, &info.ports, &user);
+    let details = engine.connect(&ictx).ok_or_else(|| {
+        YardError::new(
+            ErrorCode::DbUnsupportedEngine,
+            format!("{} has no connection details", engine.display()),
+        )
+        .with_hint("yard services lists the instances")
+    })?;
     let mut c = connect::info(
         instance,
-        engine,
+        engine.key(),
         info.state.clone(),
         port_of(info),
         &info.account,
-        socket.as_deref(),
+        &details,
         None,
     );
     c.sleeping = info.sleeping_since.is_some() && info.state == ServiceState::Stopped;
-    c
+    Ok(c)
 }
 
 /// The `bin` directory a tool runs from (db spec §7.1) and the note that says so when it is
 /// not the instance's own keg.
 fn tools_dir(ctx: &Context, instance: &str, entry: &ServiceEntry, tool: Tool) -> (PathBuf, Vec<String>) {
-    let own = keg(&ctx.brew, &entry.formula).join("bin");
-    if entry.engine != Engine::Postgres {
+    let own = keg(&ctx.brew, formula(entry)).join("bin");
+    if db_flavor(entry.engine.as_str()) != Some(DbFlavor::Postgres) {
         return (own, vec![]);
     }
     let Some(major) = entry.version.as_deref().and_then(|v| v.parse::<u32>().ok()) else {
@@ -332,11 +361,11 @@ async fn query(
     database: Option<&str>,
     sql: &str,
 ) -> Result<String, YardError> {
-    let engine = entry.engine;
-    let bin = keg(&ctx.brew, &entry.formula).join("bin");
-    let socket = socket_of(ctx, instance, engine).unwrap_or_default().display().to_string();
+    let engine = flavor(entry)?;
+    let bin = keg(&ctx.brew, formula(entry)).join("bin");
+    let socket = socket_of(ctx, instance, engine).display().to_string();
     let mut cmd = match engine {
-        Engine::Postgres => {
+        DbFlavor::Postgres => {
             let mut c = tokio::process::Command::new(bin.join("psql"));
             c.args([
                 "--no-psqlrc",

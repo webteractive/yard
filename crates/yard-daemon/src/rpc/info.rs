@@ -16,7 +16,8 @@ use yard_core::PhpVersion;
 use yard_core::emailulator::{NAME as EMAILULATOR, env_lines as mail_env};
 use yard_core::php::full_version;
 use yard_core::project::{FileKind, ServiceWant};
-use yard_core::services::{Engine, env_lines, instance_name};
+use yard_core::services::engines::{EngineKey, ServiceEngine};
+use yard_core::services::instance_name;
 use yard_proto::methods::{EnvParams, SiteDetailParams};
 use yard_proto::{
     EnvBlock, ErrorCode, ServiceInfo, SettingSource, SiteDetail, SiteInfo, SiteKind, SiteService, YardError,
@@ -35,12 +36,13 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
         if is_emailulator(name) {
             return mail_block(&snap, false).map(|b| vec![b]).ok_or_else(|| service_not_found(name));
         }
-        let engine = snap.services.services.get(name).map(|e| e.engine);
-        let info = service_info(&snap, supervisor, &ctx.sleeper, name);
-        return match (engine, info) {
-            (Some(engine), Some(info)) => Ok(vec![instance_block(engine, &info)]),
-            _ => Err(service_not_found(name)),
+        let Some(entry) = snap.services.services.get(name) else { return Err(service_not_found(name)) };
+        let Some(engine) = snap.engines.get(entry.engine.as_str()) else {
+            return Ok(vec![unknown_block(&entry.engine)]);
         };
+        let info =
+            service_info(&snap, supervisor, &ctx.sleeper, name).ok_or_else(|| service_not_found(name))?;
+        return Ok(vec![instance_block(engine.as_ref(), &info, &ctx.paths)]);
     }
     let site = match (&p.site, &p.path) {
         (Some(name), _) => {
@@ -59,15 +61,16 @@ pub(super) async fn env_print(ctx: &Context, p: EnvParams) -> Result<Vec<EnvBloc
         None => mail_block(&snap, false),
     };
     let blocks = match site {
-        Some(site) => project_blocks(&snap, supervisor, &ctx.sleeper, site)?,
+        Some(site) => project_blocks(&snap, supervisor, &ctx.sleeper, site, &ctx.paths)?,
         None => snap
             .services
             .services
             .iter()
             .filter_map(|(name, entry)| {
-                Some((entry.engine, service_info(&snap, supervisor, &ctx.sleeper, name)?))
+                let engine = snap.engines.get(entry.engine.as_str())?;
+                let info = service_info(&snap, supervisor, &ctx.sleeper, name)?;
+                Some((engine.databases().is_some(), instance_block(engine.as_ref(), &info, &ctx.paths)))
             })
-            .map(|(engine, info)| (engine, instance_block(engine, &info)))
             .collect(),
     };
     let mut blocks = note_clashes(blocks);
@@ -118,7 +121,8 @@ fn project_blocks(
     supervisor: &Supervisor,
     sleeper: &Sleeper,
     site: &SiteInfo,
-) -> Result<Vec<(Engine, EnvBlock)>, YardError> {
+    paths: &yard_core::Paths,
+) -> Result<Vec<(bool, EnvBlock)>, YardError> {
     let file = match snap.projects.get(&site.name).map(|l| &l.parsed) {
         None => return Ok(vec![]),
         Some(Err(e)) => return Err(e.clone()),
@@ -127,13 +131,16 @@ fn project_blocks(
     Ok(file
         .services
         .iter()
-        .map(|(&engine, want)| {
-            let (line, name) = wanted_instance(snap, engine, want);
-            let block = match name.and_then(|n| service_info(snap, supervisor, sleeper, &n)) {
-                Some(info) => instance_block(engine, &info),
-                None => missing_block(engine, line),
+        .map(|(key, want)| {
+            let Some(engine) = snap.engines.get(key.as_str()) else {
+                return (false, unknown_block(key));
             };
-            (engine, block)
+            let (line, name) = wanted_instance(snap, key, want);
+            let block = match name.and_then(|n| service_info(snap, supervisor, sleeper, &n)) {
+                Some(info) => instance_block(engine.as_ref(), &info, paths),
+                None => missing_block(engine.as_ref(), line),
+            };
+            (engine.databases().is_some(), block)
         })
         .collect())
 }
@@ -143,12 +150,12 @@ fn project_blocks(
 /// by name for `true`.
 fn wanted_instance<'a>(
     snap: &'a Snapshot,
-    engine: Engine,
+    engine: &EngineKey,
     want: &'a ServiceWant,
 ) -> (Option<&'a str>, Option<String>) {
     match want {
         ServiceWant::Line(line) => {
-            let name = instance_name(engine, Some(line));
+            let name = instance_name(engine.as_str(), Some(line));
             (Some(line.as_str()), snap.services.services.contains_key(&name).then_some(name))
         }
         ServiceWant::Default => (None, default_instance(&snap.services, engine).map(str::to_string)),
@@ -159,7 +166,7 @@ fn wanted_instance<'a>(
 /// with no registry entry gets no lines, never the engine's usual port: that is not where it
 /// runs. MinIO's API port is the entry named for the instance, so a lone console entry is no
 /// entry either.
-fn instance_block(engine: Engine, info: &ServiceInfo) -> EnvBlock {
+fn instance_block(engine: &dyn ServiceEngine, info: &ServiceInfo, paths: &yard_core::Paths) -> EnvBlock {
     if !info.ports.iter().any(|p| p.name == info.name) {
         return EnvBlock {
             instance: info.name.clone(),
@@ -170,27 +177,42 @@ fn instance_block(engine: Engine, info: &ServiceInfo) -> EnvBlock {
             )),
         };
     }
-    EnvBlock { instance: info.name.clone(), lines: env_lines(engine, &info.ports, &info.account), note: None }
+    // `.env` lines name ports and paths, never the program's home.
+    let user = crate::services::macos_user();
+    let ctx = crate::services::instance_ctx(&info.name, Path::new("/"), paths, &info.ports, &user);
+    EnvBlock { instance: info.name.clone(), lines: engine.env_lines(&ctx), note: None }
+}
+
+/// A block for an engine this Mac has no recipe for (recipes spec §2).
+fn unknown_block(key: &EngineKey) -> EnvBlock {
+    EnvBlock {
+        instance: key.to_string(),
+        lines: vec![],
+        note: Some(format!("{key} has no recipe on this Mac: add ~/.yard/engines/{key}.toml")),
+    }
 }
 
 /// A block with no lines naming the command that adds what the `.yard` asks for.
-fn missing_block(engine: Engine, line: Option<&str>) -> EnvBlock {
-    let instance = instance_name(engine, line);
-    let command = match line.or(engine.default_line()) {
-        Some(line) if engine.versioned() => format!("yard service add {} --version {line}", engine.key()),
-        _ => format!("yard service add {}", engine.key()),
+fn missing_block(engine: &dyn ServiceEngine, line: Option<&str>) -> EnvBlock {
+    let instance = instance_name(engine.key(), line);
+    let command = match (engine.lines(), line) {
+        (Some(lines), line) => {
+            format!("yard service add {} --version {}", engine.key(), line.unwrap_or(lines.default_line))
+        }
+        (None, _) => format!("yard service add {}", engine.key()),
     };
     EnvBlock { note: Some(format!("{instance} is not added: {command}")), instance, lines: vec![] }
 }
 
 /// The second block that sets `DB_*` says it overrides the first: pasted into one `.env`,
 /// it does.
-fn note_clashes(blocks: Vec<(Engine, EnvBlock)>) -> Vec<EnvBlock> {
+/// `database` says the block is a database engine's, whose `DB_*` lines clash.
+fn note_clashes(blocks: Vec<(bool, EnvBlock)>) -> Vec<EnvBlock> {
     let mut seen_database = false;
     blocks
         .into_iter()
-        .map(|(engine, mut block)| {
-            if matches!(engine, Engine::Mysql | Engine::Postgres) && !block.lines.is_empty() {
+        .map(|(database, mut block)| {
+            if database && !block.lines.is_empty() {
                 if seen_database {
                     block.note = Some(DB_CLASH.to_string());
                 }
@@ -260,10 +282,10 @@ pub(super) async fn site_detail(ctx: &Context, p: SiteDetailParams) -> Result<Si
         Some(Ok(file)) => file
             .services
             .iter()
-            .map(|(&engine, want)| {
+            .map(|(engine, want)| {
                 let (line, name) = wanted_instance(&snap, engine, want);
                 SiteService {
-                    engine: engine.key().to_string(),
+                    engine: engine.to_string(),
                     want: line.map(str::to_string),
                     service: name.and_then(|n| instance_info(&snap, supervisor, &ctx.sleeper, &n)),
                 }
@@ -320,9 +342,20 @@ fn sources(snap: &Snapshot, site: &SiteInfo) -> BTreeMap<String, SettingSource> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use yard_core::services::Engines;
     use yard_proto::{PortRef, ServiceState};
 
-    fn info(name: &str, engine: Engine, ports: &[(&str, u16)]) -> ServiceInfo {
+    fn e(key: &str) -> Arc<dyn ServiceEngine> {
+        Engines::builtin().get(key).unwrap().clone()
+    }
+
+    fn paths() -> yard_core::Paths {
+        yard_core::Paths::new("/r")
+    }
+
+    fn info(name: &str, engine: &str, ports: &[(&str, u16)]) -> ServiceInfo {
+        let engine = e(engine);
         ServiceInfo {
             name: name.into(),
             engine: engine.key().into(),
@@ -344,7 +377,8 @@ mod tests {
 
     #[test]
     fn a_block_prints_the_registered_port() {
-        let block = instance_block(Engine::Redis, &info("redis", Engine::Redis, &[("redis", 6391)]));
+        let block =
+            instance_block(e("redis").as_ref(), &info("redis", "redis", &[("redis", 6391)]), &paths());
         assert_eq!(block.lines[1], "REDIS_PORT=6391");
         assert_eq!(block.note, None);
     }
@@ -352,12 +386,12 @@ mod tests {
     #[test]
     fn an_instance_with_no_registry_entry_prints_no_lines_and_never_the_usual_port() {
         for (engine, name, ports) in [
-            (Engine::Redis, "redis", &[][..]),
-            (Engine::Mysql, "mysql-8.4", &[][..]),
+            ("redis", "redis", &[][..]),
+            ("mysql", "mysql-8.4", &[][..]),
             // MinIO's console entry is not its API port.
-            (Engine::Minio, "minio", &[("minio-console", 9001)][..]),
+            ("minio", "minio", &[("minio-console", 9001)][..]),
         ] {
-            let block = instance_block(engine, &info(name, engine, ports));
+            let block = instance_block(e(engine).as_ref(), &info(name, engine, ports), &paths());
             assert_eq!(block.lines, Vec::<String>::new(), "{name}");
             let note = block.note.unwrap();
             assert!(note.starts_with(&format!("{name} has no port")), "{note}");
@@ -366,16 +400,16 @@ mod tests {
 
     #[test]
     fn a_missing_instance_names_the_command_that_adds_it() {
-        let note = |engine, line| missing_block(engine, line).note.unwrap();
+        let note = |engine: &str, line| missing_block(e(engine).as_ref(), line).note.unwrap();
         assert_eq!(
-            note(Engine::Mysql, Some("8.4")),
+            note("mysql", Some("8.4")),
             "mysql-8.4 is not added: yard service add mysql --version 8.4"
         );
         assert_eq!(
-            note(Engine::Postgres, None),
+            note("postgres", None),
             "postgres-17 is not added: yard service add postgres --version 17"
         );
-        assert_eq!(note(Engine::Redis, None), "redis is not added: yard service add redis");
+        assert_eq!(note("redis", None), "redis is not added: yard service add redis");
     }
 
     #[test]
@@ -385,16 +419,12 @@ mod tests {
             lines: vec!["DB_CONNECTION=x".into()],
             note: None,
         };
-        let missing = missing_block(Engine::Postgres, Some("17"));
-        let blocks = note_clashes(vec![
-            (Engine::Mysql, lines("mysql-8.4")),
-            (Engine::Postgres, missing.clone()),
-            (Engine::Redis, lines("redis")),
-        ]);
+        let missing = missing_block(e("postgres").as_ref(), Some("17"));
+        let blocks =
+            note_clashes(vec![(true, lines("mysql-8.4")), (true, missing.clone()), (false, lines("redis"))]);
         assert_eq!(blocks[1], missing, "a block with no lines clashes with nothing");
         assert_eq!(blocks[2].note, None, "redis sets no DB_*");
-        let blocks =
-            note_clashes(vec![(Engine::Mysql, lines("mysql-8.4")), (Engine::Postgres, lines("postgres-17"))]);
+        let blocks = note_clashes(vec![(true, lines("mysql-8.4")), (true, lines("postgres-17"))]);
         assert_eq!((blocks[0].note.as_deref(), blocks[1].note.as_deref()), (None, Some(DB_CLASH)));
     }
 }

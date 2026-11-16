@@ -6,7 +6,7 @@ use crate::config::yard::{ExtName, parse_ext_name};
 use crate::config::{ServicesConfig, SiteEntry, SitesConfig};
 use crate::constraint::best_version;
 use crate::node::{NodeSpec, parse_spec};
-use crate::services::{Engine, instance_name};
+use crate::services::engines::{EngineKey, Engines, instance_name, versioned_lines};
 use crate::sites::detect_docroot;
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
@@ -28,7 +28,7 @@ pub struct ProjectFile {
     pub secure: Option<bool>,
     pub extensions: Vec<ExtName>,
     /// `[services]`: the engines the project needs, shared with every other project.
-    pub services: BTreeMap<Engine, ServiceWant>,
+    pub services: BTreeMap<EngineKey, ServiceWant>,
     /// `[services] emailulator = true`: met by any emailulator Yard can reach (M4d).
     pub emailulator: bool,
 }
@@ -177,7 +177,7 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
 fn parse_services(
     raw: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
     invalid: &dyn Fn(Option<std::ops::Range<usize>>, &str) -> YardError,
-) -> Result<(BTreeMap<Engine, ServiceWant>, bool), YardError> {
+) -> Result<(BTreeMap<EngineKey, ServiceWant>, bool), YardError> {
     let mut services = BTreeMap::new();
     let mut emailulator = false;
     for (key, value) in raw {
@@ -192,20 +192,20 @@ fn parse_services(
             };
             continue;
         }
-        let Some(engine) = Engine::from_key(name) else {
-            let known: Vec<&str> =
-                Engine::ALL.iter().map(|e| e.key()).chain([crate::emailulator::NAME]).collect();
-            return Err(invalid(
-                Some(key.span()),
-                &format!("[services]: unknown service {name:?}; the services are {}", known.join(", ")),
-            ));
-        };
+        // Whether an engine exists is the engine set's to say: an engine this Mac has no recipe
+        // for is a need, never an invalid file (recipes spec §2). Only the key's spelling and,
+        // for MySQL and PostgreSQL, the line are checked here.
+        let engine =
+            EngineKey::new(name).map_err(|e| invalid(Some(key.span()), &format!("[services]: {e}")))?;
+        let lines = versioned_lines(name);
         let want = match value.get_ref() {
             toml::Value::Boolean(true) => ServiceWant::Default,
-            toml::Value::String(line) if engine.valid_line(line) => ServiceWant::Line(line.clone()),
+            toml::Value::String(line) if lines.is_some_and(|l| l.valid(line)) => {
+                ServiceWant::Line(line.clone())
+            }
             other => {
-                let expected = match engine.default_line() {
-                    Some(line) => format!("a release line such as \"{line}\", or true"),
+                let expected = match lines {
+                    Some(l) => format!("a release line such as \"{}\", or true", l.default_line),
                     None => "true".to_string(),
                 };
                 let written = match other {
@@ -262,20 +262,27 @@ pub fn needs(
 }
 
 /// The `[services]` entries of `file` with no instance in `services`. A line is met by
-/// that exact instance, `true` by any instance of the engine.
-pub fn service_needs(file: &ProjectFile, services: &ServicesConfig) -> Vec<Need> {
-    file.services
-        .iter()
-        .filter_map(|(&engine, want)| {
-            let (met, version) = match want {
-                ServiceWant::Line(line) => {
-                    (services.services.contains_key(&instance_name(engine, Some(line))), Some(line.clone()))
-                }
-                ServiceWant::Default => (services.services.values().any(|s| s.engine == engine), None),
-            };
-            (!met).then(|| Need::Service { engine: engine.key().to_string(), version })
-        })
-        .collect()
+/// that exact instance, `true` by any instance of the engine. An engine `engines` does not know
+/// is a need Yard cannot install: its recipe is missing on this Mac (recipes spec §2). The
+/// engines Yard knows come first, in key order, then the unknown ones.
+pub fn service_needs(file: &ProjectFile, services: &ServicesConfig, engines: &Engines) -> Vec<Need> {
+    let (known, unknown): (Vec<_>, Vec<_>) =
+        file.services.iter().partition(|(e, _)| engines.get(e.as_str()).is_some());
+    let missing = known.into_iter().filter_map(|(engine, want)| {
+        let (met, version) = match want {
+            ServiceWant::Line(line) => (
+                services.services.contains_key(&instance_name(engine.as_str(), Some(line))),
+                Some(line.clone()),
+            ),
+            ServiceWant::Default => (services.services.values().any(|s| &s.engine == engine), None),
+        };
+        (!met).then(|| Need::Service { engine: engine.to_string(), version })
+    });
+    let unknown = unknown.into_iter().map(|(engine, _)| Need::Manual {
+        what: format!("the {engine} service, which this Mac has no recipe for"),
+        command: format!("add ~/.yard/engines/{engine}.toml"),
+    });
+    missing.chain(unknown).collect()
 }
 
 /// What `[services] emailulator = true` still needs: nothing while an emailulator is
@@ -609,18 +616,19 @@ mod tests {
         let f = parse_ok(
             "php = \"8.4\"\n\n[services]\nmysql = \"8.4\"\nredis = true\npostgres = \"17\"\nminio = true\n",
         );
+        let k = |s: &str| EngineKey::new(s).unwrap();
         assert_eq!(
             f.services,
             BTreeMap::from([
-                (Engine::Mysql, ServiceWant::Line("8.4".into())),
-                (Engine::Postgres, ServiceWant::Line("17".into())),
-                (Engine::Redis, ServiceWant::Default),
-                (Engine::Minio, ServiceWant::Default),
+                (k("mysql"), ServiceWant::Line("8.4".into())),
+                (k("postgres"), ServiceWant::Line("17".into())),
+                (k("redis"), ServiceWant::Default),
+                (k("minio"), ServiceWant::Default),
             ])
         );
         assert_eq!(parse_ok("[services]\n").services, BTreeMap::new());
         assert_eq!(parse_ok("").services, BTreeMap::new());
-        assert_eq!(parse_ok("[services]\nmysql = true\n").services[&Engine::Mysql], ServiceWant::Default);
+        assert_eq!(parse_ok("[services]\nmysql = true\n").services[&k("mysql")], ServiceWant::Default);
     }
 
     #[test]
@@ -635,7 +643,8 @@ mod tests {
             ("minio = false", "minio"),
             ("mysql = false", "mysql"),
             ("mysql = { version = \"8.4\" }", "mysql"),
-            ("mongo = true", "mongo"),
+            ("Mongo = true", "Mongo"),
+            ("mongo = \"7\"", "mongo"),
         ];
         for (line, key) in cases {
             let e = service_err(&format!("php = \"8.4\"\n\n[services]\n{line}\n"));
@@ -649,6 +658,38 @@ mod tests {
         assert_eq!(e.data.as_ref().unwrap()["line"], 3);
         // A scalar where the table goes.
         assert_eq!(service_err("services = \"mysql\"\n").code, ErrorCode::ProjectFileInvalid);
+    }
+
+    #[test]
+    fn project_unknown_engine_parses() {
+        // Recipes are per machine and a .yard is committed: an engine this Mac lacks is a need,
+        // never an invalid file, so the shims keep running (recipes spec §2).
+        let f = parse_ok("php = \"8.4\"\n\n[services]\nsoketi = true\n");
+        assert_eq!(f.services[&EngineKey::new("soketi").unwrap()], ServiceWant::Default);
+    }
+
+    #[test]
+    fn project_line_on_unversioned_is_invalid() {
+        let e = service_err("[services]\nredis = \"7\"\n");
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(e.message.contains("redis must be true"), "{}", e.message);
+    }
+
+    #[test]
+    fn unknown_engine_is_a_manual_need() {
+        let f = parse_ok("[services]\nsoketi = true\nredis = true\n");
+        let engines = crate::services::engines::Engines::builtin();
+        let needs = service_needs(&f, &ServicesConfig::default(), &engines);
+        assert_eq!(
+            needs,
+            [
+                Need::Service { engine: "redis".into(), version: None },
+                Need::Manual {
+                    what: "the soketi service, which this Mac has no recipe for".into(),
+                    command: "add ~/.yard/engines/soketi.toml".into(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -668,8 +709,10 @@ mod tests {
                 e.message
             );
         }
-        // The unknown-service message names it among the services.
-        assert!(service_err("[services]\nmongo = true\n").message.contains("emailulator"));
+        // An engine with no recipe here is a need, not an error (recipes spec §2).
+        assert!(
+            parse_ok("[services]\nmongo = true\n").services.contains_key(&EngineKey::new("mongo").unwrap())
+        );
     }
 
     #[test]
@@ -705,31 +748,39 @@ mod tests {
             "[services.\"mysql-8.0\"]\nengine = \"mysql\"\nversion = \"8.0\"\nformula = \"mysql@8.0\"\n",
         );
         let none = ServicesConfig::default();
+        let engines = Engines::builtin();
         let want = |text: &str| parse_ok(text);
         let need = |engine: &str, version: Option<&str>| Need::Service {
             engine: engine.into(),
             version: version.map(Into::into),
         };
         assert_eq!(
-            service_needs(&want("[services]\nmysql = \"8.4\"\n"), &mysql_80),
+            service_needs(&want("[services]\nmysql = \"8.4\"\n"), &mysql_80, &engines),
             [need("mysql", Some("8.4"))]
         );
-        assert_eq!(service_needs(&want("[services]\nmysql = \"8.0\"\n"), &mysql_80), []);
-        assert_eq!(service_needs(&want("[services]\nmysql = true\n"), &mysql_80), []);
-        assert_eq!(service_needs(&want("[services]\nredis = true\n"), &none), [need("redis", None)]);
+        assert_eq!(service_needs(&want("[services]\nmysql = \"8.0\"\n"), &mysql_80, &engines), []);
+        assert_eq!(service_needs(&want("[services]\nmysql = true\n"), &mysql_80, &engines), []);
         assert_eq!(
-            service_needs(&want("[services]\npostgres = true\n"), &mysql_80),
+            service_needs(&want("[services]\nredis = true\n"), &none, &engines),
+            [need("redis", None)]
+        );
+        assert_eq!(
+            service_needs(&want("[services]\npostgres = true\n"), &mysql_80, &engines),
             [need("postgres", None)]
         );
         // A stopped instance still meets the need (spec 9).
         let stopped = services("[services.redis]\nengine = \"redis\"\nformula = \"redis\"\nstopped = true\n");
-        assert_eq!(service_needs(&want("[services]\nredis = true\n"), &stopped), []);
-        // Several at once come out in engine order.
+        assert_eq!(service_needs(&want("[services]\nredis = true\n"), &stopped, &engines), []);
+        // Several at once come out in key order.
         assert_eq!(
-            service_needs(&want("[services]\nminio = true\nredis = true\nmysql = \"8.4\"\n"), &none),
-            [need("mysql", Some("8.4")), need("redis", None), need("minio", None)]
+            service_needs(
+                &want("[services]\nminio = true\nredis = true\nmysql = \"8.4\"\n"),
+                &none,
+                &engines
+            ),
+            [need("minio", None), need("mysql", Some("8.4")), need("redis", None)]
         );
-        assert_eq!(service_needs(&ProjectFile::default(), &none), []);
+        assert_eq!(service_needs(&ProjectFile::default(), &none, &engines), []);
     }
 
     /// Spec §9's last bullet: one commented line per engine, since Yard does not read `.env`.
@@ -765,8 +816,8 @@ mod tests {
             .replace("# mysql", "mysql")
             .replace("# redis", "redis");
         let f = parse(&on, Path::new(FILE)).unwrap();
-        assert_eq!(f.services[&Engine::Mysql], ServiceWant::Line("8.4".into()));
-        assert_eq!(f.services[&Engine::Redis], ServiceWant::Default);
+        assert_eq!(f.services[&EngineKey::new("mysql").unwrap()], ServiceWant::Line("8.4".into()));
+        assert_eq!(f.services[&EngineKey::new("redis").unwrap()], ServiceWant::Default);
     }
 
     #[test]

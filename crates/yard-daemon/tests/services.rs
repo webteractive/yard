@@ -733,7 +733,7 @@ async fn add_installs_initializes_and_runs() {
     assert!(served(port), "it runs on the usual port");
     assert_eq!(port_of(&d, "mysql-8.4"), Some((port, PortMode::Pinned)), "pinned, so nothing moves it");
     let entry = load_services(&d.fx.paths).unwrap().services["mysql-8.4"].clone();
-    assert_eq!((entry.version.as_deref(), entry.formula.as_str()), (Some("8.4"), "mysql@8.4"));
+    assert_eq!((entry.version.as_deref(), entry.formula.as_deref()), (Some("8.4"), Some("mysql@8.4")));
 
     let rows = list(&mut c).await;
     assert_eq!(rows.len(), 1);
@@ -956,7 +956,10 @@ async fn add_minio_installs_from_its_tap_once_trusted() {
     assert_eq!(port_of(&d, "minio"), Some((api, PortMode::Pinned)));
     assert_eq!(port_of(&d, "minio-console"), Some((console, PortMode::Pinned)));
     assert!(served(api) && served(console));
-    assert_eq!(load_services(&d.fx.paths).unwrap().services["minio"].formula, "minio/stable/minio");
+    assert_eq!(
+        load_services(&d.fx.paths).unwrap().services["minio"].formula.as_deref(),
+        Some("minio/stable/minio")
+    );
     d.shutdown().await.unwrap();
 }
 
@@ -977,7 +980,7 @@ async fn add_uses_an_installed_core_minio() {
     assert!(!log.contains("trust"), "no trust check for a core formula: {log}");
     assert!(log.contains("info --json=v2 minio"), "brew said which tap the keg is from: {log}");
     assert!(lines.iter().any(|l| l.contains("2027-02-17")), "brew's disable date: {lines:?}");
-    assert_eq!(load_services(&d.fx.paths).unwrap().services["minio"].formula, "minio");
+    assert_eq!(load_services(&d.fx.paths).unwrap().services["minio"].formula.as_deref(), Some("minio"));
     assert!(served(api) && served(console));
     d.shutdown().await.unwrap();
 }
@@ -1119,6 +1122,34 @@ async fn remove_of_an_unknown_instance_is_not_found() {
     let mut c = d.client().await;
     let e = c.call("services.remove", json!({"name": "mysql-8.4"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::ServiceNotFound);
+    d.shutdown().await.unwrap();
+}
+
+/// An instance whose engine this Mac has no recipe for (recipes spec §7): yardd runs nothing for
+/// it and says why, and `yard service remove` still forgets it, its ports and, with
+/// `--keep-data`, leaves its data.
+#[tokio::test]
+async fn instance_of_unknown_engine_is_failed_and_removable() {
+    let ghost = free_port();
+    let d = prepared(&(pin("ghost", ghost) + &pin("ghost-admin", free_port()))).await;
+    std::fs::write(d.fx.paths.services_toml(), "[services.ghost]\nengine = \"ghost\"\nformula = \"ghost\"\n")
+        .unwrap();
+    std::fs::create_dir_all(d.fx.paths.service_data("ghost")).unwrap();
+    std::fs::write(d.fx.paths.service_data("ghost").join("keep"), "x").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+
+    let rows = list(&mut c).await;
+    let row = rows.iter().find(|r| r["name"] == "ghost").unwrap_or_else(|| panic!("{rows:?}"));
+    assert_eq!(row["state"]["failed"]["reason"]["code"], "ENGINE_UNKNOWN", "{row}");
+    assert_eq!(row["engine_name"], "ghost");
+    assert!(unit(&mut c, "ghost").await.is_none(), "no unit for an unknown engine");
+
+    c.call("services.remove", json!({"name": "ghost", "keep_data": true})).await.unwrap();
+    assert!(!list_names(&d).contains(&"ghost".to_string()));
+    let ports = std::fs::read_to_string(d.fx.paths.ports_toml()).unwrap();
+    assert!(!ports.contains("ghost"), "both its ports are forgotten: {ports}");
+    assert!(d.fx.paths.service_data("ghost").join("keep").exists(), "--keep-data keeps it");
     d.shutdown().await.unwrap();
 }
 
@@ -1716,10 +1747,11 @@ async fn env_names_a_missing_instance() {
     let mut c = d.client().await;
 
     let blocks = env(&mut c, json!({"site": "blog"})).await.unwrap();
+    // In engine key order.
     let want = json!([
+        {"instance": "minio", "lines": [], "note": "minio is not added: yard service add minio"},
         {"instance": "mysql-8.4", "lines": [], "note": "mysql-8.4 is not added: yard service add mysql --version 8.4"},
         {"instance": "redis", "lines": redis_lines(redis), "note": null},
-        {"instance": "minio", "lines": [], "note": "minio is not added: yard service add minio"},
     ]);
     assert_eq!(Value::Array(blocks), want);
     d.shutdown().await.unwrap();
@@ -1860,14 +1892,15 @@ async fn site_info_lists_its_services() {
     let detail = c.call("sites.info", json!({"site": "blog"})).await.unwrap();
     let services = detail["services"].as_array().unwrap();
     assert_eq!(services.len(), 3, "{detail}");
-    assert_eq!((services[0]["engine"].clone(), services[0]["want"].clone()), (json!("mysql"), json!("8.4")));
-    assert_eq!(services[0]["service"]["name"], "mysql-8.4");
-    assert_eq!(services[0]["service"]["state"], "stopped");
-    assert_eq!(services[0]["service"]["ports"], json!([{"name": "mysql-8.4", "port": mysql}]));
-    assert_eq!((services[1]["engine"].clone(), services[1]["want"].clone()), (json!("redis"), Value::Null));
-    assert_eq!(services[1]["service"]["name"], "redis");
-    assert_eq!(services[2]["engine"], "minio");
-    assert_eq!(services[2]["service"], Value::Null, "a missing instance has no info");
+    // In engine key order.
+    assert_eq!(services[0]["engine"], "minio");
+    assert_eq!(services[0]["service"], Value::Null, "a missing instance has no info");
+    assert_eq!((services[1]["engine"].clone(), services[1]["want"].clone()), (json!("mysql"), json!("8.4")));
+    assert_eq!(services[1]["service"]["name"], "mysql-8.4");
+    assert_eq!(services[1]["service"]["state"], "stopped");
+    assert_eq!(services[1]["service"]["ports"], json!([{"name": "mysql-8.4", "port": mysql}]));
+    assert_eq!((services[2]["engine"].clone(), services[2]["want"].clone()), (json!("redis"), Value::Null));
+    assert_eq!(services[2]["service"]["name"], "redis");
     assert_eq!(detail["site"]["needs"], json!([{"kind": "service", "engine": "minio"}]));
     d.shutdown().await.unwrap();
 }

@@ -25,8 +25,9 @@ use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
 use yard_core::render::php::{ini_loads, is_stale};
 use yard_core::services::brew_info;
-use yard_core::services::render::{init_command, old_php_can_log_in};
-use yard_core::services::{Engine, instance_name, plain_line};
+use yard_core::services::engines::{EngineKey, LineSpec, ServiceEngine, versioned_lines};
+use yard_core::services::render::old_php_can_log_in;
+use yard_core::services::{instance_name, plain_line};
 use yard_core::sources::{tap_dir, tap_of};
 use yard_core::tunnel::cloudflared::cert_path;
 use yard_core::tunnel::facts::Facts;
@@ -82,6 +83,8 @@ struct View {
     hashes: Result<Hashes, YardError>,
     /// What emailulator said about itself; `None` when it is not installed.
     emailulator: Option<Probe>,
+    /// The engines: the snapshot's, or with no daemon the built-ins and carried recipes.
+    engines: std::sync::Arc<yard_core::services::Engines>,
 }
 
 impl View {
@@ -98,6 +101,7 @@ impl View {
             services: Some(snap.services.clone()),
             hashes: Ok(state.hashes.clone()),
             emailulator: snap.emailulator.clone(),
+            engines: snap.engines.clone(),
         })
     }
 
@@ -122,6 +126,7 @@ impl View {
             (Ok(y), Ok(_)) => Some(y.effective_tld().to_string()),
             _ => None,
         };
+        let engines = std::sync::Arc::new(yard_core::services::Engines::builtin());
         let mut projects = Projects::new();
         let sites = match (&yard, &sites_cfg, &registry, &tld) {
             (Ok(y), Ok(s), Ok(r), Some(tld)) => {
@@ -135,7 +140,7 @@ impl View {
                 sites::mark_ignored(&mut resolution.sites, &ignored);
                 // A services.toml that does not parse is `config_error`'s to report: reading it as
                 // empty would call every `[services]` entry a missing instance.
-                let services = services.as_ref().ok();
+                let services = services.as_ref().ok().map(|s| (s, engines.as_ref()));
                 let mail = emailulator.as_ref();
                 crate::project::fill_needs(&mut resolution.sites, &projects, y, services, mail, brew, paths);
                 warnings.extend(resolution.warnings);
@@ -154,6 +159,7 @@ impl View {
             services: services.ok(),
             hashes: Hashes::load(&paths.hashes()),
             emailulator,
+            engines,
         }
     }
 
@@ -231,7 +237,8 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         Some(registry) => {
             let running = portscan::own_units(&input.units);
             let registry = registry.clone();
-            let infos = tokio::task::spawn_blocking(move || portscan::infos(&registry, &running))
+            let services = view.services.clone().unwrap_or_default();
+            let infos = tokio::task::spawn_blocking(move || portscan::infos(&registry, &services, &running))
                 .await
                 .unwrap_or_default();
             checks.extend(ports(&infos));
@@ -288,6 +295,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             units: &input.units,
             daemon_running: input.daemon_running,
             sleeping: &input.sleeping,
+            engines: &view.engines,
         };
         checks.extend(service_checks(&ask, sites, &view.projects).await);
     }
@@ -776,6 +784,7 @@ struct ServiceView<'a> {
     units: &'a [UnitInfo],
     daemon_running: bool,
     sleeping: &'a BTreeMap<String, OffsetDateTime>,
+    engines: &'a yard_core::services::Engines,
 }
 
 /// One group per instance (`service:<i>`, `service-data:<i>`, `service-line:<i>`), one
@@ -786,8 +795,9 @@ async fn service_checks(view: &ServiceView<'_>, sites: &[SiteInfo], projects: &P
     let mut checks = vec![];
     for (instance, entry) in &view.services.services {
         checks.extend(instance_state(view, instance, entry));
-        checks.extend(instance_data(view.paths, instance, entry));
-        checks.extend(instance_line(view.brew, instance, entry));
+        let Some(engine) = view.engines.get(entry.engine.as_str()) else { continue };
+        checks.extend(instance_data(view.paths, instance, entry, engine.as_ref()));
+        checks.extend(instance_line(view.brew, instance, entry, engine.as_ref()));
     }
     for site in sites {
         checks.extend(site_needs(view, site, projects));
@@ -804,9 +814,7 @@ fn instance_state(view: &ServiceView<'_>, instance: &str, entry: &ServiceEntry) 
         return Some(ok(&id, format!("{instance} is stopped; you stopped it")));
     }
     // Knowable without yardd, and the reason reconcile leaves an instance out.
-    let program =
-        services::unit_command(view.brew, view.paths, entry.engine, instance, &entry.formula, &[]).program;
-    if let Some(missing) = services::missing_program(view.brew, &entry.formula, &program) {
+    if let Err(missing) = services::runnable(view.brew, view.paths, view.engines, instance, entry, &[]) {
         let hint = missing.hint.unwrap_or_default();
         return Some(warn(&id, format!("{instance} cannot run: {}", missing.message), hint));
     }
@@ -856,11 +864,16 @@ fn local_time(time: OffsetDateTime) -> String {
     format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
-/// `services/<i>/data/` for the engines whose init makes it. Yard never re-initializes
-/// data on its own. Redis's directory is made by reconcile and may be empty, and MinIO
-/// makes its own, so neither is checked.
-fn instance_data(paths: &Paths, instance: &str, entry: &ServiceEntry) -> Option<Check> {
-    init_command(entry.engine, instance, Path::new(""), paths, "")?;
+/// `services/<i>/data/` for the database engines, whose init makes it. Yard never
+/// re-initializes data on its own. Any other engine's directory is made by reconcile and may be
+/// empty, or the engine makes its own, so none is checked.
+fn instance_data(
+    paths: &Paths,
+    instance: &str,
+    entry: &ServiceEntry,
+    engine: &dyn ServiceEngine,
+) -> Option<Check> {
+    engine.databases()?;
     let id = format!("service-data:{instance}");
     let data = paths.service_data(instance);
     let problem = match std::fs::read_dir(&data) {
@@ -871,7 +884,7 @@ fn instance_data(paths: &Paths, instance: &str, entry: &ServiceEntry) -> Option<
     Some(match problem {
         None => ok(&id, format!("{instance} has its data")),
         Some(problem) => {
-            let add = Need::Service { engine: entry.engine.key().into(), version: entry.version.clone() };
+            let add = Need::Service { engine: entry.engine.to_string(), version: entry.version.clone() };
             fail(
                 &id,
                 format!("{instance} has no data: {problem}, and Yard never re-initializes it on its own"),
@@ -884,27 +897,29 @@ fn instance_data(paths: &Paths, instance: &str, entry: &ServiceEntry) -> Option<
 /// An instance on the plain formula (`mysql-9.7` on `mysql`) whose keg has moved to a
 /// newer line than its name says (spec §5): `brew upgrade mysql` did it, and the engine
 /// upgrades the instance's data in place.
-fn instance_line(brew: &Brew, instance: &str, entry: &ServiceEntry) -> Option<Check> {
-    let engine = entry.engine;
-    if !engine.versioned() || entry.formula != engine.base_formula() {
+fn instance_line(
+    brew: &Brew,
+    instance: &str,
+    entry: &ServiceEntry,
+    engine: &dyn ServiceEngine,
+) -> Option<Check> {
+    let lines = engine.lines()?;
+    let formula = entry.formula.as_deref()?;
+    if formula != lines.base_formula {
         return None;
     }
     let line = entry.version.as_deref()?;
-    let keg = std::fs::read_link(brew.prefix.join("opt").join(&entry.formula)).ok()?;
+    let keg = std::fs::read_link(brew.prefix.join("opt").join(formula)).ok()?;
     let now = plain_line(engine, &keg.file_name()?.to_string_lossy())?;
     if now == line {
         return None;
     }
-    let hint = match engine.default_line() {
-        Some(default) => format!("yard service add {} --version {default}", engine.key()),
-        None => format!("brew info {}", entry.formula),
-    };
+    let hint = format!("yard service add {} --version {}", engine.key(), lines.default_line);
     Some(warn(
         &format!("service-line:{instance}"),
         format!(
-            "{instance} now runs {} {now}: brew upgrade moved {} past {line}, and {} upgrades an instance's data in place and cannot go back",
+            "{instance} now runs {} {now}: brew upgrade moved {formula} past {line}, and {} upgrades an instance's data in place and cannot go back",
             engine.display(),
-            entry.formula,
             engine.display(),
         ),
         hint,
@@ -919,15 +934,26 @@ fn site_needs(view: &ServiceView<'_>, site: &SiteInfo, projects: &Projects) -> V
     let id = format!("service-need:{}", site.name);
     let mut checks = vec![];
     for (engine, want) in &project.services {
+        if view.engines.get(engine.as_str()).is_none() {
+            checks.push(warn(
+                &id,
+                format!(
+                    "{}'s .yard asks for the {engine} service, which this Mac has no recipe for",
+                    site.name
+                ),
+                format!("add ~/.yard/engines/{engine}.toml"),
+            ));
+            continue;
+        }
         let (instance, entry) = match want {
             ServiceWant::Line(line) => {
-                let name = instance_name(*engine, Some(line));
+                let name = instance_name(engine.as_str(), Some(line));
                 let entry = view.services.services.get(&name);
                 (name, entry)
             }
-            ServiceWant::Default => match services::default_instance(view.services, *engine) {
+            ServiceWant::Default => match services::default_instance(view.services, engine) {
                 Some(name) => (name.to_string(), view.services.services.get(name)),
-                None => (instance_name(*engine, None), None),
+                None => (instance_name(engine.as_str(), None), None),
             },
         };
         let asks = format!("{}'s .yard asks for {instance}", site.name);
@@ -939,7 +965,7 @@ fn site_needs(view: &ServiceView<'_>, site: &SiteInfo, projects: &Projects) -> V
                     ServiceWant::Line(line) => Some(line.clone()),
                     ServiceWant::Default => None,
                 };
-                let add = Need::Service { engine: engine.key().into(), version };
+                let add = Need::Service { engine: engine.to_string(), version };
                 checks.push(warn(&id, format!("{asks}, which is not added"), add.command()));
             }
             Some(entry) if entry.stopped => checks.push(warn(
@@ -971,9 +997,11 @@ fn old_php_mysql_login(sites: &[SiteInfo], projects: &Projects, services: &Servi
                 return None;
             }
             let project = projects.get(&site.name).and_then(Loaded::ok)?;
-            let instance = match project.services.get(&Engine::Mysql)? {
-                ServiceWant::Line(line) => instance_name(Engine::Mysql, Some(line)),
-                ServiceWant::Default => services::default_instance(services, Engine::Mysql)?.to_string(),
+            // MySQL's by definition: the login is MySQL's (M4b spec §16).
+            let mysql = EngineKey::new("mysql").ok()?;
+            let instance = match project.services.get(&mysql)? {
+                ServiceWant::Line(line) => instance_name(mysql.as_str(), Some(line)),
+                ServiceWant::Default => services::default_instance(services, &mysql)?.to_string(),
             };
             if old_php_can_log_in(&instance) {
                 return None;
@@ -997,9 +1025,9 @@ fn old_php_mysql_login(sites: &[SiteInfo], projects: &Projects, services: &Servi
 /// A brew that cannot answer is a warning, never an error.
 async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Vec<Check> {
     let mut formulae: Vec<&str> = vec![];
-    for entry in services.services.values() {
-        if !formulae.contains(&entry.formula.as_str()) && askable(brew, trust, &entry.formula) {
-            formulae.push(&entry.formula);
+    for formula in services.services.values().filter_map(|e| e.formula.as_deref()) {
+        if !formulae.contains(&formula) && askable(brew, trust, formula) {
+            formulae.push(formula);
         }
     }
     // With no brew the `brew` check already fails; a formula brew would refuse is left out.
@@ -1034,7 +1062,8 @@ async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Ve
         .services
         .iter()
         .filter_map(|(instance, entry)| {
-            let f = described.iter().find(|f| describes(f, &entry.formula))?;
+            let formula = entry.formula.as_deref()?;
+            let f = described.iter().find(|f| describes(f, formula))?;
             let what = if f.disabled {
                 match &f.disable_date {
                     Some(date) => format!("which brew has disabled (since {date})"),
@@ -1051,18 +1080,22 @@ async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Ve
             Some((instance, entry, what))
         })
         .collect();
-    let engines: BTreeSet<Engine> =
-        warned.iter().map(|(_, entry, _)| entry.engine).filter(|e| e.versioned()).collect();
-    let current = current_lines(brew, &engines).await;
+    let specs: BTreeMap<&str, &LineSpec> = warned
+        .iter()
+        .filter_map(|(_, entry, _)| Some((entry.engine.as_str(), versioned_lines(entry.engine.as_str())?)))
+        .collect();
+    let current = current_lines(brew, &specs.values().copied().collect::<Vec<_>>()).await;
     warned
         .into_iter()
         .map(|(instance, entry, what)| {
-            let hint = replacement_line(entry, &current, &describes)
-                .map(|line| format!("yard service add {} --version {line}", entry.engine.key()))
-                .unwrap_or_else(|| format!("brew info {}", entry.formula));
+            let formula = entry.formula.as_deref().unwrap_or_default();
+            let hint = versioned_lines(entry.engine.as_str())
+                .and_then(|spec| replacement_line(entry, spec, &current, &describes))
+                .map(|line| format!("yard service add {} --version {line}", entry.engine))
+                .unwrap_or_else(|| format!("brew info {formula}"));
             warn(
                 &format!("service-deprecated:{instance}"),
-                format!("{instance} runs {}, {what}", entry.formula),
+                format!("{instance} runs {formula}, {what}"),
                 hint,
             )
         })
@@ -1072,13 +1105,11 @@ async fn deprecated(brew: &Brew, services: &ServicesConfig, trust: &Trust) -> Ve
 /// `brew info` for each engine's default line and plain formula (`mysql@8.4`, `mysql`), the
 /// lines a deprecated instance's hint can point at. A second call, so a brew that no longer
 /// has one of them costs only the hint: any failure is no answer.
-async fn current_lines(brew: &Brew, engines: &BTreeSet<Engine>) -> Vec<brew_info::Formula> {
+async fn current_lines(brew: &Brew, specs: &[&LineSpec]) -> Vec<brew_info::Formula> {
     let mut names: Vec<String> = vec![];
-    for engine in engines {
-        if let Some(line) = engine.default_line() {
-            names.push(format!("{}@{line}", engine.base_formula()));
-        }
-        names.push(engine.base_formula().to_string());
+    for spec in specs {
+        names.push(format!("{}@{}", spec.base_formula, spec.default_line));
+        names.push(spec.base_formula.to_string());
     }
     if names.is_empty() {
         return vec![];
@@ -1095,18 +1126,18 @@ async fn current_lines(brew: &Brew, engines: &BTreeSet<Engine>) -> Vec<brew_info
 /// plain formula is on, whichever brew has current and the instance is not already on.
 fn replacement_line(
     entry: &ServiceEntry,
+    spec: &LineSpec,
     current: &[brew_info::Formula],
     describes: &dyn Fn(&brew_info::Formula, &str) -> bool,
 ) -> Option<String> {
-    let engine = entry.engine;
-    let usable = |f: &brew_info::Formula| !f.deprecated && !f.disabled && !describes(f, &entry.formula);
-    let default = engine.default_line().and_then(|line| {
-        let name = format!("{}@{line}", engine.base_formula());
-        current.iter().find(|f| describes(f, &name) && usable(f)).map(|_| line.to_string())
-    });
+    let formula = entry.formula.as_deref().unwrap_or_default();
+    let usable = |f: &brew_info::Formula| !f.deprecated && !f.disabled && !describes(f, formula);
+    let name = format!("{}@{}", spec.base_formula, spec.default_line);
+    let default =
+        current.iter().find(|f| describes(f, &name) && usable(f)).map(|_| spec.default_line.to_string());
     default.or_else(|| {
-        let plain = current.iter().find(|f| describes(f, engine.base_formula()) && usable(f))?;
-        plain_line(engine, &plain.version)
+        let plain = current.iter().find(|f| describes(f, spec.base_formula) && usable(f))?;
+        spec.plain_line(&plain.version)
     })
 }
 

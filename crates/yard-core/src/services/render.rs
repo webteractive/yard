@@ -1,13 +1,11 @@
 //! Each engine's unit command, init command and generated config file (spec 5.1 to 5.4).
 //! Pure: it builds argument lists and text, and the daemon spawns and writes them.
 
-use super::Engine;
 use crate::Paths;
 use crate::render::header;
 use crate::render::quote::nginx_str;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use yard_proto::PortRef;
 
 /// SIGINT and SIGTERM have the same numbers on every platform Yard supports. They are
 /// named here so `yard-core` needs no `libc`; the daemon passes the number to `kill`.
@@ -22,25 +20,6 @@ pub struct UnitCommand {
     pub env: Vec<(String, String)>,
     /// The signal that stops it cleanly.
     pub stop_signal: i32,
-}
-
-/// The registry entry that is the instance's main port: the one named for the unit, else the
-/// first that is not a console, else the engine's usual port.
-fn main_port(engine: Engine, instance: &str, ports: &[PortRef]) -> u16 {
-    ports
-        .iter()
-        .find(|p| p.name == instance)
-        .or_else(|| ports.iter().find(|p| !p.name.ends_with("-console")))
-        .map_or_else(|| engine.usual_ports()[0].1, |p| p.port)
-}
-
-/// MinIO's console port: `<instance>-console`, else the engine's usual console port.
-fn console_port(engine: Engine, instance: &str, ports: &[PortRef]) -> u16 {
-    let name = format!("{instance}-console");
-    ports.iter().find(|p| p.name == name).map_or_else(
-        || engine.usual_ports().iter().find(|(suffix, _)| *suffix == "console").map_or(0, |(_, port)| *port),
-        |p| p.port,
-    )
 }
 
 fn arg(text: impl Into<OsString>) -> OsString {
@@ -97,146 +76,124 @@ fn postgres_env() -> Vec<(String, String)> {
     vec![("LC_ALL".to_string(), POSTGRES_LOCALE.to_string())]
 }
 
-/// The command that runs `instance` in the foreground (spec 5.1 to 5.4). Every program is a
-/// binary in `keg`, which is brew's `opt/<formula>`; nothing is looked up on PATH.
-pub fn command(engine: Engine, instance: &str, keg: &Path, paths: &Paths, ports: &[PortRef]) -> UnitCommand {
-    let bin = |name: &str| keg.join("bin").join(name);
-    let port = main_port(engine, instance, ports);
-    match engine {
-        Engine::Mysql => UnitCommand {
-            program: bin("mysqld"),
-            args: vec![arg(format!("--defaults-file={}", paths.service_conf(instance, "my.cnf").display()))],
-            env: Vec::new(),
-            stop_signal: SIGTERM,
-        },
-        Engine::Postgres => UnitCommand {
-            program: bin("postgres"),
-            args: vec![
-                arg("-D"),
-                paths.service_data(instance).into_os_string(),
-                arg("-c"),
-                arg("listen_addresses=127.0.0.1"),
-                arg("-c"),
-                arg(format!("port={port}")),
-                arg("-c"),
-                arg(format!("unix_socket_directories={}", paths.run_dir().display())),
-            ],
-            env: postgres_env(),
-            // SIGINT is PostgreSQL's fast shutdown; SIGTERM is the smart one and waits for clients.
-            stop_signal: SIGINT,
-        },
-        Engine::Redis => UnitCommand {
-            program: bin("redis-server"),
-            args: vec![paths.service_conf(instance, "redis.conf").into_os_string()],
-            env: Vec::new(),
-            stop_signal: SIGTERM,
-        },
-        Engine::Minio => UnitCommand {
-            program: bin("minio"),
-            args: vec![
-                arg("server"),
-                paths.service_data(instance).into_os_string(),
-                arg("--address"),
-                arg(format!("127.0.0.1:{port}")),
-                arg("--console-address"),
-                arg(format!("127.0.0.1:{}", console_port(engine, instance, ports))),
-            ],
-            env: vec![
-                ("MINIO_ROOT_USER".to_string(), "minioadmin".to_string()),
-                ("MINIO_ROOT_PASSWORD".to_string(), "minioadmin".to_string()),
-            ],
-            stop_signal: SIGTERM,
-        },
+/// `mysqld --defaults-file=<my.cnf>` (spec 5.1); every program is a binary in `keg`, brew's
+/// `opt/<formula>`, and nothing is looked up on PATH.
+pub(crate) fn mysql_command(instance: &str, keg: &Path, paths: &Paths) -> UnitCommand {
+    UnitCommand {
+        program: keg.join("bin/mysqld"),
+        args: vec![arg(format!("--defaults-file={}", paths.service_conf(instance, "my.cnf").display()))],
+        env: Vec::new(),
+        stop_signal: SIGTERM,
     }
 }
 
-/// The one-time command that creates the data directory, for the engines that need one.
-/// `macos_user` is PostgreSQL's superuser.
-pub fn init_command(
-    engine: Engine,
+/// `postgres -D <data> -c …` (spec 5.2).
+pub(crate) fn postgres_command(instance: &str, keg: &Path, paths: &Paths, port: u16) -> UnitCommand {
+    UnitCommand {
+        program: keg.join("bin/postgres"),
+        args: vec![
+            arg("-D"),
+            paths.service_data(instance).into_os_string(),
+            arg("-c"),
+            arg("listen_addresses=127.0.0.1"),
+            arg("-c"),
+            arg(format!("port={port}")),
+            arg("-c"),
+            arg(format!("unix_socket_directories={}", paths.run_dir().display())),
+        ],
+        env: postgres_env(),
+        // SIGINT is PostgreSQL's fast shutdown; SIGTERM is the smart one and waits for clients.
+        stop_signal: SIGINT,
+    }
+}
+
+/// `minio server <data> --address … --console-address …` (spec 5.4).
+pub(crate) fn minio_command(
     instance: &str,
     keg: &Path,
     paths: &Paths,
-    macos_user: &str,
-) -> Option<UnitCommand> {
-    let bin = |name: &str| keg.join("bin").join(name);
+    api: u16,
+    console: u16,
+) -> UnitCommand {
+    UnitCommand {
+        program: keg.join("bin/minio"),
+        args: vec![
+            arg("server"),
+            paths.service_data(instance).into_os_string(),
+            arg("--address"),
+            arg(format!("127.0.0.1:{api}")),
+            arg("--console-address"),
+            arg(format!("127.0.0.1:{console}")),
+        ],
+        env: vec![
+            ("MINIO_ROOT_USER".to_string(), "minioadmin".to_string()),
+            ("MINIO_ROOT_PASSWORD".to_string(), "minioadmin".to_string()),
+        ],
+        stop_signal: SIGTERM,
+    }
+}
+
+/// `mysqld --no-defaults --initialize-insecure …`, creating `root` the way the line lets old
+/// PHP log in.
+pub(crate) fn mysql_init(instance: &str, keg: &Path, paths: &Paths) -> UnitCommand {
     let data = paths.service_data(instance);
-    match engine {
-        Engine::Mysql => Some(UnitCommand {
-            program: bin("mysqld"),
-            // `--no-defaults` first: mysqld reads `/etc/my.cnf` and `~/.my.cnf` unless told
-            // not to, and a user's `datadir` or `port` there would shape what Yard creates.
-            args: [
-                vec![
-                    arg("--no-defaults"),
-                    arg("--initialize-insecure"),
-                    arg(format!("--datadir={}", data.display())),
-                    arg(format!("--basedir={}", keg.display())),
-                ],
-                native_password_flags(instance),
-            ]
-            .concat(),
-            env: Vec::new(),
-            stop_signal: SIGTERM,
-        }),
-        Engine::Postgres => Some(UnitCommand {
-            program: bin("initdb"),
-            args: vec![
-                arg("-D"),
-                data.into_os_string(),
-                arg("-U"),
-                arg(macos_user),
-                arg("--auth=trust"),
-                arg("-E"),
-                arg("UTF8"),
+    UnitCommand {
+        program: keg.join("bin/mysqld"),
+        // `--no-defaults` first: mysqld reads `/etc/my.cnf` and `~/.my.cnf` unless told
+        // not to, and a user's `datadir` or `port` there would shape what Yard creates.
+        args: [
+            vec![
+                arg("--no-defaults"),
+                arg("--initialize-insecure"),
+                arg(format!("--datadir={}", data.display())),
+                arg(format!("--basedir={}", keg.display())),
             ],
-            env: postgres_env(),
-            stop_signal: SIGTERM,
-        }),
-        Engine::Redis | Engine::Minio => None,
+            native_password_flags(instance),
+        ]
+        .concat(),
+        env: Vec::new(),
+        stop_signal: SIGTERM,
     }
 }
 
-/// What `services/<i>/overrides.conf` starts as, for the engines that include it; Yard creates
-/// it once with this and never writes it again. `None` for PostgreSQL, whose user file is
-/// `postgresql.conf` in its data directory (spec 5.2). MySQL's needs a group header before any
-/// setting, or mysqld exits at startup, so it starts with `[mysqld]`. Redis's include takes bare
-/// lines. MinIO's is not MinIO's at all: nginx includes it in `minio.<tld>`'s block, so it says so.
-pub fn user_overrides(engine: Engine) -> Option<&'static str> {
-    match engine {
-        Engine::Mysql => Some(
-            "# USER-OWNED — Yard never rewrites this file. my.cnf includes it last, so a setting here wins.\n\
-             # mysqld needs a group before any setting: put yours under [mysqld].\n\
-             [mysqld]\n",
-        ),
-        Engine::Redis => Some(""),
-        // The TLD can change and this file is never rewritten, so it names no host.
-        Engine::Minio => Some(
-            "# USER-OWNED — Yard never rewrites this file. nginx includes it in the server block for\n\
-             # MinIO's console (minio.<tld>), so nginx directives go here. Yard tests them with\n\
-             # nginx -t when you save, and keeps the last good config if they fail.\n",
-        ),
-        Engine::Postgres => None,
+/// `initdb -D <data> -U <macOS user> --auth=trust -E UTF8`.
+pub(crate) fn postgres_init(instance: &str, keg: &Path, paths: &Paths, macos_user: &str) -> UnitCommand {
+    UnitCommand {
+        program: keg.join("bin/initdb"),
+        args: vec![
+            arg("-D"),
+            paths.service_data(instance).into_os_string(),
+            arg("-U"),
+            arg(macos_user),
+            arg("--auth=trust"),
+            arg("-E"),
+            arg("UTF8"),
+        ],
+        env: postgres_env(),
+        stop_signal: SIGTERM,
     }
 }
 
-/// The generated config file for `instance` and its text, for the engines that read one
-/// (MySQL's `my.cnf`, Redis's `redis.conf`). The header names `overrides.conf`, which the
-/// file includes last so the user's lines win.
-pub fn config_file(
-    engine: Engine,
-    instance: &str,
-    paths: &Paths,
-    ports: &[PortRef],
-) -> Option<(PathBuf, String)> {
+/// What a MySQL instance's `overrides.conf` starts as; Yard creates it once and never writes it
+/// again. mysqld needs a group header before any setting, or it exits at startup.
+pub(crate) const MYSQL_OVERRIDES: &str = "# USER-OWNED — Yard never rewrites this file. my.cnf includes it last, so a setting here wins.\n\
+     # mysqld needs a group before any setting: put yours under [mysqld].\n\
+     [mysqld]\n";
+
+/// MinIO's `overrides.conf` is not MinIO's at all: nginx includes it in `minio.<tld>`'s block.
+/// The TLD can change and this file is never rewritten, so it names no host.
+pub(crate) const MINIO_OVERRIDES: &str = "# USER-OWNED — Yard never rewrites this file. nginx includes it in the server block for\n\
+     # MinIO's console (minio.<tld>), so nginx directives go here. Yard tests them with\n\
+     # nginx -t when you save, and keeps the last good config if they fail.\n";
+
+/// MySQL's generated `my.cnf` (spec 5.1). The header names `overrides.conf`, which the file
+/// includes last so the user's lines win.
+pub(crate) fn mysql_cnf(instance: &str, paths: &Paths, port: u16) -> (PathBuf, String) {
     let overrides = paths.service_overrides(instance);
     let data = nginx_str(&paths.service_data(instance).display().to_string());
-    let port = main_port(engine, instance, ports);
-    match engine {
-        Engine::Mysql => {
-            let socket = nginx_str(&paths.mysql_socket(instance).display().to_string());
-            let text = format!(
-                "{header}[mysqld]
+    let socket = nginx_str(&paths.mysql_socket(instance).display().to_string());
+    let text = format!(
+        "{header}[mysqld]
 port = {port}
 bind-address = 127.0.0.1
 socket = {socket}
@@ -257,46 +214,64 @@ innodb_log_buffer_size = 16M
 
 !include {overrides}
 ",
-                header = header(&overrides),
-                native = match native_password(instance) {
-                    NativePassword::Loaded => {
-                        "# PHP 7.0 to 7.3 log in only with mysql_native_password, and 7.0 only when\n\
-                         # the server offers it first.\n\
-                         default_authentication_plugin = mysql_native_password\n\
-                         authentication_policy = mysql_native_password,,\n"
-                    }
-                    NativePassword::Off => {
-                        "# PHP 7.0 to 7.3 log in only with mysql_native_password.\n\
-                         mysql_native_password = ON\n\
-                         authentication_policy = mysql_native_password,,\n"
-                    }
-                    NativePassword::Gone => "",
-                },
-                overrides = overrides.display(),
-            );
-            Some((paths.service_conf(instance, "my.cnf"), text))
-        }
-        Engine::Redis => {
-            let text = format!(
-                "{header}bind 127.0.0.1
-port {port}
-dir {data}
-daemonize no
-include {overrides}
-",
-                header = header(&overrides),
-                overrides = nginx_str(&overrides.display().to_string()),
-            );
-            Some((paths.service_conf(instance, "redis.conf"), text))
-        }
-        Engine::Postgres | Engine::Minio => None,
-    }
+        header = header(&overrides),
+        native = match native_password(instance) {
+            NativePassword::Loaded => {
+                "# PHP 7.0 to 7.3 log in only with mysql_native_password, and 7.0 only when\n\
+                     # the server offers it first.\n\
+                     default_authentication_plugin = mysql_native_password\n\
+                     authentication_policy = mysql_native_password,,\n"
+            }
+            NativePassword::Off => {
+                "# PHP 7.0 to 7.3 log in only with mysql_native_password.\n\
+                     mysql_native_password = ON\n\
+                     authentication_policy = mysql_native_password,,\n"
+            }
+            NativePassword::Gone => "",
+        },
+        overrides = overrides.display(),
+    );
+    (paths.service_conf(instance, "my.cnf"), text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::engines::{Engines, InstanceCtx, ServiceEngine};
     use insta::assert_snapshot;
+    use std::sync::Arc;
+    use yard_proto::PortRef;
+
+    // The built-ins answer through the contract now; these keep the old tests' shape.
+    fn engine(key: &str) -> Arc<dyn ServiceEngine> {
+        Engines::builtin().get(key).unwrap().clone()
+    }
+
+    fn ctx<'a>(
+        instance: &'a str,
+        keg: &'a Path,
+        paths: &'a Paths,
+        ports: &'a [PortRef],
+        user: &'a str,
+    ) -> InstanceCtx<'a> {
+        InstanceCtx { instance, home: keg, paths, ports, macos_user: user, node: None }
+    }
+
+    fn command(key: &str, instance: &str, keg: &Path, paths: &Paths, ports: &[PortRef]) -> UnitCommand {
+        engine(key).command(&ctx(instance, keg, paths, ports, "me"))
+    }
+
+    fn init_command(key: &str, instance: &str, keg: &Path, paths: &Paths, user: &str) -> Option<UnitCommand> {
+        engine(key).init(&ctx(instance, keg, paths, &[], user))
+    }
+
+    fn config_file(key: &str, instance: &str, paths: &Paths, ports: &[PortRef]) -> Option<(PathBuf, String)> {
+        engine(key).config_file(&ctx(instance, Path::new("/k"), paths, ports, "me"))
+    }
+
+    fn user_overrides(key: &str) -> Option<String> {
+        engine(key).user_overrides()
+    }
 
     const ROOT: &str = "/Users/me/Library/Application Support/Yard";
     const KEG: &str = "/opt/homebrew/opt/mysql@8.4";
@@ -312,15 +287,14 @@ mod tests {
     #[test]
     fn mysql_cnf() {
         let paths = Paths::new(ROOT);
-        let (file, text) =
-            config_file(Engine::Mysql, "mysql-8.4", &paths, &[port("mysql-8.4", 3306)]).unwrap();
+        let (file, text) = config_file("mysql", "mysql-8.4", &paths, &[port("mysql-8.4", 3306)]).unwrap();
         assert_eq!(file, paths.service_conf("mysql-8.4", "my.cnf"));
         assert_snapshot!(text);
     }
 
     /// The `[mysqld]` settings of `instance`'s `my.cnf`, before the user's `!include`.
     fn mysqld_settings(instance: &str) -> Vec<String> {
-        let (_, text) = config_file(Engine::Mysql, instance, &Paths::new(ROOT), &[]).unwrap();
+        let (_, text) = config_file("mysql", instance, &Paths::new(ROOT), &[]).unwrap();
         text.lines().take_while(|l| !l.starts_with("!include")).map(str::to_string).collect()
     }
 
@@ -402,7 +376,7 @@ mod tests {
     fn mysql_init_creates_root_with_native_password_where_the_line_has_it() {
         let paths = Paths::new(ROOT);
         let keg = Path::new(KEG);
-        let args = |instance: &str| init_command(Engine::Mysql, instance, keg, &paths, "me").unwrap().args;
+        let args = |instance: &str| init_command("mysql", instance, keg, &paths, "me").unwrap().args;
         let policy = OsString::from("--authentication-policy=mysql_native_password,,");
         let on = OsString::from("--mysql-native-password=ON");
         let a84 = args("mysql-8.4");
@@ -418,7 +392,7 @@ mod tests {
     #[test]
     fn redis_conf() {
         let paths = Paths::new(ROOT);
-        let (file, text) = config_file(Engine::Redis, "redis", &paths, &[port("redis", 6380)]).unwrap();
+        let (file, text) = config_file("redis", "redis", &paths, &[port("redis", 6380)]).unwrap();
         assert_eq!(file, paths.service_conf("redis", "redis.conf"));
         assert_snapshot!(text);
     }
@@ -426,14 +400,14 @@ mod tests {
     #[test]
     fn postgres_and_minio_have_no_config_file() {
         let paths = Paths::new(ROOT);
-        assert_eq!(config_file(Engine::Postgres, "postgres-17", &paths, &[]), None);
-        assert_eq!(config_file(Engine::Minio, "minio", &paths, &[]), None);
+        assert_eq!(config_file("postgres", "postgres-17", &paths, &[]), None);
+        assert_eq!(config_file("minio", "minio", &paths, &[]), None);
     }
 
     #[test]
     fn the_config_file_follows_the_registry_port() {
         let paths = Paths::new(ROOT);
-        let (_, text) = config_file(Engine::Mysql, "mysql-8.4", &paths, &[port("mysql-8.4", 3399)]).unwrap();
+        let (_, text) = config_file("mysql", "mysql-8.4", &paths, &[port("mysql-8.4", 3399)]).unwrap();
         assert!(text.lines().any(|l| l == "port = 3399"), "{text}");
     }
 
@@ -443,14 +417,14 @@ mod tests {
         let keg = Path::new(KEG);
         let conf = paths.service_conf("mysql-8.4", "my.cnf");
 
-        let mysql = command(Engine::Mysql, "mysql-8.4", keg, &paths, &[port("mysql-8.4", 3306)]);
+        let mysql = command("mysql", "mysql-8.4", keg, &paths, &[port("mysql-8.4", 3306)]);
         assert_eq!(mysql.program, keg.join("bin/mysqld"));
         assert_eq!(mysql.args, [OsString::from(format!("--defaults-file={}", conf.display()))]);
         assert!(mysql.env.is_empty());
         assert_eq!(mysql.stop_signal, SIGTERM);
 
         let keg = Path::new("/opt/homebrew/opt/postgresql@17");
-        let pg = command(Engine::Postgres, "postgres-17", keg, &paths, &[port("postgres-17", 5433)]);
+        let pg = command("postgres", "postgres-17", keg, &paths, &[port("postgres-17", 5433)]);
         assert_eq!(pg.program, keg.join("bin/postgres"));
         assert_eq!(
             pg.args,
@@ -469,7 +443,7 @@ mod tests {
         assert_eq!(SIGINT, 2);
 
         let keg = Path::new("/opt/homebrew/opt/redis");
-        let redis = command(Engine::Redis, "redis", keg, &paths, &[port("redis", 6379)]);
+        let redis = command("redis", "redis", keg, &paths, &[port("redis", 6379)]);
         assert_eq!(redis.program, keg.join("bin/redis-server"));
         assert_eq!(redis.args, [paths.service_conf("redis", "redis.conf").into_os_string()]);
         assert_eq!(redis.stop_signal, SIGTERM);
@@ -478,7 +452,7 @@ mod tests {
         let keg = Path::new("/opt/homebrew/opt/minio");
         // The console entry comes first: each port is found by name, not by position.
         let ports = [port("minio-console", 9101), port("minio", 9100)];
-        let minio = command(Engine::Minio, "minio", keg, &paths, &ports);
+        let minio = command("minio", "minio", keg, &paths, &ports);
         assert_eq!(minio.program, keg.join("bin/minio"));
         assert_eq!(
             minio.args,
@@ -501,7 +475,7 @@ mod tests {
         let paths = Paths::new(ROOT);
         let keg = Path::new(KEG);
         let data = paths.service_data("mysql-8.4");
-        let mysql = init_command(Engine::Mysql, "mysql-8.4", keg, &paths, "me").unwrap();
+        let mysql = init_command("mysql", "mysql-8.4", keg, &paths, "me").unwrap();
         assert_eq!(mysql.program, keg.join("bin/mysqld"));
         assert_eq!(
             mysql.args,
@@ -517,15 +491,15 @@ mod tests {
 
         let keg = Path::new("/opt/homebrew/opt/postgresql@17");
         let data = paths.service_data("postgres-17");
-        let pg = init_command(Engine::Postgres, "postgres-17", keg, &paths, "me").unwrap();
+        let pg = init_command("postgres", "postgres-17", keg, &paths, "me").unwrap();
         assert_eq!(pg.program, keg.join("bin/initdb"));
         assert_eq!(
             pg.args,
             os(&["-D", &data.display().to_string(), "-U", "me", "--auth=trust", "-E", "UTF8"])
         );
 
-        assert_eq!(init_command(Engine::Redis, "redis", keg, &paths, "me"), None);
-        assert_eq!(init_command(Engine::Minio, "minio", keg, &paths, "me"), None);
+        assert_eq!(init_command("redis", "redis", keg, &paths, "me"), None);
+        assert_eq!(init_command("minio", "minio", keg, &paths, "me"), None);
     }
 
     #[test]
@@ -535,8 +509,8 @@ mod tests {
         let paths = Paths::new(ROOT);
         let keg = Path::new("/opt/homebrew/opt/postgresql@17");
         let locale = ("LC_ALL".to_string(), POSTGRES_LOCALE.to_string());
-        let run = command(Engine::Postgres, "postgres-17", keg, &paths, &[port("postgres-17", 5433)]);
-        let init = init_command(Engine::Postgres, "postgres-17", keg, &paths, "me").unwrap();
+        let run = command("postgres", "postgres-17", keg, &paths, &[port("postgres-17", 5433)]);
+        let init = init_command("postgres", "postgres-17", keg, &paths, "me").unwrap();
         assert_eq!(run.env, vec![locale.clone()]);
         assert_eq!(init.env, vec![locale]);
         assert_eq!(POSTGRES_LOCALE, "en_US.UTF-8");
@@ -544,24 +518,22 @@ mod tests {
 
     #[test]
     fn each_engine_starts_its_overrides_as_its_config_reads_it() {
-        let mysql = user_overrides(Engine::Mysql).unwrap();
+        let mysql = user_overrides("mysql").unwrap();
         assert!(mysql.starts_with("# USER-OWNED"), "{mysql}");
         // A setting before any group makes mysqld exit ("Found option without preceding group").
         assert_eq!(mysql.lines().find(|l| !l.starts_with('#')), Some("[mysqld]"));
-        assert_eq!(user_overrides(Engine::Redis), Some(""));
-        assert_eq!(user_overrides(Engine::Postgres), None, "PostgreSQL's file is postgresql.conf");
+        assert_eq!(user_overrides("redis").as_deref(), Some(""));
+        assert_eq!(user_overrides("postgres"), None, "PostgreSQL's file is postgresql.conf");
         // nginx includes MinIO's: comments only, and it names the host.
-        let minio = user_overrides(Engine::Minio).unwrap();
+        let minio = user_overrides("minio").unwrap();
         assert!(minio.lines().all(|l| l.starts_with('#')) && minio.contains("nginx -t"), "{minio}");
     }
 
     #[test]
     fn paths_with_spaces_are_quoted() {
         let paths = Paths::new("/tmp/a b");
-        let cases = [
-            (Engine::Mysql, "mysql-8.4", port("mysql-8.4", 3306)),
-            (Engine::Redis, "redis", port("redis", 6379)),
-        ];
+        let cases =
+            [("mysql", "mysql-8.4", port("mysql-8.4", 3306)), ("redis", "redis", port("redis", 6379))];
         for (engine, instance, p) in cases {
             let (_, text) = config_file(engine, instance, &paths, &[p]).unwrap();
             assert!(text.starts_with("# Generated by Yard — edit /tmp/a b/services/"), "{text}");

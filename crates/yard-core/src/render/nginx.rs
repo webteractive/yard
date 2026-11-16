@@ -347,16 +347,28 @@ server {{
 }
 
 /// `nginx/services/<name>.conf`: `<name>.<tld>` proxied to a service's web console on
-/// `upstream_port` (MinIO's, spec 5.4). It is not a site. `Host` is the upstream's own
-/// address, which the console may check; the browser's host and port go in `X-Forwarded-Host`.
-/// A secured block's certificate is `certs/services/<name>.pem`. The block ends with the
-/// instance's `overrides.conf`.
-pub fn service_site(ctx: &RenderCtx, name: &str, upstream_port: u16, secure: bool) -> String {
+/// `upstream_port` (MinIO's, spec 5.4; any engine's console, recipes spec §6). It is not a site.
+/// `Host` is the upstream's own address when the engine asks for it (MinIO's console checks it),
+/// else the browser's; the browser's host and port go in `X-Forwarded-Host` either way. A
+/// secured block's certificate is `certs/services/<name>.pem`. The block ends with
+/// `override_file`: MinIO's `services/minio/overrides.conf`, else `nginx/overrides/<name>.conf`.
+pub fn service_site(
+    ctx: &RenderCtx,
+    name: &str,
+    upstream_port: u16,
+    secure: bool,
+    host: crate::services::engines::HostHeader,
+    override_file: &Path,
+) -> String {
     let upstream = format!("127.0.0.1:{upstream_port}");
-    let body = proxy_location(&format!("http://{upstream}"), &upstream, "", Forwarded::Local);
+    let host = match host {
+        crate::services::engines::HostHeader::Upstream => upstream.clone(),
+        crate::services::engines::HostHeader::Client => "$http_host".to_string(),
+    };
+    let body = proxy_location(&format!("http://{upstream}"), &host, "", Forwarded::Local);
     let certs = ctx.paths.services_certs_dir();
     let tls = secure.then(|| (certs.join(format!("{name}.pem")), certs.join(format!("{name}.key"))));
-    server_blocks(ctx, &format!("{name}.{}", ctx.tld), &body, &ctx.paths.service_overrides(name), tls)
+    server_blocks(ctx, &format!("{name}.{}", ctx.tld), &body, override_file, tls)
 }
 
 /// `mail.<tld>`: emailulator's web UI, whoever serves it (emailulator spec §10).

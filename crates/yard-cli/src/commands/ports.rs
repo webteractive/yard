@@ -40,7 +40,8 @@ pub async fn check(ctx: &Ctx) -> Outcome {
         Ok(mut client) => client.call(methods::PORTS_CHECK, Value::Null).await?,
         Err(CliError::DaemonNotRunning) => {
             let registry = Registry::load(&ctx.paths)?;
-            tokio::task::spawn_blocking(move || portscan::infos(&registry, &BTreeSet::new()))
+            let services = yard_core::config::load_services(&ctx.paths).unwrap_or_default();
+            tokio::task::spawn_blocking(move || portscan::infos(&registry, &services, &BTreeSet::new()))
                 .await
                 .map_err(YardError::internal)?
         }

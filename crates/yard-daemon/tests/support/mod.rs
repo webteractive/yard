@@ -144,7 +144,7 @@ impl Fixture {
     pub fn add_service(&self, instance: &str, formula: &str, stopped: bool) {
         let (engine, line) = yard_core::services::parse_instance(instance).expect("an instance name");
         let mut text = std::fs::read_to_string(self.paths.services_toml()).unwrap_or_default();
-        text.push_str(&format!("[services.\"{instance}\"]\nengine = \"{}\"\n", engine.key()));
+        text.push_str(&format!("[services.\"{instance}\"]\nengine = \"{engine}\"\n"));
         if let Some(line) = line {
             text.push_str(&format!("version = \"{line}\"\n"));
         }

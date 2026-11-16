@@ -57,9 +57,9 @@ pub fn overrides_for(paths: &Paths, file: &Path) -> Option<PathBuf> {
         return Some(paths.service_overrides(name));
     }
     if dir.parent() == Some(paths.services_dir().as_path()) {
-        // `services/<instance>/my.cnf`, `redis.conf`: the generated configs, not `overrides.conf`.
-        let name = file.file_name()?.to_str()?;
-        if !matches!(name, "my.cnf" | "redis.conf") {
+        // `services/<instance>/my.cnf`, `redis.conf`, a recipe's `run.config.file`: the
+        // generated configs, which a recipe may name anything but `overrides.conf`.
+        if file.file_name()? == "overrides.conf" {
             return None;
         }
         return Some(paths.service_overrides(dir.file_name()?.to_str()?));
@@ -89,7 +89,8 @@ mod tests {
     use super::*;
     use crate::brew::Brew;
     use crate::config::yard::{ExtEntry, ExtSource};
-    use crate::services::Engine;
+    use crate::services::Engines;
+    use crate::services::engines::InstanceCtx;
     use crate::{Paths, PhpVersion};
     use insta::assert_snapshot;
     use std::path::Path;
@@ -399,13 +400,27 @@ mod tests {
     #[test]
     fn nginx_service_minio() {
         let (p, b) = ctx_parts();
-        assert_snapshot!(nginx::service_site(&ctx(&p, &b), "minio", 9001, false));
+        assert_snapshot!(nginx::service_site(
+            &ctx(&p, &b),
+            "minio",
+            9001,
+            false,
+            crate::services::engines::HostHeader::Upstream,
+            &p.service_overrides("minio")
+        ));
     }
 
     #[test]
     fn nginx_service_minio_secure() {
         let (p, b) = ctx_parts();
-        assert_snapshot!(nginx::service_site(&ctx(&p, &b), "minio", 9001, true));
+        assert_snapshot!(nginx::service_site(
+            &ctx(&p, &b),
+            "minio",
+            9001,
+            true,
+            crate::services::engines::HostHeader::Upstream,
+            &p.service_overrides("minio")
+        ));
     }
 
     fn mail(secure: bool, upstream_tls: bool) -> nginx::MailHost {
@@ -464,7 +479,14 @@ mod tests {
     #[test]
     fn a_service_block_sends_the_upstream_as_host_and_keeps_the_port_forwarded() {
         let (p, b) = ctx_parts();
-        let conf = nginx::service_site(&ctx(&p, &b), "minio", 9101, false);
+        let conf = nginx::service_site(
+            &ctx(&p, &b),
+            "minio",
+            9101,
+            false,
+            crate::services::engines::HostHeader::Upstream,
+            &p.service_overrides("minio"),
+        );
         for line in [
             "server_name minio.yard;",
             "proxy_pass \"http://127.0.0.1:9101\";",
@@ -592,8 +614,22 @@ mod tests {
             nginx::nginx_main(&c),
             nginx::nginx_site(&c, &php_site("my-app", "/Users/me/Herd/my app"), false, None),
             nginx::nginx_site(&c, &secure(php_site("my-app", "/Users/me/Herd/my app")), false, None),
-            nginx::service_site(&c, "minio", 9001, false),
-            nginx::service_site(&c, "minio", 9001, true),
+            nginx::service_site(
+                &c,
+                "minio",
+                9001,
+                false,
+                crate::services::engines::HostHeader::Upstream,
+                &p.service_overrides("minio"),
+            ),
+            nginx::service_site(
+                &c,
+                "minio",
+                9001,
+                true,
+                crate::services::engines::HostHeader::Upstream,
+                &p.service_overrides("minio"),
+            ),
             php::fpm_conf(&c, v("8.4")),
             php::php_ini(&c, v("8.4")),
         ];
@@ -641,7 +677,17 @@ mod tests {
             (p.nginx_conf(), nginx::nginx_main(&c)),
             (p.nginx_site(&site.name), nginx::nginx_site(&c, &site, false, None)),
             (p.nginx_default_index(), nginx::default_index(&c, &[])),
-            (p.nginx_service("minio"), nginx::service_site(&c, "minio", 9001, true)),
+            (
+                p.nginx_service("minio"),
+                nginx::service_site(
+                    &c,
+                    "minio",
+                    9001,
+                    true,
+                    crate::services::engines::HostHeader::Upstream,
+                    &p.service_overrides("minio"),
+                ),
+            ),
             (p.nginx_service("emailulator"), nginx::mail_host(&c, &mail(true, false))),
             (p.dnsmasq_conf(), dnsmasq::dnsmasq_conf(&c, 53535)),
             (p.nginx_setup_page("ee"), nginx::setup_page(&c, &needs_php("ee", "/code/ee"))),
@@ -668,10 +714,17 @@ mod tests {
             let first = out.lines().next().unwrap();
             assert!(first.contains(&format!("edit {} instead", named.display())), "{first}");
         }
-        for (instance, engine, file) in
-            [("mysql-8.4", Engine::Mysql, "my.cnf"), ("redis", Engine::Redis, "redis.conf")]
-        {
-            let (path, text) = crate::services::render::config_file(engine, instance, &p, &[]).unwrap();
+        let engines = Engines::builtin();
+        for (instance, engine, file) in [("mysql-8.4", "mysql", "my.cnf"), ("redis", "redis", "redis.conf")] {
+            let ctx = InstanceCtx {
+                instance,
+                home: Path::new("/k"),
+                paths: &p,
+                ports: &[],
+                macos_user: "me",
+                node: None,
+            };
+            let (path, text) = engines.get(engine).unwrap().config_file(&ctx).unwrap();
             assert_eq!(path, p.service_conf(instance, file));
             let named = overrides_for(&p, &path).unwrap_or_else(|| panic!("{}", path.display()));
             assert_eq!(named, p.service_overrides(instance));
@@ -684,7 +737,11 @@ mod tests {
         assert_eq!(overrides_for(&p, &p.tunnel_yml("my.app")), Some(p.sites_toml()));
         assert_eq!(overrides_for(&p, &p.tunnel_override("blog")), None);
         assert_eq!(overrides_for(&p, &p.service_overrides("redis")), None);
-        assert_eq!(overrides_for(&p, &p.service_conf("redis", "other.conf")), None);
+        // A recipe's generated config may have any name.
+        assert_eq!(
+            overrides_for(&p, &p.service_conf("valkey", "valkey.conf")),
+            Some(p.service_overrides("valkey"))
+        );
         assert_eq!(overrides_for(&p, &p.yard_toml()), None);
         assert_eq!(overrides_for(&p, &p.php_overrides(v("8.4"))), None);
     }

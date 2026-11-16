@@ -156,15 +156,18 @@ fn managed_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
     std::iter::once(root.clone()).chain(sites).map(|dir| canonical(&dir)).collect()
 }
 
-/// The directories of the instances whose `overrides.conf` nginx includes: MinIO's, which
-/// `minio.<tld>`'s block ends with. Canonical, and only those that exist; none while
-/// `services.toml` does not parse.
+/// The directories of the instances whose `overrides.conf` nginx includes: those of a built-in
+/// whose console's block ends with it (MinIO's `minio.<tld>`). Canonical, and only those that
+/// exist; none while `services.toml` does not parse.
 fn nginx_include_dirs(paths: &yard_core::Paths) -> BTreeSet<PathBuf> {
     let Ok(services) = yard_core::config::load_services(paths) else { return BTreeSet::new() };
+    let engines = yard_core::services::Engines::builtin();
     services
         .services
         .iter()
-        .filter(|(_, entry)| entry.engine == yard_core::services::Engine::Minio)
+        .filter(|(_, entry)| {
+            engines.get(entry.engine.as_str()).and_then(|e| e.console()).is_some_and(|c| c.nginx_overrides)
+        })
         .map(|(instance, _)| paths.service_dir(instance))
         .filter(|dir| dir.is_dir())
         .map(|dir| canonical(&dir))
