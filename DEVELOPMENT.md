@@ -87,7 +87,8 @@ up what they add:
 - `e2e-engines.sh` adds the carried Valkey, Memcached, Meilisearch and Typesense recipes
   (installing what is missing, Typesense's checksummed download included), asks each a question,
   checks the instance secrets and `meilisearch.yard`, then adds a `path` and an `npm` recipe of its
-  own from `~/.yard/engines`, and removes everything it added.
+  own from `~/.yard/engines`, and removes everything it added. It skips Valkey where brew's `redis`
+  is linked, since brew will not install the two side by side.
 
 `YARD=<path to yard>` points a script at another build, such as an installed release
 (`/Applications/Yard.app/Contents/Helpers/yard`). Yard.app's checklists are

@@ -66,7 +66,8 @@ triggers:
   yardd: fall back to `engine_display`); `ConnectInfo.clients`; `StatusInfo.engine_errors` (the recipes that did not load); `DbTarget.engine` limits the instance
   choice to one engine (`yard mysql`). `EngineSourceKind` and `EngineOrigin` (tagged by `kind`) have
   `Other` fallbacks. New codes: `ENGINE_UNKNOWN`, `ENGINE_RECIPE_INVALID`, `ENGINE_NOT_INSTALLED`,
-  `DOWNLOAD_HASH_MISMATCH`, `PATH_NOT_ALLOWED`.
+  `DOWNLOAD_HASH_MISMATCH`, `PATH_NOT_ALLOWED`, `FORMULA_CONFLICT` (brew refused an install over a
+  linked formula that ships the same commands; the hint names it to `brew unlink`).
 - Protocol 2.12 (`yard db`, db spec §11): `db.list`, `db.create`, `db.connect { wake }` and
   `db.command`, each taking `DbTarget` (`path`, `site`, `service`, flattened). `db.command` runs no
   tool: it picks and wakes the instance, checks the name and the passed-through flags, creates an

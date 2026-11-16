@@ -73,6 +73,9 @@ triggers:
   PHP's `extension_dir`, so Yard records the absolute `so` from `pecl config-get ext_dir`.
 - `decorate_workers_output` exists only in PHP ≥ 7.3. Version-gate any FPM or ini
   directive that is newer than 7.0.
+- **Conflicting formulae** (recipes spec §16). Brew refuses to install a formula while a linked one
+  ships the same commands (`valkey` beside `redis`). `services::Add` turns that job failure into
+  `FORMULA_CONFLICT` naming the linked formula; Yard never runs `brew unlink` or `brew link` itself.
 - **Trust gate** (`yardd/src/sources.rs`, spec M4b §8). Homebrew 6+ loads a formula from a
   non-official tap only when it or its tap is trusted. Before `php.install` and a brew
   `ext.add` start their job (not inside it, so the CLI gets an ordinary error), the handler

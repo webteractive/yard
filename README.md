@@ -171,6 +171,11 @@ health check and the `yard env` lines it gives. Yard carries Redis, Valkey, Memc
 and Typesense; yours go in `~/.yard/engines/<key>.toml`, where one with a carried recipe's key
 replaces it. yardd picks a new or edited recipe up within seconds, with no restart.
 
+Brew will not install Valkey while its Redis is linked, since both ship `redis-server`;
+`yard service add valkey` then fails with `FORMULA_CONFLICT`. Run `brew unlink redis` first if you
+want both: Yard runs each by its own keg path, so your Redis instances keep working, but brew's
+`redis-cli` leaves your PATH.
+
 ```
 yard engines                          # every engine, where it comes from, whether it is installed
 yard engines check ~/soketi.toml      # load a recipe without installing anything

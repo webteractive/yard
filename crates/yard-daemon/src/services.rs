@@ -130,6 +130,15 @@ pub fn ensure_secret(paths: &Paths, instance: &str) -> std::io::Result<()> {
     std::fs::rename(&temp, &file)
 }
 
+/// The Node an npm engine runs on (`{node}`): the newest installed one its recipe names. `None`
+/// for any other engine, or when none is installed.
+pub fn engine_node(paths: &Paths, engine: &dyn ServiceEngine) -> Option<PathBuf> {
+    match engine.source() {
+        SourceSpec::Npm { node, .. } => Some(crate::programs::npm_node(paths, &node)?.1),
+        _ => None,
+    }
+}
+
 /// The context an instance's engine renders it in.
 pub fn instance_ctx<'a>(
     instance: &'a str,
@@ -155,7 +164,7 @@ pub fn unit_command(
     let user = macos_user();
     // An npm engine runs on the newest installed Node its recipe names, first on its PATH.
     let node = match engine.source() {
-        SourceSpec::Npm { node, .. } => Some(crate::programs::npm_node(paths, &node)?.1),
+        SourceSpec::Npm { .. } => Some(engine_node(paths, engine)?),
         _ => None,
     };
     let secret = secret(paths, instance);
@@ -538,6 +547,27 @@ pub async fn resolve(
     }
 }
 
+/// `FORMULA_CONFLICT` when brew refused an install because a linked formula ships the same
+/// binaries ("Cannot install valkey because conflicting formulae are installed. redis: because
+/// …"), naming the formula to unlink. Unlinking is the user's step: Yard runs every keg by its
+/// `opt/` path, so the linked formula's instances keep working, but its commands leave PATH.
+fn brew_conflict(e: &YardError, engine: &str) -> Option<YardError> {
+    let tail: Vec<&str> =
+        e.data.as_ref()?.get("tail")?.as_array()?.iter().filter_map(|l| l.as_str()).collect();
+    tail.iter().find(|l| l.contains("conflicting formulae are installed"))?;
+    let linked = tail.iter().find_map(|l| {
+        let (name, why) = l.trim().split_once(": because")?;
+        (!name.is_empty() && !why.is_empty()).then(|| name.to_string())
+    })?;
+    Some(
+        YardError::new(
+            ErrorCode::FormulaConflict,
+            format!("brew will not install {engine} while {linked} is linked: both ship the same commands"),
+        )
+        .with_hint(format!("brew unlink {linked}, then yard service add {engine}")),
+    )
+}
+
 /// The job line for a deprecated formula, naming brew's disable date. A deprecation brew has
 /// only scheduled (a date ahead, `deprecated` still false) is not one yet.
 fn deprecation_note(f: &Formula) -> Option<String> {
@@ -627,8 +657,13 @@ impl Add {
             }
         };
         let user = macos_user();
-        let program =
-            self.engine.command(&instance_ctx(&self.instance, &home, &self.paths, &[], &user)).program;
+        let program = self
+            .engine
+            .command(&InstanceCtx {
+                node: engine_node(&self.paths, self.engine.as_ref()).as_deref(),
+                ..instance_ctx(&self.instance, &home, &self.paths, &[], &user)
+            })
+            .program;
         if !program.exists() {
             return Err(match &self.resolved {
                 Some(r) => YardError::new(
@@ -666,7 +701,9 @@ impl Add {
             if tap_of(&resolved.formula).is_some() {
                 require_trusted(&self.brew, &resolved.formula).await?;
             }
-            job.run(&self.brew.brew_bin(), &["install", &resolved.formula], &Brew::job_env()).await?;
+            job.run(&self.brew.brew_bin(), &["install", &resolved.formula], &Brew::job_env())
+                .await
+                .map_err(|e| brew_conflict(&e, self.engine.key()).unwrap_or(e))?;
         }
         Ok(keg)
     }
@@ -696,8 +733,10 @@ impl Add {
                     .map_err(|e| YardError::internal(format!("cannot make {instance}'s secret: {e}")))?;
             }
             let secret = secret(paths, instance);
+            let node = engine_node(paths, self.engine.as_ref());
             let mut ictx = instance_ctx(instance, keg, paths, &ports, &user);
             ictx.secret = secret.as_deref();
+            ictx.node = node.as_deref();
             if let Some(init) = self.engine.init(&ictx) {
                 // mysqld makes `data`, but not the directory above it.
                 std::fs::create_dir_all(paths.service_dir(instance)).map_err(|e| {

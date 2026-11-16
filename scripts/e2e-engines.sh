@@ -72,6 +72,12 @@ command -v brew >/dev/null || fail "brew is not installed"
 command -v jq >/dev/null || fail "jq is not installed (brew install jq)"
 "$yard" status --json >/dev/null 2>&1 || fail "yardd is not running; run yard start and scripts/e2e-m1.sh first"
 brew_prefix="$(brew --prefix)"
+# brew will not install Valkey while Redis is linked (both ship redis-* binaries), and Yard never
+# unlinks a formula: on such a Mac Valkey is left out of this run.
+if [[ -e $brew_prefix/bin/redis-server && ! -d $brew_prefix/opt/valkey ]]; then
+  echo "note valkey skipped: brew's redis is linked, so brew will not install valkey (FORMULA_CONFLICT)"
+  carried=(memcached meilisearch typesense)
+fi
 
 existing="$(services_json)" || fail "yard services failed"
 for name in "${carried[@]}" "${scratch[@]}"; do
@@ -111,7 +117,8 @@ cleanup() {
       fi
     fi
   done
-  for name in "${recipes[@]}"; do rm -f "$data/engines/$name.toml"; done
+  # bash 3.2 calls an empty array unbound under set -u, hence the ${a[@]+...} form.
+  for name in ${recipes[@]+"${recipes[@]}"}; do rm -f "$data/engines/$name.toml"; done
   # The override stubs Yard created for the site and for meilisearch.yard, unless edited.
   for stub in "$data/nginx/overrides/$site.conf" "$data/nginx/overrides/meilisearch.conf"; do
     if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
@@ -144,9 +151,13 @@ add() {
 # 3. The carried recipes, each asked its own question.
 for name in "${carried[@]}"; do add "$name"; done
 
-valkey_port="$(port_of valkey)"
-[[ $("$brew_prefix/opt/valkey/bin/valkey-cli" -p "$valkey_port" PING) == PONG ]] || fail "valkey did not answer PING"
-pass "valkey answers PING on $valkey_port"
+has_valkey=0
+for name in "${carried[@]}"; do [[ $name == valkey ]] && has_valkey=1; done
+if ((has_valkey)); then
+  valkey_port="$(port_of valkey)"
+  [[ $("$brew_prefix/opt/valkey/bin/valkey-cli" -p "$valkey_port" PING) == PONG ]] || fail "valkey did not answer PING"
+  pass "valkey answers PING on $valkey_port"
+fi
 
 memcached_port="$(port_of memcached)"
 printf 'version\r\nquit\r\n' | /usr/bin/nc 127.0.0.1 "$memcached_port" | grep -q '^VERSION' || fail "memcached did not answer version"
@@ -172,10 +183,15 @@ pass "typesense listens on loopback only"
 # 4. yard env in a scratch project whose .yard lists them, and the console through nginx.
 mkdir -p "$work/$site"
 printf '<?php echo "ok";\n' >"$work/$site/index.php"
-printf '[services]\nvalkey = true\nmemcached = true\nmeilisearch = true\ntypesense = true\n' >"$work/$site/.yard"
+{
+  printf '[services]\nmemcached = true\nmeilisearch = true\ntypesense = true\n'
+  if ((has_valkey)); then printf 'valkey = true\n'; fi
+} >"$work/$site/.yard"
 (cd "$work/$site" && "$yard" link "$site" --yes >/dev/null) || fail "yard link $site failed"
 env_lines="$(cd "$work/$site" && "$yard" env)"
-for line in "REDIS_PORT=$valkey_port" "MEMCACHED_PORT=$memcached_port" "MEILISEARCH_HOST=http://127.0.0.1:$meili_port" "TYPESENSE_PORT=$ts_port"; do
+want_lines=("MEMCACHED_PORT=$memcached_port" "MEILISEARCH_HOST=http://127.0.0.1:$meili_port" "TYPESENSE_PORT=$ts_port")
+if ((has_valkey)); then want_lines+=("REDIS_PORT=$valkey_port"); fi
+for line in "${want_lines[@]}"; do
   grep -qx "$line" <<<"$env_lines" || fail "yard env lacks $line"
 done
 grep -qE '^MEILISEARCH_KEY=[0-9a-f]{32}$' <<<"$env_lines" || fail "yard env has no MEILISEARCH_KEY secret"

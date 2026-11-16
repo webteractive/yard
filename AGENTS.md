@@ -209,8 +209,13 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   Built on main on 2026-11-16 (protocol 2.13, Tasks 1–13 and 15), with the whole suite passing (1446)
   and the app's (255) after a whole-branch review's fixes; an automated security review of the carried recipes added `{secret}` (a
   per-instance random key, made fail-closed) for Typesense's API key and Meilisearch's master key and
-  dropped Typesense's CORS. The real-machine check (`scripts/e2e-engines.sh`) and `checklist.sh`'s
-  new picker item have not run yet: they wait for the maintainer. `yard db` keeps working for one
+  dropped Typesense's CORS. On 2026-11-16 the Mac mini passed `scripts/e2e-engines.sh` (maintainer approved the
+  run) on its third pass: the first found brew refusing Valkey while Redis is linked (now
+  `FORMULA_CONFLICT`, naming the formula to unlink; the script skips Valkey there), the second an npm
+  recipe's `{node}` left empty in the add's program check. `checklist.sh` then passed 77/77, with its
+  new R5 (a recipe dropped into `engines/` is offered by the Add picker without a restart); its first
+  run failed DB3 because `ax.js save` typed the name over a selection Command-A had not made, so it
+  now sets the name field's value through accessibility and reads it back. `yard db` keeps working for one
   release with a notice, and is removed in the release after the one that ships this. Runtimes
   (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx) later;
   FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
@@ -560,7 +565,8 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   the maintainer first. `shellcheck scripts/e2e-db.sh` stays clean.
 - `scripts/e2e-engines.sh` — real-machine service recipes check after `e2e-m1.sh`: adds the carried
   `valkey`, `memcached`, `meilisearch` and `typesense` (brew-installing the first three and
-  downloading Typesense when missing), asks each a question by absolute path, checks Meilisearch
+  downloading Typesense when missing; Valkey is skipped where brew's `redis` is linked, which brew
+  refuses it beside), asks each a question by absolute path, checks Meilisearch
   refuses a keyless request, Typesense listens on loopback only, `yard env`'s secrets, and
   `meilisearch.yard`, then writes `e2e-path` (Apple's python3) and `e2e-npm` (http-server 14.1.1 on
   Node 22) into `~/.yard/engines`, adds and curls both, lets memcached sleep and wakes it with `yard

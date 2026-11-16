@@ -1,6 +1,6 @@
 # Yard service recipes: engines as a contract, and engines from files — design
 
-Status: **approved by the maintainer on 2026-11-16; built on main the same day (protocol 2.13), the real-machine check (`scripts/e2e-engines.sh`) still to run. §16 lists what the build changed.** A builder read it cold the same
+Status: **approved by the maintainer on 2026-11-16; built on main the same day (protocol 2.13); `scripts/e2e-engines.sh` passed on the Mac mini the same day. §16 lists what the build changed.** A builder read it cold the same
 day; its two questions are answered in §2 (the unknown `.yard` engine, and pinned versions). It changes two M4b decisions (the
 engine table is a closed set, and services come only from brew; M4b spec §2, §3 non-goals, §5) and
 builds on the M4b service model (`docs/superpowers/specs/2026-10-23-yard-m4b-services-design.md`),
@@ -302,8 +302,8 @@ loads each one. The builder writes each from the program's own docs and checks i
 | `redis` | brew `redis` | 6379 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD=null` | today's `redis.conf` and `overrides.conf`, byte for byte (§10) |
 | `valkey` | brew `valkey` | 6379 | the same `REDIS_*` lines (Laravel's redis client talks to it) | `valkey.conf` like Redis's |
 | `memcached` | brew `memcached` | 11211 | `MEMCACHED_HOST`, `MEMCACHED_PORT` | `-l 127.0.0.1`, `-U 0`; in memory, so a sleep empties it (a cache, so acceptable) |
-| `meilisearch` | brew `meilisearch` | 7700 | `MEILISEARCH_HOST`, `MEILISEARCH_KEY={secret}` | `--env development` with `--master-key {secret}` (§16), dumps and snapshots under its data dir, console at `meilisearch.<tld>` (its dashboard, which asks for the key) |
-| `typesense` | download, pinned (30.2) | 8108, peering 8107 | `TYPESENSE_HOST`, `TYPESENSE_PORT`, `TYPESENSE_PROTOCOL=http`, `TYPESENSE_API_KEY={secret}` | `--api-key {secret}`, `--data-dir {data}`, `--api-address 127.0.0.1`, `--peering-address 127.0.0.1`, no CORS (§16) |
+| `meilisearch` | brew `meilisearch` | 7700 | `MEILISEARCH_HOST`, `MEILISEARCH_KEY={secret}` | `--env development`, the master key `{secret}` through `MEILI_MASTER_KEY` (§16), dumps and snapshots under its data dir, console at `meilisearch.<tld>` (its dashboard, which asks for the key) |
+| `typesense` | download, pinned (30.2) | 8108, peering 8107 | `TYPESENSE_HOST`, `TYPESENSE_PORT`, `TYPESENSE_PROTOCOL=http`, `TYPESENSE_API_KEY={secret}` | the API key `{secret}` through `TYPESENSE_API_KEY`, `--data-dir {data}`, `--api-address 127.0.0.1`, `--peering-address 127.0.0.1`, no CORS (§16) |
 
 `yard env` gives connection lines only, never a driver choice (`CACHE_STORE`, `SCOUT_DRIVER`):
 picking the driver is the project's **(builder's call)**. Valkey and Redis share 6379 as their
@@ -394,7 +394,7 @@ Protocol 2.13 **(builder's call on names)**:
   `yard_proto::engine_display`, which keeps its table only for an older yardd.
 - Event: `engines.changed` after a reload, so Yard.app's picker follows a new recipe.
 - New error codes: `ENGINE_UNKNOWN`, `ENGINE_RECIPE_INVALID`, `ENGINE_NOT_INSTALLED`,
-  `DOWNLOAD_HASH_MISMATCH`, `PATH_NOT_ALLOWED`.
+  `DOWNLOAD_HASH_MISMATCH`, `PATH_NOT_ALLOWED`, and `FORMULA_CONFLICT` (§16).
 
 Yard.app's Add service picker lists `engines.list` instead of its own list, shows a recipe
 engine's load error in the Services screen, and its Connect… takes `connect.clients` from the
@@ -494,3 +494,10 @@ Decided while planning and building, each recorded in the plan's ledger with its
   replaces a recorded `formula` with the `version`; `yard node uninstall` refuses the only Node an
   npm instance runs on, and `engines.install` brings a missing one back; `yard <engine>` honours a
   `--root` written after the engine and finds the verb past flags.
+- **From the real-machine run** (`scripts/e2e-engines.sh` on the Mac mini, 2026-11-16): brew refuses
+  to install `valkey` while `redis` is linked (both ship `redis-server`), so a brew install that fails
+  that way is `FORMULA_CONFLICT`, naming the linked formula, with the hint `brew unlink <formula>,
+  then yard service add <engine>`. Yard never unlinks for the user: its own instances run kegs by
+  their `opt/` path and keep working, but the linked formula's commands leave PATH. The script skips
+  Valkey where brew's redis is linked. The add's program check now renders `{node}` too, so an npm
+  recipe whose command starts with `{node}` no longer fails as "installed but  is missing".

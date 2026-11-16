@@ -1125,6 +1125,24 @@ async fn remove_of_an_unknown_instance_is_not_found() {
     d.shutdown().await.unwrap();
 }
 
+/// brew refuses to install Valkey beside a linked Redis (both ship `redis-*` binaries); the add
+/// says so and names the step that is the user's to take, which Yard never takes itself.
+#[tokio::test]
+async fn a_brew_conflict_names_the_formula_to_unlink() {
+    let d = prepared("").await;
+    write_formulae(&d, &[core("valkey", "9.1.3")]);
+    std::fs::write(d.fx.brew.path().join("fake-brew-conflict"), "valkey redis").unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (_, error) = add(&mut c, "valkey", None).await;
+    let error = error.expect("refused");
+    assert_eq!(error.code, ErrorCode::FormulaConflict, "{error:?}");
+    assert!(error.message.contains("redis"), "{}", error.message);
+    assert_eq!(error.hint.as_deref(), Some("brew unlink redis, then yard service add valkey"));
+    assert!(!brew_log(&d).contains("unlink"), "Yard never unlinks: {}", brew_log(&d));
+    d.shutdown().await.unwrap();
+}
+
 /// Valkey's usual port is Redis's: added beside Redis it takes the next free one, and its
 /// `yard env` names that (recipes spec §8).
 #[tokio::test]

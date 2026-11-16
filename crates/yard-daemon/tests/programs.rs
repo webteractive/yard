@@ -404,3 +404,24 @@ async fn engines_install_brings_back_a_missing_node() {
     assert!(node.join("installation/bin/node").exists(), "Node 22 is back: {lines:?}");
     d.shutdown().await.unwrap();
 }
+
+/// An npm recipe's command may start with `{node}` (Yard's Node running the package's script),
+/// and the add finds that program.
+#[tokio::test]
+async fn an_npm_command_may_start_with_node() {
+    let d = prepared("").await;
+    d.fx.add_node("22.18.0");
+    let port = free_port();
+    let text = npm_recipe("22", port).replace(
+        "command = [\"{home}/node_modules/.bin/fake-service\", \"127.0.0.1:{port.main}\"]",
+        "command = [\"{node}\", \"{home}/node_modules/@acme/npmed/server.js\", \"127.0.0.1:{port.main}\"]",
+    );
+    assert!(text.contains("{node}"));
+    d.fx.add_recipe("npmed", &text);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add_when_known(&mut c, "npmed").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(wait_until(|| served(port), Duration::from_secs(5)).await);
+    d.shutdown().await.unwrap();
+}

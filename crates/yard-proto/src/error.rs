@@ -129,6 +129,9 @@ pub enum ErrorCode {
     DownloadHashMismatch,
     /// A `path` recipe names a program Yard will not run (Herd's, DBngin's, Postgres.app's).
     PathNotAllowed,
+    /// brew will not install a formula beside a linked one that ships the same binaries
+    /// (Valkey beside Redis); the hint names the formula to unlink, which Yard never does.
+    FormulaConflict,
     Internal,
     /// A code a newer yardd sends that this build does not know (`"OTHER"`); never sent.
     #[serde(other)]
@@ -233,6 +236,7 @@ mod tests {
             (ErrorCode::EngineNotInstalled, "ENGINE_NOT_INSTALLED"),
             (ErrorCode::DownloadHashMismatch, "DOWNLOAD_HASH_MISMATCH"),
             (ErrorCode::PathNotAllowed, "PATH_NOT_ALLOWED"),
+            (ErrorCode::FormulaConflict, "FORMULA_CONFLICT"),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
         }

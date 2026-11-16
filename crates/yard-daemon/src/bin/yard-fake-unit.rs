@@ -38,7 +38,7 @@ fn main() -> ExitCode {
         Some("minio") => minio(&args),
         Some("emailulator") => emailulator(Path::new(&argv0), &args),
         Some("cloudflared") => cloudflared(Path::new(&argv0), &args),
-        Some("fake-service") => fake_service(Path::new(&argv0), &args),
+        Some("fake-service" | "node") => fake_service(Path::new(&argv0), &args),
         Some("npm") => npm(Path::new(&argv0), &args),
         _ => mode(&args),
     }
@@ -502,6 +502,19 @@ fn brew(argv0: &Path, args: &[String]) -> ExitCode {
     {
         std::thread::sleep(Duration::from_millis(ms));
     }
+    // `fake-brew-conflict` holds `<formula> <linked>`: installing the first fails as brew does
+    // while the second is linked and ships the same binaries.
+    let conflict = std::fs::read_to_string(prefix.join("fake-brew-conflict")).unwrap_or_default();
+    if let Some((wanted, linked)) = conflict.trim().split_once(' ')
+        && arg(0) == "install"
+        && args.iter().any(|a| a == wanted)
+    {
+        eprintln!("Error: {wanted}: Cannot install {wanted} because conflicting formulae are installed.");
+        eprintln!("  {linked}: because both install `redis-*` binaries");
+        eprintln!();
+        eprintln!("Please `brew unlink {linked}` before continuing.");
+        return ExitCode::from(1);
+    }
     let failing = std::fs::read_to_string(prefix.join("fake-brew-fail")).unwrap_or_default();
     if args.iter().any(|a| !failing.trim().is_empty() && a == failing.trim()) {
         eprintln!("Error: fake failure for {}", failing.trim());
@@ -672,6 +685,8 @@ fn engine_bins(name: &str) -> &'static [&'static str] {
         &["postgres", "initdb"]
     } else if name == "redis" {
         &["redis-server"]
+    } else if name == "valkey" {
+        &["valkey-server"]
     } else if name == "minio" {
         &["minio"]
     } else {

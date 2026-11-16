@@ -81,17 +81,18 @@ impl Fixture {
 }
 
 impl Fixture {
-    /// Node `v` as fnm installs it under the data root: empty `node`, `npm` and `npx`.
+    /// Node `v` as fnm installs it under the data root: `node` and `npm` are the fake, `npx` an
+    /// empty executable.
     pub fn add_node(&self, v: &str) {
         let bin = self.paths.node_versions_dir().join(format!("v{v}/installation/bin"));
-        // npm is the fake, so an npm recipe can install (recipes plan Task 8).
+        // npm is the fake, so an npm recipe can install, and node too, acting as a server on the
+        // addresses it is given (recipes plan Task 8).
         place(&bin.join("npm"), |dst| symlink(&self.fake, dst));
-        for name in ["node", "npx"] {
-            place(&bin.join(name), |dst| {
-                std::fs::write(dst, "")?;
-                std::fs::set_permissions(dst, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            });
-        }
+        place(&bin.join("node"), |dst| symlink(&self.fake, dst));
+        place(&bin.join("npx"), |dst| {
+            std::fs::write(dst, "")?;
+            std::fs::set_permissions(dst, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        });
     }
 }
 
