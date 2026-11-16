@@ -97,7 +97,8 @@ pub mod invalidation {
                 i.keys.insert(ResourceKey::Ports);
             }
             Event::TunnelChanged { tunnel } => i.upsert_tunnel = Some((**tunnel).clone()),
-            Event::JobProgress { .. } | Event::LogLine { .. } | Event::Unknown => {}
+            // The Add picker's engine list follows this from Task 13 of the recipes plan.
+            Event::JobProgress { .. } | Event::LogLine { .. } | Event::EnginesChanged | Event::Unknown => {}
         }
         i
     }

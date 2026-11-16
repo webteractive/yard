@@ -249,6 +249,7 @@ mod tests {
             password: None,
             socket: Some("/Users/me/.yard/run/mysql-8.4.sock".into()),
             url: "mysql://root@127.0.0.1:3307".into(),
+            clients: Vec::new(),
         }
     }
 

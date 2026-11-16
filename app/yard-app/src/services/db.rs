@@ -33,7 +33,7 @@ fn id(name: &str, verb: &str) -> String {
 }
 
 fn target(name: &str) -> DbTarget {
-    DbTarget { path: None, site: None, service: Some(name.to_string()) }
+    DbTarget { path: None, site: None, service: Some(name.to_string()), engine: None }
 }
 
 fn error(env: &AppEnv, id: &str, cx: &App) -> Option<SharedString> {

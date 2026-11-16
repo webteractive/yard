@@ -168,6 +168,7 @@ pub(super) fn info(snap: &Snapshot) -> Option<ServiceInfo> {
     Some(ServiceInfo {
         name: NAME.to_string(),
         engine: NAME.to_string(),
+        engine_name: yard_proto::engine_display(NAME).to_string(),
         version: probe.version.map(|(major, minor, patch)| format!("{major}.{minor}.{patch}")),
         // It comes from its installer, not brew: where it is stands in for the formula.
         formula: probe.bin.display().to_string(),

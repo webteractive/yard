@@ -18,7 +18,7 @@ use yard_proto::{
 /// The params' target. With no flag yardd needs the directory, as an absolute real path.
 pub fn target(at: DbAt) -> Result<DbTarget, YardError> {
     let path = if at.site.is_none() && at.service.is_none() { Some(cwd_absolute()?) } else { None };
-    Ok(DbTarget { path, site: at.site, service: at.service })
+    Ok(DbTarget { path, site: at.site, service: at.service, engine: None })
 }
 
 pub async fn list(ctx: &Ctx, at: DbAt) -> Outcome {

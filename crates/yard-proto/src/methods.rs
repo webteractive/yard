@@ -69,6 +69,8 @@ pub const DB_LIST: &str = "db.list";
 pub const DB_CREATE: &str = "db.create";
 pub const DB_CONNECT: &str = "db.connect";
 pub const DB_COMMAND: &str = "db.command";
+pub const ENGINES_LIST: &str = "engines.list";
+pub const ENGINES_INSTALL: &str = "engines.install";
 pub const JOBS_CANCEL: &str = "jobs.cancel";
 pub const SUBSCRIBE: &str = "subscribe";
 
@@ -139,6 +141,8 @@ pub const ALL: &[&str] = &[
     DB_CREATE,
     DB_CONNECT,
     DB_COMMAND,
+    ENGINES_LIST,
+    ENGINES_INSTALL,
     JOBS_CANCEL,
     SUBSCRIBE,
 ];
@@ -365,6 +369,17 @@ pub struct DbTarget {
     pub site: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// Limits the choice to one engine's instances (`yard mysql`, protocol 2.13); `service`
+    /// must then be one of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+}
+
+/// `engines.install` (a job): installs the program the engine's recipe pins and moves its
+/// instance onto it (recipes spec §5.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineInstallParams {
+    pub key: String,
 }
 
 /// `db.list`.
@@ -678,8 +693,26 @@ mod db_tests {
     use serde_json::json;
 
     #[test]
-    fn protocol_is_2_12() {
-        assert_eq!(crate::PROTOCOL_VERSION, "2.12");
+    fn protocol_is_2_13() {
+        assert_eq!(crate::PROTOCOL_VERSION, "2.13");
+    }
+
+    #[test]
+    fn engines_methods_are_listed() {
+        for name in ["engines.list", "engines.install"] {
+            assert_eq!(ALL.iter().filter(|m| **m == name).count(), 1, "{name}");
+        }
+        let p: EngineInstallParams = serde_json::from_value(json!({"key": "typesense"})).unwrap();
+        assert_eq!(p.key, "typesense");
+    }
+
+    #[test]
+    fn db_target_carries_engine() {
+        let p: DbListParams = serde_json::from_value(json!({"engine": "mysql"})).unwrap();
+        assert_eq!(p.target.engine.as_deref(), Some("mysql"));
+        let none: DbListParams = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(none.target.engine, None);
+        assert_eq!(serde_json::to_value(&none).unwrap(), json!({}));
     }
 
     #[test]

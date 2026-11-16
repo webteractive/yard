@@ -119,6 +119,16 @@ pub enum ErrorCode {
     ServiceStopped,
     /// The instance did not come up in time after a wake.
     ServiceWakeTimeout,
+    /// An instance or a `.yard` names an engine this Mac has no recipe for.
+    EngineUnknown,
+    /// A recipe file did not load; the message is `<file>:<line>: <why>`.
+    EngineRecipeInvalid,
+    /// The program an instance runs (a download or npm install root) is not installed.
+    EngineNotInstalled,
+    /// A downloaded file's SHA-256 is not the one its recipe names.
+    DownloadHashMismatch,
+    /// A `path` recipe names a program Yard will not run (Herd's, DBngin's, Postgres.app's).
+    PathNotAllowed,
     Internal,
     /// A code a newer yardd sends that this build does not know (`"OTHER"`); never sent.
     #[serde(other)]
@@ -218,6 +228,11 @@ mod tests {
             (ErrorCode::FileExists, "FILE_EXISTS"),
             (ErrorCode::ServiceStopped, "SERVICE_STOPPED"),
             (ErrorCode::ServiceWakeTimeout, "SERVICE_WAKE_TIMEOUT"),
+            (ErrorCode::EngineUnknown, "ENGINE_UNKNOWN"),
+            (ErrorCode::EngineRecipeInvalid, "ENGINE_RECIPE_INVALID"),
+            (ErrorCode::EngineNotInstalled, "ENGINE_NOT_INSTALLED"),
+            (ErrorCode::DownloadHashMismatch, "DOWNLOAD_HASH_MISMATCH"),
+            (ErrorCode::PathNotAllowed, "PATH_NOT_ALLOWED"),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
         }

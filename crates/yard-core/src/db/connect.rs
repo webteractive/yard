@@ -38,6 +38,7 @@ pub fn info(
         password,
         socket: socket.map(|s| s.display().to_string()),
         url: format!("{scheme}://{login}{HOST}:{port}{path}"),
+        clients: Vec::new(),
     }
 }
 

@@ -60,6 +60,13 @@ triggers:
   A client of an older yardd leaves `state` out of `subscribe`, which would refuse it.
   `SERVICE_VERSION_UNSUPPORTED` carries `data.available`, the lines brew has (Yard.app's line
   picker); the M6 design promised it with 2.11 and yardd sent it only from 2026-11-06.
+- Protocol 2.13 (service recipes, recipes spec §11): `engines.list` (`EnginesListResult`: each
+  `EngineInfo`, and the recipes that failed with no last good version) and `engines.install { key }`
+  (a job); event `engines_changed` (topic `state`); `ServiceInfo.engine_name` (empty from an older
+  yardd: fall back to `engine_display`); `ConnectInfo.clients`; `DbTarget.engine` limits the instance
+  choice to one engine (`yard mysql`). `EngineSourceKind` and `EngineOrigin` (tagged by `kind`) have
+  `Other` fallbacks. New codes: `ENGINE_UNKNOWN`, `ENGINE_RECIPE_INVALID`, `ENGINE_NOT_INSTALLED`,
+  `DOWNLOAD_HASH_MISMATCH`, `PATH_NOT_ALLOWED`.
 - Protocol 2.12 (`yard db`, db spec §11): `db.list`, `db.create`, `db.connect { wake }` and
   `db.command`, each taking `DbTarget` (`path`, `site`, `service`, flattened). `db.command` runs no
   tool: it picks and wakes the instance, checks the name and the passed-through flags, creates an

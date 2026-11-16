@@ -606,7 +606,8 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
   `sources.list|trust|untrust`,
   `ca.info`, `node.list|install|uninstall|default|use|unuse`,
   `tunnels.list|add|remove|domains|domain_add|domain_remove` (M5, tunnels spec §12), `units.restart`,
-  `jobs.cancel`, `env.print`, and from 2.12 `db.list|create|connect|command` (db spec §11).
+  `jobs.cancel`, `env.print`, from 2.12 `db.list|create|connect|command` (db spec §11), and from
+  2.13 `engines.list|install` (recipes spec §11).
 - Long operations (brew installs) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20

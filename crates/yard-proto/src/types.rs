@@ -609,6 +609,10 @@ pub struct ServiceInfo {
     /// `mysql-8.4`, `postgres-17`, `redis`, `minio`.
     pub name: String,
     pub engine: String,
+    /// How people name the engine (`MySQL`, a recipe's `name`; protocol 2.13). Empty from an
+    /// older yardd: use `engine_display(engine)` then.
+    #[serde(default)]
+    pub engine_name: String,
     /// The line (`8.4`); `None` for engines that have one (`redis`, `minio`).
     pub version: Option<String>,
     pub formula: String,
@@ -882,6 +886,10 @@ pub struct ConnectInfo {
     /// MySQL's socket file or PostgreSQL's socket directory; Redis has none.
     pub socket: Option<String>,
     pub url: String,
+    /// Which GUI clients take these details, one line each (protocol 2.13; empty from an older
+    /// yardd).
+    #[serde(default)]
+    pub clients: Vec<String>,
 }
 
 /// `yard db dump`'s result (`--json`).
@@ -1258,6 +1266,7 @@ pub(crate) mod tests {
         let info = ServiceInfo {
             name: "mysql-8.4".into(),
             engine: "mysql".into(),
+            engine_name: "MySQL".into(),
             version: Some("8.4".into()),
             formula: "mysql@8.4".into(),
             ports: vec![PortRef { name: "mysql-8.4".into(), port: 3306 }],
@@ -1469,5 +1478,139 @@ pub(crate) mod tests {
             serde_json::from_value::<StreamFilter>(json!({"kind":"zstd"})).unwrap(),
             StreamFilter::Other
         );
+    }
+}
+
+/// Where an engine's program comes from (recipes spec §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineSourceKind {
+    Brew,
+    Path,
+    Download,
+    Npm,
+    /// A source a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
+}
+
+/// Where an engine is defined: in Yard's code, a recipe Yard carries, or the user's file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EngineOrigin {
+    BuiltIn,
+    Carried,
+    User {
+        file: String,
+    },
+    /// An origin a newer yardd reports that this client does not know; never sent.
+    #[serde(other)]
+    Other,
+}
+
+/// One of an engine's ports: its name in the recipe (`main`) and the port it is offered first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnginePort {
+    pub name: String,
+    pub usual: u16,
+}
+
+/// One row of `engines.list` (protocol 2.13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineInfo {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub source: EngineSourceKind,
+    pub origin: EngineOrigin,
+    /// Whether the program the recipe pins (or the brew formula, or the path) is there.
+    pub installed: bool,
+    /// Why the recipe's current file did not load, when it is running on its last good version.
+    #[serde(default)]
+    pub error: Option<YardError>,
+    pub ports: Vec<EnginePort>,
+    /// Whether it has a web console at `<key>.<tld>`.
+    pub console: bool,
+    /// Whether `yard <key> list|create|dump|import` work on it.
+    pub databases: bool,
+    /// Whether it has a client prompt and connection details.
+    pub connect: bool,
+    /// The version a `download` or `npm` recipe pins.
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// `engines.list`'s answer: every engine, and the recipes that failed with no last good version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnginesListResult {
+    pub engines: Vec<EngineInfo>,
+    #[serde(default)]
+    pub errors: Vec<YardError>,
+}
+
+#[cfg(test)]
+mod engines_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn info() -> EngineInfo {
+        EngineInfo {
+            key: "meilisearch".into(),
+            name: "Meilisearch".into(),
+            description: "Search".into(),
+            source: EngineSourceKind::Download,
+            origin: EngineOrigin::User { file: "/x/a.toml".into() },
+            installed: true,
+            error: None,
+            ports: vec![EnginePort { name: "main".into(), usual: 7700 }],
+            console: true,
+            databases: false,
+            connect: true,
+            version: Some("1.2.0".into()),
+        }
+    }
+
+    #[test]
+    fn engine_info_round_trips() {
+        let v = serde_json::to_value(info()).unwrap();
+        assert_eq!(v["origin"], json!({"kind": "user", "file": "/x/a.toml"}));
+        assert_eq!(v["source"], json!("download"));
+        let back: EngineInfo = serde_json::from_value(v).unwrap();
+        assert_eq!(back, info());
+        let list = EnginesListResult { engines: vec![info()], errors: vec![] };
+        let back: EnginesListResult = serde_json::from_value(serde_json::to_value(&list).unwrap()).unwrap();
+        assert_eq!(back, list);
+        assert_eq!(serde_json::to_value(EngineOrigin::BuiltIn).unwrap(), json!({"kind": "built_in"}));
+        assert_eq!(serde_json::to_value(EngineOrigin::Carried).unwrap(), json!({"kind": "carried"}));
+    }
+
+    #[test]
+    fn unknown_origin_and_source_read_as_other() {
+        let o: EngineOrigin = serde_json::from_value(json!({"kind": "remote", "url": "x"})).unwrap();
+        assert_eq!(o, EngineOrigin::Other);
+        let s: EngineSourceKind = serde_json::from_value(json!("cargo")).unwrap();
+        assert_eq!(s, EngineSourceKind::Other);
+    }
+
+    #[test]
+    fn service_info_without_engine_name_reads_empty() {
+        let v = json!({
+            "name": "redis", "engine": "redis", "version": null, "formula": "redis",
+            "ports": [], "state": "running", "stopped_by_user": false,
+            "account": {"user": null, "password": null}, "console": null, "used_by": []
+        });
+        let s: ServiceInfo = serde_json::from_value(v).unwrap();
+        assert_eq!(s.engine_name, "");
+    }
+
+    #[test]
+    fn connect_info_without_clients_reads_empty() {
+        let v = json!({
+            "instance": "redis", "engine": "redis", "state": "running", "host": "127.0.0.1",
+            "port": 6379, "user": null, "password": null, "socket": null, "url": "redis://127.0.0.1:6379"
+        });
+        let c: ConnectInfo = serde_json::from_value(v).unwrap();
+        assert!(c.clients.is_empty());
     }
 }

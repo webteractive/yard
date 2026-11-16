@@ -326,6 +326,7 @@ mod tests {
         ServiceInfo {
             name: name.into(),
             engine: engine.key().into(),
+            engine_name: engine.display().into(),
             version: None,
             formula: name.into(),
             ports: ports.iter().map(|(n, p)| PortRef { name: (*n).into(), port: *p }).collect(),

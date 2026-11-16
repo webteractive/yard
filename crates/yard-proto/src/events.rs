@@ -62,6 +62,9 @@ pub enum Event {
         #[serde(default)]
         config_error: Option<YardError>,
     },
+    /// The set of engines changed: a recipe was added, edited, broken or removed (protocol
+    /// 2.13). Clients ask `engines.list` again.
+    EnginesChanged,
     /// An event a newer yardd sends that this build does not know (`{"type":"unknown"}`);
     /// never sent, and a client drops it.
     #[serde(other)]
@@ -78,7 +81,7 @@ impl Event {
             Event::PortConflict { .. } => Topic::Ports,
             Event::JobProgress { .. } | Event::JobFinished { .. } => Topic::Jobs,
             Event::TunnelChanged { .. } => Topic::Tunnels,
-            Event::Reconciled { .. } => Topic::State,
+            Event::Reconciled { .. } | Event::EnginesChanged => Topic::State,
             Event::Unknown => return None,
         })
     }
@@ -88,6 +91,15 @@ impl Event {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn engines_changed_is_topic_state() {
+        let e = Event::EnginesChanged;
+        assert_eq!(serde_json::to_value(&e).unwrap(), json!({"type":"engines_changed"}));
+        assert_eq!(e.topic(), Some(Topic::State));
+        let back: Event = serde_json::from_value(json!({"type":"engines_changed"})).unwrap();
+        assert_eq!(back, Event::EnginesChanged);
+    }
 
     #[test]
     fn reconciled_is_on_the_state_topic() {

@@ -215,6 +215,7 @@ pub fn service_info(
     Some(ServiceInfo {
         name: name.to_string(),
         engine: engine.key().to_string(),
+        engine_name: engine.display().to_string(),
         version: entry.version.clone(),
         formula: entry.formula.clone(),
         ports,

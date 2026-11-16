@@ -158,6 +158,7 @@ mod tests {
         ServiceInfo {
             name: "redis".into(),
             engine: "redis".into(),
+            engine_name: "Redis".into(),
             version: None,
             formula: "redis".into(),
             ports: vec![],
