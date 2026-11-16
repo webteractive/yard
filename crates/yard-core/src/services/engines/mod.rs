@@ -4,8 +4,56 @@
 
 mod builtin;
 mod key;
+pub mod recipe;
 
 pub use key::{EngineKey, LineShape, LineSpec, MYSQL_LINES, POSTGRES_LINES, versioned_lines};
+pub use recipe::{LoadOptions, RecipeEngine, RecipeError, parse_recipe};
+
+/// Every top-level `yard` command and alias: a recipe key may not be one, so `yard <key>`
+/// always reaches the engine (recipes spec §9.1). A yard-cli test keeps it equal to the CLI.
+pub const YARD_COMMANDS: &[&str] = &[
+    "start",
+    "stop",
+    "status",
+    "version",
+    "uninstall",
+    "self-update",
+    "doctor",
+    "sites",
+    "link",
+    "init",
+    "unlink",
+    "proxy",
+    "unproxy",
+    "docroot",
+    "isolate",
+    "unisolate",
+    "secure",
+    "unsecure",
+    "trust",
+    "untrust",
+    "ports",
+    "php",
+    "node",
+    "ext",
+    "xdebug",
+    "install-shims",
+    "services",
+    "service",
+    "db",
+    "env",
+    "info",
+    "sources",
+    "source",
+    "tunnel",
+    "untunnel",
+    "tunnels",
+    "restart",
+    "helper",
+    "engines",
+    "pgsql",
+    "help",
+];
 
 use crate::Paths;
 use crate::services::render::UnitCommand;
@@ -152,6 +200,10 @@ pub trait ServiceEngine: Send + Sync + Debug {
     fn may_sleep(&self) -> bool {
         true
     }
+    /// The suffix of the port the health check connects to (`""`, the main port).
+    fn health_port(&self) -> String {
+        String::new()
+    }
     fn env_lines(&self, ctx: &InstanceCtx) -> Vec<String>;
     fn console(&self) -> Option<Console> {
         None
@@ -207,5 +259,7 @@ impl Engines {
     }
 }
 
+#[cfg(test)]
+mod recipe_tests;
 #[cfg(test)]
 mod tests;

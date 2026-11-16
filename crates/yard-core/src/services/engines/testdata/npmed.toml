@@ -1,0 +1,18 @@
+schema = 1
+key = "npmed"
+name = "Npmed"
+
+[source]
+kind = "npm"
+package = "@acme/npmed"
+version = "1.6.1"
+node = "18"
+
+[ports]
+main = 6001
+
+[run]
+command = ["{node}", "{home}/node_modules/@acme/npmed/bin/server.js", "--port", "{port.main}"]
+
+[health]
+tcp = "main"

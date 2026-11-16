@@ -1,0 +1,20 @@
+schema = 1
+key = "downloaded"
+name = "Downloaded"
+
+[source]
+kind = "download"
+version = "30.1"
+url = "https://example.com/downloaded-30.1.tar.gz"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+strip = 1
+
+[ports]
+main = 8108
+
+[run]
+command = ["{home}/downloaded-server", "--data-dir", "{data}", "--api-port", "{port.main}"]
+dirs = ["data"]
+
+[health]
+tcp = "main"

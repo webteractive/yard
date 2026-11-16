@@ -1,0 +1,16 @@
+schema = 1
+key = "pathed"
+name = "Pathed"
+
+[source]
+kind = "path"
+program = "/usr/local/bin/pathed"
+
+[ports]
+main = 7800
+
+[run]
+command = ["{program}", "--port", "{port.main}"]
+
+[health]
+tcp = "main"

@@ -1,0 +1,52 @@
+schema = 1
+key = "brewed"
+name = "Brewed"
+description = "A brew engine with every field"
+
+[source]
+kind = "brew"
+formula = "acme/tap/brewed"
+
+[ports]
+main = 7700
+console = 7701
+
+[run]
+command = ["{home}/bin/brewed", "--listen", "127.0.0.1:{port.main}", "--data", "{data}", "--conf", "{conf}"]
+env = { BREWED_HOME = "{dir}" }
+stop_signal = "INT"
+start_timeout = "45s"
+dirs = ["data", "logs"]
+init = ["{home}/bin/brewed", "init", "{data}"]
+sleep = false
+
+[run.config]
+file = "brewed.conf"
+text = """
+port {port.main}
+console {port.console}
+dir {data}
+json {{"a": 1}}
+{include_overrides}
+"""
+include = "include {overrides}"
+overrides = "# yours\n"
+
+[health]
+tcp = "main"
+
+[console]
+port = "console"
+host_header = "upstream"
+
+[env]
+lines = ["BREWED_URL=http://127.0.0.1:{port.main}"]
+
+[account]
+user = "admin"
+password = "secret"
+
+[connect]
+url = "brewed://127.0.0.1:{port.main}"
+shell = ["{home}/bin/brewed-cli", "-p", "{port.main}"]
+clients = ["Any client: the URL above"]
