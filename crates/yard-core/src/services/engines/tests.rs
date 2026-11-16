@@ -19,7 +19,7 @@ fn get(key: &str) -> Arc<dyn ServiceEngine> {
 }
 
 fn ctx<'a>(instance: &'a str, home: &'a str, paths: &'a Paths, ports: &'a [PortRef]) -> InstanceCtx<'a> {
-    InstanceCtx { instance, home: Path::new(home), paths, ports, macos_user: "me", node: None }
+    InstanceCtx { instance, home: Path::new(home), paths, ports, macos_user: "me", secret: None, node: None }
 }
 
 #[test]
@@ -405,7 +405,9 @@ fn carried_recipes_render() {
 
     let ports = [port("meilisearch", 27700)];
     let meili = get("meilisearch");
-    let c = ctx("meilisearch", "/opt/homebrew/opt/meilisearch", &paths, &ports);
+    let mut c = ctx("meilisearch", "/opt/homebrew/opt/meilisearch", &paths, &ports);
+    c.secret = Some("m-key");
+    assert!(meili.needs_secret());
     let cmd = strs(&meili.command(&c));
     assert_eq!(cmd[..3], ["/opt/homebrew/opt/meilisearch/bin/meilisearch", "--http-addr", "127.0.0.1:27700"]);
     assert!(
@@ -413,7 +415,8 @@ fn carried_recipes_render() {
         "{cmd:?}"
     );
     assert!(cmd.contains(&"/u/.yard/services/meilisearch/data/data.ms".to_string()), "{cmd:?}");
-    assert_eq!(meili.env_lines(&c), ["MEILISEARCH_HOST=http://127.0.0.1:27700", "MEILISEARCH_KEY="]);
+    assert!(cmd.windows(2).any(|w| w == ["--master-key", "m-key"]), "{cmd:?}");
+    assert_eq!(meili.env_lines(&c), ["MEILISEARCH_HOST=http://127.0.0.1:27700", "MEILISEARCH_KEY=m-key"]);
     assert_eq!(
         meili.console(),
         Some(Console { port: String::new(), host_header: HostHeader::Client, nginx_overrides: false })
@@ -421,7 +424,9 @@ fn carried_recipes_render() {
 
     let ports = [port("typesense", 28108), port("typesense-peering", 28107)];
     let typesense = get("typesense");
-    let c = ctx("typesense", "/u/.yard/programs/typesense/30.2", &paths, &ports);
+    let mut c = ctx("typesense", "/u/.yard/programs/typesense/30.2", &paths, &ports);
+    c.secret = Some("t-key");
+    assert!(typesense.needs_secret());
     let cmd = strs(&typesense.command(&c));
     assert_eq!(cmd[0], "/u/.yard/programs/typesense/30.2/typesense-server");
     for pair in [
@@ -429,7 +434,7 @@ fn carried_recipes_render() {
         ["--api-port", "28108"],
         ["--peering-address", "127.0.0.1"],
         ["--peering-port", "28107"],
-        ["--api-key", "yard"],
+        ["--api-key", "t-key"],
     ] {
         assert!(cmd.windows(2).any(|w| w == pair), "{pair:?} in {cmd:?}");
     }
@@ -439,9 +444,11 @@ fn carried_recipes_render() {
             "TYPESENSE_HOST=127.0.0.1",
             "TYPESENSE_PORT=28108",
             "TYPESENSE_PROTOCOL=http",
-            "TYPESENSE_API_KEY=yard"
+            "TYPESENSE_API_KEY=t-key"
         ]
     );
+    assert!(!cmd.contains(&"--enable-cors".to_string()), "no web page should reach it: {cmd:?}");
+    assert!(!get("redis").needs_secret() && !get("valkey").needs_secret());
     let SourceSpec::Download { version, url, sha256, strip } = typesense.source() else {
         panic!("a download")
     };

@@ -592,7 +592,14 @@ impl Reconciler {
             let Some(ports) = service_ports.get(instance) else { continue };
             let Some(engine) = engines.get(entry.engine.as_str()) else { continue };
             let Some(home) = services::home(&state.brew, &paths, engine.as_ref(), entry) else { continue };
-            let ictx = services::instance_ctx(instance, &home, &paths, ports, &user);
+            if engine.needs_secret()
+                && let Err(e) = services::ensure_secret(&paths, instance)
+            {
+                report.warnings.push(format!("{instance}: cannot make its secret: {e}"));
+            }
+            let secret = services::secret(&paths, instance);
+            let mut ictx = services::instance_ctx(instance, &home, &paths, ports, &user);
+            ictx.secret = secret.as_deref();
             if let Some((file, text)) = engine.config_file(&ictx) {
                 service_confs.insert(instance.clone(), file.clone());
                 rendered.insert(file, text);

@@ -254,7 +254,7 @@ mod tests {
         ports: &'a [PortRef],
         user: &'a str,
     ) -> InstanceCtx<'a> {
-        InstanceCtx { instance, home: keg, paths, ports, macos_user: user, node: None }
+        InstanceCtx { instance, home: keg, paths, ports, macos_user: user, secret: None, node: None }
     }
 
     fn command(key: &str, instance: &str, keg: &Path, paths: &Paths, ports: &[PortRef]) -> UnitCommand {

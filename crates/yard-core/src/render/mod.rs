@@ -722,6 +722,7 @@ mod tests {
                 paths: &p,
                 ports: &[],
                 macos_user: "me",
+                secret: None,
                 node: None,
             };
             let (path, text) = engines.get(engine).unwrap().config_file(&ctx).unwrap();

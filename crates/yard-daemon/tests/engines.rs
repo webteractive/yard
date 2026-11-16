@@ -247,3 +247,42 @@ async fn engines_changed_event_fires() {
     assert!(event.is_some(), "engines_changed after the new recipe");
     d.shutdown().await.unwrap();
 }
+
+/// A recipe that uses `{secret}` gets the instance's own random secret: made once, mode 0600,
+/// passed to its program and printed by `yard env` (recipes spec §6.1).
+#[tokio::test]
+async fn an_instance_gets_its_own_secret() {
+    let port = free_port();
+    let text =
+        recipe_on("echo", "--key={secret}", port).replace("ECHO_EXTRA=--key={secret}", "ECHO_KEY={secret}");
+    let (d, _) = with_echo(Some(&text)).await;
+    d.fx.add_service("echo", "fake-echo", false);
+    let mut c = d.client().await;
+    let file = d.fx.paths.service_dir("echo").join("secret");
+    assert!(wait_until(|| file.exists(), Duration::from_secs(5)).await, "yardd made the secret");
+    let secret = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(secret.len(), 32, "{secret:?}");
+    assert!(secret.bytes().all(|b| b.is_ascii_hexdigit()));
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    let log = d.fx.brew.path().join("opt/fake-echo/bin/fake-service.log");
+    assert!(
+        wait_until(
+            || std::fs::read_to_string(&log).is_ok_and(|l| l.contains(&format!("--key={secret}"))),
+            Duration::from_secs(5)
+        )
+        .await,
+        "the program got it"
+    );
+    let lines = env_lines(&mut c, "echo").await;
+    assert!(lines.as_array().unwrap().iter().any(|l| l == &json!(format!("ECHO_KEY={secret}"))), "{lines}");
+    // A later reconcile keeps it.
+    std::fs::write(
+        d.fx.paths.services_toml(),
+        std::fs::read_to_string(d.fx.paths.services_toml()).unwrap() + "\n",
+    )
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), secret);
+    d.shutdown().await.unwrap();
+}

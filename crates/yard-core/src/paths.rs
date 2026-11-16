@@ -176,6 +176,12 @@ impl Paths {
         self.service_dir(instance).join("overrides.conf")
     }
 
+    /// `services/<instance>/secret`: the instance's own random secret, for a recipe that uses
+    /// `{secret}` (mode 0600; recipes spec §6.1).
+    pub fn service_secret(&self, instance: &str) -> PathBuf {
+        self.service_dir(instance).join("secret")
+    }
+
     /// `engines/`: the user's recipes, one `<key>.toml` each (recipes spec §7).
     pub fn engines_dir(&self) -> PathBuf {
         self.root.join("engines")

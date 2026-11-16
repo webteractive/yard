@@ -112,6 +112,7 @@ pub fn check(ctx: &Ctx, file: PathBuf) -> Outcome {
         paths: &ctx.paths,
         ports: &ports,
         macos_user: "user",
+        secret: Some("<secret>"),
         node: matches!(recipe.source(), SourceSpec::Npm { .. }).then_some(node.as_path()),
     };
     let cmd = recipe.command(&ictx);

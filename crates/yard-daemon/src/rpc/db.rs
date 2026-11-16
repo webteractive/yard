@@ -219,7 +219,9 @@ async fn recipe_shell(
     let home = crate::services::home(&ctx.brew, &ctx.paths, engine.as_ref(), entry)
         .ok_or_else(|| crate::services::not_installed(instance, &entry.engine))?;
     let user = macos_user();
-    let ictx = crate::services::instance_ctx(instance, &home, &ctx.paths, &info.ports, &user);
+    let secret = crate::services::secret(&ctx.paths, instance);
+    let mut ictx = crate::services::instance_ctx(instance, &home, &ctx.paths, &info.ports, &user);
+    ictx.secret = secret.as_deref();
     let mut shell = engine
         .connect(&ictx)
         .and_then(|c| c.shell)
@@ -359,7 +361,9 @@ fn connect_info(
         .get(entry.engine.as_str())
         .ok_or_else(|| crate::services::unknown_engine(instance, &entry.engine))?;
     let user = macos_user();
-    let ictx = crate::services::instance_ctx(instance, Path::new("/"), &ctx.paths, &info.ports, &user);
+    let secret = crate::services::secret(&ctx.paths, instance);
+    let mut ictx = crate::services::instance_ctx(instance, Path::new("/"), &ctx.paths, &info.ports, &user);
+    ictx.secret = secret.as_deref();
     let details = engine.connect(&ictx).ok_or_else(|| {
         YardError::new(
             ErrorCode::DbUnsupportedEngine,

@@ -1,5 +1,7 @@
 # Typesense, from its own Apple Silicon build (brew has it only in its own tap). The API key is
-# a fixed local one; Typesense listens for peers too, so both ports stay on loopback.
+# the instance's own random secret, which yard env prints, and CORS stays off: Laravel Scout calls
+# it from PHP, and no web page in a local browser should. It listens for peers too, so both ports
+# stay on loopback.
 schema = 1
 key = "typesense"
 name = "Typesense"
@@ -19,12 +21,11 @@ peering = 8107
 command = [
   "{home}/typesense-server",
   "--data-dir", "{data}",
-  "--api-key", "yard",
+  "--api-key", "{secret}",
   "--api-address", "127.0.0.1",
   "--api-port", "{port.main}",
   "--peering-address", "127.0.0.1",
   "--peering-port", "{port.peering}",
-  "--enable-cors",
 ]
 dirs = ["data"]
 
@@ -32,8 +33,8 @@ dirs = ["data"]
 tcp = "main"
 
 [env]
-lines = ["TYPESENSE_HOST=127.0.0.1", "TYPESENSE_PORT={port.main}", "TYPESENSE_PROTOCOL=http", "TYPESENSE_API_KEY=yard"]
+lines = ["TYPESENSE_HOST=127.0.0.1", "TYPESENSE_PORT={port.main}", "TYPESENSE_PROTOCOL=http", "TYPESENSE_API_KEY={secret}"]
 
 [connect]
 url = "http://127.0.0.1:{port.main}"
-clients = ["Any HTTP client: the URL above, with the header X-TYPESENSE-API-KEY: yard"]
+clients = ["Any HTTP client: the URL above, with the header X-TYPESENSE-API-KEY set to the TYPESENSE_API_KEY yard env prints"]

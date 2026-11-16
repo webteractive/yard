@@ -64,6 +64,8 @@ enum Var {
     Overrides,
     IncludeOverrides,
     User,
+    /// The instance's random secret (`services/<i>/secret`), which yardd makes.
+    Secret,
     /// The port's suffix: `""` for `main`.
     Port(String),
 }
@@ -157,6 +159,7 @@ fn var(name: &str, allowed: &Allowed) -> Result<Var, String> {
         "run" => Ok(Var::Run),
         "instance" => Ok(Var::Instance),
         "user" => Ok(Var::User),
+        "secret" => Ok(Var::Secret),
         "overrides" => Ok(Var::Overrides),
         "conf" => only(allowed.has_config, Var::Conf, "needs a [run.config]"),
         "include_overrides" => only(
@@ -264,6 +267,7 @@ impl RecipeEngine {
                 .map(|t| self.expand(t, ctx))
                 .unwrap_or_default(),
             Var::User => ctx.macos_user.to_string(),
+            Var::Secret => ctx.secret.unwrap_or_default().to_string(),
             Var::Port(suffix) => ctx.port(self, suffix).to_string(),
         }
     }
@@ -351,6 +355,20 @@ impl ServiceEngine for RecipeEngine {
     }
     fn has_connect(&self) -> bool {
         self.connect.is_some()
+    }
+    fn needs_secret(&self) -> bool {
+        let uses = |t: &Template| t.0.iter().any(|p| matches!(p, Piece::Var(Var::Secret, _)));
+        let config = self.config.iter().flat_map(|c| std::iter::once(&c.text).chain(c.include.as_ref()));
+        let connect =
+            self.connect.iter().flat_map(|c| std::iter::once(&c.url).chain(c.shell.iter().flatten()));
+        self.command
+            .iter()
+            .chain(self.init.iter().flatten())
+            .chain(self.env.iter().map(|(_, t)| t))
+            .chain(&self.env_lines)
+            .chain(config)
+            .chain(connect)
+            .any(uses)
     }
     fn connect(&self, ctx: &InstanceCtx) -> Option<Connect> {
         let c = self.connect.as_ref()?;

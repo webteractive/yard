@@ -100,6 +100,31 @@ pub fn home(brew: &Brew, paths: &Paths, engine: &dyn ServiceEngine, entry: &Serv
     }
 }
 
+/// The instance's secret, when yardd has made one.
+pub fn secret(paths: &Paths, instance: &str) -> Option<String> {
+    std::fs::read_to_string(paths.service_secret(instance))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Makes the instance's secret once: 32 hex characters from the system's random source, in a
+/// file only the user can read. An existing one is kept.
+pub fn ensure_secret(paths: &Paths, instance: &str) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = paths.service_secret(instance);
+    if file.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(paths.service_dir(instance))?;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&file)?;
+    out.write_all(hex.as_bytes())
+}
+
 /// The context an instance's engine renders it in.
 pub fn instance_ctx<'a>(
     instance: &'a str,
@@ -108,7 +133,7 @@ pub fn instance_ctx<'a>(
     ports: &'a [PortRef],
     macos_user: &'a str,
 ) -> InstanceCtx<'a> {
-    InstanceCtx { instance, home, paths, ports, macos_user, node: None }
+    InstanceCtx { instance, home, paths, ports, macos_user, secret: None, node: None }
 }
 
 /// What running `instance` takes, with its ports read from the registry: the unit command.
@@ -128,8 +153,10 @@ pub fn unit_command(
         SourceSpec::Npm { node, .. } => Some(crate::programs::npm_node(paths, &node)?.1),
         _ => None,
     };
+    let secret = secret(paths, instance);
     let mut ctx = instance_ctx(instance, &home, paths, ports, &user);
     ctx.node = node.as_deref();
+    ctx.secret = secret.as_deref();
     let mut cmd = engine.command(&ctx);
     if let Some(node) = &node
         && !cmd.env.iter().any(|(k, _)| k == "PATH")
@@ -647,7 +674,14 @@ impl Add {
         let data = paths.service_data(instance);
         if is_empty(&data) {
             let user = macos_user();
-            if let Some(init) = self.engine.init(&instance_ctx(instance, keg, paths, &ports, &user)) {
+            if self.engine.needs_secret() {
+                ensure_secret(paths, instance)
+                    .map_err(|e| YardError::internal(format!("cannot make {instance}'s secret: {e}")))?;
+            }
+            let secret = secret(paths, instance);
+            let mut ictx = instance_ctx(instance, keg, paths, &ports, &user);
+            ictx.secret = secret.as_deref();
+            if let Some(init) = self.engine.init(&ictx) {
                 // mysqld makes `data`, but not the directory above it.
                 std::fs::create_dir_all(paths.service_dir(instance)).map_err(|e| {
                     YardError::internal(format!(

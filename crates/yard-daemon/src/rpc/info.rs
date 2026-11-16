@@ -179,7 +179,9 @@ fn instance_block(engine: &dyn ServiceEngine, info: &ServiceInfo, paths: &yard_c
     }
     // `.env` lines name ports and paths, never the program's home.
     let user = crate::services::macos_user();
-    let ctx = crate::services::instance_ctx(&info.name, Path::new("/"), paths, &info.ports, &user);
+    let secret = crate::services::secret(paths, &info.name);
+    let mut ctx = crate::services::instance_ctx(&info.name, Path::new("/"), paths, &info.ports, &user);
+    ctx.secret = secret.as_deref();
     EnvBlock { instance: info.name.clone(), lines: engine.env_lines(&ctx), note: None }
 }
 

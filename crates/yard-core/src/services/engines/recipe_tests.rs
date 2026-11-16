@@ -67,6 +67,7 @@ fn brewed_expands_every_field() {
         paths: &paths,
         ports: &ports,
         macos_user: "me",
+        secret: None,
         node: None,
     };
     let cmd = b.command(&ctx);
@@ -128,6 +129,7 @@ fn defaults_for_a_lean_recipe() {
         paths: &paths,
         ports: &ports,
         macos_user: "me",
+        secret: None,
         node: None,
     };
     let cmd = p.command(&ctx);
@@ -157,6 +159,7 @@ fn npm_runs_on_yards_node() {
         paths: &paths,
         ports: &ports,
         macos_user: "me",
+        secret: None,
         node: Some(Path::new("/u/.yard/node/node-versions/v18.20.0/installation/bin/node")),
     };
     let cmd = n.command(&ctx);
@@ -186,6 +189,7 @@ fn placeholder_values_are_never_split() {
         paths: &paths,
         ports: &ports,
         macos_user: "me",
+        secret: None,
         node: None,
     };
     let cmd = p.command(&ctx);
@@ -392,6 +396,7 @@ fn quoted_placeholders_escape() {
         paths: &paths,
         ports: &ports,
         macos_user: "me",
+        secret: None,
         node: None,
     };
     assert_eq!(strs(&r.command(&ctx).args), ["\"/a b/\\\"q\\\"\\\\z/services/t/data\"", "\"27000\""]);
@@ -417,6 +422,7 @@ fn generated_config_gets_the_header() {
             paths: &paths,
             ports: &ports,
             macos_user: "me",
+            secret: None,
             node: None,
         };
         r.config_file(&ctx).unwrap().1
@@ -459,4 +465,27 @@ fn path_allowed_refuses_herd_dbngin_postgresapp() {
 fn path_allowed_needs_absolute() {
     let e = super::recipe::path_allowed(Path::new("bin/x"), Path::new("/Users/me")).unwrap_err();
     assert_eq!(e.code, yard_proto::ErrorCode::PathNotAllowed);
+}
+
+#[test]
+fn secret_expands_to_the_instance_secret() {
+    let text = BASE
+        .replace("{port.main}\"]", "--key\", \"{secret}\"]")
+        .replace("[health]", "[env]\nlines = [\"KEY={secret}\"]\n\n[health]");
+    let r = parse_recipe(&text, Path::new("/r/t.toml"), Origin::Carried, &LoadOptions::default()).unwrap();
+    assert!(r.needs_secret());
+    let paths = Paths::new("/u/.yard");
+    let ports = [port("t", 27000)];
+    let ctx = InstanceCtx {
+        instance: "t",
+        home: Path::new("/k"),
+        paths: &paths,
+        ports: &ports,
+        macos_user: "me",
+        secret: Some("s3cr3t"),
+        node: None,
+    };
+    assert_eq!(strs(&r.command(&ctx).args), ["--key", "s3cr3t"]);
+    assert_eq!(r.env_lines(&ctx), ["KEY=s3cr3t"]);
+    assert!(!load("brewed").needs_secret());
 }

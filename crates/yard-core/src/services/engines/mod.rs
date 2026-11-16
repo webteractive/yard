@@ -147,6 +147,9 @@ pub struct InstanceCtx<'a> {
     pub macos_user: &'a str,
     /// Yard's Node for an npm engine.
     pub node: Option<&'a Path>,
+    /// The instance's own random secret (`services/<i>/secret`), for an engine whose recipe uses
+    /// `{secret}`: an API or master key no other Mac and no web page knows.
+    pub secret: Option<&'a str>,
 }
 
 impl InstanceCtx<'_> {
@@ -220,6 +223,10 @@ pub trait ServiceEngine: Send + Sync + Debug {
     }
     /// Whether [`connect`](Self::connect) says anything, whatever the instance.
     fn has_connect(&self) -> bool {
+        false
+    }
+    /// Whether the engine uses the instance's secret, which yardd then makes.
+    fn needs_secret(&self) -> bool {
         false
     }
 }
@@ -375,6 +382,7 @@ pub fn engine_verbs(engine: &dyn ServiceEngine) -> Vec<Verb> {
         paths: &paths,
         ports: &[],
         macos_user: "",
+        secret: None,
         node: None,
     };
     let connect = engine.connect(&ctx);

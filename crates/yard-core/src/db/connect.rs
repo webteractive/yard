@@ -52,6 +52,7 @@ mod tests {
             paths: &paths,
             ports: &ports,
             macos_user: "me",
+            secret: None,
             node: None,
         };
         (engine.account("me"), engine.connect(&ctx).unwrap())
