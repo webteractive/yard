@@ -432,3 +432,31 @@ fn generated_config_gets_the_header() {
     );
     assert_eq!(with("comment = \"\""), "x\n");
 }
+
+#[test]
+fn path_allowed_refuses_herd_dbngin_postgresapp() {
+    use super::recipe::path_allowed;
+    let home = Path::new("/Users/me");
+    for refused in [
+        "/Users/me/Herd/bin/redis-server",
+        "/Users/me/Library/Application Support/Herd/bin/meilisearch",
+        "/Applications/Herd.app/Contents/Resources/bin/x",
+        "/Applications/DBngin.app/Contents/MacOS/mysqld",
+        "/Users/me/Library/Application Support/com.tinyapp.DBngin/Engines/redis/bin/redis-server",
+        "/Applications/Postgres.app/Contents/Versions/17/bin/postgres",
+    ] {
+        let e = path_allowed(Path::new(refused), home).unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::PathNotAllowed, "{refused}");
+        assert!(e.message.contains(refused), "{}", e.message);
+    }
+    assert!(path_allowed(Path::new("/usr/local/bin/thing"), home).is_ok());
+    assert!(path_allowed(Path::new("/Users/me/bin/thing"), home).is_ok());
+    // A name that only starts like a refused folder is fine.
+    assert!(path_allowed(Path::new("/Users/me/Herdsman/bin/x"), home).is_ok());
+}
+
+#[test]
+fn path_allowed_needs_absolute() {
+    let e = super::recipe::path_allowed(Path::new("bin/x"), Path::new("/Users/me")).unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::PathNotAllowed);
+}

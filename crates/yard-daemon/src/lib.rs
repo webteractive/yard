@@ -21,6 +21,7 @@ pub mod orphans;
 pub mod portscan;
 pub mod privileged;
 pub mod probe;
+pub mod programs;
 pub mod project;
 pub mod reconcile;
 pub mod rpc;

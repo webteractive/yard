@@ -2,6 +2,7 @@
 
 mod db;
 mod emailulator;
+mod engines;
 mod ext;
 mod handlers;
 mod info;

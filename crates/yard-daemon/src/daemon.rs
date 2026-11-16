@@ -133,6 +133,8 @@ pub struct Context {
     pub resolve_host: fn(&str) -> Option<bool>,
     /// The asks that may wait on a wake at once (`wake::WAKE_SLOTS`).
     pub wake_slots: Arc<tokio::sync::Semaphore>,
+    /// How recipes load (`DaemonOptions.allow_file_urls`).
+    pub recipe_options: yard_core::services::engines::LoadOptions,
     /// `DaemonOptions.db_wake_wait`.
     pub db_wake_wait: Duration,
 }
@@ -202,6 +204,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         tunnels,
         tunnel_ready_wait: opts.tunnel_ready_wait,
         db_wake_wait: opts.db_wake_wait,
+        recipe_options: opts.recipe_options(),
         resolve_host: opts.resolve_host,
         wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });

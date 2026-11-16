@@ -12,7 +12,7 @@ use crate::sources::require_trusted;
 use crate::state::Snapshot;
 use crate::supervisor::Supervisor;
 use yard_core::config::load_services;
-use yard_core::services::engines::{EngineKey, ServiceEngine};
+use yard_core::services::engines::{EngineKey, ServiceEngine, SourceSpec};
 use yard_core::services::instance_name;
 use yard_core::services::sleep::SleepAfter;
 use yard_core::sources::tap_of;
@@ -60,10 +60,18 @@ pub(super) async fn add(ctx: &Context, p: ServiceAddParams) -> Result<JobStarted
     if load_services(&ctx.paths)?.services.contains_key(&instance) {
         return Err(services::exists(&instance));
     }
-    let resolved = services::resolve(&ctx.brew, engine.as_ref(), line.as_deref()).await?;
+    // Only a brew engine has a formula to resolve and a tap to trust; any other source is
+    // installed by the job (recipes spec §5).
+    let brewed = matches!(engine.source(), SourceSpec::Brew { .. } | SourceSpec::BrewLines(_));
+    let resolved = match brewed {
+        true => Some(services::resolve(&ctx.brew, engine.as_ref(), line.as_deref()).await?),
+        false => None,
+    };
     // Nothing is asked of brew for a keg that is already there, and homebrew/core needs no trust.
-    let Resolved { formula, .. } = &resolved;
-    if !services::keg(&ctx.brew, formula).exists() && tap_of(formula).is_some() {
+    if let Some(Resolved { formula, .. }) = &resolved
+        && !services::keg(&ctx.brew, formula).exists()
+        && tap_of(formula).is_some()
+    {
         require_trusted(&ctx.brew, formula).await?;
     }
     let add = Add {
@@ -74,6 +82,7 @@ pub(super) async fn add(ctx: &Context, p: ServiceAddParams) -> Result<JobStarted
         instance,
         version: line,
         resolved,
+        recipe_options: ctx.recipe_options.clone(),
         port: p.port,
         usual_ports: ctx.usual_ports.clone(),
         app_dirs: ctx.app_dirs.clone(),
@@ -122,6 +131,10 @@ pub(super) async fn remove(ctx: &Context, p: ServiceRemoveParams) -> Result<(), 
     }
     // Its reconcile forgets the instance's sleep and drops its sites from `run/sleeping`.
     services::remove(&ctx.paths, &ctx.reconciler, &p.name, p.keep_data).await?;
+    // A download or npm version no instance records and no recipe pins goes with it (§5.1).
+    if let Ok(snap) = snapshot(ctx).await {
+        crate::programs::sweep(&ctx.paths, &snap.services, &snap.engines);
+    }
     Ok(())
 }
 

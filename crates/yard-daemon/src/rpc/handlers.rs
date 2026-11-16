@@ -125,6 +125,8 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::DB_CREATE => json(db::create(ctx, parse(params)?).await),
         methods::DB_CONNECT => json(db::connect(ctx, parse_or_default(params)?).await),
         methods::DB_COMMAND => json(db::command(ctx, parse(params)?).await),
+        methods::ENGINES_LIST => json(super::engines::list(ctx).await),
+        methods::ENGINES_INSTALL => json(super::engines::install(ctx, parse(params)?).await),
         methods::JOBS_CANCEL => {
             let p: JobParams = parse(params)?;
             json(ctx.jobs.cancel(&p.job_id))

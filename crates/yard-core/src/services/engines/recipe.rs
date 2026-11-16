@@ -807,3 +807,32 @@ pub fn parse_recipe(
         connect,
     })
 }
+
+/// `PATH_NOT_ALLOWED` for a `path` program Yard will not run: one that is not absolute, or one
+/// in Herd's, DBngin's or Postgres.app's folders, whose copies are theirs (recipes spec §5).
+/// `home` is the user's home.
+pub fn path_allowed(program: &Path, home: &Path) -> Result<(), YardError> {
+    let refuse = |why: &str| {
+        Err(YardError::new(
+            ErrorCode::PathNotAllowed,
+            format!("Yard will not run {}: {why}", program.display()),
+        )
+        .with_hint("install the program yourself, or use a brew or download recipe"))
+    };
+    if !program.is_absolute() {
+        return refuse("a path recipe names its program by absolute path");
+    }
+    let theirs = [
+        home.join("Herd"),
+        home.join("Library/Application Support/Herd"),
+        PathBuf::from("/Applications/Herd.app"),
+        PathBuf::from("/Applications/DBngin.app"),
+        home.join("Library/Application Support/com.tinyapp.DBngin"),
+        PathBuf::from("/Applications/Postgres.app"),
+    ];
+    // `starts_with` compares whole components, so `~/Herdsman` is not `~/Herd`.
+    match theirs.iter().find(|dir| program.starts_with(dir)) {
+        Some(dir) => refuse(&format!("it is in {}, another tool's", dir.display())),
+        None => Ok(()),
+    }
+}

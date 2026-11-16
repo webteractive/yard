@@ -525,7 +525,10 @@ pub struct Add {
     pub instance: String,
     /// The line (`8.4`), `None` for an engine with none.
     pub version: Option<String>,
-    pub resolved: Resolved,
+    /// The formula a brew engine installs; `None` for any other source.
+    pub resolved: Option<Resolved>,
+    /// How recipes load (`DaemonOptions.allow_file_urls` for a download's `file://`).
+    pub recipe_options: yard_core::services::engines::LoadOptions,
     /// `--port`: the instance's (first) port, else the usual one or the next free.
     pub port: Option<u16>,
     pub usual_ports: Option<BTreeMap<String, u16>>,
@@ -542,31 +545,49 @@ impl Add {
         if load_services(&self.paths)?.services.contains_key(&self.instance) {
             return Err(exists(&self.instance));
         }
-        if let Some(note) = self.resolved.info.as_ref().and_then(deprecation_note) {
-            job.line(note);
-        }
-        let keg = keg(&self.brew, &self.resolved.formula);
-        if !keg.exists() {
-            // The handler gated this already; an install that waited behind another job is
-            // gated again, since brew trusts a fully qualified formula without asking.
-            if tap_of(&self.resolved.formula).is_some() {
-                require_trusted(&self.brew, &self.resolved.formula).await?;
+        let (home, recorded) = match &self.resolved {
+            Some(resolved) => (self.install_formula(&job, resolved).await?, None),
+            None => {
+                let recorded = crate::programs::install(
+                    &job,
+                    &self.paths,
+                    self.reconciler.home(),
+                    self.engine.as_ref(),
+                    &self.recipe_options,
+                )
+                .await?;
+                let entry = ServiceEntry {
+                    engine: EngineKey::new(self.engine.key()).map_err(YardError::internal)?,
+                    version: recorded.clone(),
+                    formula: None,
+                    stopped: false,
+                    sleep_after: None,
+                };
+                let home = home(&self.brew, &self.paths, self.engine.as_ref(), &entry)
+                    .ok_or_else(|| not_installed(&self.instance, &entry.engine))?;
+                (home, recorded)
             }
-            job.run(&self.brew.brew_bin(), &["install", &self.resolved.formula], &Brew::job_env()).await?;
-        }
+        };
         let user = macos_user();
         let program =
-            self.engine.command(&instance_ctx(&self.instance, &keg, &self.paths, &[], &user)).program;
+            self.engine.command(&instance_ctx(&self.instance, &home, &self.paths, &[], &user)).program;
         if !program.exists() {
-            return Err(YardError::new(
-                ErrorCode::FormulaMissing,
-                format!("{} is installed but {} is missing", self.resolved.formula, program.display()),
-            )
-            .with_hint(format!("brew reinstall {}", self.resolved.formula)));
+            return Err(match &self.resolved {
+                Some(r) => YardError::new(
+                    ErrorCode::FormulaMissing,
+                    format!("{} is installed but {} is missing", r.formula, program.display()),
+                )
+                .with_hint(format!("brew reinstall {}", r.formula)),
+                None => YardError::new(
+                    ErrorCode::EngineNotInstalled,
+                    format!("{} is installed but {} is missing", self.engine.display(), program.display()),
+                )
+                .with_hint(format!("check run.command in the {} recipe", self.engine.key())),
+            });
         }
 
         let mut created = Created::default();
-        let result = self.provision(&job, &keg, &mut created).await;
+        let result = self.provision(&job, &home, &mut created, recorded.as_deref()).await;
         if let Err(e) = &result {
             job.line(format!("rolling back {}: {}", self.instance, e.message));
             self.roll_back(&job, &created).await;
@@ -574,11 +595,31 @@ impl Add {
         result
     }
 
+    /// Installs the brew formula when its keg is missing, behind brew's trust for a tap's; the
+    /// keg.
+    async fn install_formula(&self, job: &JobCtx, resolved: &Resolved) -> Result<PathBuf, YardError> {
+        if let Some(note) = resolved.info.as_ref().and_then(deprecation_note) {
+            job.line(note);
+        }
+        let keg = keg(&self.brew, &resolved.formula);
+        if !keg.exists() {
+            // The handler gated this already; an install that waited behind another job is
+            // gated again, since brew trusts a fully qualified formula without asking.
+            if tap_of(&resolved.formula).is_some() {
+                require_trusted(&self.brew, &resolved.formula).await?;
+            }
+            job.run(&self.brew.brew_bin(), &["install", &resolved.formula], &Brew::job_env()).await?;
+        }
+        Ok(keg)
+    }
+
+    /// `recorded` is the program version a download or npm instance keeps (recipes spec §5.1).
     async fn provision(
         &self,
         job: &JobCtx,
         keg: &std::path::Path,
         created: &mut Created,
+        recorded: Option<&str>,
     ) -> Result<(), YardError> {
         let (paths, instance) = (&self.paths, self.instance.as_str());
         created.dir_before = list_dir(&paths.service_dir(instance));
@@ -616,10 +657,12 @@ impl Add {
             }
             let at = |key: &'static str| ["services", instance, key];
             file.set(&at("engine"), value(self.engine.key()));
-            if let Some(version) = &self.version {
-                file.set(&at("version"), value(version.as_str()));
+            if let Some(version) = self.version.as_deref().or(recorded) {
+                file.set(&at("version"), value(version));
             }
-            file.set(&at("formula"), value(self.resolved.formula.as_str()));
+            if let Some(resolved) = &self.resolved {
+                file.set(&at("formula"), value(resolved.formula.as_str()));
+            }
             Ok(())
         })?;
         created.entry = true;
