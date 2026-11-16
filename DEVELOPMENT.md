@@ -82,6 +82,12 @@ up what they add:
 - `e2e-m5.sh` checks a quick tunnel with no Cloudflare account (it needs the network and brew's
   `cloudflared`): PHP behind the `trycloudflare.com` URL sees HTTPS, the public host and the
   visitor's address, and `yard untunnel` leaves nothing behind.
+- `e2e-db.sh` creates, imports and dumps scratch databases through `yard mysql` and
+  `yard postgres` on the real instances, and checks that `yard db` still works with its notice.
+- `e2e-engines.sh` adds the carried Valkey, Memcached, Meilisearch and Typesense recipes
+  (installing what is missing, Typesense's checksummed download included), asks each a question,
+  checks the instance secrets and `meilisearch.yard`, then adds a `path` and an `npm` recipe of its
+  own from `~/.yard/engines`, and removes everything it added.
 
 `YARD=<path to yard>` points a script at another build, such as an installed release
 (`/Applications/Yard.app/Contents/Helpers/yard`). Yard.app's checklists are

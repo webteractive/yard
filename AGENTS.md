@@ -205,8 +205,15 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   Memcached, Meilisearch and Typesense are carried ones. Designed in
   `docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` (approved 2026-11-16), planned
   in `docs/superpowers/plans/2026-11-16-yard-service-recipes.md` (approved 2026-11-16, run natively on
-  main). Using an engine becomes `yard <engine> <verb>` (`yard mysql`, `yard postgres`), replacing `yard db`. Runtimes (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx)
-  later; FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
+  main). Using an engine becomes `yard <engine> <verb>` (`yard mysql`, `yard postgres`), replacing `yard db`.
+  Built on main on 2026-11-16 (protocol 2.13, Tasks 1–13 and 15), with the whole suite passing (1437)
+  and the app's (255); an automated security review of the carried recipes added `{secret}` (a
+  per-instance random key, made fail-closed) for Typesense's API key and Meilisearch's master key and
+  dropped Typesense's CORS. The real-machine check (`scripts/e2e-engines.sh`) and `checklist.sh`'s
+  new picker item have not run yet: they wait for the maintainer. `yard db` keeps working for one
+  release with a notice, and is removed in the release after the one that ships this. Runtimes
+  (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx) later;
+  FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -250,13 +257,20 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `secure` and `docroot` are refused for it; for a managed one they edit that file. Herd-style parking, which M1
   shipped, was removed in M2. There is no `yard migrate herd` (dropped 2026-10-20):
   each project moves from Herd by `yard link` run in it.
-- **Services** (M4b, spec `2026-10-23-yard-m4b-services-design.md`): MySQL, PostgreSQL, Redis
-  and MinIO run from brew's kegs as supervised units listening on 127.0.0.1 only, listed in
+- **Services** (M4b, spec `2026-10-23-yard-m4b-services-design.md`; engines as a contract and
+  recipes, spec `2026-11-16-yard-service-recipes-design.md`): every engine implements
+  `services::engines::ServiceEngine`; MySQL, PostgreSQL and MinIO are Rust, the rest recipes (TOML:
+  Yard carries Redis, Valkey, Memcached, Meilisearch and Typesense in `crates/yard-core/engines/`, the
+  user's live in `~/.yard/engines/`, read at each reconcile with each one's last good version kept).
+  A recipe's program comes from brew, a `path`, a checksummed `download` or an exact `npm` version on
+  Yard's Node, always run by absolute path; a download or npm instance keeps the version it recorded
+  until `yard engines install`. Nothing outside `services/engines/` matches on an engine key. Instances
+  run as supervised units listening on 127.0.0.1 only, listed in
   `services.toml` and named `<engine>-<line>` (`mysql-8.4`, `redis`). Their ports are
   allocated once at `yard service add`, recorded `pinned` and never moved by Yard, and skip
   the ports DBngin and Postgres.app reserve while installed. Yard never runs `brew services`
   or `brew uninstall` for one, never re-initializes or deletes data except `service remove`,
-  and creates a database only when asked (`yard db create`/`import`, db spec, 2026-11-15) and never
+  and creates a database only when asked (`yard mysql|postgres create`/`import`, db spec, 2026-11-15) and never
   roles or buckets. A MySQL 8 instance makes `mysql_native_password`
   the default (root included) and every MySQL instance uses `utf8mb4_unicode_ci` and
   `sql_mode = NO_ENGINE_SUBSTITUTION`, so PHP 7.0–7.3 projects work (M4b spec §16, the maintainer
@@ -535,15 +549,25 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   resolver changed or `~/.cloudflared` was created; ask the maintainer first.
   `shellcheck scripts/e2e-m5.sh` stays clean.
 
-- `scripts/e2e-db.sh` — real-machine `yard db` check after `e2e-m1.sh`, on the real `mysql-8.4`
+- `scripts/e2e-db.sh` — real-machine `yard mysql`/`yard postgres` check (it also checks `yard db` still works with its notice) after `e2e-m1.sh`, on the real `mysql-8.4`
   and `postgres-17` (`YARD_DB_MYSQL`/`YARD_DB_PG` name others): creates scratch databases named
   `yard_e2e_<pid>_*`, imports plain, gzipped and `pg_dump -Fc` fixtures (one with an owner role the
   instance lacks, one plain with `OWNER TO`), checks a `mysqldump --databases` dump is refused before
   its `USE`, dumps and re-imports and compares row counts, checks `DB_NOT_EMPTY`, a passed and a
-  refused flag, and that `yard db list` wakes a sleeping instance. It drops only the databases it
+  refused flag, and that `yard mysql list` wakes a sleeping instance. It drops only the databases it
   created, through the keg client by absolute path, fails if any other database appeared or
   vanished or the listeners on 3306, 5432 and 6379 changed, and writes to the real instances, so ask
   the maintainer first. `shellcheck scripts/e2e-db.sh` stays clean.
+- `scripts/e2e-engines.sh` — real-machine service recipes check after `e2e-m1.sh`: adds the carried
+  `valkey`, `memcached`, `meilisearch` and `typesense` (brew-installing the first three and
+  downloading Typesense when missing), asks each a question by absolute path, checks Meilisearch
+  refuses a keyless request, Typesense listens on loopback only, `yard env`'s secrets, and
+  `meilisearch.yard`, then writes `e2e-path` (Apple's python3) and `e2e-npm` (http-server 14.1.1 on
+  Node 22) into `~/.yard/engines`, adds and curls both, lets memcached sleep and wakes it with `yard
+  service start`, and removes everything it added. It refuses to run over an existing instance or
+  recipe of those names, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails
+  if Herd's resolver or the listeners on 3306, 5432 and 6379 changed; ask the maintainer first.
+  `shellcheck scripts/e2e-engines.sh` stays clean.
 
 ## Verifying a change on a real machine
 
@@ -572,7 +596,7 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
 ## Layout (planned, spec §3.2)
 
 - `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and from M6 Yard.app, which uses the types directly).
-- `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here.
+- `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here. `services/engines/` is the engine contract, the built-ins and the recipe engine; `crates/yard-core/engines/*.toml` are the carried recipes, compiled in.
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
 - `crates/yard-client` — the connection to yardd that the CLI and Yard.app share (M6).

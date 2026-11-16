@@ -23,7 +23,7 @@ pub async fn env(ctx: &Ctx, site: Option<String>, service: Option<String>) -> Ou
             Ok(detail) => eprintln!("{}", nothing_for(&detail)),
             Err(e) if e.code == ErrorCode::SiteNotFound => {
                 eprintln!(
-                    "No service instances yet. Add one with yard service add <engine>: mysql, postgres, redis, minio or emailulator."
+                    "No service instances yet. Add one with yard service add <engine> (yard engines lists them), or emailulator."
                 );
             }
             Err(e) => eprintln!(

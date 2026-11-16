@@ -63,7 +63,7 @@ triggers:
 - Protocol 2.13 (service recipes, recipes spec §11): `engines.list` (`EnginesListResult`: each
   `EngineInfo`, and the recipes that failed with no last good version) and `engines.install { key }`
   (a job); event `engines_changed` (topic `state`); `ServiceInfo.engine_name` (empty from an older
-  yardd: fall back to `engine_display`); `ConnectInfo.clients`; `DbTarget.engine` limits the instance
+  yardd: fall back to `engine_display`); `ConnectInfo.clients`; `StatusInfo.engine_errors` (the recipes that did not load); `DbTarget.engine` limits the instance
   choice to one engine (`yard mysql`). `EngineSourceKind` and `EngineOrigin` (tagged by `kind`) have
   `Other` fallbacks. New codes: `ENGINE_UNKNOWN`, `ENGINE_RECIPE_INVALID`, `ENGINE_NOT_INSTALLED`,
   `DOWNLOAD_HASH_MISMATCH`, `PATH_NOT_ALLOWED`.

@@ -1346,7 +1346,7 @@ fn empty_services_says_what_to_do() {
     assert!(out.status.success(), "{}", stderr(&out));
     let so = stdout(&out);
     assert!(so.starts_with("No services yet. Add one with yard service add <engine>"), "{so}");
-    assert!(so.contains("mysql, postgres, redis, minio or emailulator"), "{so}");
+    assert!(so.contains("yard engines lists them") || so.contains("yard engines lists"), "{so}");
 }
 
 fn mysql_env() -> Value {
@@ -2535,7 +2535,7 @@ fn service_add_help_mentions_emailulator() {
     let out = yard_at(short_root().path()).args(["service", "add", "--help"]).output().unwrap();
     assert!(out.status.success());
     let so = stdout(&out);
-    assert!(so.contains("mysql, postgres, redis, minio or emailulator"), "{so}");
+    assert!(so.contains("meilisearch, typesense, your own recipes), or emailulator"), "{so}");
     assert!(so.contains("Yard never installs emailulator itself"), "{so}");
 }
 

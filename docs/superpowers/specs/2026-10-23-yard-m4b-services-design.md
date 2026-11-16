@@ -75,7 +75,7 @@ Non-goals:
   buckets. Creating a database on request moved to the db spec (2026-11-15).
 - Backups, replication, `pg_upgrade`, or moving an instance's data between versions.
 - Per-project instances (`.yard` cannot ask for its own private server).
-- MariaDB, Valkey, MongoDB, Meilisearch and other engines.
+- MariaDB, Valkey, MongoDB, Meilisearch and other engines. (Since 2026-11-16 engines are a contract and recipes: Valkey, Memcached, Meilisearch and Typesense are carried recipes, and any other is a file in `~/.yard/engines`; see `2026-11-16-yard-service-recipes-design.md`.)
 - Upgrading brew formulae (`brew upgrade` stays the user's).
 
 Anti-goals (a failure even if it works):
@@ -145,7 +145,7 @@ Each engine is one entry in a table in `yard-core` (`services::Engine`, **builde
 call** on the exact shape): its `.yard` key, the versions it accepts and how a version
 maps to a formula, the default version, its usual ports, how to initialize data, its unit
 command and generated config, its health check, and its `yard env` lines. Adding MariaDB
-or Valkey later is one more entry. M4d adds emailulator as one.
+or Valkey later is one more entry. M4d adds emailulator as one. (Superseded 2026-11-16: the table is the `ServiceEngine` contract, and Redis is a recipe; see `2026-11-16-yard-service-recipes-design.md`.)
 
 All binaries are absolute keg paths under `<prefix>/opt/<formula>/` (homebrew rule);
 nothing is looked up on PATH.

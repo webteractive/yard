@@ -69,7 +69,7 @@ pub async fn list(ctx: &Ctx) -> Outcome {
     ctx.emit(&services, || {
         if services.is_empty() {
             return format!(
-                "No services yet. Add one with yard service add <engine>: mysql, postgres, redis, minio or emailulator.\n\n{}",
+                "No services yet. Add one with yard service add <engine> (yard engines lists them), or emailulator.\n\n{}",
                 for_agents("yard services")
             );
         }

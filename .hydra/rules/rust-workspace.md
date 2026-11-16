@@ -64,10 +64,18 @@ triggers:
   `start-fails`, `login-fails` and `delete-fails`. A run serves `/ready` and `/quicktunnel`
   (`quick-<origin port>.trycloudflare.com`) on the yml's `metrics` address from the start, unlike
   the real one, which opens it only once it has a hostname.
+- Recipe engines in tests (recipes plan): `Fixture::add_recipe(key, text)` writes
+  `engines/<key>.toml`, and `Fixture::add_fake_formula(formula)` makes a keg whose
+  `bin/fake-service` is the fake as any recipe program: it listens on every `127.0.0.1:<port>`,
+  `0.0.0.0:<port>` and `--port <n>` argument and logs its arguments and PATH to
+  `fake-service.log` beside itself. `npm` in a fake Node install (`add_node`, fnm's install) is the
+  fake too: `install --prefix P … <pkg>@<v>` leaves `P/node_modules/.bin/fake-service`. Test
+  daemons set `allow_file_urls`, so a download recipe can name a `file://` archive, and map every
+  carried engine's usual port to a free one (Valkey's to Redis's).
 - The fake engines (`redis-server` exits 1 with `Can't chdir to` when its conf's `dir` is missing, as
   real redis does): `mysqld --defaults-file=F` listens on the `port` in `F` and exits 1 with
   `unknown variable` when the overrides file `F` includes contains `bad`; `postgres -c port=N`,
-  `redis-server F` and `minio server … --address A --console-address C` listen where they are
+  `redis-server F` (and `valkey-server F`, the same fake) and `minio server … --address A --console-address C` listen where they are
   told. `mysqld --no-defaults --initialize-insecure --datadir=D` and `initdb -D D` create `D/ibdata1` and
   `D/PG_VERSION`, wait `<prefix>/fake-init-delay` ms and fail while `<prefix>/fake-init-fail`
   exists; a running `mysqld` waits `<prefix>/fake-listen-delay` ms before it listens, as one in

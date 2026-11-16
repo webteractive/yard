@@ -289,10 +289,11 @@ pub enum ServiceAction {
     /// runs it, so yard service start, stop, restart, port and remove refuse it; with no agent
     /// installed, remove forgets it.
     Add {
-        /// mysql, postgres, redis, minio or emailulator.
+        /// Any engine yard engines lists (mysql, postgres, minio, redis, valkey, memcached,
+        /// meilisearch, typesense, your own recipes), or emailulator.
         engine: String,
         /// The release line, e.g. 8.4 for MySQL or 17 for PostgreSQL; the engine's default
-        /// when omitted. Redis, MinIO and emailulator have none.
+        /// when omitted. Every other engine has none.
         #[arg(long)]
         version: Option<String>,
         /// The port to pin; defaults to the engine's usual port, else the next free one.

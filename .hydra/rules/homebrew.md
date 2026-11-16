@@ -21,6 +21,12 @@ triggers:
 
 # Homebrew is a package source, never a source of truth
 
+- PHP, nginx and dnsmasq come only from brew. A service engine's program may also come from a
+  recipe's `path` (refused under Herd's, DBngin's or Postgres.app's folders), a checksummed
+  `download` (`/usr/bin/curl` and `/usr/bin/tar` into `~/.yard/programs/<key>/<version>/`) or an
+  exact `npm` version run with Yard's own Node (recipes spec §5); every program still runs by
+  absolute path, never from PATH.
+
 - Never run `brew services`, and never edit or create files under the brew prefix
   (`/opt/homebrew`). `yardd` launches every binary itself, with Yard's config.
 - Installing anything with brew changes the maintainer's machine, whichever Mac it is. Ask before running

@@ -37,6 +37,10 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     without its `dir`); the databases' init needs theirs absent or empty, and MinIO makes its own.
     A recipe's generated config (`run.config.file`, any name but `overrides.conf`) is generated the
     same way, headed with the line naming its `overrides.conf` (recipes spec §6).
+  - `services/<i>/secret` is the instance's random key for a recipe that uses `{secret}`: yardd
+    writes it once (32 hex, mode 0600, atomically), replaces an empty or damaged one, and never
+    starts such an instance without it. `programs/<key>/<version>/` holds what download and npm
+    recipes installed; Yard deletes one only when no instance records it and no recipe pins it.
   - Yard creates a database (never a role or bucket) only when asked: `db.create`, or `db.command`
     for an import into a name that does not exist (db spec). `yard link`, `init` and a `.yard` never
     create one, and nothing in Yard drops one.
