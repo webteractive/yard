@@ -6,6 +6,7 @@ use crate::jobs::JobCtx;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use yard_core::Paths;
+use yard_core::brew::Brew;
 use yard_core::config::ServicesConfig;
 use yard_core::services::Engines;
 use yard_core::services::engines::{LoadOptions, ServiceEngine, SourceSpec, recipe::path_allowed};
@@ -21,6 +22,7 @@ const TAR: &str = "/usr/bin/tar";
 pub async fn install(
     job: &JobCtx,
     paths: &Paths,
+    brew: &Brew,
     home: &Path,
     engine: &dyn ServiceEngine,
     opts: &LoadOptions,
@@ -50,10 +52,15 @@ pub async fn install(
             }
             Ok(Some(version))
         }
-        SourceSpec::Npm { version, .. } => Err(YardError::new(
-            ErrorCode::EngineNotInstalled,
-            format!("{} {version} comes from npm, which this Yard cannot install yet", engine.display()),
-        )),
+        SourceSpec::Npm { package, version, node } => {
+            let root = paths.program_root(engine.key(), &version);
+            if root.is_dir() {
+                job.line(format!("{} {version} is installed", engine.display()));
+            } else {
+                npm_install(job, paths, brew, engine.key(), &package, &version, &node).await?;
+            }
+            Ok(Some(version))
+        }
         SourceSpec::Brew { .. } | SourceSpec::BrewLines(_) => {
             Err(YardError::internal("a brew engine installs through brew"))
         }
@@ -137,6 +144,66 @@ async fn fetch_into(
     }
     job.check_cancelled()?;
     Ok(root)
+}
+
+/// The Node an npm recipe's `node` names, newest installed first: its version and `bin/node`.
+pub fn npm_node(paths: &Paths, node: &str) -> Option<(yard_core::node::NodeVersion, PathBuf)> {
+    let spec = yard_core::node::parse_spec(node).ok()?;
+    let v = yard_core::node::pick(&spec, &crate::node::installed(paths), &crate::node::lts(paths))?;
+    Some((v, paths.node_bin(v, "node")))
+}
+
+/// What an npm recipe's programs run with: that Node's `bin` first, then the system's, so an
+/// npm bin's `#!/usr/bin/env node` finds Yard's Node, never nvm's or Herd's.
+pub fn npm_path(node: &Path) -> String {
+    let bin = node.parent().map(|p| p.display().to_string()).unwrap_or_default();
+    format!("{bin}:/usr/bin:/bin")
+}
+
+/// `npm install --prefix <stage> … <package>@<version>` with the recipe's Node (installed first
+/// when it is missing), renamed into the install root. Install scripts run: the recipe is the
+/// user's own. brew's Python has no distutils for node-gyp, so npm gets Apple's.
+#[allow(clippy::too_many_arguments)]
+async fn npm_install(
+    job: &JobCtx,
+    paths: &Paths,
+    brew: &Brew,
+    key: &str,
+    package: &str,
+    version: &str,
+    node: &str,
+) -> Result<(), YardError> {
+    let node_bin = match npm_node(paths, node) {
+        Some((_, bin)) => bin,
+        None => {
+            let spec = yard_core::node::parse_spec(node)
+                .map_err(|e| YardError::new(ErrorCode::InvalidArgument, e))?;
+            job.line(format!("installing Node {node}, which the recipe runs on"));
+            let v = crate::node::install_node(job, paths, brew, spec).await?;
+            paths.node_bin(v, "node")
+        }
+    };
+    let npm = node_bin.with_file_name("npm");
+    let stage = stage_dir(paths, key);
+    let root = stage.join("root");
+    let result = async {
+        std::fs::create_dir_all(&root).map_err(|e| io("create", &root, e))?;
+        let env = vec![
+            ("PATH".to_string(), npm_path(&node_bin)),
+            ("npm_config_python".to_string(), "/usr/bin/python3".to_string()),
+        ];
+        let prefix = root.display().to_string();
+        let spec = format!("{package}@{version}");
+        job.line(format!("npm install {spec}"));
+        job.run(&npm, &["install", "--prefix", &prefix, "--no-save", "--no-audit", "--no-fund", &spec], &env)
+            .await?;
+        job.check_cancelled()?;
+        let target = paths.program_root(key, version);
+        std::fs::rename(&root, &target).map_err(|e| io("move the install to", &target, e))
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&stage);
+    result
 }
 
 /// Whether the program `engine` pins is there now: its keg for brew, its file for `path`, its

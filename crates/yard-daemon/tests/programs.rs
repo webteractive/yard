@@ -277,3 +277,68 @@ async fn pin_change_keeps_running_version_until_install() {
     assert_eq!(state["failed"]["reason"]["hint"], "yard engines install dl");
     d.shutdown().await.unwrap();
 }
+
+fn npm_recipe(node: &str, usual: u16) -> String {
+    format!(
+        "schema = 1\nkey = \"npmed\"\nname = \"Npmed\"\n\n[source]\nkind = \"npm\"\npackage = \"@acme/npmed\"\n\
+         version = \"1.2.3\"\nnode = \"{node}\"\n\n[ports]\nmain = {usual}\n\n[run]\n\
+         command = [\"{{home}}/node_modules/.bin/fake-service\", \"127.0.0.1:{{port.main}}\"]\n\n[health]\ntcp = \"main\"\n"
+    )
+}
+
+#[tokio::test]
+async fn npm_source_installs_with_yards_node() {
+    let d = prepared("").await;
+    d.fx.add_node("22.18.0");
+    let port = free_port();
+    d.fx.add_recipe("npmed", &npm_recipe("22", port));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add_when_known(&mut c, "npmed").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(wait_until(|| served(port), Duration::from_secs(5)).await);
+    assert_eq!(entry(&d, "npmed").unwrap().version.as_deref(), Some("1.2.3"));
+    let bin = d.fx.paths.node_versions_dir().join("v22.18.0/installation/bin");
+    let log = std::fs::read_to_string(bin.join("npm.log")).unwrap();
+    assert!(log.contains(&format!("{}/npm install --prefix ", bin.display())), "npm by absolute path: {log}");
+    assert!(log.contains("@acme/npmed@1.2.3"), "{log}");
+    assert!(log.contains(&format!("PATH={}:", bin.display())), "the version's bin first: {log}");
+    assert!(log.contains("npm_config_python=/usr/bin/python3"), "{log}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn npm_source_installs_missing_node() {
+    let d = prepared("").await;
+    d.fx.add_fnm();
+    let port = free_port();
+    d.fx.add_recipe("npmed", &npm_recipe("20", port));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add_when_known(&mut c, "npmed").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(
+        d.fx.paths.node_versions_dir().join("v20.19.4/installation/bin/node").exists(),
+        "Node 20 came first"
+    );
+    assert!(wait_until(|| served(port), Duration::from_secs(5)).await);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn npm_unit_path_has_node_first() {
+    let d = prepared("").await;
+    d.fx.add_node("22.18.0");
+    let port = free_port();
+    d.fx.add_recipe("npmed", &npm_recipe("22", port));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add_when_known(&mut c, "npmed").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(wait_until(|| served(port), Duration::from_secs(5)).await);
+    let log = d.fx.paths.program_root("npmed", "1.2.3").join("node_modules/.bin/fake-service.log");
+    let text = std::fs::read_to_string(&log).unwrap();
+    let bin = d.fx.paths.node_versions_dir().join("v22.18.0/installation/bin");
+    assert!(text.contains(&format!("PATH={}:", bin.display())), "{text}");
+    d.shutdown().await.unwrap();
+}

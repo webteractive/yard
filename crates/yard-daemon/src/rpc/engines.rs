@@ -80,10 +80,11 @@ pub(super) async fn install(ctx: &Context, p: EngineInstallParams) -> Result<Job
         )
         .with_hint(format!("yard service add {}", engine.key())));
     }
-    let (paths, reconciler, opts) = (ctx.paths.clone(), ctx.reconciler.clone(), ctx.recipe_options.clone());
+    let (paths, reconciler, opts, brew) =
+        (ctx.paths.clone(), ctx.reconciler.clone(), ctx.recipe_options.clone(), ctx.brew.clone());
     Ok(ctx.jobs.start("engine-install", move |job| async move {
         let home = reconciler.home().to_path_buf();
-        let recorded = crate::programs::install(&job, &paths, &home, engine.as_ref(), &opts).await?;
+        let recorded = crate::programs::install(&job, &paths, &brew, &home, engine.as_ref(), &opts).await?;
         job.check_cancelled()?;
         if let Some(version) = recorded {
             let instances: Vec<String> = load_services(&paths)?

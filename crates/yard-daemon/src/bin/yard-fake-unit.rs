@@ -39,6 +39,7 @@ fn main() -> ExitCode {
         Some("emailulator") => emailulator(Path::new(&argv0), &args),
         Some("cloudflared") => cloudflared(Path::new(&argv0), &args),
         Some("fake-service") => fake_service(Path::new(&argv0), &args),
+        Some("npm") => npm(Path::new(&argv0), &args),
         _ => mode(&args),
     }
 }
@@ -626,14 +627,15 @@ fn fnm(argv0: &Path, args: &[String]) -> ExitCode {
             }
             let bin = dir.join("installation/bin");
             let made = std::fs::create_dir_all(&bin).and_then(|()| {
-                for name in ["node", "npm", "npx"] {
+                for name in ["node", "npx"] {
                     std::fs::write(bin.join(name), "")?;
                     std::fs::set_permissions(
                         bin.join(name),
                         std::os::unix::fs::PermissionsExt::from_mode(0o755),
                     )?;
                 }
-                Ok(())
+                // npm is the fake, so an npm recipe's install runs (recipes plan Task 8).
+                std::os::unix::fs::symlink(std::env::current_exe()?, bin.join("npm"))
             });
             match made {
                 Ok(()) => {
@@ -1060,6 +1062,45 @@ fn minio(args: &[String]) -> ExitCode {
         Err(e) => return fail(format!("cannot listen on {console}: {e}")),
     }
     listen_tcp(Some(api))
+}
+
+/// npm, in a Node version's `bin` (recipes plan Task 8): appends its argv[0], arguments, PATH
+/// and `npm_config_python` to `npm.log` beside itself, and `install --prefix <P> … <pkg>@<v>`
+/// leaves `<P>/node_modules/<pkg>/package.json` and `<P>/node_modules/.bin/fake-service`, the
+/// fake as any recipe engine.
+fn npm(argv0: &Path, args: &[String]) -> ExitCode {
+    let line = format!(
+        "{} {} PATH={} npm_config_python={}\n",
+        argv0.display(),
+        args.join(" "),
+        std::env::var("PATH").unwrap_or_default(),
+        std::env::var("npm_config_python").unwrap_or_default()
+    );
+    let log = argv0.parent().unwrap_or(Path::new(".")).join("npm.log");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+    if args.first().map(String::as_str) != Some("install") {
+        return ExitCode::SUCCESS;
+    }
+    let Some(prefix) = args.iter().position(|a| a == "--prefix").and_then(|i| args.get(i + 1)) else {
+        return fail("npm install needs --prefix".into());
+    };
+    let Some(spec) = args.last() else { return fail("npm install needs a package".into()) };
+    let package = spec.rsplit_once('@').map_or(spec.as_str(), |(p, _)| p);
+    let modules = Path::new(prefix).join("node_modules");
+    let made = std::fs::create_dir_all(modules.join(package))
+        .and_then(|()| std::fs::write(modules.join(package).join("package.json"), "{}"))
+        .and_then(|()| std::fs::create_dir_all(modules.join(".bin")))
+        .and_then(|()| {
+            std::os::unix::fs::symlink(std::env::current_exe()?, modules.join(".bin/fake-service"))
+        });
+    match made {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(format!("npm install into {prefix}: {e}")),
+    }
 }
 
 /// Any recipe engine (recipes plan Task 6): listens on every `127.0.0.1:<port>` or

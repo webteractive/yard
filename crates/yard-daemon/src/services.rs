@@ -123,7 +123,20 @@ pub fn unit_command(
 ) -> Option<UnitCommand> {
     let home = home(brew, paths, engine, entry)?;
     let user = macos_user();
-    Some(engine.command(&instance_ctx(instance, &home, paths, ports, &user)))
+    // An npm engine runs on the newest installed Node its recipe names, first on its PATH.
+    let node = match engine.source() {
+        SourceSpec::Npm { node, .. } => Some(crate::programs::npm_node(paths, &node)?.1),
+        _ => None,
+    };
+    let mut ctx = instance_ctx(instance, &home, paths, ports, &user);
+    ctx.node = node.as_deref();
+    let mut cmd = engine.command(&ctx);
+    if let Some(node) = &node
+        && !cmd.env.iter().any(|(k, _)| k == "PATH")
+    {
+        cmd.env.push(("PATH".to_string(), crate::programs::npm_path(node)));
+    }
+    Some(cmd)
 }
 
 /// The engine and unit command `instance` runs with, or why it cannot run as its entry says:
@@ -551,6 +564,7 @@ impl Add {
                 let recorded = crate::programs::install(
                     &job,
                     &self.paths,
+                    &self.brew,
                     self.reconciler.home(),
                     self.engine.as_ref(),
                     &self.recipe_options,

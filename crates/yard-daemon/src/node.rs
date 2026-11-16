@@ -2,6 +2,7 @@
 //! here runs fnm: only the `node.install` and `node.uninstall` jobs and
 //! `node.list --available` do.
 
+use crate::jobs::JobCtx;
 use crate::project::read_project_file;
 use crate::sources::BREW_TIMEOUT;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,7 @@ use yard_core::Paths;
 use yard_core::brew::Brew;
 use yard_core::config::{SitesConfig, YardConfig, load_sites, load_yard};
 use yard_core::node::{
-    DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, lts_from, matches, newest_per_line, parse_ls_remote,
+    DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, lts_from, matches, newest, newest_per_line, parse_ls_remote,
     parse_spec, pick,
 };
 use yard_core::shim::{NodeSource, child_path, failed_pin, resolve_node, uses_node};
@@ -220,4 +221,73 @@ pub fn in_use(v: NodeVersion, mut sites: Vec<SiteInfo>, paths: &Paths) -> Result
         (_, Some(file)) => format!("edit {file}"),
     };
     Err(YardError::new(ErrorCode::NodeInUse, format!("Node {v} runs {}", names.join(", "))).with_hint(hint))
+}
+
+/// Installs the newest Node matching `spec` with brew's fnm (installing fnm when it is missing)
+/// and answers the version; one already installed is answered as it is (M4c spec). The body of
+/// `node.install`'s job, which an npm recipe's install runs too (recipes spec §5).
+pub async fn install_node(
+    job: &JobCtx,
+    paths: &Paths,
+    brew: &Brew,
+    spec: NodeSpec,
+) -> Result<NodeVersion, YardError> {
+    if let NodeSpec::Exact(v) = spec
+        && installed(paths).contains(&v)
+    {
+        job.line(format!("Node {v} is already installed"));
+        return Ok(v);
+    }
+    let fnm = brew.fnm_bin();
+    if !fnm.exists() {
+        job.run(&brew.brew_bin(), &["install", "fnm"], &Brew::job_env()).await?;
+        if !fnm.exists() {
+            return Err(YardError::new(
+                ErrorCode::FormulaMissing,
+                format!("brew install fnm left no {}", fnm.display()),
+            )
+            .with_hint("brew install fnm"));
+        }
+    }
+    std::fs::create_dir_all(paths.node_dir())
+        .map_err(|e| YardError::internal(format!("cannot create {}: {e}", paths.node_dir().display())))?;
+    let env = fnm_env(paths);
+    let (listed, lines) = job.capture(&fnm, &["ls-remote"], &env).await?;
+    let target = if listed {
+        let releases = parse_ls_remote(&lines.join("\n"));
+        let lts = lts_from(&releases);
+        if let Err(e) = write_lts(paths, &lts) {
+            job.line(format!("cannot write {}: {e}", paths.lts_toml().display()));
+        }
+        newest(&spec, &releases, &lts).ok_or_else(|| {
+            YardError::new(ErrorCode::InvalidArgument, format!("nodejs.org has no Node {spec}"))
+                .with_hint("yard node list --available")
+        })?
+    } else if let NodeSpec::Exact(v) = spec {
+        job.line(format!("could not list nodejs.org's releases; installing {v} anyway"));
+        v
+    } else {
+        let tail: Vec<&String> = lines.iter().skip(lines.len().saturating_sub(20)).collect();
+        return Err(YardError::new(
+            ErrorCode::JobFailed,
+            format!("fnm ls-remote failed, so Node {spec} cannot be resolved to a version"),
+        )
+        .with_hint("check the network, or name an exact version such as 22.18.0")
+        .with_data(serde_json::json!({ "tail": tail })));
+    };
+    if installed(paths).contains(&target) {
+        job.line(format!("Node {target} is already installed"));
+        return Ok(target);
+    }
+    // A download that failed or was cancelled leaves the directory without bin/node;
+    // fnm would call that installed and refuse, so it goes first.
+    let partial = paths.node_versions_dir().join(format!("v{target}"));
+    if partial.exists() {
+        job.line(format!("Removing {}, which an earlier install left unfinished", partial.display()));
+        std::fs::remove_dir_all(&partial)
+            .map_err(|e| YardError::internal(format!("cannot remove {}: {e}", partial.display())))?;
+    }
+    job.line(format!("Installing Node {target}"));
+    job.run(&fnm, &["install", "--progress", "never", &format!("v{target}")], &env).await?;
+    Ok(target)
 }

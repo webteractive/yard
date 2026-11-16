@@ -4,13 +4,10 @@ use super::handlers::{Target, directory, not_found, project_file_target, site, s
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::managed::edit_managed;
-use crate::node::{available, fill_node, fnm_env, in_use, installed, lts, resolve_at, write_lts};
+use crate::node::{available, fill_node, fnm_env, in_use, installed, lts, resolve_at};
 use toml_edit::value;
-use yard_core::brew::Brew;
 use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::node::{
-    DEFAULT_SPEC, NodeSpec, NodeVersion, install_hint, lts_from, newest, parse_ls_remote, parse_spec, pick,
-};
+use yard_core::node::{DEFAULT_SPEC, NodeSpec, NodeVersion, install_hint, parse_spec, pick};
 use yard_proto::methods::{
     NodeInstallParams, NodeListParams, NodeSpecParams, NodeUseParams, NodeVersionParams, SiteParams,
 };
@@ -68,63 +65,7 @@ pub(super) async fn install(ctx: &Context, p: NodeInstallParams) -> Result<JobSt
     };
     let (paths, brew) = (ctx.paths.clone(), ctx.brew.clone());
     Ok(ctx.jobs.start("node-install", move |job: JobCtx| async move {
-        if let NodeSpec::Exact(v) = spec
-            && installed(&paths).contains(&v)
-        {
-            job.line(format!("Node {v} is already installed"));
-            return Ok(());
-        }
-        let fnm = brew.fnm_bin();
-        if !fnm.exists() {
-            job.run(&brew.brew_bin(), &["install", "fnm"], &Brew::job_env()).await?;
-            if !fnm.exists() {
-                return Err(YardError::new(
-                    ErrorCode::FormulaMissing,
-                    format!("brew install fnm left no {}", fnm.display()),
-                )
-                .with_hint("brew install fnm"));
-            }
-        }
-        std::fs::create_dir_all(paths.node_dir())
-            .map_err(|e| YardError::internal(format!("cannot create {}: {e}", paths.node_dir().display())))?;
-        let env = fnm_env(&paths);
-        let (listed, lines) = job.capture(&fnm, &["ls-remote"], &env).await?;
-        let target = if listed {
-            let releases = parse_ls_remote(&lines.join("\n"));
-            let lts = lts_from(&releases);
-            if let Err(e) = write_lts(&paths, &lts) {
-                job.line(format!("cannot write {}: {e}", paths.lts_toml().display()));
-            }
-            newest(&spec, &releases, &lts).ok_or_else(|| {
-                YardError::new(ErrorCode::InvalidArgument, format!("nodejs.org has no Node {spec}"))
-                    .with_hint("yard node list --available")
-            })?
-        } else if let NodeSpec::Exact(v) = spec {
-            job.line(format!("could not list nodejs.org's releases; installing {v} anyway"));
-            v
-        } else {
-            let tail: Vec<&String> = lines.iter().skip(lines.len().saturating_sub(20)).collect();
-            return Err(YardError::new(
-                ErrorCode::JobFailed,
-                format!("fnm ls-remote failed, so Node {spec} cannot be resolved to a version"),
-            )
-            .with_hint("check the network, or name an exact version such as 22.18.0")
-            .with_data(serde_json::json!({ "tail": tail })));
-        };
-        if installed(&paths).contains(&target) {
-            job.line(format!("Node {target} is already installed"));
-            return Ok(());
-        }
-        // A download that failed or was cancelled leaves the directory without bin/node;
-        // fnm would call that installed and refuse, so it goes first.
-        let partial = paths.node_versions_dir().join(format!("v{target}"));
-        if partial.exists() {
-            job.line(format!("Removing {}, which an earlier install left unfinished", partial.display()));
-            std::fs::remove_dir_all(&partial)
-                .map_err(|e| YardError::internal(format!("cannot remove {}: {e}", partial.display())))?;
-        }
-        job.line(format!("Installing Node {target}"));
-        job.run(&fnm, &["install", "--progress", "never", &format!("v{target}")], &env).await
+        crate::node::install_node(&job, &paths, &brew, spec).await.map(|_| ())
     }))
 }
 
