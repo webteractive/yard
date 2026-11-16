@@ -42,6 +42,32 @@ pub fn label(holder: Option<&Holder>) -> String {
     format!("{} (pid {}, {kind})", h.name, h.pid)
 }
 
+/// The addresses something listens on at TCP `port`, as lsof names them (`127.0.0.1:7700`,
+/// `*:7700`, `[::1]:7700`); none when lsof finds nothing or cannot run.
+pub fn listen_addrs(port: u16) -> Vec<String> {
+    let out = std::process::Command::new(LSOF)
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fn"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(out) = out else { return vec![] };
+    parse_listen(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The `n<address>` lines of `lsof -Fn`, each once.
+fn parse_listen(out: &str) -> Vec<String> {
+    let mut addrs: Vec<String> =
+        out.lines().filter_map(|l| l.strip_prefix('n')).map(str::to_string).collect();
+    addrs.sort();
+    addrs.dedup();
+    addrs
+}
+
+/// Whether an address lsof printed is loopback only.
+pub fn is_loopback(addr: &str) -> bool {
+    addr.starts_with("127.") || addr.starts_with("[::1]") || addr.starts_with("localhost:")
+}
+
 /// The first process in `lsof -F pcR` output: `p<pid>`, `R<ppid>`, `c<command>` lines.
 fn parse_lsof(out: &str) -> Option<(u32, Option<u32>, String)> {
     let mut pid = None;
@@ -134,5 +160,13 @@ mod tests {
         assert_eq!(parse_lsof(out), Some((4534, Some(4532), "nginx-arm64".to_string())));
         assert_eq!(parse_lsof(""), None);
         assert_eq!(parse_lsof("p12\ncfoo\n"), Some((12, None, "foo".to_string())));
+    }
+
+    #[test]
+    fn listen_addresses_from_lsof() {
+        let out = "p123\nf5\nn*:7700\nf6\nn127.0.0.1:7701\np456\nf3\nn[::1]:7700\nf4\nn*:7700\n";
+        assert_eq!(parse_listen(out), ["*:7700", "127.0.0.1:7701", "[::1]:7700"]);
+        assert!(is_loopback("127.0.0.1:7701") && is_loopback("[::1]:7700"));
+        assert!(!is_loopback("*:7700") && !is_loopback("192.168.1.4:7700"));
     }
 }

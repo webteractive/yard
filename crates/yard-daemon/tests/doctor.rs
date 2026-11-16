@@ -1844,3 +1844,135 @@ mod tunnels {
         d.shutdown().await.unwrap();
     }
 }
+
+/// Doctor on recipe engines and their programs (recipes spec §12).
+mod recipes {
+    use super::support::daemon::{Client, prepared};
+    use super::support::{free_port, served, wait_until};
+    use serde_json::Value;
+    use std::time::Duration;
+    use yard_proto::{Check, CheckStatus};
+
+    async fn checks(c: &mut Client) -> Vec<Check> {
+        let report = c.call("doctor", Value::Null).await.unwrap();
+        serde_json::from_value(report["checks"].clone()).unwrap()
+    }
+
+    fn find<'a>(checks: &'a [Check], id: &str) -> Option<&'a Check> {
+        checks.iter().find(|c| c.id == id)
+    }
+
+    fn echo(addr: &str, usual: u16) -> String {
+        format!(
+            "schema = 1\nkey = \"echo\"\nname = \"Echo\"\n\n[source]\nkind = \"brew\"\nformula = \"fake-echo\"\n\n\
+             [ports]\nmain = {usual}\n\n[run]\ncommand = [\"{{home}}/bin/fake-service\", \"{addr}:{{port.main}}\"]\n\n\
+             [health]\ntcp = \"main\"\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn a_broken_recipe_fails_engine() {
+        let d = prepared("").await;
+        d.fx.add_recipe("echo", "schema = 1\nkey = \"echo\"\nname = \n");
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let all = checks(&mut c).await;
+        let check = find(&all, "engine:echo").unwrap_or_else(|| panic!("{all:?}"));
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert!(check.message.contains("echo.toml:3:"), "{}", check.message);
+        assert_eq!(
+            check.hint.as_deref(),
+            Some(
+                format!("yard engines check {}", d.fx.paths.engines_dir().join("echo.toml").display())
+                    .as_str()
+            )
+        );
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_program_fails_engine_program() {
+        let d = prepared("").await;
+        d.fx.add_recipe(
+            "dl",
+            &format!(
+                "schema = 1\nkey = \"dl\"\nname = \"Dl\"\n\n[source]\nkind = \"download\"\nversion = \"1.0\"\n\
+                 url = \"https://example.com/dl.tgz\"\nsha256 = \"{}\"\n\n[ports]\nmain = {}\n\n[run]\n\
+                 command = [\"{{home}}/fake-service\", \"127.0.0.1:{{port.main}}\"]\n\n[health]\ntcp = \"main\"\n",
+                "a".repeat(64),
+                free_port()
+            ),
+        );
+        std::fs::write(d.fx.paths.services_toml(), "[services.dl]\nengine = \"dl\"\nversion = \"0.9\"\n")
+            .unwrap();
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let all = checks(&mut c).await;
+        let program = find(&all, "engine-program:dl").unwrap_or_else(|| panic!("{all:?}"));
+        assert_eq!(program.status, CheckStatus::Fail);
+        assert_eq!(program.hint.as_deref(), Some("yard engines install dl"));
+        // engine-version: the recipe pins 1.0, the instance recorded 0.9.
+        let version = find(&all, "engine-version:dl").unwrap_or_else(|| panic!("{all:?}"));
+        assert_eq!(version.status, CheckStatus::Ok);
+        assert!(version.message.contains("0.9") && version.message.contains("1.0"), "{}", version.message);
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_wildcard_listener_warns_service_exposed() {
+        let port = free_port();
+        let d = prepared(&format!("\"echo\" = {{ port = {port}, mode = \"pinned\" }}\n")).await;
+        d.fx.add_fake_formula("fake-echo");
+        d.fx.add_recipe("echo", &echo("0.0.0.0", port));
+        d.fx.add_service("echo", "fake-echo", false);
+        let d = d.start().await;
+        let mut c = d.client().await;
+        assert!(wait_until(|| served(port), Duration::from_secs(5)).await);
+        let mut exposed = None;
+        for _ in 0..50 {
+            exposed = find(&checks(&mut c).await, "service-exposed:echo").cloned();
+            if exposed.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let exposed = exposed.expect("service-exposed:echo");
+        assert_eq!(exposed.status, CheckStatus::Warn);
+        assert!(exposed.message.contains(&format!("*:{port}")), "{}", exposed.message);
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_loopback_listener_is_not_exposed() {
+        let port = free_port();
+        let d = prepared(&format!("\"echo\" = {{ port = {port}, mode = \"pinned\" }}\n")).await;
+        d.fx.add_fake_formula("fake-echo");
+        d.fx.add_recipe("echo", &echo("127.0.0.1", port));
+        d.fx.add_service("echo", "fake-echo", false);
+        let d = d.start().await;
+        let mut c = d.client().await;
+        assert!(wait_until(|| served(port), Duration::from_secs(5)).await);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(find(&checks(&mut c).await, "service-exposed:echo").is_none());
+        d.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unused_install_roots_are_reported() {
+        let d = prepared("").await;
+        let old = d.fx.paths.program_root("gone", "1.0");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("bin"), vec![0u8; 2048]).unwrap();
+        let d = d.start().await;
+        let mut c = d.client().await;
+        let all = checks(&mut c).await;
+        let unused = find(&all, "programs-unused").unwrap_or_else(|| panic!("{all:?}"));
+        assert_eq!(unused.status, CheckStatus::Ok);
+        assert!(
+            unused.message.contains("gone/1.0") && unused.message.contains("2.0 KB"),
+            "{}",
+            unused.message
+        );
+        d.shutdown().await.unwrap();
+    }
+}

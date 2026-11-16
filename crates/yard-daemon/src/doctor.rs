@@ -25,7 +25,7 @@ use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
 use yard_core::render::php::{ini_loads, is_stale};
 use yard_core::services::brew_info;
-use yard_core::services::engines::{EngineKey, LineSpec, ServiceEngine, versioned_lines};
+use yard_core::services::engines::{EngineKey, LineSpec, ServiceEngine, SourceSpec, versioned_lines};
 use yard_core::services::render::old_php_can_log_in;
 use yard_core::services::{instance_name, plain_line};
 use yard_core::sources::{tap_dir, tap_of};
@@ -802,8 +802,105 @@ async fn service_checks(view: &ServiceView<'_>, sites: &[SiteInfo], projects: &P
     for site in sites {
         checks.extend(site_needs(view, site, projects));
     }
+    checks.extend(recipe_checks(view));
     checks.extend(deprecated(view.brew, view.services, view.trust).await);
     checks
+}
+
+/// The recipe checks (recipes spec §12): `engine:<key>` for a recipe file that did not load (a
+/// warning while its engine runs on its last good version), `engine-program:<i>` for an instance
+/// whose download, npm or path program is gone, `engine-version:<i>` for one that runs another
+/// version than its recipe pins, `service-exposed:<i>` for a running recipe instance listening
+/// beyond loopback, and `programs-unused` for install roots nothing names.
+fn recipe_checks(view: &ServiceView<'_>) -> Vec<Check> {
+    let mut checks = vec![];
+    for e in view.engines.errors() {
+        let key = e.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let y = e.to_yard_error();
+        checks.push(fail(&format!("engine:{key}"), y.message, y.hint.unwrap_or_default()));
+    }
+    for key in view.engines.keys() {
+        if let Some(e) = view.engines.stale(&key) {
+            let y = e.to_yard_error();
+            let message = format!("{} (the {key} engine runs on its last good version)", y.message);
+            checks.push(warn(&format!("engine:{key}"), message, y.hint.unwrap_or_default()));
+        }
+    }
+    let registry = yard_core::ports::Registry::load(view.paths).ok();
+    for (instance, entry) in &view.services.services {
+        let Some(engine) = view.engines.get(entry.engine.as_str()) else { continue };
+        let brewed = matches!(engine.source(), SourceSpec::Brew { .. } | SourceSpec::BrewLines(_));
+        if !brewed
+            && let Err(e) = services::runnable(view.brew, view.paths, view.engines, instance, entry, &[])
+            && e.code == yard_proto::ErrorCode::EngineNotInstalled
+        {
+            checks.push(fail(&format!("engine-program:{instance}"), e.message, e.hint.unwrap_or_default()));
+        }
+        if let SourceSpec::Download { version, .. } | SourceSpec::Npm { version, .. } = engine.source()
+            && let Some(runs) = entry.version.as_deref()
+            && runs != version
+        {
+            let mut check = ok(
+                &format!("engine-version:{instance}"),
+                format!("{instance} runs {} {runs}; its recipe pins {version}", engine.display()),
+            );
+            check.hint = Some(format!("yard engines install {}", engine.key()));
+            checks.push(check);
+        }
+        let running = view.daemon_running
+            && view.units.iter().any(|u| u.name == *instance && u.state == UnitState::Running);
+        if running && engine.origin() != yard_core::services::engines::Origin::BuiltIn {
+            let names = services::port_entries(engine.as_ref(), instance);
+            let ports: Vec<u16> = names
+                .iter()
+                .filter_map(|(n, ..)| registry.as_ref()?.entries.get(n).map(|e| e.port))
+                .collect();
+            let exposed: Vec<String> = ports
+                .into_iter()
+                .flat_map(holder::listen_addrs)
+                .filter(|a| !holder::is_loopback(a))
+                .collect();
+            if !exposed.is_empty() {
+                checks.push(warn(
+                    &format!("service-exposed:{instance}"),
+                    format!("{instance} listens on {}, beyond this Mac's loopback", exposed.join(", ")),
+                    format!("bind it to 127.0.0.1 in the {} recipe's run.command", engine.key()),
+                ));
+            }
+        }
+    }
+    let unused = crate::programs::unused(view.paths, view.services, view.engines);
+    if !unused.is_empty() {
+        let size: u64 = unused.iter().map(|d| dir_size(d)).sum();
+        let programs = view.paths.programs_dir();
+        let names: Vec<String> =
+            unused.iter().map(|d| d.strip_prefix(&programs).unwrap_or(d).display().to_string()).collect();
+        let mut check = ok(
+            "programs-unused",
+            format!(
+                "{} in {} that nothing uses: {}",
+                yard_core::present::bytes_text(size),
+                programs.display(),
+                names.join(", ")
+            ),
+        );
+        check.hint = Some("yard engines install <key> or yard service remove sweeps them".into());
+        checks.push(check);
+    }
+    checks
+}
+
+/// The bytes of every file under `dir`.
+fn dir_size(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            _ => e.metadata().map(|m| m.len()).unwrap_or(0),
+        })
+        .sum()
 }
 
 /// Whether the instance runs, from yardd's units. Without yardd only what the file says

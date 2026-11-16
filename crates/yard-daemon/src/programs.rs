@@ -226,9 +226,13 @@ pub fn installed(engine: &dyn ServiceEngine, brew_prefix: &Path, paths: &Paths) 
     }
 }
 
-/// Deletes the install roots no instance records and no recipe pins, and answers what it
-/// deleted. Stages a killed yardd left go too.
+/// Deletes [`unused`]'s install roots and answers what it deleted.
 pub fn sweep(paths: &Paths, services: &ServicesConfig, engines: &Engines) -> Vec<PathBuf> {
+    unused(paths, services, engines).into_iter().filter(|dir| std::fs::remove_dir_all(dir).is_ok()).collect()
+}
+
+/// The install roots no instance records and no recipe pins, and stages a killed yardd left.
+pub fn unused(paths: &Paths, services: &ServicesConfig, engines: &Engines) -> Vec<PathBuf> {
     let mut keep: BTreeSet<(String, String)> =
         services.services.values().filter_map(|e| Some((e.engine.to_string(), e.version.clone()?))).collect();
     for engine in engines.all() {
@@ -244,10 +248,7 @@ pub fn sweep(paths: &Paths, services: &ServicesConfig, engines: &Engines) -> Vec
             let version = version_dir.file_name().to_string_lossy().into_owned();
             let stale_stage = version.starts_with(".stage-")
                 && !version.starts_with(&format!(".stage-{}-", std::process::id()));
-            if (stale_stage || !version.starts_with('.'))
-                && !keep.contains(&(key.clone(), version))
-                && std::fs::remove_dir_all(version_dir.path()).is_ok()
-            {
+            if (stale_stage || !version.starts_with('.')) && !keep.contains(&(key.clone(), version)) {
                 removed.push(version_dir.path());
             }
         }
