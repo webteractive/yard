@@ -203,9 +203,10 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   recipe engine read from TOML at runtime (`~/.yard/engines/*.toml`; sources `brew`, `path`,
   `download`, `npm`), so a new service needs no rebuild; Redis moves to a recipe and Valkey,
   Memcached, Meilisearch and Typesense are carried ones. Designed in
-  `docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` (approved 2026-11-16); no plan
-  yet. Runtimes (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx)
-  later; FrankenPHP is tabled.
+  `docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` (approved 2026-11-16), planned
+  in `docs/superpowers/plans/2026-11-16-yard-service-recipes.md` (approved 2026-11-16, run natively on
+  main). Using an engine becomes `yard <engine> <verb>` (`yard mysql`, `yard postgres`), replacing `yard db`. Runtimes (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx)
+  later; FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.

@@ -62,7 +62,9 @@ must work on their Macs too.
   behind shims: PHP, Composer, Node; the next design, Composer first, since brew's Composer 2.3+
   cannot run under PHP 7.0 and 7.1 and those projects need 2.2 LTS), and the *server* (nginx and
   dnsmasq, shared by every site; a contract only if an alternative such as Caddy is wanted, after
-  runtimes). FrankenPHP, which would be server and PHP runtime in one, is tabled (maintainer).
+  runtimes). FrankenPHP is a runtime, not a server: a second driver beside php-fpm for the process
+  that runs PHP, which nginx would proxy to over HTTP instead of FastCGI (maintainer); it brings its
+  own PHP build and extensions, not brew's. It is tabled (maintainer).
   Runtimes reuse this design's recipe format and sources where they fit. Tunnel providers may
   follow the same pattern later.
 
@@ -254,7 +256,7 @@ re-parsed: a path with a space stays one argument.
 ### 6.2 Load-time checks
 
 A recipe loads only if: it parses; `schema` is one Yard knows; the stem is the key; the key is
-valid and not a built-in's; every placeholder is known for its source; `command[0]` expands to
+valid and not a built-in's or a Yard command's name (§9.1); every placeholder is known for its source; `command[0]` expands to
 something under the install root (or is `{program}`, or `{node}`); `ports` has one to eight entries
 with distinct names and usual ports 1024–65535; `health.tcp` and `console.port` name a port;
 `download` has an `https://` URL and a 64-hex `sha256`; `npm`'s `version` is exact. Whether the
@@ -329,8 +331,46 @@ is `yard service remove meilisearch` and add again. The recipe does not pass
   not a valid engine key (`My Service`) is still `PROJECT_FILE_INVALID`. The shims skip
   `[services]` keys they do not know and load no recipes; `yard init`, `yard info` and the setup
   page ask yardd.
-- `yard db connect` and `yard db shell` take a recipe engine that has `[connect]`; `list`,
-  `create`, `dump` and `import` stay MySQL's and PostgreSQL's (`DB_UNSUPPORTED_ENGINE`).
+- `yard db` is replaced by per-engine commands (§9.1).
+
+### 9.1 Per-engine commands (maintainer, 2026-11-16)
+
+`yard db` is too abstract for a Yard that runs many kinds of service **(maintainer)**. Each engine
+gets its own command for *using* it; *running* it stays in `yard service add|remove|start|stop|…
+<instance>` **(maintainer)**, since an instance name (`mysql-8.4`) already names its engine and
+`yard services` lists them all in one place.
+
+```
+yard mysql                      # the mysql prompt on the project's MySQL (yard db shell today)
+yard mysql list|create|dump|import|connect|open   [--service mysql-8.0] [--site <s>]
+yard postgres …                 # the same verbs; `yard pgsql` is an alias
+yard redis                      # the redis-cli prompt; yard redis connect
+yard meilisearch open           # opens meilisearch.<tld>
+yard <recipe-key> …             # whatever the recipe supports
+```
+
+- **The verbs follow the contract (builder's call).** An engine with `databases()` has `list`,
+  `create`, `dump` and `import`, with today's `yard db` flags and behaviour unchanged (db spec); an
+  engine with `[connect]` has the prompt (the bare command, also `shell`) and `connect`; an engine
+  with a console, or a `connect` URL macOS can open, has `open`. A verb the engine lacks is a usage
+  error naming the verbs it has. Extra arguments after `--` go to the tool, as with `yard db`.
+- **Which instance:** the db spec §5 rule, limited to the command's engine: `--service` (which must
+  be an instance of that engine), else what the project's `.yard` asks for, else the machine's only
+  instance of that engine.
+- **Every engine the CLI knows gets one, recipes included.** The CLI loads the carried recipes and
+  `~/.yard/engines` itself (as `yard engines check` does), so `yard redis` works with yardd down
+  as far as the verb allows. `yard --help` lists the engine commands in their own section.
+- **A recipe key may not be one of Yard's command names** (`link`, `env`, `info`, `service`,
+  `engines`, …, and `db` and `pgsql`): the load check refuses it, so an engine never shadows a Yard
+  command (builder's call). A test keeps the reserved list equal to the CLI's commands.
+- **`yard postgres`, not `yard pgsql`, is the name (builder's call):** it is the engine's key in
+  `.yard` and `services.toml`. `pgsql` (Laravel's driver name) is an alias.
+- **`yard db` goes away over one release (builder's call).** It shipped in 0.1.8: the release that
+  brings the engine commands keeps `yard db <verb>` working and prints `yard db is going away: use
+  yard <engine> <verb>` on stderr; the release after removes it. Yard.app and `scripts/e2e-db.sh`
+  move to the new commands in the same change.
+- **MariaDB,** when it comes, is a built-in with MySQL's database support and gets `yard mariadb`
+  with no CLI work.
 
 Help text and README move with these (Docs In Step).
 
