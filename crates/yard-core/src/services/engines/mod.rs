@@ -3,6 +3,7 @@
 //! PostgreSQL and MinIO are Rust implementations here; recipes (TOML) are the other kind.
 
 mod builtin;
+pub mod carried;
 mod key;
 pub mod recipe;
 
@@ -236,10 +237,10 @@ pub struct Engines {
 }
 
 impl Engines {
-    /// The engines in Yard's code.
+    /// The engines in Yard's code and the recipes it carries.
     pub fn builtin() -> Engines {
         let mut engines = Engines::default();
-        for engine in builtin::all() {
+        for engine in builtin::all().into_iter().chain(carried::engines()) {
             engines.engines.insert(engine.key().to_string(), engine);
         }
         engines

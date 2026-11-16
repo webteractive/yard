@@ -12,9 +12,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use yard_proto::Account;
 
-/// MySQL, PostgreSQL, MinIO, and Redis until it becomes a recipe (Task 4).
+/// MySQL, PostgreSQL and MinIO; Redis is a carried recipe.
 pub fn all() -> Vec<Arc<dyn ServiceEngine>> {
-    Engine::ALL.into_iter().map(|e| Arc::new(Builtin(e)) as Arc<dyn ServiceEngine>).collect()
+    [Engine::Mysql, Engine::Postgres, Engine::Minio]
+        .into_iter()
+        .map(|e| Arc::new(Builtin(e)) as Arc<dyn ServiceEngine>)
+        .collect()
 }
 
 #[derive(Debug)]

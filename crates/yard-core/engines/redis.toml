@@ -1,0 +1,40 @@
+# Redis, as Yard has run it since M4b (recipes spec §10): the same unit, redis.conf, overrides,
+# data directory and .env lines.
+schema = 1
+key = "redis"
+name = "Redis"
+description = "In-memory data store for cache, queues and sessions"
+
+[source]
+kind = "brew"
+formula = "redis"
+
+[ports]
+main = 6379
+
+[run]
+command = ["{home}/bin/redis-server", "{conf}"]
+dirs = ["data"]
+
+[run.config]
+file = "redis.conf"
+text = """
+bind 127.0.0.1
+port {port.main}
+dir {data:quoted}
+daemonize no
+{include_overrides}
+"""
+include = "include {overrides:quoted}"
+overrides = ""
+
+[health]
+tcp = "main"
+
+[env]
+lines = ["REDIS_HOST=127.0.0.1", "REDIS_PORT={port.main}", "REDIS_PASSWORD=null"]
+
+[connect]
+url = "redis://127.0.0.1:{port.main}"
+shell = ["{home}/bin/redis-cli", "-p", "{port.main}"]
+clients = ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]

@@ -5,7 +5,7 @@ use super::*;
 use crate::Paths;
 use crate::services::render;
 use crate::services::{DATABASE_START_TIMEOUT, Engine};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use yard_proto::PortRef;
 
 const ROOT: &str = "/Users/me/.yard";
@@ -82,7 +82,65 @@ fn parity_with_the_enum() {
         let timeout = matches!(engine, Engine::Mysql | Engine::Postgres).then_some(DATABASE_START_TIMEOUT);
         assert_eq!(e.start_timeout(), timeout, "{instance}");
         assert!(e.may_sleep());
-        assert_eq!(e.origin(), Origin::BuiltIn);
+        let origin = if engine == Engine::Redis { Origin::Carried } else { Origin::BuiltIn };
+        assert_eq!(e.origin(), origin, "{instance}");
+    }
+}
+
+/// Redis moved to a carried recipe (recipes spec §10): under a data root with a space and a
+/// quote its unit, `redis.conf` (every byte), overrides, dirs, env lines and connect details are
+/// the enum's.
+#[test]
+fn redis_recipe_matches_the_builtin() {
+    let paths = Paths::new("/Users/me/Library/Application Support/Ya\"rd");
+    let ports = [port("redis", 26379)];
+    let keg = Path::new("/opt/homebrew/opt/redis");
+    let engines = Engines::builtin();
+    let redis = engines.get("redis").unwrap();
+    let ctx = InstanceCtx {
+        instance: "redis",
+        home: keg,
+        paths: &paths,
+        ports: &ports,
+        macos_user: "me",
+        node: None,
+    };
+    assert_eq!(redis.command(&ctx), render::command(Engine::Redis, "redis", keg, &paths, &ports));
+    assert_eq!(redis.config_file(&ctx), render::config_file(Engine::Redis, "redis", &paths, &ports));
+    assert_eq!(redis.user_overrides().as_deref(), Some(""));
+    assert_eq!(redis.dirs(), ["data"]);
+    assert_eq!(redis.start_timeout(), None);
+    assert_eq!(redis.command(&ctx).stop_signal, render::SIGTERM);
+    assert_eq!(redis.account("me"), Engine::Redis.account("me"));
+    assert_eq!(
+        redis.env_lines(&ctx),
+        crate::services::env_lines(Engine::Redis, &ports, &Engine::Redis.account("me"))
+    );
+    let connect = redis.connect(&ctx).unwrap();
+    assert_eq!(connect.url, "redis://127.0.0.1:26379");
+    assert_eq!(
+        connect.shell,
+        Some(vec!["/opt/homebrew/opt/redis/bin/redis-cli".into(), "-p".into(), "26379".into()])
+    );
+    assert_eq!(
+        connect.clients,
+        ["TablePlus: paste the URL", "Another Redis client: a connection to the host and port above"]
+    );
+    assert_eq!(redis.source(), SourceSpec::Brew { formula: "redis".into() });
+    assert_eq!(redis.display(), "Redis");
+}
+
+#[test]
+fn every_carried_recipe_loads() {
+    let texts = carried::texts();
+    assert!(!texts.is_empty());
+    let loaded = carried::all();
+    assert_eq!(loaded.len(), texts.len(), "a carried recipe failed to load");
+    for (name, text) in texts {
+        let file = PathBuf::from(format!("{name}.toml"));
+        if let Err(e) = recipe::parse_recipe(text, &file, Origin::Carried, &LoadOptions::default()) {
+            panic!("{name}: {e:?}");
+        }
     }
 }
 
