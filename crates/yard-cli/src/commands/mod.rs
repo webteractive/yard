@@ -3,6 +3,7 @@
 
 mod db;
 mod doctor;
+mod engines;
 mod env;
 mod ext;
 mod helper;
@@ -24,8 +25,8 @@ mod update;
 mod version;
 
 use crate::cli::{
-    Cli, Command, DbAt, DbSub, DomainCommand, ExtAction, HelperAction, NodeAction, OnOff, PhpAction,
-    PortsAction, ServiceAction, SourceAction, TunnelsCommand,
+    Cli, Command, DbAt, DbSub, DomainCommand, EnginesAction, ExtAction, HelperAction, NodeAction, OnOff,
+    PhpAction, PortsAction, ServiceAction, SourceAction, TunnelsCommand,
 };
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
@@ -180,6 +181,11 @@ pub async fn run(cli: Cli) -> i32 {
         },
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,
+        Command::Engines { action: None } => engines::list(&ctx).await,
+        Command::Engines { action: Some(EnginesAction::Check { file }) } => engines::check(&ctx, file),
+        Command::Engines { action: Some(EnginesAction::Install { key }) } => {
+            engines::install(&ctx, key).await
+        }
         Command::Sources => sources::list(&ctx).await,
         Command::Source { action: SourceAction::Trust { target, tap } } => {
             sources::change(&ctx, target, tap, true).await

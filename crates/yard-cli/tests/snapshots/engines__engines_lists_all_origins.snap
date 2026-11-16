@@ -1,0 +1,14 @@
+---
+source: crates/yard-cli/tests/engines.rs
+expression: stdout(&out)
+---
+ENGINE     NAME       SOURCE         ORIGIN                                  INSTALLED
+mysql      MySQL      brew           built-in                                yes
+redis      Redis      brew           carried                                 no
+typesense  Typesense  download 30.1  /Users/me/.yard/engines/typesense.toml  no
+
+error: /Users/me/.yard/engines/typesense.toml:4: name is empty
+error: /Users/me/.yard/engines/soketi.toml:2: "Soketi" is not an engine key
+
+Add one with yard service add <engine>; write your own in ~/.yard/engines/<key>.toml.
+For agents and scripts: yard engines --json

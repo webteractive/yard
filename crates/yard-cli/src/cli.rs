@@ -209,6 +209,12 @@ pub enum Command {
         /// The site; defaults to the linked project that contains the current directory.
         site: Option<String>,
     },
+    /// List the service engines: MySQL, PostgreSQL and MinIO, the recipes Yard carries, and your
+    /// own in ~/.yard/engines, with where each program comes from and whether it is installed.
+    Engines {
+        #[command(subcommand)]
+        action: Option<EnginesAction>,
+    },
     /// List the brew taps Yard installs from, and what brew trusts in them.
     Sources,
     /// Change what brew trusts from Yard's taps.
@@ -465,6 +471,16 @@ pub enum DomainCommand {
     },
     /// Forget a domain. Tunnels on it keep running; its sign-in stays.
     Remove { domain: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EnginesAction {
+    /// Load a recipe file without installing anything, and show the instance it would make:
+    /// its ports, the command it runs and its yard env lines. Needs no daemon.
+    Check { file: std::path::PathBuf },
+    /// Install the program an engine's recipe pins (a download or an npm package) and move its
+    /// instance onto it.
+    Install { key: String },
 }
 
 #[derive(Debug, Subcommand)]

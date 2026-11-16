@@ -21,6 +21,16 @@ pub async fn status(ctx: &Ctx) -> Outcome {
             "Profile   {profile}\nTLD       .{}\nSites     {}\nConfig    {config}\n\n",
             info.tld, info.sites
         );
+        for e in &info.engine_errors {
+            out.push_str(&format!(
+                "Recipe    {}
+",
+                e.message
+            ));
+        }
+        if !info.engine_errors.is_empty() {
+            out.push('\n');
+        }
         if info.units.is_empty() && info.sleeping.is_empty() {
             out.push_str("No units yet; yardd starts them after its first reconcile.\n");
         } else {
