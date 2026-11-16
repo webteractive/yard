@@ -497,6 +497,41 @@ else
 fi
 ax press Cancel >/dev/null
 
+# R5 (recipes plan Task 13): a recipe dropped into the root's engines/ is offered by the Add
+# picker with no restart, the picker following engines.list and engines_changed.
+mkdir -p "$root/engines"
+cat >"$root/engines/chkecho.toml" <<'RECIPE'
+schema = 1
+key = "chkecho"
+name = "Chk echo"
+
+[source]
+kind = "brew"
+formula = "chkecho"
+
+[ports]
+main = 29098
+
+[run]
+command = ["{home}/bin/chkecho", "127.0.0.1:{port.main}"]
+
+[health]
+tcp = "main"
+RECIPE
+if within 10 sh -c "'$yard_bin' --root '$root' engines --json | jq -e 'any(.engines[]; .key == \"chkecho\")' >/dev/null"; then
+  sleep 1
+  ax press "Add service…" >/dev/null
+  if ax pick Engine "Chk echo" >/dev/null 2>&1; then
+    pass "R5 a recipe dropped into engines/ is offered by the Add picker without a restart"
+  else
+    fail "R5 Add picker" "no Chk echo among $(ax tree | jq -r '[.[] | select(.role == "AXMenuItem") | .name] | join(", ")')"
+  fi
+  ax press Cancel >/dev/null 2>&1 || true
+else
+  fail "R5 yardd never listed the chkecho recipe"
+fi
+rm -f "$root/engines/chkecho.toml"
+
 # V1: add MinIO from the form; it runs as a job whose output Activity shows
 if [[ -d "$(brew --prefix)/opt/minio" ]]; then
   ax press "Add service…" >/dev/null

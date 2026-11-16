@@ -436,11 +436,17 @@ function run(argv) {
       // The name field (Save As) is the panel's first plain text field; the search field is not one.
       const field = w.entireContents().find((e) => str(() => e.role()) === "AXTextField" && str(() => e.subrole()) !== "AXSearchField");
       if (!field) throw new Error("the save panel has no name field");
-      try { field.focused = true; } catch (err) {}
-      delay(0.2);
-      se.keystroke("a", { using: "command down" });
-      se.keystroke(name);
-      delay(0.3);
+      // Typing over the panel's selection proved unreliable (Command-A sometimes selected nothing
+      // and the name was appended), so the field's value is set through accessibility and read back.
+      let typed = "";
+      for (let i = 0; i < 3 && typed !== name; i++) {
+        try { field.focused = true; } catch (err) {}
+        delay(0.2);
+        try { field.value = name; } catch (err) {}
+        delay(0.3);
+        typed = str(() => field.value());
+      }
+      if (typed !== name) throw new Error(`the save panel's name field says ${typed}, not ${name}`);
       const save = w.entireContents().find((e) => str(() => e.role()) === "AXButton" && str(() => e.name()) === "Save");
       if (!save) throw new Error("the save panel has no Save button");
       save.actions.byName("AXPress").perform();
