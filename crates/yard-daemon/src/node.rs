@@ -191,6 +191,32 @@ pub async fn available(
 /// `NODE_IN_USE` when `v` is the only installed version the default spec, or the spec of a
 /// linked site that uses Node, matches: removing it would leave them nothing to run. `sites`
 /// is the snapshot's; their Node part is filled here.
+/// `NODE_IN_USE` when `v` is the only installed Node an npm recipe's instance runs on (recipes
+/// spec §5): uninstalling it would leave the instance unable to start.
+pub fn npm_in_use(v: NodeVersion, snapshot: &crate::state::Snapshot, paths: &Paths) -> Result<(), YardError> {
+    let (installed, lts) = (installed(paths), lts(paths));
+    let using: Vec<&String> = snapshot
+        .services
+        .services
+        .iter()
+        .filter(|(_, entry)| {
+            let Some(engine) = snapshot.engines.get(entry.engine.as_str()) else { return false };
+            let yard_core::services::engines::SourceSpec::Npm { node, .. } = engine.source() else {
+                return false;
+            };
+            let Ok(spec) = parse_spec(&node) else { return false };
+            let matching: Vec<&NodeVersion> =
+                installed.iter().filter(|i| matches(&spec, **i, &lts)).collect();
+            matching == [&v]
+        })
+        .map(|(name, _)| name)
+        .collect();
+    let Some(first) = using.first() else { return Ok(()) };
+    let names: Vec<&str> = using.iter().map(|s| s.as_str()).collect();
+    Err(YardError::new(ErrorCode::NodeInUse, format!("Node {v} runs {}", names.join(", ")))
+        .with_hint(format!("yard service remove {first}")))
+}
+
 pub fn in_use(v: NodeVersion, mut sites: Vec<SiteInfo>, paths: &Paths) -> Result<(), YardError> {
     fill_node(&mut sites, paths);
     let (installed, lts) = (installed(paths), lts(paths));

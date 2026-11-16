@@ -15,16 +15,17 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
     let written = args.next().unwrap_or_default();
     // Laravel's name for the driver.
     let key = if written == "pgsql" { "postgres".to_string() } else { written.clone() };
-    let engines = yard_daemon::engines::load_once(&ctx.paths, &Default::default());
+    let rest: Vec<String> = args.collect();
+    // A `--root` written after the engine is the root, as it is anywhere else: the engines are
+    // read from it and every call goes to its yardd, never the real one.
+    let root_overridden = ctx.root_overridden || trailing_root(&rest).is_some();
+    let paths = trailing_root(&rest).map_or_else(|| ctx.paths.clone(), yard_core::Paths::new);
+    let engines = yard_daemon::engines::load_once(&paths, &Default::default());
     let Some(engine) = engines.get(&key).cloned() else {
         eprintln!("error: unrecognized subcommand '{written}'\n\nFor more information, try 'yard --help'.");
         return Ok(2);
     };
-    let rest: Vec<String> = args.collect();
-    let (verb, tail) = match rest.first().and_then(|w| Verb::parse(w)) {
-        Some(verb) => (verb, rest[1..].to_vec()),
-        None => (Verb::Shell, rest),
-    };
+    let (verb, tail) = split_verb(rest);
     let verbs = engine_verbs(engine.as_ref());
     if !verbs.contains(&verb) {
         let has: Vec<&str> = verbs.iter().map(|v| v.name()).collect();
@@ -34,7 +35,8 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
     }
     // `open` on an engine with a console opens the console.
     if verb == Verb::Open && engine.databases().is_none() && engine.console().is_some() {
-        return open_console(ctx, &key).await;
+        let ctx = Ctx { paths, json: ctx.json, root_overridden, security: ctx.security.clone() };
+        return open_console(&ctx, &key).await;
     }
     let argv = ["yard".to_string(), "db".to_string(), verb.name().to_string()].into_iter().chain(tail);
     let parsed = match Cli::try_parse_from(argv) {
@@ -45,13 +47,47 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
         }
     };
     let Some(Command::Db { action }) = parsed.command else { return Ok(2) };
-    let ctx = Ctx {
-        paths: ctx.paths.clone(),
-        json: ctx.json || parsed.json,
-        root_overridden: ctx.root_overridden,
-        security: ctx.security.clone(),
-    };
+    let ctx = Ctx { paths, json: ctx.json || parsed.json, root_overridden, security: ctx.security.clone() };
     db_action(&ctx, action, Some(key)).await
+}
+
+/// The flags of `yard db`'s verbs that take a value: the word after one is never the verb.
+const VALUE_FLAGS: [&str; 3] = ["--service", "--site", "--root"];
+
+/// The `--root` among `args` before any `--`, in either spelling.
+fn trailing_root(args: &[String]) -> Option<String> {
+    let mut words = args.iter().take_while(|a| *a != "--");
+    while let Some(word) = words.next() {
+        if word == "--root" {
+            return words.next().cloned();
+        }
+        if let Some(root) = word.strip_prefix("--root=") {
+            return Some(root.to_string());
+        }
+    }
+    None
+}
+
+/// The verb and the other arguments: the first word before any `--` that names a verb and is not
+/// a flag's value (`yard mysql --service mysql-8.0 list`), else `shell` with them all.
+fn split_verb(mut args: Vec<String>) -> (Verb, Vec<String>) {
+    let mut i = 0;
+    while i < args.len() && args[i] != "--" {
+        if VALUE_FLAGS.contains(&args[i].as_str()) {
+            i += 2;
+            continue;
+        }
+        if let Some(verb) = Verb::parse(&args[i]) {
+            args.remove(i);
+            return (verb, args);
+        }
+        if !args[i].starts_with('-') {
+            // A positional before any verb (a database name): the verb is shell.
+            break;
+        }
+        i += 1;
+    }
+    (Verb::Shell, args)
 }
 
 /// Opens the console of `key`'s instance (`meilisearch.<tld>`).

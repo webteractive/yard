@@ -8,8 +8,13 @@ use std::fmt;
 #[serde(try_from = "String", into = "String")]
 pub struct EngineKey(String);
 
-/// The keys of the engines in Yard's code, and emailulator's, which Yard only points at.
-const RESERVED: [&str; 4] = ["mysql", "postgres", "minio", "emailulator"];
+/// The keys of the engines in Yard's code, emailulator's, which Yard only points at, and the names
+/// of Yard's own units and port entries, which an instance named for a key would take over.
+const RESERVED: [&str; 7] = ["mysql", "postgres", "minio", "emailulator", "nginx", "dnsmasq", "mail"];
+
+/// Prefixes of Yard's own unit and port-entry names (`tunnel-<site>`, `nginx-tunnel-<site>`,
+/// `php-fpm-<v>`, `emailulator-smtp`), and of the versioned built-ins' instances.
+const RESERVED_PREFIXES: [&str; 6] = ["mysql-", "postgres-", "tunnel-", "nginx-", "php-fpm", "emailulator-"];
 
 impl EngineKey {
     /// Checks the syntax only; whether an engine has the key is the set's to say.
@@ -35,7 +40,7 @@ impl EngineKey {
     /// A built-in's key, emailulator's, or one a versioned instance name could be read as
     /// (`mysql-x`): a recipe may not take it.
     pub fn is_reserved(&self) -> bool {
-        RESERVED.contains(&self.0.as_str()) || self.0.starts_with("mysql-") || self.0.starts_with("postgres-")
+        RESERVED.contains(&self.0.as_str()) || RESERVED_PREFIXES.iter().any(|p| self.0.starts_with(p))
     }
 }
 

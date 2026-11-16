@@ -77,10 +77,14 @@ pub(super) async fn uninstall(ctx: &Context, p: NodeVersionParams) -> Result<Job
         return Err(YardError::new(ErrorCode::NodeMissing, format!("Node {v} is not installed"))
             .with_hint("yard node list shows the installed versions"));
     }
-    in_use(v, snapshot(ctx).await?.resolution.sites, &ctx.paths)?;
+    let snap = snapshot(ctx).await?;
+    crate::node::npm_in_use(v, &snap, &ctx.paths)?;
+    in_use(v, snap.resolution.sites, &ctx.paths)?;
     let (paths, brew, reconciler) = (ctx.paths.clone(), ctx.brew.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("node-uninstall", move |job: JobCtx| async move {
-        in_use(v, snapshot_of(&reconciler).await?.resolution.sites, &paths)?;
+        let snap = snapshot_of(&reconciler).await?;
+        crate::node::npm_in_use(v, &snap, &paths)?;
+        in_use(v, snap.resolution.sites, &paths)?;
         let fnm = brew.fnm_bin();
         if !fnm.exists() {
             return Err(YardError::new(ErrorCode::FormulaMissing, "fnm is not installed")

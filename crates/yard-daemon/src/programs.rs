@@ -56,6 +56,13 @@ pub async fn install(
             let root = paths.program_root(engine.key(), &version);
             if root.is_dir() {
                 job.line(format!("{} {version} is installed", engine.display()));
+                // Its Node may have gone (uninstalled by hand): the instance needs it to start.
+                if npm_node(paths, &node).is_none() {
+                    let spec = yard_core::node::parse_spec(&node)
+                        .map_err(|e| YardError::new(ErrorCode::InvalidArgument, e))?;
+                    job.line(format!("installing Node {node}, which {} runs on", engine.display()));
+                    crate::node::install_node(job, paths, brew, spec).await?;
+                }
             } else {
                 npm_install(job, paths, brew, engine.key(), &package, &version, &node).await?;
             }

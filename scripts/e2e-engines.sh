@@ -112,8 +112,10 @@ cleanup() {
     fi
   done
   for name in "${recipes[@]}"; do rm -f "$data/engines/$name.toml"; done
-  stub="$data/nginx/overrides/$site.conf"
-  if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
+  # The override stubs Yard created for the site and for meilisearch.yard, unless edited.
+  for stub in "$data/nginx/overrides/$site.conf" "$data/nginx/overrides/meilisearch.conf"; do
+    if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
+  done
   for f in "${tomls[@]}"; do
     if [[ $cleanup_failed == 1 && $f != sites.toml ]]; then continue; fi
     if [[ -f $work/$f.bak ]]; then
@@ -162,8 +164,9 @@ ts_port="$(port_of typesense)"
 want='{"ok":true}' answer="$(tries=100 eventually curl -fsS "http://127.0.0.1:$ts_port/health")"
 [[ $answer == '{"ok":true}' ]] || fail "typesense /health answered '$answer'"
 pass "typesense is healthy on $ts_port"
-lsof -nP -iTCP -sTCP:LISTEN -a -c typesense | awk 'NR>1 {print $9}' | grep -vqE '^(127\.0\.0\.1|\[::1\]):' \
-  && fail "typesense listens beyond loopback"
+ts_listeners="$(lsof -nP -iTCP -sTCP:LISTEN -a -c typesense | awk 'NR>1 {print $9}')"
+[[ -n $ts_listeners ]] || fail "lsof finds no typesense listener to check"
+grep -vqE '^(127\.0\.0\.1|\[::1\]):' <<<"$ts_listeners" && fail "typesense listens beyond loopback: $ts_listeners"
 pass "typesense listens on loopback only"
 
 # 4. yard env in a scratch project whose .yard lists them, and the console through nginx.

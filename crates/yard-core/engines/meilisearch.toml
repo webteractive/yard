@@ -23,10 +23,11 @@ command = [
   "--dump-dir", "{data}/dumps",
   "--snapshot-dir", "{data}/snapshots",
   "--env", "development",
-  "--master-key", "{secret}",
   "--no-analytics",
 ]
 dirs = ["data"]
+# The key goes in the environment, which only the user can read, not in argv, which ps shows.
+env = { MEILI_MASTER_KEY = "{secret}" }
 
 [health]
 tcp = "main"

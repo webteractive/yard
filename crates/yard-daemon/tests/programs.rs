@@ -342,3 +342,65 @@ async fn npm_unit_path_has_node_first() {
     assert!(text.contains(&format!("PATH={}:", bin.display())), "{text}");
     d.shutdown().await.unwrap();
 }
+
+/// A brew instance whose recipe is replaced by a download one moves to it through
+/// `engines.install`, and services.toml stays readable: the version replaces the formula.
+#[tokio::test]
+async fn engines_install_replaces_a_formula_with_the_version() {
+    let redis = free_port();
+    let d = prepared(&format!("\"redis\" = {{ port = {redis}, mode = \"pinned\" }}\n")).await;
+    d.fx.add_formula("redis");
+    d.fx.add_service("redis", "redis", false);
+    let files = tempfile::tempdir().unwrap();
+    let (file, sha) = archive(files.path(), &d.fx.fake, "one");
+    let text = download_recipe("1.0", &format!("file://{}", file.display()), &sha, redis)
+        .replace("key = \"dl\"", "key = \"redis\"");
+    d.fx.add_recipe("redis", &text);
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = run_job(&mut c, "engines.install", json!({"key": "redis"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    let e = entry(&d, "redis").expect("services.toml still parses");
+    assert_eq!((e.formula.as_deref(), e.version.as_deref()), (None, Some("1.0")));
+    d.shutdown().await.unwrap();
+}
+
+/// `yard node uninstall` refuses the only Node an npm instance runs on (recipes spec §5).
+#[tokio::test]
+async fn node_an_npm_instance_runs_cannot_be_uninstalled() {
+    let d = prepared("").await;
+    d.fx.add_fnm();
+    d.fx.add_node("22.18.0");
+    // Another LTS, so the default Node is not what keeps 22 installed.
+    d.fx.add_node("20.19.4");
+    d.fx.add_recipe("npmed", &npm_recipe("22", free_port()));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add_when_known(&mut c, "npmed").await;
+    assert_eq!(error, None, "{lines:?}");
+    let e = c.call("node.uninstall", json!({"version": "22.18.0"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::NodeInUse, "{e:?}");
+    assert!(e.message.contains("npmed"), "{}", e.message);
+    d.shutdown().await.unwrap();
+}
+
+/// An npm instance whose Node went away gets it back from `yard engines install`, though its
+/// package is still installed.
+#[tokio::test]
+async fn engines_install_brings_back_a_missing_node() {
+    let d = prepared("").await;
+    d.fx.add_fnm();
+    d.fx.add_node("22.18.0");
+    let port = free_port();
+    d.fx.add_recipe("npmed", &npm_recipe("22", port));
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let (lines, error) = add_when_known(&mut c, "npmed").await;
+    assert_eq!(error, None, "{lines:?}");
+    let node = d.fx.paths.node_versions_dir().join("v22.18.0");
+    std::fs::remove_dir_all(&node).unwrap();
+    let (lines, error) = run_job(&mut c, "engines.install", json!({"key": "npmed"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(node.join("installation/bin/node").exists(), "Node 22 is back: {lines:?}");
+    d.shutdown().await.unwrap();
+}

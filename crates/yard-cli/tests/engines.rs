@@ -202,3 +202,26 @@ fn help_lists_engine_commands() {
     );
     assert!(!text.contains("\n  db "), "yard db is hidden: {text}");
 }
+
+/// `--root` written after the engine is the root, as it is anywhere else: a recipe found only
+/// there is a command, and the call goes to that root's yardd, never the real one.
+#[test]
+fn a_root_after_the_engine_is_honoured() {
+    let empty = short_root();
+    let scratch = short_root();
+    std::fs::create_dir_all(scratch.path().join("engines")).unwrap();
+    let recipe = GOOD.to_string() + "\n[connect]\nurl = \"echo://127.0.0.1:{port.main}\"\n";
+    std::fs::write(scratch.path().join("engines/echo.toml"), recipe).unwrap();
+    let out = yard_at(empty.path()).args(["echo", "connect", "--root"]).arg(scratch.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(3), "the scratch root's recipe, and no yardd there: {}", stderr(&out));
+}
+
+/// A flag before the verb does not turn the verb into a database name.
+#[test]
+fn flags_before_the_verb() {
+    let d = MockDaemon::start(&[("db.list", Ok(json!([])))]);
+    let out = d.yard().args(["mysql", "--service", "mysql-8.0", "list"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let p = &d.params("db.list")[0];
+    assert_eq!((p["service"].as_str(), p["engine"].as_str()), (Some("mysql-8.0"), Some("mysql")));
+}

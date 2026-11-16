@@ -326,7 +326,39 @@ impl Engines {
             }
         }
         *last_good = kept;
+        engines.refuse_port_entry_keys();
         engines
+    }
+
+    /// Refuses a user recipe whose key is another engine's port entry (`minio-console`,
+    /// `typesense-peering`, or `cache-stack` beside a `cache` with a port named `stack`): its
+    /// instance's main entry would be that one, and the two would share a port.
+    fn refuse_port_entry_keys(&mut self) {
+        let entries: Vec<(String, String)> = self
+            .engines
+            .values()
+            .flat_map(|e| {
+                let key = e.key().to_string();
+                e.ports()
+                    .into_iter()
+                    .filter(|p| !p.suffix.is_empty())
+                    .map(move |p| (format!("{key}-{}", p.suffix), key.clone()))
+            })
+            .collect();
+        for (entry, owner) in entries {
+            let Some(engine) = self.engines.get(&entry) else { continue };
+            let Origin::User(file) = engine.origin() else { continue };
+            self.engines.remove(&entry);
+            self.stale.remove(&entry);
+            self.errors.push(RecipeError {
+                file,
+                line: None,
+                message: format!(
+                    "{entry} is the {owner} engine's port entry {entry}: an instance named {entry} would share its port; \
+                     give the recipe another key"
+                ),
+            });
+        }
     }
 
     /// [`Engines::builtin`], built once: the carried recipes are parsed the first time only.

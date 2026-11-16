@@ -486,4 +486,11 @@ Decided while planning and building, each recorded in the plan's ledger with its
 - **Ports.** An instance's other ports are `<instance>-<name>`, owned by the longest instance name
   that fits (`port_owner` takes the services list), so removal works for an unknown engine. Needs and
   `yard env` blocks come out in key order.
-
+- **From the final review:** a recipe key may not be one of Yard's own unit or port-entry names
+  (`nginx`, `dnsmasq`, `mail`, or starting `tunnel-`, `nginx-`, `php-fpm`, `emailulator-`), nor
+  another engine's port entry (`minio-console`, `typesense-peering`), since the two instances would
+  share a unit or a port; secret keys reach Typesense and Meilisearch through their environment
+  (`TYPESENSE_API_KEY`, `MEILI_MASTER_KEY`), not their arguments, which `ps` shows; `engines.install`
+  replaces a recorded `formula` with the `version`; `yard node uninstall` refuses the only Node an
+  npm instance runs on, and `engines.install` brings a missing one back; `yard <engine>` honours a
+  `--root` written after the engine and finds the verb past flags.

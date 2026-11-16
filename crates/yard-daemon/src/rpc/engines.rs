@@ -96,6 +96,9 @@ pub(super) async fn install(ctx: &Context, p: EngineInstallParams) -> Result<Job
             for instance in &instances {
                 TomlFile::edit(&paths.services_toml(), |file| {
                     file.set(&["services", instance, "version"], toml_edit::value(version.as_str()));
+                    // A download or npm entry records its version and no formula: one switched
+                    // from a brew recipe would not parse with both.
+                    file.remove(&["services", instance, "formula"]);
                     Ok(())
                 })?;
                 job.line(format!("{instance} now runs {} {version}", engine.display()));

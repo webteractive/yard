@@ -415,7 +415,9 @@ fn carried_recipes_render() {
         "{cmd:?}"
     );
     assert!(cmd.contains(&"/u/.yard/services/meilisearch/data/data.ms".to_string()), "{cmd:?}");
-    assert!(cmd.windows(2).any(|w| w == ["--master-key", "m-key"]), "{cmd:?}");
+    // Keys go in the environment, which only the user can read, never in argv, which `ps` shows.
+    assert!(!cmd.iter().any(|a| a.contains("m-key")), "{cmd:?}");
+    assert!(meili.command(&c).env.contains(&("MEILI_MASTER_KEY".to_string(), "m-key".to_string())));
     assert_eq!(meili.env_lines(&c), ["MEILISEARCH_HOST=http://127.0.0.1:27700", "MEILISEARCH_KEY=m-key"]);
     assert_eq!(
         meili.console(),
@@ -434,7 +436,6 @@ fn carried_recipes_render() {
         ["--api-port", "28108"],
         ["--peering-address", "127.0.0.1"],
         ["--peering-port", "28107"],
-        ["--api-key", "t-key"],
     ] {
         assert!(cmd.windows(2).any(|w| w == pair), "{pair:?} in {cmd:?}");
     }
@@ -448,6 +449,8 @@ fn carried_recipes_render() {
         ]
     );
     assert!(!cmd.contains(&"--enable-cors".to_string()), "no web page should reach it: {cmd:?}");
+    assert!(!cmd.iter().any(|a| a.contains("t-key")), "{cmd:?}");
+    assert!(typesense.command(&c).env.contains(&("TYPESENSE_API_KEY".to_string(), "t-key".to_string())));
     assert!(!get("redis").needs_secret() && !get("valkey").needs_secret());
     let SourceSpec::Download { version, url, sha256, strip } = typesense.source() else {
         panic!("a download")
@@ -455,4 +458,57 @@ fn carried_recipes_render() {
     assert_eq!((version.as_str(), strip), ("30.2", 0));
     assert!(url.starts_with("https://dl.typesense.org/releases/30.2/"), "{url}");
     assert_eq!(sha256.len(), 64);
+}
+
+#[test]
+fn keys_that_would_take_yards_own_units_are_reserved() {
+    for key in
+        ["nginx", "dnsmasq", "mail", "tunnel-blog", "nginx-tunnel-x", "php-fpm-8-4", "emailulator-smtp"]
+    {
+        assert!(EngineKey::new(key).unwrap().is_reserved(), "{key}");
+    }
+    assert!(!EngineKey::new("soketi").unwrap().is_reserved());
+}
+
+#[test]
+fn a_key_that_is_another_engines_port_entry_is_refused() {
+    let text = |key: &str, ports: &str| {
+        format!(
+            "schema = 1\nkey = \"{key}\"\nname = \"X\"\n\n[source]\nkind = \"brew\"\nformula = \"x\"\n\n[ports]\n{ports}\n\n\
+             [run]\ncommand = [\"{{home}}/bin/x\"]\n\n[health]\ntcp = \"main\"\n"
+        )
+    };
+    let parse = |key: &str, ports: &str| {
+        let file = PathBuf::from(format!("/u/.yard/engines/{key}.toml"));
+        recipe::parse_recipe(&text(key, ports), &file, Origin::User(file.clone()), &LoadOptions::default())
+    };
+    let mut last_good = BTreeMap::new();
+    // MinIO's console entry is `minio-console`; Typesense's peering one `typesense-peering`.
+    let engines = Engines::with_user(
+        Engines::builtin_shared(),
+        vec![parse("minio-console", "main = 27001"), parse("typesense-peering", "main = 27002")],
+        &mut last_good,
+    );
+    assert!(engines.get("minio-console").is_none() && engines.get("typesense-peering").is_none());
+    assert_eq!(engines.errors().len(), 2, "{:?}", engines.errors());
+    assert!(engines.errors()[0].message.contains("port entry"), "{:?}", engines.errors());
+    // And a port name that would make another engine's key: `redis` with a port `stack` is
+    // `redis-stack`, which this recipe's key is.
+    let engines = Engines::with_user(
+        Engines::builtin_shared(),
+        vec![parse("redis-stack", "main = 27003"), parse("cache", "main = 27004\nx = 27005")],
+        &mut last_good,
+    );
+    assert!(engines.get("redis-stack").is_some() && engines.get("cache").is_some(), "no clash here");
+    let engines = Engines::with_user(
+        Engines::builtin_shared(),
+        vec![parse("cache", "main = 27004\nstack = 27005"), parse("cache-stack", "main = 27006")],
+        &mut last_good,
+    );
+    assert_eq!(
+        engines.errors().len(),
+        1,
+        "cache's `stack` port and cache-stack collide: {:?}",
+        engines.errors()
+    );
 }

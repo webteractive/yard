@@ -206,8 +206,8 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` (approved 2026-11-16), planned
   in `docs/superpowers/plans/2026-11-16-yard-service-recipes.md` (approved 2026-11-16, run natively on
   main). Using an engine becomes `yard <engine> <verb>` (`yard mysql`, `yard postgres`), replacing `yard db`.
-  Built on main on 2026-11-16 (protocol 2.13, Tasks 1–13 and 15), with the whole suite passing (1437)
-  and the app's (255); an automated security review of the carried recipes added `{secret}` (a
+  Built on main on 2026-11-16 (protocol 2.13, Tasks 1–13 and 15), with the whole suite passing (1446)
+  and the app's (255) after a whole-branch review's fixes; an automated security review of the carried recipes added `{secret}` (a
   per-instance random key, made fail-closed) for Typesense's API key and Meilisearch's master key and
   dropped Typesense's CORS. The real-machine check (`scripts/e2e-engines.sh`) and `checklist.sh`'s
   new picker item have not run yet: they wait for the maintainer. `yard db` keeps working for one

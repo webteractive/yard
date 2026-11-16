@@ -21,13 +21,14 @@ peering = 8107
 command = [
   "{home}/typesense-server",
   "--data-dir", "{data}",
-  "--api-key", "{secret}",
   "--api-address", "127.0.0.1",
   "--api-port", "{port.main}",
   "--peering-address", "127.0.0.1",
   "--peering-port", "{port.peering}",
 ]
 dirs = ["data"]
+# The key goes in the environment, which only the user can read, not in argv, which ps shows.
+env = { TYPESENSE_API_KEY = "{secret}" }
 
 [health]
 tcp = "main"
