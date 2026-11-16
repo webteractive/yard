@@ -199,6 +199,13 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   (the two late security findings, the deferred minors, `innodb_log_buffer_size = 16M`, and
   PostgreSQL flags read as getopt reads them) passed `e2e-db.sh` with the wake check against this
   checkout's yardd before 0.1.9.
+- Service recipes (maintainer, 2026-11-16): engines become a `ServiceEngine` contract in Rust, with a
+  recipe engine read from TOML at runtime (`~/.yard/engines/*.toml`; sources `brew`, `path`,
+  `download`, `npm`), so a new service needs no rebuild; Redis moves to a recipe and Valkey,
+  Memcached, Meilisearch and Typesense are carried ones. Designed in
+  `docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` (approved 2026-11-16); no plan
+  yet. Runtimes (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx)
+  later; FrankenPHP is tabled.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
