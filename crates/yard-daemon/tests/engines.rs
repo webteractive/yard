@@ -286,3 +286,28 @@ async fn an_instance_gets_its_own_secret() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), secret);
     d.shutdown().await.unwrap();
 }
+
+/// A secret file that is empty or not 32 hex characters is never used as a key: yardd replaces
+/// it before the instance starts, so a recipe never runs with an empty key (fail closed).
+#[tokio::test]
+async fn a_malformed_secret_is_replaced() {
+    let port = free_port();
+    let text = recipe_on("echo", "--key={secret}", port);
+    let (d, _) = with_echo(Some(&text)).await;
+    let file = d.fx.paths.service_dir("echo").join("secret");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "").unwrap();
+    d.fx.add_service("echo", "fake-echo", false);
+    assert!(
+        wait_until(|| std::fs::read_to_string(&file).is_ok_and(|s| s.len() == 32), Duration::from_secs(5))
+            .await,
+        "the empty secret was replaced"
+    );
+    let log = d.fx.brew.path().join("opt/fake-echo/bin/fake-service.log");
+    assert!(
+        wait_until(|| std::fs::read_to_string(&log).is_ok_and(|l| !l.is_empty()), Duration::from_secs(5))
+            .await
+    );
+    assert!(!std::fs::read_to_string(&log).unwrap().contains("--key= "), "never started with an empty key");
+    d.shutdown().await.unwrap();
+}

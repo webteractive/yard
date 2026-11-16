@@ -100,29 +100,34 @@ pub fn home(brew: &Brew, paths: &Paths, engine: &dyn ServiceEngine, entry: &Serv
     }
 }
 
-/// The instance's secret, when yardd has made one.
+/// The instance's secret: exactly 32 hex characters, else none. An empty or damaged file is never
+/// used as a key.
 pub fn secret(paths: &Paths, instance: &str) -> Option<String> {
-    std::fs::read_to_string(paths.service_secret(instance))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let text = std::fs::read_to_string(paths.service_secret(instance)).ok()?;
+    let text = text.trim();
+    (text.len() == 32 && text.bytes().all(|b| b.is_ascii_hexdigit())).then(|| text.to_string())
 }
 
-/// Makes the instance's secret once: 32 hex characters from the system's random source, in a
-/// file only the user can read. An existing one is kept.
+/// Makes the instance's secret: 32 hex characters from the system's random source, in a file only
+/// the user can read, written beside it and renamed into place. A good one is kept; an empty or
+/// damaged one is replaced.
 pub fn ensure_secret(paths: &Paths, instance: &str) -> std::io::Result<()> {
     use std::io::{Read, Write};
     use std::os::unix::fs::OpenOptionsExt;
-    let file = paths.service_secret(instance);
-    if file.exists() {
+    if secret(paths, instance).is_some() {
         return Ok(());
     }
+    let file = paths.service_secret(instance);
     std::fs::create_dir_all(paths.service_dir(instance))?;
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&file)?;
-    out.write_all(hex.as_bytes())
+    let temp = file.with_file_name(format!(".secret-{}", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
+    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp)?;
+    out.write_all(hex.as_bytes())?;
+    out.sync_all()?;
+    std::fs::rename(&temp, &file)
 }
 
 /// The context an instance's engine renders it in.
@@ -180,6 +185,18 @@ pub fn runnable(
 ) -> Result<(Arc<dyn ServiceEngine>, UnitCommand), YardError> {
     let engine =
         engines.get(entry.engine.as_str()).cloned().ok_or_else(|| unknown_engine(instance, &entry.engine))?;
+    // Fail closed: a recipe that keys its program with the instance's secret never runs with an
+    // empty one (an unkeyed Meilisearch would answer any web page).
+    if engine.needs_secret() && secret(paths, instance).is_none() {
+        return Err(YardError::new(
+            ErrorCode::JobFailed,
+            format!("{instance} has no secret, so it is not started"),
+        )
+        .with_hint(format!(
+            "check that {} can be written, then yard service restart {instance}",
+            paths.service_dir(instance).display()
+        )));
+    }
     let cmd = unit_command(brew, paths, engine.as_ref(), instance, entry, ports)
         .ok_or_else(|| not_installed(instance, &entry.engine))?;
     match entry.formula.as_deref() {
@@ -1070,6 +1087,24 @@ pub fn tail(path: &std::path::Path, lines: usize) -> Result<Vec<String>, YardErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_secret_must_be_32_hex_characters() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(root.path());
+        let file = paths.service_secret("t");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        for bad in ["", "short", &"z".repeat(32), &"a".repeat(31)] {
+            std::fs::write(&file, bad).unwrap();
+            assert_eq!(secret(&paths, "t"), None, "{bad:?}");
+            ensure_secret(&paths, "t").unwrap();
+            let made = secret(&paths, "t").expect("replaced with a good one");
+            assert_ne!(made, bad);
+        }
+        let kept = secret(&paths, "t").unwrap();
+        ensure_secret(&paths, "t").unwrap();
+        assert_eq!(secret(&paths, "t").unwrap(), kept, "a good one is kept");
+    }
     use std::path::Path;
 
     #[test]
