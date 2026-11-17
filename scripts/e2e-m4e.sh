@@ -2,7 +2,8 @@
 # M4e end-to-end check on a real Mac, in the standard profile, after e2e-m1.sh passes.
 #
 # Adds three scratch instances that sleep after 60s without use, `redis`, `mysql-8.0` and
-# `postgres-17`, links a scratch project whose .yard lists them, and checks the whole loop on
+# `postgres-17` (YARD_E2E_MYSQL and YARD_E2E_PG pick other lines), links a scratch project whose
+# .yard lists them, and checks the whole loop on
 # the real yardd with the real engines:
 #   - they fall asleep and nothing listens on their ports;
 #   - `yard service start` wakes each one, and it prints each engine's cold start (the M4e
@@ -15,14 +16,16 @@
 # While they are awake it times 50 wake asks on run/wake.sock and prints their p50 (target
 # under 1 ms). Then it removes what it added.
 #
-# Needs: yardd running, built from this tree (e2e-m1.sh), brew's `redis`, `mysql@8.0` and
-# `postgresql@17` kegs, and jq. Installs nothing. It runs for about ten minutes, most of it
+# Needs: yardd running, built from this tree (e2e-m1.sh), brew's `redis`, `mysql@<line>` and
+# `postgresql@<line>` kegs for the instances it adds, and jq. Installs nothing. It runs for about ten minutes, most of it
 # waiting for yardd's 30 s idle samples. Ask the maintainer first.
 #
-# It stops before changing anything if one of the three is already an instance: it removes
-# only what it added. yard.toml, services.toml, ports.toml and sites.toml are backed up and
+# One of the three that is already an instance is someone's: it is skipped, said so and left
+# alone (the site's .yard and page leave its engine out), and the run fails only when all three
+# exist. It removes only what it added. yard.toml, services.toml, ports.toml and sites.toml are backed up and
 # put back if they differ. It never touches DBngin, Postgres.app, Herd or any other instance:
-# the listeners on 3306, 5432 and 6379 and Herd's resolver must come out unchanged. Ports are
+# the listeners on 3306, 5432 and 6379 (except a port Yard's own instance holds) and Herd's
+# resolver must come out unchanged. Ports are
 # read from `yard services --json`, never assumed.
 set -euo pipefail
 unset YARD_ROOT
@@ -33,7 +36,10 @@ fixtures="$repo/tests/fixtures/e2e"
 data="$HOME/.yard"
 herd_resolver=/etc/resolver/test
 site="yard-e2e-sleep"
-instances=(redis mysql-8.0 postgres-17)
+mysql_line="${YARD_E2E_MYSQL:-8.0}"
+pg_line="${YARD_E2E_PG:-17}"
+mysql_i="mysql-$mysql_line"
+pg_i="postgres-$pg_line"
 foreign_ports=(3306 5432 6379)
 # yardd samples every 30 s and an instance sleeps after 60 s, so it is asleep within 90 s
 # of its last use; this leaves room for the stops.
@@ -52,9 +58,14 @@ sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absen
 listeners() {
   local port
   for port in "${foreign_ports[@]}"; do
+    yard_holds "$port" && continue
     printf '%s: %s\n' "$port" "$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fpc 2>/dev/null | grep -E '^[pc]' | sort -u | tr '\n' ' ')"
   done
 }
+
+# Ports Yard's own instances are given (moved there with `yard service port`, say): they sleep
+# and wake on their own, so they are left out of the listeners compared.
+yard_holds() { grep -qx "$1" <<<"$yard_ports"; }
 
 listening() { [[ -n $(lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null || true) ]]; }
 
@@ -107,22 +118,32 @@ command -v jq >/dev/null || fail "jq is not installed (brew install jq)"
 "$yard" status --json >/dev/null 2>&1 || fail "yardd is not running; run yard start and scripts/e2e-m1.sh first"
 prefix="$(brew --prefix)"
 redis_cli="$prefix/opt/redis/bin/redis-cli"
-mysql_cli="$prefix/opt/mysql@8.0/bin/mysql"
-psql_cli="$prefix/opt/postgresql@17/bin/psql"
-for client in "$redis_cli" "$mysql_cli" "$psql_cli"; do
-  [[ -x $client ]] || fail "$client is not there; brew's redis, mysql@8.0 and postgresql@17 must be installed"
-done
+mysql_cli="$prefix/opt/mysql@$mysql_line/bin/mysql"
+psql_cli="$prefix/opt/postgresql@$pg_line/bin/psql"
 
-for i in "${instances[@]}"; do
+instances=()
+for i in redis "$mysql_i" "$pg_i"; do
   if services_json | jq -e --arg n "$i" '.[] | select(.name == $n)' >/dev/null; then
-    fail "$i is already a service instance; this script removes what it adds, so it will not run over it. Ask the maintainer"
+    echo "skip $i: it is already an instance, and this script removes only what it adds"
+  else
+    instances+=("$i")
   fi
 done
+((${#instances[@]})) || fail "all three instances already exist; YARD_E2E_MYSQL and YARD_E2E_PG pick other lines"
+# True when this run adds instance $1.
+uses() { [[ " ${instances[*]} " == *" $1 "* ]]; }
+if uses redis; then [[ -x $redis_cli ]] || fail "$redis_cli is not there; brew's redis must be installed"; fi
+if uses "$mysql_i"; then [[ -x $mysql_cli ]] || fail "$mysql_cli is not there; brew's mysql@$mysql_line must be installed"; fi
+if uses "$pg_i"; then [[ -x $psql_cli ]] || fail "$psql_cli is not there; brew's postgresql@$pg_line must be installed"; fi
 if "$yard" sites --json | jq -e --arg n "$site" '.[] | select(.name == $n)' >/dev/null; then
   fail "a site named $site already exists"
 fi
 
 resolver_before="$(sum "$herd_resolver")"
+yard_ports="$(services_json | jq -r '.[].ports[]?.port')"
+for port in "${foreign_ports[@]}"; do
+  if yard_holds "$port"; then echo "not compared: Yard's own instance holds $port"; fi
+done
 listeners_before="$(listeners)"
 echo "listeners before:"
 printf '  %s\n' "${listeners_before//$'\n'/$'\n'  }"
@@ -177,7 +198,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 3. The three instances, each sleeping after 60s.
+# 3. The instances, each sleeping after 60s.
 add() {
   local name=$1
   shift
@@ -197,23 +218,45 @@ add() {
   [[ $(field "$name" '.sleep_after_secs') == 60 ]] || fail "yard services does not show sleep_after 60 for $name"
   pass "added $name on port $p, sleeping after 60s"
 }
-add redis redis
-add mysql-8.0 mysql --version 8.0
-add postgres-17 postgres --version 17
+if uses redis; then add redis redis; fi
+if uses "$mysql_i"; then add "$mysql_i" mysql --version "$mysql_line"; fi
+if uses "$pg_i"; then add "$pg_i" postgres --version "$pg_line"; fi
 
-# 4. A scratch project, outside ~/Herd, whose .yard asks for all three and whose page uses
-# each: redis PING, and SELECT 1 on MySQL and PostgreSQL with the accounts `yard env` prints.
+# 4. A scratch project, outside ~/Herd, whose .yard asks for the instances added and whose page
+# uses each: redis PING, and SELECT 1 on MySQL and PostgreSQL with the accounts `yard env` prints.
 cp -R "$fixtures/hello-php" "$work/$site"
-printf '[services]\nredis = true\nmysql = "8.0"\npostgres = "17"\n' >"$work/$site/.yard"
+{
+  echo '[services]'
+  if uses redis; then echo 'redis = true'; fi
+  if uses "$mysql_i"; then echo "mysql = \"$mysql_line\""; fi
+  if uses "$pg_i"; then echo "postgres = \"$pg_line\""; fi
+} >"$work/$site/.yard"
+pdo=""
+expected_page=""
+if uses redis; then expected_page+=$'redis PONG\n'; fi
+if uses "$mysql_i"; then
+  pdo+="    'mysql' => ['mysql:host=127.0.0.1;port=$(port_of "$mysql_i")', 'root'],"$'\n'
+  expected_page+=$'mysql 1\n'
+fi
+if uses "$pg_i"; then
+  pdo+="    'postgres' => ['pgsql:host=127.0.0.1;port=$(port_of "$pg_i");dbname=postgres', '$USER'],"$'\n'
+  expected_page+=$'postgres 1\n'
+fi
+expected_page="${expected_page%$'\n'}"
+redis_php=""
+if uses redis; then
+  redis_php="$(sed "s/@PORT@/$(port_of redis)/" <<'PHP'
+$redis = @fsockopen('127.0.0.1', @PORT@, $errno, $error, 2);
+$out[] = 'redis ' . ($redis && fwrite($redis, "PING\r\n") ? trim(fgets($redis), "+\r\n") : "down: $error");
+PHP
+  )"
+fi
 cat >"$work/$site/public/index.php" <<PHP
 <?php
 \$out = [];
-\$redis = @fsockopen('127.0.0.1', $(port_of redis), \$errno, \$error, 2);
-\$out[] = 'redis ' . (\$redis && fwrite(\$redis, "PING\r\n") ? trim(fgets(\$redis), "+\r\n") : "down: \$error");
+$redis_php
 foreach ([
-    'mysql' => ['mysql:host=127.0.0.1;port=$(port_of mysql-8.0)', 'root'],
-    'postgres' => ['pgsql:host=127.0.0.1;port=$(port_of postgres-17);dbname=postgres', '$USER'],
-] as \$name => [\$dsn, \$user]) {
+$pdo] as \$name => [\$dsn, \$user]) {
     try {
         \$out[] = "\$name " . (new PDO(\$dsn, \$user, ''))->query('SELECT 1')->fetchColumn();
     } catch (Throwable \$e) {
@@ -224,15 +267,14 @@ echo implode("\n", \$out);
 PHP
 (cd "$work/$site" && "$yard" link "$site" >/dev/null)
 "$yard" info "$site" --json >"$work/info.json" 2>&1 || true
-pass "linked $site, whose .yard lists redis, mysql 8.0 and postgres 17"
-expected_page=$'redis PONG\nmysql 1\npostgres 1'
+pass "linked $site, whose .yard lists ${instances[*]}"
 
 # 5. They fall asleep, and nothing listens on their ports.
 wait_asleep
 for i in "${instances[@]}"; do
   [[ $(state "$i") == stopped ]] || fail "a sleeping $i is $(state "$i") on the wire, expected stopped"
 done
-pass "all three fell asleep, and nothing listens on their ports"
+pass "${instances[*]} fell asleep, and nothing listens on their ports"
 
 # 6. Each engine's cold start: yard service start waits until the instance passes its health
 # check, so its time is the wake.
@@ -245,7 +287,7 @@ for i in "${instances[@]}"; do
 done
 all_running "yard service start"
 
-# 7. A page wakes all three: nginx asks yardd before PHP runs, and PHP reaches each.
+# 7. A page wakes them all: nginx asks yardd before PHP runs, and PHP reaches each.
 wait_asleep
 page="$(curl -s --max-time 30 -w '\n%{time_total}' "http://$site.yard:8080/")"
 page_time="${page##*$'\n'}"
@@ -257,7 +299,7 @@ $expected_page"
 awk -v t="$page_time" -v l="$page_limit" 'BEGIN {exit !(t < l)}' ||
   fail "the waking page took ${page_time}s, over nginx's ${page_limit}s wait"
 all_running "the page"
-awk -v t="$page_time" 'BEGIN {printf "ok   a request to the site woke all three and PHP reached each, in %.2f s\n", t}'
+awk -v t="$page_time" 'BEGIN {printf "ok   a request to the site woke every instance and PHP reached each, in %.2f s\n", t}'
 
 # 8. The cost of an ask while everything is awake: the p50 of 50 asks on wake.sock.
 for _ in $(seq 50); do
@@ -271,23 +313,29 @@ out="$(cd "$work/$site" && "$data/bin/php" -r 'echo 1;' 2>"$php_err")" || fail "
 [[ $out == 1 ]] || fail "php through the shim printed '$out', expected 1"
 grep -q "waking" "$php_err" || fail "php through the shim did not say it was waking: $(cat "$php_err")"
 all_running "php"
-pass "php in $site woke all three and said so"
+pass "php in $site woke ${instances[*]} and said so"
 
 # 10. A held connection keeps each awake: a SUBSCRIBE, a SELECT SLEEP and a pg_sleep each
 # hold one open for longer than the check.
-"$redis_cli" -h 127.0.0.1 -p "$(port_of redis)" subscribe yard-e2e >/dev/null 2>&1 &
-holders+=($!)
-"$mysql_cli" -h 127.0.0.1 -P "$(port_of mysql-8.0)" -u root -e 'SELECT SLEEP(150)' >/dev/null 2>&1 &
-holders+=($!)
-"$psql_cli" -h 127.0.0.1 -p "$(port_of postgres-17)" -d postgres -c 'SELECT pg_sleep(150)' >/dev/null 2>&1 &
-holders+=($!)
+if uses redis; then
+  "$redis_cli" -h 127.0.0.1 -p "$(port_of redis)" subscribe yard-e2e >/dev/null 2>&1 &
+  holders+=($!)
+fi
+if uses "$mysql_i"; then
+  "$mysql_cli" -h 127.0.0.1 -P "$(port_of "$mysql_i")" -u root -e 'SELECT SLEEP(150)' >/dev/null 2>&1 &
+  holders+=($!)
+fi
+if uses "$pg_i"; then
+  "$psql_cli" -h 127.0.0.1 -p "$(port_of "$pg_i")" -d postgres -c 'SELECT pg_sleep(150)' >/dev/null 2>&1 &
+  holders+=($!)
+fi
 sleep 100
 for i in "${instances[@]}"; do
   [[ $(state "$i") == running && $(field "$i" '.sleeping_since // ""') == "" ]] ||
     fail "$i fell asleep while a client held a connection"
 done
 stop_holders
-pass "held client connections kept all three awake for 100 s"
+pass "held client connections kept ${instances[*]} awake for 100 s"
 
 # 11. Clean up: unlink, remove the instances, put the TOMLs back; then the foreign listeners
 # and Herd's resolver, after.
@@ -298,7 +346,7 @@ for i in "${instances[@]}"; do
     fail "$i is still an instance after its removal"
   fi
 done
-pass "unlinked $site and removed the three instances"
+pass "unlinked $site and removed ${instances[*]}"
 listeners_after="$(listeners)"
 [[ $listeners_before == "$listeners_after" ]] || fail "the listeners on ${foreign_ports[*]} changed: before
 $listeners_before

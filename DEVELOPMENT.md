@@ -71,7 +71,8 @@ up what they add:
 - `e2e-m4a.sh` checks the `.yard` file, and `e2e-m4a1.sh` the managed `.yard` (and that
   `git status` stays clean).
 - `e2e-m4b.sh` adds MySQL, PostgreSQL, Redis and MinIO (installing what is missing with brew),
-  asks each one a question, and removes what it added.
+  asks each one a question, and removes what it added. An instance of those names that already
+  exists is skipped and left alone; `YARD_E2E_MYSQL` and `YARD_E2E_PG` pick other lines.
 - `e2e-m4c.sh` installs Node 16.14.0 and 22 with fnm, runs them through the shims (a native
   module build included), and removes only what it installed.
 - `e2e-m4d.sh` checks emailulator against the agent already installed (it never installs,
@@ -79,17 +80,24 @@ up what they add:
   project's `MAIL_PORT`.
 - `e2e-m4e.sh` lets scratch Redis, MySQL 8.0 and PostgreSQL 17 instances fall asleep, times
   each one's cold start, wakes them from a page and from `php`, and keeps them awake with held
-  connections.
+  connections. Like `e2e-m4b.sh`, it skips an instance that already exists and takes other lines
+  from `YARD_E2E_MYSQL` and `YARD_E2E_PG`.
 - `e2e-m5.sh` checks a quick tunnel with no Cloudflare account (it needs the network and brew's
   `cloudflared`): PHP behind the `trycloudflare.com` URL sees HTTPS, the public host and the
   visitor's address, and `yard untunnel` leaves nothing behind.
 - `e2e-db.sh` creates, imports and dumps scratch databases through `yard mysql` and
-  `yard postgres` on the real instances, and checks that `yard db` still works with its notice.
+  `yard postgres` on the real instances (each engine's only one, else `mysql-8.4` and
+  `postgres-17`; `YARD_DB_MYSQL` and `YARD_DB_PG` name others), and checks that `yard db` still
+  works with its notice.
 - `e2e-engines.sh` adds the carried Valkey, Memcached, Meilisearch and Typesense recipes
   (installing what is missing, Typesense's checksummed download included), asks each a question,
   checks the instance secrets and `meilisearch.yard`, then adds a `path` and an `npm` recipe of its
   own from `~/.yard/engines`, and removes everything it added. It skips Valkey where brew's `redis`
   is linked, since brew will not install the two side by side.
+
+The scripts that add or use instances check that the listeners on 3306, 5432 and 6379 (DBngin,
+Postgres.app) come out unchanged, leaving out a port Yard's own instance holds: it sleeps and wakes
+on its own, and where `yard service port` moved instances onto those ports, they are Yard's.
 
 `YARD=<path to yard>` points a script at another build, such as an installed release
 (`/Applications/Yard.app/Contents/Helpers/yard`). Yard.app's checklists are

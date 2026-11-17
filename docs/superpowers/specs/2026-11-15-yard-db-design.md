@@ -432,7 +432,10 @@ that fixes it (rpc-protocol rule). The methods join `methods::ALL` and main spec
   row counts, checks `DB_NOT_EMPTY`, a passed-through flag and a refused one, and waits for the
   instance to sleep and checks `yard db list` wakes it. It drops only the databases it created,
   through the keg client by absolute path, and fails if any other database appeared or vanished.
-  It touches no other server: the listeners on 3306, 5432 and 6379 are checked before and after.
+  It touches no other server: the listeners on 3306, 5432 and 6379 are checked before and after,
+  leaving out a port Yard's own instance holds (it sleeps and wakes on its own). It uses each
+  engine's only instance unless `YARD_DB_MYSQL`/`YARD_DB_PG` name one, else `mysql-8.4` and
+  `postgres-17`.
   It needs the maintainer's approval (it writes to the real instances).
 - **Yard.app:** `checklist.sh` gains the Connect sheet, Create, and a Dump and Import against the
   scratch yardd's instance (the fake tools in `checklist-installs.sh` where a real one is missing).

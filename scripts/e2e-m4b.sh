@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # M4b end-to-end check on a real Mac, in the standard profile, after e2e-m1.sh passes.
 #
-# Adds MySQL 8.4, PostgreSQL 17, Redis and MinIO through `yard service add`, asks each
+# Adds MySQL 8.4, PostgreSQL 17, Redis and MinIO through `yard service add` (YARD_E2E_MYSQL and
+# YARD_E2E_PG pick other lines, e.g. 8.0 and 16, where those instances already exist), asks each
 # one a question with its own client from the brew keg, checks that `yard env` prints the
 # ports `yard services` reports, that `yard info` shows a scratch project's `.yard`
 # [services] entry met, and that the MinIO keg's tap is the one services.toml records.
@@ -9,14 +10,16 @@
 #
 # Needs: yardd running (e2e-m1.sh), brew, jq, and `minio/stable` tapped and trusted (the
 # MinIO add fails with FORMULA_UNTRUSTED otherwise; this script never grants trust).
-# Installs: `mysql@8.4`, `postgresql@17`, `redis` and `minio/stable/minio` with brew when
+# Installs: `mysql@<line>`, `postgresql@<line>`, `redis` and `minio/stable/minio` with brew when
 # they are missing, and leaves them installed (Yard never runs brew uninstall). Ask the maintainer
 # first.
 #
-# It stops before changing anything if mysql-8.4, postgres-17, redis or minio is already
-# an instance: it removes only what it added. services.toml, ports.toml and sites.toml are
+# An instance of one of those names that already exists is someone's: it is skipped, said so,
+# and left alone, and the run fails only when all four exist. It removes only what it added.
+# services.toml, ports.toml and sites.toml are
 # backed up and put back if they differ. It never touches DBngin, Postgres.app or Herd:
-# the listeners on 3306, 5432 and 6379 and Herd's resolver must come out unchanged. Every
+# the listeners on 3306, 5432 and 6379 (except a port Yard's own instance holds) and Herd's
+# resolver must come out unchanged. Every
 # port is read from `yard services --json`, never assumed.
 set -euo pipefail
 unset YARD_ROOT
@@ -27,7 +30,10 @@ fixtures="$repo/tests/fixtures/e2e"
 data="$HOME/.yard"
 herd_resolver=/etc/resolver/test
 site="yard-e2e-services"
-instances=(mysql-8.4 postgres-17 redis minio)
+mysql_line="${YARD_E2E_MYSQL:-8.4}"
+pg_line="${YARD_E2E_PG:-17}"
+mysql_i="mysql-$mysql_line"
+pg_i="postgres-$pg_line"
 foreign_ports=(3306 5432 6379)
 
 fail() { echo "FAIL $*" >&2; exit 1; }
@@ -40,9 +46,14 @@ sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absen
 listeners() {
   local port
   for port in "${foreign_ports[@]}"; do
+    yard_holds "$port" && continue
     printf '%s: %s\n' "$port" "$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fpc 2>/dev/null | grep -E '^[pc]' | sort -u | tr '\n' ' ')"
   done
 }
+
+# Ports Yard's own instances are given (moved there with `yard service port`, say): they sleep
+# and wake on their own, so they are left out of the listeners compared.
+yard_holds() { grep -qx "$1" <<<"$yard_ports"; }
 
 # The services Yard reports, as JSON.
 services_json() { "$yard" services --json; }
@@ -72,16 +83,26 @@ command -v jq >/dev/null || fail "jq is not installed (brew install jq)"
 brew_prefix="$(brew --prefix)"
 
 existing="$(services_json)" || fail "yard services failed"
-for name in "${instances[@]}"; do
+instances=()
+for name in "$mysql_i" "$pg_i" redis minio; do
   if jq -e --arg n "$name" '.[] | select(.name == $n)' <<<"$existing" >/dev/null; then
-    fail "$name is already a service instance; this script removes what it adds, so it will not run over it"
+    echo "skip $name: it is already an instance, and this script removes only what it adds"
+  else
+    instances+=("$name")
   fi
 done
+((${#instances[@]})) || fail "all four instances already exist; YARD_E2E_MYSQL and YARD_E2E_PG pick other lines"
+# True when this run adds instance $1.
+uses() { [[ " ${instances[*]} " == *" $1 "* ]]; }
 if "$yard" sites --json | jq -e --arg n "$site" '.[] | select(.name == $n)' >/dev/null; then
   fail "a site named $site already exists"
 fi
 
 resolver_before="$(sum "$herd_resolver")"
+yard_ports="$(services_json | jq -r '.[].ports[]?.port')"
+for port in "${foreign_ports[@]}"; do
+  if yard_holds "$port"; then echo "not compared: Yard's own instance holds $port"; fi
+done
 listeners_before="$(listeners)"
 echo "listeners before:"
 printf '  %s\n' "${listeners_before//$'\n'/$'\n'  }"
@@ -144,10 +165,10 @@ add() {
   fi
   pass "added $name"
 }
-add mysql-8.4 mysql --version 8.4
-add postgres-17 postgres --version 17
-add redis redis
-add minio minio
+if uses "$mysql_i"; then add "$mysql_i" mysql --version "$mysql_line"; fi
+if uses "$pg_i"; then add "$pg_i" postgres --version "$pg_line"; fi
+if uses redis; then add redis redis; fi
+if uses minio; then add minio minio; fi
 
 # 4. Every instance is running, on a port yard services reports, and none took a port a
 # foreign listener already held.
@@ -161,13 +182,20 @@ port_of() {
   [[ -n $found ]] || fail "yard services lists no $2 port for $1"
   printf '%s' "$found"
 }
-mysql_port="$(port_of mysql-8.4 '.[0].port')"
-postgres_port="$(port_of postgres-17 '.[0].port')"
-redis_port="$(port_of redis '.[0].port')"
-minio_api="$(port_of minio 'map(select(.name | test("console") | not)) | .[0].port')"
-minio_console="$(port_of minio 'map(select(.name | test("console"))) | .[0].port')"
-echo "ports: mysql-8.4 $mysql_port, postgres-17 $postgres_port, redis $redis_port, minio $minio_api (console $minio_console)"
-for port in "$mysql_port" "$postgres_port" "$redis_port"; do
+ports=()
+for name in "${instances[@]}"; do
+  ports+=("$(port_of "$name" '.[0].port')")
+  echo "port: $name ${ports[${#ports[@]} - 1]}"
+done
+if uses "$mysql_i"; then mysql_port="$(port_of "$mysql_i" '.[0].port')"; fi
+if uses "$pg_i"; then postgres_port="$(port_of "$pg_i" '.[0].port')"; fi
+if uses redis; then redis_port="$(port_of redis '.[0].port')"; fi
+if uses minio; then
+  minio_api="$(port_of minio 'map(select(.name | test("console") | not)) | .[0].port')"
+  minio_console="$(port_of minio 'map(select(.name | test("console"))) | .[0].port')"
+  echo "minio console: $minio_console"
+fi
+for port in "${ports[@]}"; do
   for foreign in "${foreign_ports[@]}"; do
     if [[ $port == "$foreign" ]] && [[ -n $(grep "^$foreign: ." <<<"$listeners_before" || true) ]]; then
       fail "an instance took port $foreign, which another process held before this run"
@@ -178,63 +206,84 @@ pass "every instance is running, on the ports yard services reports"
 
 # 5. Each engine answers from its own client in the brew keg (a bare mysql or psql here
 # could be DBngin's or Postgres.app's).
-mysql_bin="$brew_prefix/opt/mysql@8.4/bin/mysql"
-psql_bin="$brew_prefix/opt/postgresql@17/bin/psql"
-redis_bin="$brew_prefix/opt/redis/bin/redis-cli"
-for bin in "$mysql_bin" "$psql_bin" "$redis_bin"; do [[ -x $bin ]] || fail "$bin is not there"; done
+if uses "$mysql_i"; then
+  mysql_bin="$brew_prefix/opt/mysql@$mysql_line/bin/mysql"
+  [[ -x $mysql_bin ]] || fail "$mysql_bin is not there"
+  want=1
+  answer="$(tries=25 eventually "$mysql_bin" --no-defaults -h 127.0.0.1 -P "$mysql_port" -u root -N -e 'select 1')"
+  [[ $answer == 1 ]] || fail "mysql on port $mysql_port answered '$answer' to select 1"
+  pass "$mysql_i answers select 1 on port $mysql_port as root, with no password"
+fi
 
-want=1
-answer="$(tries=25 eventually "$mysql_bin" --no-defaults -h 127.0.0.1 -P "$mysql_port" -u root -N -e 'select 1')"
-[[ $answer == 1 ]] || fail "mysql on port $mysql_port answered '$answer' to select 1"
-pass "mysql-8.4 answers select 1 on port $mysql_port as root, with no password"
+if uses "$pg_i"; then
+  psql_bin="$brew_prefix/opt/postgresql@$pg_line/bin/psql"
+  [[ -x $psql_bin ]] || fail "$psql_bin is not there"
+  want=1
+  answer="$(tries=25 eventually "$psql_bin" -X -w -h 127.0.0.1 -p "$postgres_port" -At -c 'select 1' postgres)"
+  [[ $answer == 1 ]] || fail "postgres on port $postgres_port answered '$answer' to select 1"
+  pass "$pg_i answers select 1 on port $postgres_port with no password"
+fi
 
-answer="$(tries=25 eventually "$psql_bin" -X -w -h 127.0.0.1 -p "$postgres_port" -At -c 'select 1' postgres)"
-[[ $answer == 1 ]] || fail "postgres on port $postgres_port answered '$answer' to select 1"
-pass "postgres-17 answers select 1 on port $postgres_port with no password"
+if uses redis; then
+  redis_bin="$brew_prefix/opt/redis/bin/redis-cli"
+  [[ -x $redis_bin ]] || fail "$redis_bin is not there"
+  want=PONG
+  answer="$(tries=25 eventually "$redis_bin" -h 127.0.0.1 -p "$redis_port" ping)"
+  [[ $answer == PONG ]] || fail "redis on port $redis_port answered '$answer' to ping"
+  pass "redis answers PONG on port $redis_port"
+fi
 
-want=PONG
-answer="$(tries=25 eventually "$redis_bin" -h 127.0.0.1 -p "$redis_port" ping)"
-[[ $answer == PONG ]] || fail "redis on port $redis_port answered '$answer' to ping"
-pass "redis answers PONG on port $redis_port"
+if uses minio; then
+  want=200
+  answer="$(tries=25 eventually curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$minio_api/minio/health/live")"
+  [[ $answer == 200 ]] || fail "minio's health check on port $minio_api answered '$answer', expected 200"
+  pass "minio's health check answers 200 on port $minio_api"
 
-want=200
-answer="$(tries=25 eventually curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$minio_api/minio/health/live")"
-[[ $answer == 200 ]] || fail "minio's health check on port $minio_api answered '$answer', expected 200"
-pass "minio's health check answers 200 on port $minio_api"
-
-want=200
-answer="$(tries=50 eventually curl -s -o /dev/null -w '%{http_code}' "http://minio.yard:8080/")"
-[[ $answer == 200 ]] || fail "http://minio.yard:8080/ answered '$answer', expected 200 from the console through nginx"
-pass "http://minio.yard:8080/ answers 200 (the console, through nginx)"
+  want=200
+  answer="$(tries=50 eventually curl -s -o /dev/null -w '%{http_code}' "http://minio.yard:8080/")"
+  [[ $answer == 200 ]] || fail "http://minio.yard:8080/ answered '$answer', expected 200 from the console through nginx"
+  pass "http://minio.yard:8080/ answers 200 (the console, through nginx)"
+fi
 
 # 6. yard env prints the ports yard services reports.
 env_json="$(cd "$work" && "$yard" env --json)" || fail "yard env --json failed"
 env_value() { jq -r --arg i "$1" --arg k "$2" '.[] | select(.instance == $i) | .lines[] | select(startswith($k + "=")) | sub("^[^=]*="; "")' <<<"$env_json"; }
-[[ $(env_value mysql-8.4 DB_PORT) == "$mysql_port" ]] || fail "yard env prints DB_PORT=$(env_value mysql-8.4 DB_PORT) for mysql-8.4, yard services says $mysql_port"
-[[ $(env_value postgres-17 DB_PORT) == "$postgres_port" ]] || fail "yard env prints DB_PORT=$(env_value postgres-17 DB_PORT) for postgres-17, yard services says $postgres_port"
-[[ $(env_value redis REDIS_PORT) == "$redis_port" ]] || fail "yard env prints REDIS_PORT=$(env_value redis REDIS_PORT) for redis, yard services says $redis_port"
-[[ $(env_value minio AWS_ENDPOINT) == "http://127.0.0.1:$minio_api" ]] || fail "yard env prints AWS_ENDPOINT=$(env_value minio AWS_ENDPOINT) for minio, yard services says port $minio_api"
+if uses "$mysql_i"; then
+  [[ $(env_value "$mysql_i" DB_PORT) == "$mysql_port" ]] || fail "yard env prints DB_PORT=$(env_value "$mysql_i" DB_PORT) for $mysql_i, yard services says $mysql_port"
+fi
+if uses "$pg_i"; then
+  [[ $(env_value "$pg_i" DB_PORT) == "$postgres_port" ]] || fail "yard env prints DB_PORT=$(env_value "$pg_i" DB_PORT) for $pg_i, yard services says $postgres_port"
+fi
+if uses redis; then
+  [[ $(env_value redis REDIS_PORT) == "$redis_port" ]] || fail "yard env prints REDIS_PORT=$(env_value redis REDIS_PORT) for redis, yard services says $redis_port"
+fi
+if uses minio; then
+  [[ $(env_value minio AWS_ENDPOINT) == "http://127.0.0.1:$minio_api" ]] || fail "yard env prints AWS_ENDPOINT=$(env_value minio AWS_ENDPOINT) for minio, yard services says port $minio_api"
+fi
 pass "yard env prints the ports yard services reports"
 
 # 7. The MinIO keg's tap is the formula services.toml records. brew's answer is read, not
 # assumed: the keg may be homebrew/core's rather than minio/stable's.
-brew_formula="$(brew info --json=v2 minio | jq -r '.formulae[0] | select(.installed | length > 0) | .full_name')"
-[[ -n $brew_formula ]] || fail "brew info --json=v2 minio shows no installed keg"
-recorded="$(python3 -I -c 'import sys, tomllib
+if uses minio; then
+  brew_formula="$(brew info --json=v2 minio | jq -r '.formulae[0] | select(.installed | length > 0) | .full_name')"
+  [[ -n $brew_formula ]] || fail "brew info --json=v2 minio shows no installed keg"
+  recorded="$(python3 -I -c 'import sys, tomllib
 with open(sys.argv[1], "rb") as f:
     print(tomllib.load(f)["services"]["minio"]["formula"])' "$data/services.toml")" || fail "services.toml has no minio entry"
-[[ $brew_formula == "$recorded" ]] || fail "brew says the installed minio is $brew_formula, services.toml records $recorded"
-pass "brew's installed minio ($brew_formula) is the formula services.toml records"
+  [[ $brew_formula == "$recorded" ]] || fail "brew says the installed minio is $brew_formula, services.toml records $recorded"
+  pass "brew's installed minio ($brew_formula) is the formula services.toml records"
+fi
 
-# 8. A scratch project, outside ~/Herd, whose .yard asks for MySQL 8.4: yard info shows it met.
+# 8. A scratch project, outside ~/Herd, whose .yard asks for the MySQL line: yard info shows it
+# met (by the instance already there, when step 1 skipped it; linking changes no instance).
 cp -R "$fixtures/hello-php" "$work/$site"
-printf '[services]\nmysql = "8.4"\n' >"$work/$site/.yard"
+printf '[services]\nmysql = "%s"\n' "$mysql_line" >"$work/$site/.yard"
 (cd "$work/$site" && "$yard" link "$site" >/dev/null)
 info="$(cd "$work/$site" && "$yard" info --json)" || fail "yard info failed in $work/$site"
 met="$(jq -r '.services[] | select(.engine == "mysql") | "\(.want) \(.service.name // "missing")"' <<<"$info")"
-[[ $met == "8.4 mysql-8.4" ]] || fail "yard info shows the mysql need as '$met', expected '8.4 mysql-8.4'"
+[[ $met == "$mysql_line $mysql_i" ]] || fail "yard info shows the mysql need as '$met', expected '$mysql_line $mysql_i'"
 [[ $(jq -r '.site.needs // [] | length' <<<"$info") == 0 ]] || fail "yard info lists unmet needs: $(jq -c '.site.needs' <<<"$info")"
-pass "yard info shows [services] mysql = \"8.4\" met by mysql-8.4, with no unmet needs"
+pass "yard info shows [services] mysql = \"$mysql_line\" met by $mysql_i, with no unmet needs"
 
 # 9. Clean up: unlink, remove what was added, put the TOMLs back; then the foreign listeners
 # and Herd's resolver, after.

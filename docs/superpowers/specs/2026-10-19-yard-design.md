@@ -956,9 +956,10 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   own client by absolute keg path, `yard env` prints the ports `yard services` reports,
   `minio.<tld>` answers 200, brew's installed minio is the formula `services.toml` records,
   a scratch project's `[services]` entry shows met in `yard info`, and every instance it
-  added is removed. It stops before changing anything if one of those instances already
-  exists, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails if
-  the listeners on 3306, 5432 and 6379 (DBngin, Postgres.app) or Herd's resolver changed.
+  added is removed. An instance of those names that already exists is skipped and left alone
+  (other MySQL and PostgreSQL lines can be chosen); it backs up and restores `services.toml`,
+  `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and 6379 (DBngin,
+  Postgres.app; a port Yard's own instance holds is left out) or Herd's resolver changed.
   `scripts/e2e-m4d.sh` checks emailulator against the agent already on the machine and never
   installs, starts or stops it: `yard doctor` names the agent, `yard ports` has
   `emailulator-smtp` `external` on its SMTP port, `mail.<tld>` answers 200 while the agent's

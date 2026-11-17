@@ -431,7 +431,8 @@ engine.
   package with a bin that listens on a port), sleep and wake on one of them, and removes all it
   added. It stops before changing anything when one of its instances exists, backs up and restores
   `services.toml`, `ports.toml` and `sites.toml`, and fails if Herd's resolver or the listeners on
-  3306, 5432 and 6379 changed. `e2e-m4b.sh` and `e2e-m4e.sh` must pass unchanged against the
+  3306, 5432 and 6379 changed (a port Yard's own instance holds is left out, since it sleeps and
+  wakes on its own). `e2e-m4b.sh` and `e2e-m4e.sh` must pass unchanged against the
   Redis recipe.
 - Yard.app's `checklist.sh` gains an item that drops a recipe into the scratch root's `engines/`
   and finds it in the Add picker without a restart.

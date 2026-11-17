@@ -37,9 +37,14 @@ sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absen
 listeners() {
   local port
   for port in "${foreign_ports[@]}"; do
+    yard_holds "$port" && continue
     printf '%s: %s\n' "$port" "$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fpc 2>/dev/null | grep -E '^[pc]' | sort -u | tr '\n' ' ')"
   done
 }
+
+# Ports Yard's own instances are given (moved there with `yard service port`, say): they sleep
+# and wake on their own, so they are left out of the listeners compared.
+yard_holds() { grep -qx "$1" <<<"$yard_ports"; }
 
 services_json() { "$yard" services --json; }
 
@@ -93,6 +98,10 @@ if "$yard" sites --json | jq -e --arg n "$site" '.[] | select(.name == $n)' >/de
 fi
 
 resolver_before="$(sum "$herd_resolver")"
+yard_ports="$(services_json | jq -r '.[].ports[]?.port')"
+for port in "${foreign_ports[@]}"; do
+  if yard_holds "$port"; then echo "not compared: Yard's own instance holds $port"; fi
+done
 listeners_before="$(listeners)"
 
 # 2. Back up the three TOMLs.

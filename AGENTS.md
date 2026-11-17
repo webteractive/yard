@@ -509,15 +509,16 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   `yard init --local` moves the file into the project. It needs php@7.1 (from `e2e-m2.sh`)
   and installs nothing; ask the maintainer first. `shellcheck scripts/e2e-m4a1.sh` stays clean.
 - `scripts/e2e-m4b.sh` — real-machine M4b check after `e2e-m1.sh`: adds `mysql-8.4`,
-  `postgres-17`, `redis` and `minio`, asks each one a question with its own client by
+  `postgres-17` (`YARD_E2E_MYSQL`/`YARD_E2E_PG` pick other lines), `redis` and `minio`, asks each one a question with its own client by
   absolute keg path, checks `yard env` against `yard services`, checks that brew's installed
   `minio` is the formula `services.toml` records, links a scratch project whose `.yard`
-  lists MySQL 8.4 and checks `yard info` shows it met, then removes what it added. It needs
-  yardd running, jq and `minio/stable` trusted; it brew-installs `mysql@8.4`, `postgresql@17`,
-  `redis` and `minio/stable/minio` when missing, so ask the maintainer first. It stops before changing
-  anything if one of the four instances already exists, backs up and restores `services.toml`,
-  `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and 6379 or Herd's
-  resolver changed. `shellcheck scripts/e2e-m4b.sh` stays clean.
+  lists that MySQL line and checks `yard info` shows it met, then removes what it added. It needs
+  yardd running, jq and `minio/stable` trusted; it brew-installs `mysql@<line>`, `postgresql@<line>`,
+  `redis` and `minio/stable/minio` when missing, so ask the maintainer first. An instance of
+  those names that already exists is skipped and left alone (it fails only when all four exist);
+  it backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails if the
+  listeners on 3306, 5432 and 6379 (except a port Yard's own instance holds) or Herd's resolver
+  changed. `shellcheck scripts/e2e-m4b.sh` stays clean.
 - `scripts/e2e-m4c.sh` — real-machine M4c check after `e2e-m1.sh`: in a scratch project under
   `$TMPDIR` whose `.nvmrc` pins 16.14.0, `yard link --yes` installs it and `node -v` and an
   `npm run` script both report it; `npm install --build-from-source bufferutil` builds;
@@ -541,18 +542,20 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   scratch override, and fails if Herd's resolver changed; ask the maintainer first.
   `shellcheck scripts/e2e-m4d.sh` stays clean.
 - `scripts/e2e-m4e.sh` — real-machine M4e check after `e2e-m1.sh`, with the real engines: adds
-  scratch `redis`, `mysql-8.0` and `postgres-17` instances with `sleep_after = "60s"`, links a
+  scratch `redis`, `mysql-8.0` and `postgres-17` (`YARD_E2E_MYSQL`/`YARD_E2E_PG` pick other
+  lines) instances with `sleep_after = "60s"`, links a
   scratch project under `$TMPDIR` whose `.yard` lists them, waits for them to sleep (nothing
   listens on their ports), times each engine's cold start through `yard service start`, then
   checks a page wakes all three within nginx's 10 s wait (PHP gets `PONG` from Redis and runs
   `SELECT 1` on MySQL and PostgreSQL through PDO), that `php` through the shim wakes them and
   says so, and that a held client connection keeps each awake (PostgreSQL's held by a forked
   backend). It prints the p50 of a wake ask while awake. It needs yardd running and brew's
-  `redis`, `mysql@8.0` and `postgresql@17` kegs, and installs nothing; ask the maintainer first. It never
-  touches another instance (the maintainer's `mysql-8.4` included), stops before changing anything if one
-  of the three is already in `services.toml`, backs up and restores `yard.toml`,
-  `services.toml`, `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and
-  6379 or Herd's resolver changed. It runs on macOS's bash 3.2. `shellcheck scripts/e2e-m4e.sh`
+  `redis`, `mysql@<line>` and `postgresql@<line>` kegs, and installs nothing; ask the maintainer
+  first. It never touches another instance (the maintainer's `mysql-8.4` included): one of the
+  three already in `services.toml` is skipped, and left out of the site's `.yard` and page (it
+  fails only when all three exist). It backs up and restores `yard.toml`, `services.toml`,
+  `ports.toml` and `sites.toml`, and fails if the listeners on 3306, 5432 and 6379 (except a
+  port Yard's own instance holds) or Herd's resolver changed. It runs on macOS's bash 3.2. `shellcheck scripts/e2e-m4e.sh`
   stays clean.
 - `scripts/e2e-m5.sh` — real-machine M5 check after `e2e-m1.sh`, with the network and no
   Cloudflare account: links a scratch PHP project under `$TMPDIR`, runs `yard tunnel --quick
@@ -566,14 +569,15 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   resolver changed or `~/.cloudflared` was created; ask the maintainer first.
   `shellcheck scripts/e2e-m5.sh` stays clean.
 
-- `scripts/e2e-db.sh` — real-machine `yard mysql`/`yard postgres` check (it also checks `yard db` still works with its notice) after `e2e-m1.sh`, on the real `mysql-8.4`
-  and `postgres-17` (`YARD_DB_MYSQL`/`YARD_DB_PG` name others): creates scratch databases named
+- `scripts/e2e-db.sh` — real-machine `yard mysql`/`yard postgres` check (it also checks `yard db` still works with its notice) after `e2e-m1.sh`, on the real instances (each
+  engine's only one, else `mysql-8.4` and `postgres-17`; `YARD_DB_MYSQL`/`YARD_DB_PG` name others): creates scratch databases named
   `yard_e2e_<pid>_*`, imports plain, gzipped and `pg_dump -Fc` fixtures (one with an owner role the
   instance lacks, one plain with `OWNER TO`), checks a `mysqldump --databases` dump is refused before
   its `USE`, dumps and re-imports and compares row counts, checks `DB_NOT_EMPTY`, a passed and a
   refused flag, and that `yard mysql list` wakes a sleeping instance. It drops only the databases it
   created, through the keg client by absolute path, fails if any other database appeared or
-  vanished or the listeners on 3306, 5432 and 6379 changed, and writes to the real instances, so ask
+  vanished or the listeners on 3306, 5432 and 6379 (except a port Yard's own instance holds)
+  changed, and writes to the real instances, so ask
   the maintainer first. `shellcheck scripts/e2e-db.sh` stays clean.
 - `scripts/e2e-engines.sh` — real-machine service recipes check after `e2e-m1.sh`: adds the carried
   `valkey`, `memcached`, `meilisearch` and `typesense` (brew-installing the first three and
@@ -584,8 +588,8 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   Node 22) into `~/.yard/engines`, adds and curls both, lets memcached sleep and wakes it with `yard
   service start`, and removes everything it added. It refuses to run over an existing instance or
   recipe of those names, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails
-  if Herd's resolver or the listeners on 3306, 5432 and 6379 changed; ask the maintainer first.
-  `shellcheck scripts/e2e-engines.sh` stays clean.
+  if Herd's resolver or the listeners on 3306, 5432 and 6379 (except a port Yard's own instance
+  holds) changed; ask the maintainer first. `shellcheck scripts/e2e-engines.sh` stays clean.
 
 ## Verifying a change on a real machine
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # `yard mysql` and `yard postgres` (once `yard db`) end-to-end check on a real Mac (db spec §12), after e2e-m1.sh passes.
 #
-# On the real MySQL and PostgreSQL instances (YARD_DB_MYSQL, default mysql-8.4, and YARD_DB_PG,
-# default postgres-17; a missing PostgreSQL instance skips its half) it creates scratch
+# On the real MySQL and PostgreSQL instances (YARD_DB_MYSQL and YARD_DB_PG; each defaults to the
+# engine's only instance, else mysql-8.4 and postgres-17; a missing PostgreSQL instance skips its
+# half) it creates scratch
 # databases named yard_e2e_<pid>_* and checks:
 #   - `yard mysql create` makes one and leaves an existing one alone;
 #   - `yard mysql import` of plain SQL (with strings that look like statements), of the same file
@@ -25,8 +26,6 @@ unset YARD_ROOT
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 yard="${YARD:-$repo/target/release/yard}"
-mysql_instance="${YARD_DB_MYSQL:-mysql-8.4}"
-pg_instance="${YARD_DB_PG:-postgres-17}"
 run_dir="$HOME/.yard/run"
 herd_resolver=/etc/resolver/test
 prefix="yard_e2e_$$"
@@ -39,9 +38,14 @@ sum() { if [[ -e $1 ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo absen
 listeners() {
   local port
   for port in "${foreign_ports[@]}"; do
+    yard_holds "$port" && continue
     printf '%s: %s\n' "$port" "$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -Fpc 2>/dev/null | grep -E '^[pc]' | sort -u | tr '\n' ' ')"
   done
 }
+
+# Ports Yard's own instances are given (moved there with `yard service port`, say): they sleep
+# and wake on their own, so they are left out of the listeners compared.
+yard_holds() { grep -qx "$1" <<<"$yard_ports"; }
 
 field() { "$yard" services --json | jq -r --arg n "$1" ".[] | select(.name == \$n) | $2"; }
 has_instance() { [[ -n $(field "$1" '.name') ]]; }
@@ -52,6 +56,17 @@ asleep() { [[ $(field "$1" '.sleeping_since // empty') != "" && $(field "$1" '.s
 command -v jq >/dev/null || fail "jq is needed"
 [[ -x $yard ]] || fail "no yard at $yard (cargo build --release)"
 "$yard" status >/dev/null || fail "yardd is not running"
+
+# The instance to use for engine $1: $2 when it is set, else the engine's only instance, else $3.
+pick() {
+  local names
+  if [[ -n $2 ]]; then echo "$2"; return; fi
+  names="$("$yard" services --json | jq -c --arg e "$1" '[.[] | select(.engine == $e) | .name]')"
+  if [[ $(jq length <<<"$names") == 1 ]]; then jq -r '.[0]' <<<"$names"; else echo "$3"; fi
+}
+mysql_instance="$(pick mysql "${YARD_DB_MYSQL:-}" mysql-8.4)"
+pg_instance="$(pick postgres "${YARD_DB_PG:-}" postgres-17)"
+echo "instances: $mysql_instance and $pg_instance"
 has_instance "$mysql_instance" || fail "no $mysql_instance instance (yard service add mysql)"
 with_pg=1
 has_instance "$pg_instance" || { with_pg=0; echo "skip PostgreSQL: no $pg_instance instance"; }
@@ -66,6 +81,10 @@ fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/yard-e2e-db.XXXXXX")"
 resolver_before="$(sum "$herd_resolver")"
+yard_ports="$("$yard" services --json | jq -r '.[].ports[]?.port')"
+for port in "${foreign_ports[@]}"; do
+  if yard_holds "$port"; then echo "not compared: Yard's own instance holds $port"; fi
+done
 listeners_before="$(listeners)"
 my_asleep_at_start=0
 asleep "$mysql_instance" && my_asleep_at_start=1
