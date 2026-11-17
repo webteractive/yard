@@ -226,9 +226,10 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `NODE_EXTRA_CA_CERTS` from its shims (M4c). Built on main with the suite passing (1457); on the
   Mac mini on 2026-11-17 `scripts/e2e-m1.sh` and `e2e-m3.sh` (with its new PHP streams and curl
   calls and `php-ca`) passed against yardd built from it, and PHP 7.0 and 8.4 still verify
-  public HTTPS through the bundle. On the main Mac, the hand-made
-  `zz-yard-ca.ini` files in brew's `etc/php/<v>/conf.d` (the workaround) can go once yardd runs
-  this build.
+  public HTTPS through the bundle. 0.1.10 shipped it, with the service recipes, on 2026-11-17. The
+  main Mac then took 0.1.10 through `brew upgrade --cask yard` and dropped its hand-made workaround
+  (`zz-yard-ca.ini` in brew's `conf.d`): doctor's `php-ca` read ok for 7.0–8.5, and one site's PHP
+  reached another over HTTPS.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
