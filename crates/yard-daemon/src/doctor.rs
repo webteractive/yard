@@ -263,6 +263,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
 
     let secured = view.sites.as_ref().is_some_and(|(_, sites)| sites.iter().any(|s| s.secure));
     checks.push(ca(paths, secured, input.security).await);
+    checks.extend(php_ca(paths, &brew.installed_php(&exists, &read_link)));
 
     if let Some((_, sites)) = &view.sites {
         let installed = brew.installed_php(&exists, &read_link);
@@ -602,6 +603,74 @@ async fn ca(paths: &Paths, secured: bool, security: &Path) -> Check {
     } else {
         ok("ca", "no site uses HTTPS")
     }
+}
+
+/// `php-ca` once a Yard CA exists: whether each installed PHP that Yard has configured verifies
+/// against a bundle holding it, through the `openssl.cafile` and `curl.cainfo` it really uses
+/// (Yard's `php.ini`, then its `conf.d` in load order, so a user's or a mirrored brew ini that
+/// names another file wins). One ok for all, or `php-ca:<v>` warnings.
+fn php_ca(paths: &Paths, installed: &[PhpVersion]) -> Vec<Check> {
+    let Ok(ca) = std::fs::read_to_string(paths.ca_cert()) else { return vec![] };
+    let ca = ca.trim();
+    let mut warnings = vec![];
+    let mut verified = vec![];
+    for v in installed {
+        let Ok(ini) = std::fs::read_to_string(paths.php_ini(*v)) else { continue };
+        let mut files = vec![("php.ini".to_string(), ini)];
+        let mut conf_d = crate::reconcile::ini_files(&paths.php_conf_d(*v));
+        conf_d.sort();
+        files.extend(conf_d);
+        let mut wrong = vec![];
+        for key in ["openssl.cafile", "curl.cainfo"] {
+            match yard_core::ini::effective(&files, key) {
+                None => wrong.push(format!("nothing sets {key}")),
+                Some((file, value)) => {
+                    let holds = std::fs::read_to_string(&value).is_ok_and(|t| t.contains(ca));
+                    if !holds {
+                        wrong.push(format!("{key} in {file} names {value}, which does not hold the Yard CA"));
+                    }
+                }
+            }
+        }
+        if wrong.is_empty() {
+            verified.push(*v);
+            continue;
+        }
+        let yards = wrong.iter().all(|w| w.starts_with("nothing") || w.contains(" in php.ini "));
+        let hint = if yards {
+            "yard stop && yard start".to_string()
+        } else {
+            format!(
+                "add the Yard CA to that bundle, or remove the line from {}",
+                paths.php_conf_d(*v).display()
+            )
+        };
+        warnings.push(warn(
+            &format!("php-ca:{v}"),
+            format!("PHP {v} cannot verify https sites' certificates: {}", wrong.join("; ")),
+            hint,
+        ));
+    }
+    if !warnings.is_empty() || verified.is_empty() {
+        return warnings;
+    }
+    let bundle = match verified.as_slice() {
+        [one] => paths.php_ca_bundle(*one),
+        _ => paths.root().join("php/<version>/ca-bundle.pem"),
+    };
+    vec![ok(
+        "php-ca",
+        format!(
+            "PHP {} {} the Yard CA for https calls ({})",
+            list(&verified),
+            if verified.len() == 1 { "trusts" } else { "trust" },
+            bundle.display()
+        ),
+    )]
+}
+
+fn list(versions: &[PhpVersion]) -> String {
+    versions.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
 }
 
 /// The largest `composer.json` doctor reads.

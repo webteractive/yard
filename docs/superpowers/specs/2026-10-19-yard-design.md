@@ -497,6 +497,22 @@ profile; Yard does not edit dotfiles.
   when trust set outside the login keychain remains. With no CA, `untrust` makes none.
   `ca.info` reports `trusted` from `security verify-cert -c <ca.pem> -l -L -q -p basic`.
   Safari and Chrome use the login keychain; curl in scripts takes `--cacert`.
+- **PHP trusts Yard's CA without the keychain** (2026-11-17, the maintainer: always, not only after
+  `yard trust`; found moving Herd's sites, where one site calling another over HTTPS failed with
+  cURL error 60). Brew's OpenSSL and curl read brew's `ca-certificates` bundle, never the
+  keychain, and Herd's PHP had Herd's CA in its own. Once a CA exists, reconcile writes
+  `php/<v>/ca-bundle.pem` for every installed PHP: brew's `etc/ca-certificates/cert.pem` (macOS's
+  `/etc/ssl/cert.pem` when brew has none), then `yard-ca.pem`, headed as generated (OpenSSL skips
+  text between certificates), and Yard's `php.ini` names it as `openssl.cafile` and `curl.cainfo`,
+  so php-fpm and the shims' PHP (and Composer) verify `https://<site>.<tld>` as well as public
+  sites. With no CA, `php.ini` names neither, keeping brew's roots. The periodic scan compares
+  both inputs' size and modification time with what the bundle was made from, so a brew update
+  of `ca-certificates` or a new CA reaches PHP without a config change; PHP reads the file on
+  each connection, so nothing restarts for it. `99-overrides.ini` (or any later `conf.d` ini) may
+  name another bundle and wins. `yard doctor`'s `php-ca` is ok when every configured PHP's
+  effective `openssl.cafile` and `curl.cainfo` name a file holding the CA, and warns
+  `php-ca:<v>` naming the ini and key that do not (hint `yard stop && yard start` for Yard's own,
+  else the `conf.d` to fix).
 - `yard secure [site]` issues a leaf cert (825-day validity, SAN = site host and
   `*.<site host>`) and serves the site on the https port, with its http port
   answering `301` to the https URL (8080→8443 on `standard`, 80→443 on
@@ -928,7 +944,8 @@ Services bind `127.0.0.1` only. `yard env [--site]` prints `.env` lines
   PHP 7.1 beside 8.4, a site isolated to 7.1, redis and xdebug added and checked with
   `php -m` through the shim, every `php` and `php-fpm` brew's (never Herd's), and
   `yard xdebug off`. `scripts/e2e-m3.sh` adds HTTPS: a secured site answers on
-  `https://<site>.yard:8443` under `curl --cacert <ca.pem>`, its http URL answers
+  `https://<site>.yard:8443` under `curl --cacert <ca.pem>` and from PHP's streams and curl
+  through the shim (Yard's CA bundle, no `--cacert`), doctor's `php-ca` is ok, its http URL answers
   `301` to the https one, its key is mode 0600, and `yard unsecure` serves http again
   and removes the certificate. It never runs `yard trust`, which macOS asks a password for.
   `scripts/e2e-m4a.sh` adds the `.yard`: a scratch project's file picks its PHP, an edit

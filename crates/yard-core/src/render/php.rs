@@ -1,14 +1,22 @@
 //! php.ini and the php-fpm pool for one version (spec §4.2, §4.4).
 
 use super::quote::ini_str;
-use super::{RenderCtx, ini_header};
+use super::{RenderCtx, header, ini_header};
 use crate::PhpVersion;
 use crate::config::yard::{ExtEntry, ExtSource};
 use std::collections::BTreeMap;
 
-/// FPM's ini. The CLI SAPI forces `max_execution_time = 0` itself, so 300 here only
-/// limits web requests.
-pub fn php_ini(ctx: &RenderCtx, v: PhpVersion) -> String {
+/// FPM's ini, which the shims' PHP reads too. The CLI SAPI forces `max_execution_time = 0`
+/// itself, so 300 here only limits web requests. With `ca_bundle`, OpenSSL and curl verify
+/// against `ca_bundle` (the public roots and Yard's CA), so PHP can call `https://<site>.<tld>`;
+/// without one PHP keeps brew's roots, since naming a missing file would fail every request.
+pub fn php_ini(ctx: &RenderCtx, v: PhpVersion, ca_bundle: bool) -> String {
+    let ca = if ca_bundle {
+        let file = ini_str(&ctx.paths.php_ca_bundle(v).display().to_string());
+        format!("openssl.cafile = {file}\ncurl.cainfo = {file}\n")
+    } else {
+        String::new()
+    };
     format!(
         "{header}memory_limit = 512M
 upload_max_filesize = 1G
@@ -20,10 +28,27 @@ opcache.enable = 1
 opcache.validate_timestamps = 1
 opcache.revalidate_freq = 0
 date.timezone = {tz}
-",
+{ca}",
         header = ini_header(&ctx.paths.php_overrides(v)),
         tz = ini_str(ctx.timezone),
     )
+}
+
+/// `php/<v>/ca-bundle.pem`: `public` (brew's `ca-certificates`) then `yard_ca`. OpenSSL skips
+/// the text between certificates, so the header is a plain comment line.
+pub fn ca_bundle(ctx: &RenderCtx, v: PhpVersion, public: &str, yard_ca: &str) -> String {
+    let mut out = header(&ctx.paths.php_overrides(v));
+    out.push_str(
+        "# The public roots from brew's ca-certificates, then Yard's CA. To use another bundle, set\n\
+         # openssl.cafile and curl.cainfo in that file.\n",
+    );
+    for part in [public, yard_ca] {
+        out.push_str(part);
+        if !part.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 pub fn fpm_conf(ctx: &RenderCtx, v: PhpVersion) -> String {

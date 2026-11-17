@@ -40,6 +40,8 @@ pub struct Snapshot {
     pub emailulator: Option<Probe>,
     /// The tunnels this reconcile ran, by site (M5).
     pub tunnels: BTreeMap<String, Planned>,
+    /// What PHP's CA bundle was made from; `None` when there was none to make.
+    pub php_ca: Option<crate::php_ca::Sources>,
 }
 
 #[derive(Clone)]

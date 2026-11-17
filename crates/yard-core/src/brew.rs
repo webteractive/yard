@@ -55,6 +55,12 @@ impl Brew {
         self.prefix.join("bin/fnm")
     }
 
+    /// The public roots brew's `ca-certificates` keeps, which every `openssl@<n>/cert.pem`
+    /// links to: what brew's PHP trusts by default.
+    pub fn ca_certificates(&self) -> PathBuf {
+        self.prefix.join("etc/ca-certificates/cert.pem")
+    }
+
     pub fn nginx_bin(&self) -> PathBuf {
         self.prefix.join("opt/nginx/bin/nginx")
     }
@@ -180,6 +186,11 @@ mod tests {
         assert_eq!(b.nginx_mime_types(), Path::new("/opt/homebrew/etc/nginx/mime.types"));
         assert_eq!(b.nginx_fastcgi_params(), Path::new("/opt/homebrew/etc/nginx/fastcgi_params"));
         assert_eq!(b.php_conf_d(v("8.4")), Path::new("/opt/homebrew/etc/php/8.4/conf.d"));
+    }
+
+    #[test]
+    fn ca_certificates_is_the_formulas_bundle() {
+        assert_eq!(brew().ca_certificates(), Path::new("/opt/homebrew/etc/ca-certificates/cert.pem"));
     }
 
     #[test]

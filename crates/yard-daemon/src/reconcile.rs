@@ -34,7 +34,7 @@ use yard_core::render::dnsmasq::dnsmasq_conf;
 use yard_core::render::nginx::{
     MailHost, TunnelListener, default_index, mail_host, nginx_main, nginx_site, service_site, setup_page,
 };
-use yard_core::render::php::{brew_inis, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
+use yard_core::render::php::{brew_inis, ca_bundle, ext_ini, fpm_conf, is_stale, php_fpm_env, php_ini};
 use yard_core::services::Engines;
 use yard_core::services::sleep::effective_sleep;
 use yard_core::shim::SHIMS;
@@ -304,6 +304,15 @@ impl Reconciler {
         now
     }
 
+    /// Whether brew's public roots or Yard's CA changed since PHP's CA bundle was made, or one
+    /// appeared or went away. Nothing watches brew's `etc`, so the periodic scan asks; PHP reads
+    /// the bundle on each connection, so a new one needs no restart.
+    pub async fn php_ca_stale(&self) -> bool {
+        let state = self.state.lock().await;
+        let Some(snap) = &state.snapshot else { return false };
+        crate::php_ca::sources(&state.paths, &state.brew) != snap.php_ca
+    }
+
     /// A secured site whose certificate is missing, from another CA, for other names or
     /// close to expiry. Nothing watches `certs/` or the clock, so the periodic scan finds it.
     pub async fn certs_due(&self) -> bool {
@@ -569,8 +578,13 @@ impl Reconciler {
             }
         }
         let no_exts = BTreeMap::new();
+        // PHP verifies against brew's roots plus Yard's CA once there is one.
+        let ca_inputs = crate::php_ca::read(&paths, &state.brew);
         for v in &inis {
-            rendered.insert(paths.php_ini(*v), php_ini(&ctx, *v));
+            if let Some(ca) = &ca_inputs {
+                rendered.insert(paths.php_ca_bundle(*v), ca_bundle(&ctx, *v, &ca.public, &ca.ca));
+            }
+            rendered.insert(paths.php_ini(*v), php_ini(&ctx, *v, ca_inputs.is_some()));
             rendered.insert(paths.fpm_conf(*v), fpm_conf(&ctx, *v));
             let exts = yard.extensions.get(v).unwrap_or(&no_exts);
             let conf_d = paths.php_conf_d(*v);
@@ -914,6 +928,7 @@ impl Reconciler {
             left_out,
             emailulator: state.emailulator.clone(),
             tunnels,
+            php_ca: ca_inputs.map(|ca| ca.sources),
         };
         *self.published.write().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         state.snapshot = Some(snapshot);

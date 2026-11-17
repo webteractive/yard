@@ -571,6 +571,39 @@ async fn secure_then_unsecure_round_trips_sites_toml() {
 }
 
 #[tokio::test]
+async fn php_trusts_yards_ca_once_there_is_one_and_follows_brews_roots() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let v = yard_core::PhpVersion::DEFAULT;
+    let ini = d.fx.paths.php_ini(v);
+    let bundle = d.fx.paths.php_ca_bundle(v);
+    assert!(!std::fs::read_to_string(&ini).unwrap().contains("openssl.cafile"), "no CA, so brew's roots");
+    assert!(!bundle.exists());
+
+    let mut c = d.client().await;
+    c.call("sites.secure", json!({"site": "blog"})).await.unwrap();
+    let text = std::fs::read_to_string(&bundle).unwrap();
+    let ca = std::fs::read_to_string(d.fx.paths.ca_cert()).unwrap();
+    assert!(text.contains(support::PUBLIC_ROOTS) && text.contains(ca.trim()), "{text}");
+    let ini_text = std::fs::read_to_string(&ini).unwrap();
+    for key in ["openssl.cafile", "curl.cainfo"] {
+        assert!(ini_text.contains(&format!("{key} = \"{}\"", bundle.display())), "{ini_text}");
+    }
+
+    // brew updating ca-certificates reaches PHP without a TOML edit.
+    let roots = yard_core::brew::Brew::new(d.fx.brew.path()).ca_certificates();
+    std::fs::write(&roots, "# brew's newer roots\n").unwrap();
+    let updated = || std::fs::read_to_string(&bundle).unwrap_or_default().contains("brew's newer roots");
+    assert!(
+        wait_until(updated, Duration::from_secs(10)).await,
+        "{}",
+        std::fs::read_to_string(&bundle).unwrap()
+    );
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unsecure_overrides_secure_by_default() {
     let d = prepared("").await;
     d.project("blog");

@@ -2,9 +2,9 @@
 # M3 end-to-end check on a real Mac, in the standard profile, after e2e-m1.sh passes.
 #
 # Links a temp PHP app as hello-tls, secures it, and checks it over HTTPS against Yard's
-# CA with curl --cacert, so it needs no keychain trust and never runs `yard trust`
-# (macOS asks for a password there). Unsecures and unlinks it again, removing its
-# override stub. Herd's resolver must come out unchanged.
+# CA with curl --cacert and from PHP itself (Yard's CA bundle), so it needs no keychain
+# trust and never runs `yard trust` (macOS asks for a password there). Unsecures and
+# unlinks it again, removing its override stub. Herd's resolver must come out unchanged.
 set -euo pipefail
 unset YARD_ROOT
 
@@ -64,6 +64,28 @@ version="$(answer --cacert "$ca" "https://$site.yard:8443/")"
 [[ $version == 8.4.* ]] || fail "https://$site.yard:8443/ answered '$version', expected PHP 8.4.*"
 pass "https://$site.yard:8443/ runs PHP $version, verified against $ca"
 
+# 4b. PHP itself calls the site over HTTPS with no keychain trust and no --cacert: Yard's
+# php.ini names php/<v>/ca-bundle.pem (brew's roots and Yard's CA) as openssl.cafile, which
+# streams use, and curl.cainfo, which the curl extension uses.
+bundle="$data/php/8.4/ca-bundle.pem"
+grep -qF "$(sed -n 2p "$ca")" "$bundle" || fail "$bundle does not hold Yard's CA"
+# shellcheck disable=SC2016 # PHP code: its $ are PHP's.
+call='[$how, $url] = [$argv[1], $argv[2]];
+if ($how === "curl") {
+    $h = curl_init($url);
+    curl_setopt($h, CURLOPT_RETURNTRANSFER, true);
+    $body = curl_exec($h);
+    echo $body === false ? "error: " . curl_error($h) : $body;
+} else {
+    $body = @file_get_contents($url);
+    echo $body === false ? "error: " . (error_get_last()["message"] ?? "") : $body;
+}'
+for how in stream curl; do
+  got="$(cd "$work/$site" && "$data/bin/php" -r "$call" "$how" "https://$site.yard:8443/")"
+  [[ $got == 8.4.* ]] || fail "PHP's $how call to https://$site.yard:8443/ gave '$got'"
+done
+pass "PHP calls https://$site.yard:8443/ through streams and curl, verified against $bundle"
+
 # 5. Its http URL redirects to the https one, keeping the path.
 headers="$(curl -sI "http://$site.yard:8080/x" | tr -d '\r')"
 [[ $headers == "HTTP/1.1 301"* ]] || fail "http://$site.yard:8080/x answered: ${headers%%$'\n'*}"
@@ -88,6 +110,14 @@ for c in failed:
 sys.exit(1 if failed else 0)
 PY
 pass "yard doctor has no failing check"
+python3 - "$report" <<'PY' || fail "yard doctor's php-ca check is not ok"
+import json, sys
+checks = [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"].startswith("php-ca")]
+for c in checks:
+    print(f"  {c['id']}: {c['status']}: {c['message']}", file=sys.stderr)
+sys.exit(0 if [c["status"] for c in checks] == ["ok"] else 1)
+PY
+pass "yard doctor's php-ca check is ok"
 
 # 8. Unsecure serves plain http again and removes the certificate.
 "$yard" unsecure "$site" >/dev/null

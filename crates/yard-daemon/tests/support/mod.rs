@@ -18,6 +18,9 @@ use yard_helper::HelperConfig;
 
 pub const FAKE: &str = env!("CARGO_BIN_EXE_yard-fake-unit");
 
+/// What the fake brew's `ca-certificates` holds.
+pub const PUBLIC_ROOTS: &str = "# the fake public roots\n";
+
 pub struct Fixture {
     pub root: TempDir,
     pub brew: TempDir,
@@ -48,6 +51,8 @@ impl Fixture {
             place(&file, |dst| std::fs::write(dst, ""));
         }
         std::fs::create_dir_all(brew.php_conf_d(PhpVersion::DEFAULT)).unwrap();
+        // brew's public roots, which PHP's CA bundle starts with.
+        place(&brew.ca_certificates(), |dst| std::fs::write(dst, PUBLIC_ROOTS));
         // What `brew trust --json=v1` reports: the two taps Yard's PHP and extension installs
         // come from, trusted as on a machine that ran `yard source trust --tap` for each.
         let trusted = r#"{"taps":["shivammathur/php","shivammathur/extensions"],"formulae":[],"casks":[],"commands":[]}"#;

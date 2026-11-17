@@ -18,6 +18,7 @@ pub mod modules;
 pub mod nginx;
 pub mod node;
 pub mod orphans;
+pub mod php_ca;
 pub mod portscan;
 pub mod privileged;
 pub mod probe;

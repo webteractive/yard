@@ -22,6 +22,12 @@ pub fn get(text: &str, key: &str) -> Option<String> {
     Some(unquoted.to_string())
 }
 
+/// The file whose setting of `key` PHP uses, and that value: the last of `files` (in the
+/// order PHP loads them: `php.ini`, then its scan directory by name) that sets it.
+pub fn effective<'a>(files: &'a [(String, String)], key: &str) -> Option<(&'a str, String)> {
+    files.iter().rev().find_map(|(name, text)| Some((name.as_str(), get(text, key)?)))
+}
+
 /// Sets `key` where its last line is, dropping earlier ones, or appends it.
 pub fn set(text: &str, key: &str, value: &str) -> String {
     let needs_quotes = value.contains(|c: char| c.is_whitespace() || c == ';' || c == '#' || c == '=');
@@ -108,6 +114,22 @@ mod tests {
         assert_eq!(get(text, "memory_limit").as_deref(), Some("2G"));
         assert_eq!(get(text, "memory"), None);
         assert_eq!(get("[PHP]\nx=1\n", "x").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn effective_is_the_last_file_in_load_order_that_sets_the_key() {
+        let files = vec![
+            ("php.ini".to_string(), "openssl.cafile = \"/yard/ca-bundle.pem\"\n".to_string()),
+            ("10-brew-zz-ca.ini".to_string(), "openssl.cafile=/mine.pem\n".to_string()),
+            ("50-redis.ini".to_string(), "extension=redis.so\n".to_string()),
+            ("99-overrides.ini".to_string(), "; openssl.cafile = /commented.pem\n".to_string()),
+        ];
+        assert_eq!(effective(&files, "openssl.cafile"), Some(("10-brew-zz-ca.ini", "/mine.pem".to_string())));
+        assert_eq!(
+            effective(&files[..1], "openssl.cafile"),
+            Some(("php.ini", "/yard/ca-bundle.pem".to_string()))
+        );
+        assert_eq!(effective(&files, "curl.cainfo"), None);
     }
 
     #[test]

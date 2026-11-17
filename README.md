@@ -94,6 +94,12 @@ password. `yard untrust` removes it. Until then `yard doctor` warns. Yard's `nod
 `security.enterprise_roots.enabled` set in `about:config`; `yard doctor` prints the path
 and the Firefox note.
 
+PHP needs none of that: once Yard has a CA, every PHP it runs (sites, `php` and `composer`)
+verifies certificates against `~/.yard/php/<version>/ca-bundle.pem`, brew's public roots plus
+Yard's CA, so one site can call another over `https://`. Yard rebuilds it when brew updates its
+certificates. To use another bundle, set `openssl.cafile` and `curl.cainfo` in that version's
+`99-overrides.ini`.
+
 ## Old PHP and MySQL
 
 PHP 7.0 to 7.3 can log in to MySQL only with `mysql_native_password`, so a MySQL 8 instance

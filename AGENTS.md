@@ -219,6 +219,16 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   release with a notice, and is removed in the release after the one that ships this. Runtimes
   (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx) later;
   FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
+- PHP trusts Yard's CA (maintainer, 2026-11-17, from a cURL error 60 found moving the main Mac's
+  Herd sites): reconcile writes `php/<v>/ca-bundle.pem` (brew's `ca-certificates` and
+  `yard-ca.pem`) once a CA exists, and Yard's `php.ini` names it as `openssl.cafile` and
+  `curl.cainfo`, always, not only after `yard trust` (main spec §5.4). Node already had
+  `NODE_EXTRA_CA_CERTS` from its shims (M4c). Built on main with the suite passing (1457); on the
+  Mac mini on 2026-11-17 `scripts/e2e-m1.sh` and `e2e-m3.sh` (with its new PHP streams and curl
+  calls and `php-ca`) passed against yardd built from it, and PHP 7.0 and 8.4 still verify
+  public HTTPS through the bundle. On the main Mac, the hand-made
+  `zz-yard-ca.ini` files in brew's `etc/php/<v>/conf.d` (the workaround) can go once yardd runs
+  this build.
 - Milestones M1–M7 (spec §12; reordered 2026-10-21: M4 Node and services, M5 tunnels,
   M6 Yard.app, M7 distribution) each get their own plan in `docs/superpowers/plans/`.
   Write no product code for a milestone before its plan is approved.
@@ -482,7 +492,9 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   fails if one is left. Run PHP only as
   `"$HOME/.yard/bin/php"`; a bare `php` can be Herd's.
 - `scripts/e2e-m3.sh` — real-machine M3 check after `e2e-m1.sh`: secures a scratch site and
-  curls it over HTTPS with `--cacert`, so it needs no keychain trust; ask the maintainer first. Tests
+  curls it over HTTPS with `--cacert`, then has PHP 8.4 call it through the shim (streams and
+  curl, verified by Yard's `php/8.4/ca-bundle.pem`) and checks doctor's `php-ca`, so it needs no
+  keychain trust; ask the maintainer first. Tests
   never run the real `security` or touch a keychain: `DaemonOptions.security`, the
   fixture's fake `security` and the CLI's `YARD_SECURITY` stand in for it.
 - `scripts/e2e-m4a.sh` — real-machine M4a check after `e2e-m1.sh`: a scratch project's

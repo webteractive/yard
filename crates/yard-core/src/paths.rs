@@ -217,6 +217,12 @@ impl Paths {
         self.php_dir(v).join("conf.d")
     }
 
+    /// The public roots plus Yard's CA, which `php.ini` names as `openssl.cafile` and
+    /// `curl.cainfo`, so PHP can call `https://<site>.<tld>` (generated).
+    pub fn php_ca_bundle(&self, v: PhpVersion) -> PathBuf {
+        self.php_dir(v).join("ca-bundle.pem")
+    }
+
     pub fn php_overrides(&self, v: PhpVersion) -> PathBuf {
         self.php_conf_d(v).join("99-overrides.ini")
     }
@@ -344,6 +350,7 @@ mod tests {
         assert_eq!(p.daemon_socket(), Path::new("/r/yardd.sock"));
         assert_eq!(p.nginx_pid(), Path::new("/r/run/nginx.pid"));
         assert_eq!(p.ca_cert(), Path::new("/r/ca/yard-ca.pem"));
+        assert_eq!(p.php_ca_bundle("8.4".parse().unwrap()), Path::new("/r/php/8.4/ca-bundle.pem"));
         assert_eq!(p.ca_key(), Path::new("/r/ca/yard-ca.key"));
         assert_eq!(p.cert("blog"), Path::new("/r/certs/blog.pem"));
         assert_eq!(p.cert_key("blog"), Path::new("/r/certs/blog.key"));

@@ -494,6 +494,73 @@ async fn ca_check_names_node_extra_ca_certs_when_trusted() {
     assert!(c.message.starts_with(&expected), "{c:?}");
 }
 
+/// Yard's php.ini for the default PHP, naming `bundle` as reconcile would, and the bundle with
+/// `extra` after the public roots.
+fn php_with_bundle(paths: &yard_core::Paths, extra: &str) -> std::path::PathBuf {
+    let v = yard_core::PhpVersion::DEFAULT;
+    let bundle = paths.php_ca_bundle(v);
+    std::fs::create_dir_all(paths.php_conf_d(v)).unwrap();
+    let file = bundle.display();
+    std::fs::write(paths.php_ini(v), format!("openssl.cafile = \"{file}\"\ncurl.cainfo = \"{file}\"\n"))
+        .unwrap();
+    std::fs::write(&bundle, format!("{}{extra}", support::PUBLIC_ROOTS)).unwrap();
+    bundle
+}
+
+#[tokio::test]
+async fn php_ca_check_passes_when_php_verifies_against_the_ca() {
+    let e = env().await;
+    tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    let ca = std::fs::read_to_string(e.fx.paths.ca_cert()).unwrap();
+    let bundle = php_with_bundle(&e.fx.paths, &ca);
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "php-ca");
+    assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+    assert!(c.message.contains(&bundle.display().to_string()), "{c:?}");
+}
+
+#[tokio::test]
+async fn php_ca_check_names_the_ini_whose_bundle_lacks_the_ca() {
+    let e = env().await;
+    tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    let ca = std::fs::read_to_string(e.fx.paths.ca_cert()).unwrap();
+    php_with_bundle(&e.fx.paths, &ca);
+    let v = yard_core::PhpVersion::DEFAULT;
+    let stale = e.fx.root.path().join("old-bundle.pem");
+    std::fs::write(&stale, support::PUBLIC_ROOTS).unwrap();
+    let ini = e.fx.paths.php_conf_d(v).join("10-brew-zz-ca.ini");
+    std::fs::write(&ini, format!("openssl.cafile = {}\n", stale.display())).unwrap();
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, &format!("php-ca:{v}"));
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("openssl.cafile") && c.message.contains("10-brew-zz-ca.ini"), "{c:?}");
+    assert!(!c.message.contains("curl.cainfo"), "curl.cainfo is still Yard's: {c:?}");
+}
+
+#[tokio::test]
+async fn php_ca_check_warns_when_nothing_names_a_bundle() {
+    let e = env().await;
+    tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
+    let v = yard_core::PhpVersion::DEFAULT;
+    std::fs::create_dir_all(e.fx.paths.php_conf_d(v)).unwrap();
+    std::fs::write(e.fx.paths.php_ini(v), "memory_limit = 512M\n").unwrap();
+
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, &format!("php-ca:{v}"));
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some("yard stop && yard start"), "{c:?}");
+}
+
+#[tokio::test]
+async fn php_ca_check_is_absent_without_a_ca() {
+    let e = env().await;
+    php_with_bundle(&e.fx.paths, "");
+    let report = e.offline(&e.helper).await;
+    assert!(!report.checks.iter().any(|c| c.id.starts_with("php-ca")), "{:?}", report.checks);
+}
+
 #[tokio::test]
 async fn ca_check_warns_when_security_does_not_answer() {
     let e = env().await;

@@ -66,7 +66,8 @@ up what they add:
 
 - `e2e-m1.sh` links a PHP app and proxies another, curls both on `.yard:8080`, and, where 80 and
   443 are free, switches to the privileged profile and back.
-- `e2e-m2.sh` checks multi-PHP and extensions, and `e2e-m3.sh` HTTPS.
+- `e2e-m2.sh` checks multi-PHP and extensions, and `e2e-m3.sh` HTTPS (with PHP calling a
+  secured site through Yard's CA bundle).
 - `e2e-m4a.sh` checks the `.yard` file, and `e2e-m4a1.sh` the managed `.yard` (and that
   `git status` stays clean).
 - `e2e-m4b.sh` adds MySQL, PostgreSQL, Redis and MinIO (installing what is missing with brew),
