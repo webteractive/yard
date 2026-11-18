@@ -216,9 +216,17 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   new R5 (a recipe dropped into `engines/` is offered by the Add picker without a restart); its first
   run failed DB3 because `ax.js save` typed the name over a selection Command-A had not made, so it
   now sets the name field's value through accessibility and reads it back. `yard db` keeps working for one
-  release with a notice, and is removed in the release after the one that ships this. Runtimes
-  (PHP, Composer, Node; Composer first) are the next design, a server contract (nginx) later;
-  FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
+  release with a notice, and is removed in the release after the one that ships this. A server
+  contract (nginx) may come later; FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
+- Runtimes (maintainer, 2026-11-18): a `Runtime` contract in Rust with every runtime defined by a
+  recipe (Composer a plain one, Node on the `fnm` source, PHP on the `php` driver; user recipes in
+  `~/.yard/runtimes/` add Bun, Python and the like), Composer per project from getcomposer.org (2.2
+  under PHP below 7.2.5), and PHP builds named `8.4-zts`, `8.4-debug` or `8.4-<label>` (brew's
+  variants, or a prefix the user compiled). Designed in
+  `docs/superpowers/specs/2026-11-18-yard-runtimes-design.md` (approved 2026-11-18), to be built in
+  three plans: the contract and Composer, PHP builds, user runtime recipes. PHP builds Yard
+  downloads or compiles itself are parked in
+  `docs/superpowers/specs/2026-11-18-yard-php-builds-installed-design.md`.
 - PHP trusts Yard's CA (maintainer, 2026-11-17, from a cURL error 60 found moving the main Mac's
   Herd sites): reconcile writes `php/<v>/ca-bundle.pem` (brew's `ca-certificates` and
   `yard-ca.pem`) once a CA exists, and Yard's `php.ini` names it as `openssl.cafile` and
