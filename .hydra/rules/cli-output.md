@@ -15,7 +15,8 @@ triggers:
 - `yard <engine> [verb] …` arrives as clap's external subcommand (recipes spec §9.1): the CLI loads
   the engines itself (`yard_daemon::engines::load_once`, so a recipe's command works with yardd
   down), maps `pgsql` to `postgres`, and parses the rest as `yard db <verb>` would, with the
-  engine set on `DbAt` (never a flag). A verb the engine lacks, or an unknown word, exits 2.
+  engine set on `DbAt` (never a flag); it parses with `yard db`'s own command renamed `yard <what was typed>`, so
+  help and usage errors say `yard mysql list`, never `yard db list`. A verb the engine lacks, or an unknown word, exits 2.
   `yard db` is hidden and prints `yard db is going away: use yard <engine> <verb>` on stderr; a
   recipe key may not be a CLI command (`YARD_COMMANDS`, kept equal by a test).
 - Exit codes are part of the interface: 0 success, 1 Yard error (stderr

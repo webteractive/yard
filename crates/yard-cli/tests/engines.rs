@@ -225,3 +225,23 @@ fn flags_before_the_verb() {
     let p = &d.params("db.list")[0];
     assert_eq!((p["service"].as_str(), p["engine"].as_str()), (Some("mysql-8.0"), Some("mysql")));
 }
+
+#[test]
+fn yard_engine_help_and_errors_name_the_engine() {
+    let root = short_root();
+    for (args, usage) in [
+        (&["mysql", "list", "--help"][..], "Usage: yard mysql list"),
+        (&["mysql", "--help"][..], "Usage: yard mysql shell"),
+        (&["pgsql", "dump", "--help"][..], "Usage: yard pgsql dump"),
+    ] {
+        let out = yard_at(root.path()).args(args).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", stderr(&out));
+        assert!(text.contains(usage), "{args:?}: {text}");
+        assert!(!text.contains("yard db"), "{args:?}: {text}");
+    }
+    let out = yard_at(root.path()).args(["mysql", "list", "--bogus"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("yard mysql list"), "{}", stderr(&out));
+    assert!(!stderr(&out).contains("yard db"), "{}", stderr(&out));
+}

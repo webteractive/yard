@@ -3,8 +3,8 @@
 //! `yard db <verb>` is and runs limited to that engine's instances.
 
 use super::{Ctx, Outcome, db_action};
-use crate::cli::{Cli, Command};
-use clap::Parser;
+use crate::cli::{Cli, DbSub};
+use clap::{CommandFactory, FromArgMatches};
 use serde_json::Value;
 use std::ffi::OsString;
 use yard_core::services::engines::{Verb, engine_verbs};
@@ -38,16 +38,24 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
         let ctx = Ctx { paths, json: ctx.json, root_overridden, security: ctx.security.clone() };
         return open_console(&ctx, &key).await;
     }
-    let argv = ["yard".to_string(), "db".to_string(), verb.name().to_string()].into_iter().chain(tail);
-    let parsed = match Cli::try_parse_from(argv) {
-        Ok(cli) => cli,
+    // Parsed by `yard db`'s own command, named after what was typed, so help and usage errors
+    // say `yard mysql list`, not `yard db list`. Built first, so the global flags reach it.
+    let mut cli = Cli::command();
+    cli.build();
+    let Some(db) = cli.find_subcommand("db") else { return Ok(2) };
+    let mut db = db.clone().bin_name(format!("yard {written}"));
+    let argv = [format!("yard {written}"), verb.name().to_string()].into_iter().chain(tail);
+    let parsed = db
+        .try_get_matches_from_mut(argv)
+        .and_then(|m| Ok((DbSub::from_arg_matches(&m)?, m.get_flag("json"))));
+    let (action, json) = match parsed {
+        Ok(parsed) => parsed,
         Err(e) => {
             let _ = e.print();
             return Ok(e.exit_code());
         }
     };
-    let Some(Command::Db { action }) = parsed.command else { return Ok(2) };
-    let ctx = Ctx { paths, json: ctx.json || parsed.json, root_overridden, security: ctx.security.clone() };
+    let ctx = Ctx { paths, json: ctx.json || json, root_overridden, security: ctx.security.clone() };
     db_action(&ctx, action, Some(key)).await
 }
 
