@@ -2,7 +2,11 @@
 //! pinned versions, checked by SHA-256 and renamed into `installs/<key>/<version>/`. The
 //! downloads are `file://` fixtures shaped like getcomposer.org.
 
+mod support;
+
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use support::daemon::{Client, prepared, run_job};
 use yard_core::Paths;
 use yard_core::runtimes::Origin;
 use yard_core::runtimes::recipe::{RuntimeRecipe, parse_runtime_recipe};
@@ -195,4 +199,219 @@ async fn uninstall_removes_only_that_version() {
     let v = "2.2.32".parse().unwrap();
     let (_, error) = job(move |ctx| async move { runtimes::uninstall(&ctx, &paths, &rr, &v).await }).await;
     assert_eq!(error.unwrap().code, ErrorCode::RuntimeMissing);
+}
+
+/// A Composer version as `runtime.install` leaves it, without a download.
+fn put_composer(paths: &Paths, version: &str) {
+    let root = paths.install_root("composer", version);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("composer.phar"), "<?php\n").unwrap();
+    let v: yard_core::runtimes::version::RuntimeVersion = version.parse().unwrap();
+    let record = yard_core::runtimes::select::InstallRecord {
+        requires_php: (v >= "2.3.0".parse().unwrap()).then(|| "7.2.5".parse().unwrap()),
+        version: v,
+        url: format!("https://getcomposer.org/download/{version}/composer.phar"),
+        sha256: "a".repeat(64),
+        installed_at: "2026-11-19T00:00:00Z".into(),
+    };
+    std::fs::write(paths.install_record("composer", version), record.render()).unwrap();
+}
+
+fn write(dir: &Path, name: &str, text: &str) {
+    std::fs::write(dir.join(name), text).unwrap();
+}
+
+async fn site(c: &mut Client, name: &str) -> Value {
+    let list = c.call("sites.list", Value::Null).await.unwrap();
+    list.as_array().unwrap().iter().find(|s| s["name"] == name).cloned().unwrap_or_else(|| panic!("{list}"))
+}
+
+fn composer_of(site: &Value) -> Value {
+    site["runtimes"]
+        .as_array()
+        .and_then(|r| r.iter().find(|r| r["key"] == "composer"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn runtimes_list_names_the_three_carried() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let list = c.call("runtimes.list", Value::Null).await.unwrap();
+    let keys: Vec<&str> =
+        list["runtimes"].as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["composer", "node", "php"], "{list}");
+    assert!(list["runtimes"].as_array().unwrap().iter().all(|r| r["origin"] == "carried"), "{list}");
+    let php = &list["runtimes"][2];
+    assert!(php["installed"].as_array().unwrap().iter().any(|v| v == "8.4"), "{list}");
+    assert_eq!(list["errors"], json!([]));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_site_with_composer_json_shows_its_composer() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    write(&dir, ".yard", "php = \"7.1\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let composer = composer_of(&site(&mut c, "shop").await);
+    assert_eq!(composer["spec"], "2.2", "{composer}");
+    assert_eq!(composer["source"], "default", "{composer}");
+    assert_eq!(composer["name"], "Composer", "{composer}");
+    assert_eq!(composer["version"], Value::Null, "{composer}");
+    put_composer(&d.fx.paths, "2.2.32");
+    let composer = composer_of(&site(&mut c, "shop").await);
+    assert_eq!(composer["version"], "2.2.32", "{composer}");
+    let info = c.call("sites.info", json!({"site": "shop"})).await.unwrap();
+    assert_eq!(composer_of(&info["site"])["version"], "2.2.32", "{info}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_site_without_composer_json_shows_none() {
+    let d = prepared("").await;
+    d.project("plain");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "plain").await;
+    assert!(s.get("runtimes").is_none(), "{s}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn use_writes_the_managed_file_and_unuse_removes_it() {
+    let d = prepared("").await;
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    let managed = d.fx.paths.managed_project_file("shop");
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, format!("# mine\nproject = {:?}\n", dir.display().to_string())).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = c.call("runtime.use", json!({"key": "composer", "site": "shop", "spec": "2.2"})).await.unwrap();
+    let composer = composer_of(&s);
+    assert_eq!(
+        (composer["spec"].as_str(), composer["source"].as_str()),
+        (Some("2.2"), Some("managed_file")),
+        "{s}"
+    );
+    let text = std::fs::read_to_string(&managed).unwrap();
+    assert!(text.contains("[runtimes]\ncomposer = \"2.2\""), "{text}");
+    assert!(text.starts_with("# mine\n"), "{text}");
+    c.call("runtime.unuse", json!({"key": "composer", "site": "shop"})).await.unwrap();
+    let text = std::fs::read_to_string(&managed).unwrap();
+    assert!(!text.contains("runtimes"), "{text}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn use_is_refused_for_a_committed_yard() {
+    let d = prepared("").await;
+    let dir = d.project("shop");
+    write(&dir, ".yard", "php = \"8.4\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e =
+        c.call("runtime.use", json!({"key": "composer", "site": "shop", "spec": "2.2"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::SiteHasProjectFile);
+    assert!(e.hint.unwrap().contains("[runtimes] composer = \"2.2\""));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn use_writes_sites_toml_without_a_managed_file() {
+    let d = prepared("").await;
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = c.call("runtime.use", json!({"key": "composer", "site": "shop", "spec": "2"})).await.unwrap();
+    assert_eq!(composer_of(&s)["source"], "sites_toml", "{s}");
+    let sites = yard_core::config::load_sites(&d.fx.paths).unwrap();
+    assert_eq!(sites.sites["shop"].runtimes["composer"].to_string(), "2");
+    c.call("runtime.unuse", json!({"key": "composer", "site": "shop"})).await.unwrap();
+    let sites = yard_core::config::load_sites(&d.fx.paths).unwrap();
+    assert!(sites.sites["shop"].runtimes.is_empty());
+    let e = c.call("runtime.use", json!({"key": "bun", "site": "shop", "spec": "1"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RuntimeUnknown);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn default_writes_yard_toml_and_needs_an_installed_match() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let e = c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RuntimeMissing);
+    put_composer(&d.fx.paths, "2.11.2");
+    c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap();
+    let (yard, _) = yard_core::config::load_yard(&d.fx.paths).unwrap();
+    assert_eq!(yard.runtime_defaults["composer"].to_string(), "2");
+    let list = c.call("runtime.list", json!({"key": "composer"})).await.unwrap();
+    assert_eq!(list["default"], "2", "{list}");
+    assert_eq!(list["versions"][0]["version"], "2.11.2", "{list}");
+    assert_eq!(list["versions"][0]["default"], true, "{list}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_refuses_the_only_version_a_site_runs() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    write(&dir, ".yard", "php = \"7.1\"\n");
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = c.call("runtime.uninstall", json!({"key": "composer", "version": "2.2.32"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RuntimeInUse);
+    assert!(e.message.contains("shop"), "{}", e.message);
+    let (_, error) =
+        run_job(&mut c, "runtime.uninstall", json!({"key": "composer", "version": "2.11.2"})).await;
+    assert_eq!(error, None);
+    assert!(!d.fx.paths.install_root("composer", "2.11.2").exists());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unknown_runtime_in_yard_is_reported_not_fatal() {
+    let d = prepared("").await;
+    let dir = d.project("shop");
+    write(&dir, ".yard", "php = \"8.4\"\n\n[runtimes]\nbun = \"1\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let s = site(&mut c, "shop").await;
+    assert!(s.get("project_error").is_none() && s.get("needs").is_none(), "{s}");
+    let bun = s["runtimes"].as_array().unwrap().iter().find(|r| r["key"] == "bun").cloned().unwrap();
+    assert_eq!(bun["error"]["code"], "RUNTIME_UNKNOWN", "{bun}");
+    assert_eq!(bun["spec"], "1", "{bun}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_install_node_delegates() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let started = c.call("runtime.install", json!({"key": "node", "spec": "22"})).await.unwrap();
+    assert!(started["job_id"].as_str().unwrap().starts_with("node-install-"), "{started}");
+    // Installed already, so the job finds it without the network.
+    put_composer(&d.fx.paths, "2.2.32");
+    let (lines, error) =
+        run_job(&mut c, "runtime.install", json!({"key": "composer", "spec": "2.2.32"})).await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "Composer 2.2.32 is installed"), "{lines:?}");
+    // Refused before any job: 2.7 is not a channel.
+    let e = c.call("runtime.install", json!({"key": "composer", "spec": "2.7"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    let e = c.call("runtime.install", json!({"key": "composer"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    let e = c.call("runtime.list", json!({"key": "bun"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RuntimeUnknown);
+    d.shutdown().await.unwrap();
 }

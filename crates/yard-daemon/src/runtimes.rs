@@ -7,14 +7,19 @@ use crate::programs::{fetch, stage_in};
 use std::collections::BTreeMap;
 use std::path::Path;
 use yard_core::Paths;
-use yard_core::runtimes::Runtimes;
+use yard_core::config::{SiteEntry, SitesConfig, YardConfig, load_sites, load_yard};
+use yard_core::project::{FileKind, ProjectFile};
 use yard_core::runtimes::recipe::{IndexDef, RuntimeRecipe, SourceDef, VersionEntry, expand_version};
+use yard_core::runtimes::resolve::{PinSource, failed_source, pin_file_version, resolve_pin, uses_runtime};
 use yard_core::runtimes::select::{
-    InstallRecord, composer_channel, composer_channels, index_version, parse_sha256sum, requires_php,
+    InstallRecord, composer_channel, composer_channels, default_spec, index_version, parse_sha256sum,
+    requires_php,
 };
+use yard_core::runtimes::shim::{Pick, pick_composer};
 use yard_core::runtimes::version::{RuntimeVersion, VersionSpec, pick};
+use yard_core::runtimes::{RuntimeKind, Runtimes};
 use yard_core::services::engines::LoadOptions;
-use yard_proto::{ErrorCode, SettingSource, SiteInfo, YardError};
+use yard_proto::{ErrorCode, SettingSource, SiteInfo, SiteKind, SiteRuntime, YardError};
 
 const CURL: &str = "/usr/bin/curl";
 
@@ -204,6 +209,11 @@ fn io(what: &str, path: &Path, e: std::io::Error) -> YardError {
     YardError::internal(format!("cannot {what} {}: {e}", path.display()))
 }
 
+/// `RUNTIME_MISSING` for a spec nothing installed meets, hinting at the install.
+pub fn missing_spec(recipe: &RuntimeRecipe, spec: &VersionSpec) -> YardError {
+    yard_core::runtimes::shim::missing(recipe, spec, &PinSource::Default)
+}
+
 /// `RUNTIME_IN_USE` when `v` is the only installed version a linked site's runtime (from
 /// `sites`' `runtimes`) or the default `default` resolves to, naming what to change.
 pub fn in_use(
@@ -291,4 +301,190 @@ pub async fn uninstall(
     std::fs::remove_dir_all(&root).map_err(|e| io("remove", &root, e))?;
     job.line(format!("Removed {} {v}", recipe.name));
     Ok(())
+}
+
+/// The full version of the PHP keg `v` (`7.1.33`), or `x.y.0` when it cannot be read.
+pub fn php_full(brew: &yard_core::brew::Brew, v: yard_core::PhpVersion) -> RuntimeVersion {
+    let read_link = |p: &Path| std::fs::read_link(p).ok();
+    let full = brew
+        .php_opt(v, &|p: &Path| p.exists(), &read_link)
+        .ok()
+        .and_then(|opt| read_link(&opt))
+        .and_then(|target| yard_core::php::full_version(&target.to_string_lossy()));
+    yard_core::runtimes::select::php_full_or_zero(full.as_deref(), v)
+}
+
+fn setting(source: &PinSource) -> (SettingSource, Option<String>) {
+    match source {
+        PinSource::Project(f) => (SettingSource::ProjectFile, Some(f.display().to_string())),
+        PinSource::Managed(f) => (SettingSource::ManagedFile, Some(f.display().to_string())),
+        PinSource::Site(_) => (SettingSource::SitesToml, None),
+        PinSource::PinFile(f) => (SettingSource::PinFile, Some(f.display().to_string())),
+        PinSource::Default => (SettingSource::Default, None),
+    }
+}
+
+/// The pin `dir` resolves to for a recipe runtime, as its shim run there would see it; `None`
+/// when nothing pins it there.
+pub fn resolve_at(
+    dir: &Path,
+    recipe: &RuntimeRecipe,
+    sites: &SitesConfig,
+    paths: &Paths,
+) -> Result<Option<(VersionSpec, PinSource)>, YardError> {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let key = recipe.key.as_str();
+    resolve_pin(
+        dir,
+        &recipe.pin_files,
+        sites,
+        paths,
+        &crate::node::read_pin,
+        &canonical,
+        &|f: &ProjectFile| f.runtimes.get(key).cloned(),
+        &|s: &SiteEntry| s.runtimes.get(key).cloned(),
+        &pin_file_version,
+    )
+}
+
+/// The spec a site's runtime resolves to and where from: its pin, else `yard.toml`'s
+/// default, else the recipe's rule for the PHP `php_full`.
+pub fn spec_for(
+    recipe: &RuntimeRecipe,
+    pin: Option<(VersionSpec, PinSource)>,
+    yard: &YardConfig,
+    php_full: &RuntimeVersion,
+) -> Option<(VersionSpec, PinSource)> {
+    pin.or_else(|| yard.runtime_defaults.get(&recipe.key).map(|s| (s.clone(), PinSource::Default)))
+        .or_else(|| default_spec(recipe, Some(php_full)).map(|(s, _)| (s, PinSource::Default)))
+}
+
+/// Fills `runtimes` on each linked PHP site whose root exists (runtimes spec §7): every recipe
+/// runtime the site uses (one of its `uses_when` files in the root, or its own pin), with the
+/// spec it resolves to and the installed version that runs, or why none does; and every
+/// `[runtimes]` key of its `.yard` or `sites.toml` entry no runtime defines, as
+/// `RUNTIME_UNKNOWN`. Nothing is filled while `yard.toml` or `sites.toml` does not parse.
+pub fn fill_runtimes(
+    sites: &mut [SiteInfo],
+    paths: &Paths,
+    runtimes: &Runtimes,
+    brew: &yard_core::brew::Brew,
+) {
+    let (Ok((yard, _)), Ok(config)) = (load_yard(paths), load_sites(paths)) else { return };
+    let (projects, _) = yard_core::project::load(&config, paths, &crate::project::read_project_file);
+    for site in sites {
+        site.runtimes = vec![];
+        let SiteKind::Php { path, php, .. } = &site.kind else { continue };
+        let Ok(root) = std::fs::canonicalize(path) else { continue };
+        if !root.is_dir() {
+            continue;
+        }
+        let php_full = match php.parse() {
+            Ok(v) => php_full(brew, v),
+            Err(_) => continue,
+        };
+        for rt in runtimes.iter().filter(|r| r.kind() == RuntimeKind::Recipe) {
+            let recipe = rt.recipe();
+            let has_uses = recipe.uses_when.iter().any(|f| root.join(f).is_file());
+            let entry = match resolve_at(&root, recipe, &config, paths) {
+                Ok(pin) => {
+                    let source = pin.as_ref().map_or(PinSource::Default, |(_, s)| s.clone());
+                    if !uses_runtime(&source, &root, has_uses) {
+                        continue;
+                    }
+                    // yard.toml's default counts as a pin: a plain prefix, as the shim takes it.
+                    let pin = pin.or_else(|| {
+                        yard.runtime_defaults.get(&recipe.key).map(|s| (s.clone(), PinSource::Default))
+                    });
+                    let Some((spec, source)) = spec_for(recipe, pin.clone(), &yard, &php_full) else {
+                        continue;
+                    };
+                    let (setting, file) = setting(&source);
+                    let picked = pick_composer(
+                        recipe,
+                        pin,
+                        &php_full,
+                        &format!("site {}", site.name),
+                        &installed(paths, &recipe.key),
+                        None,
+                        paths,
+                    );
+                    let (version, error) = match picked {
+                        Ok(Pick::Run(v, _)) => (Some(v.to_string()), None),
+                        Ok(Pick::BrewComposer(_)) => (None, None),
+                        Err(e) if e.code == ErrorCode::RuntimeMissing => (None, None),
+                        Err(e) => (None, Some(e)),
+                    };
+                    SiteRuntime {
+                        key: recipe.key.clone(),
+                        name: recipe.name.clone(),
+                        spec: Some(spec.to_string()),
+                        source: setting,
+                        file,
+                        version,
+                        error,
+                    }
+                }
+                // A `.yard` that does not parse is the site's `project_error` already.
+                Err(e)
+                    if e.code == ErrorCode::ProjectFileInvalid
+                        && (site.project_error.is_some() || !has_uses) =>
+                {
+                    continue;
+                }
+                Err(e) => {
+                    let (source, file) =
+                        failed_source(&e, paths).map_or((SettingSource::Default, None), |s| setting(&s));
+                    SiteRuntime {
+                        key: recipe.key.clone(),
+                        name: recipe.name.clone(),
+                        spec: None,
+                        source,
+                        file,
+                        version: None,
+                        error: Some(e),
+                    }
+                }
+            };
+            site.runtimes.push(entry);
+        }
+        // Keys no runtime defines: the site's file owns them, else its sites.toml entry.
+        let (keys, source, file) = match projects.get(&site.name) {
+            Some(loaded) => {
+                let Some(parsed) = loaded.ok() else { continue };
+                let source = match loaded.kind {
+                    FileKind::Managed => SettingSource::ManagedFile,
+                    FileKind::Committed => SettingSource::ProjectFile,
+                };
+                (parsed.runtimes.clone(), source, Some(loaded.file.display().to_string()))
+            }
+            None => match config.sites.get(&site.name) {
+                Some(entry) => (entry.runtimes.clone(), SettingSource::SitesToml, None),
+                None => continue,
+            },
+        };
+        for (key, spec) in keys.into_iter().filter(|(k, _)| runtimes.get(k).is_none()) {
+            site.runtimes.push(SiteRuntime {
+                name: key.clone(),
+                spec: Some(spec.to_string()),
+                source,
+                file: file.clone(),
+                version: None,
+                error: Some(unknown(&key)),
+                key,
+            });
+        }
+    }
+}
+
+/// `RUNTIME_UNKNOWN` for a key no runtime defines.
+pub fn unknown(key: &str) -> YardError {
+    YardError::new(ErrorCode::RuntimeUnknown, format!("no runtime is called {key}"))
+        .with_hint(format!("add ~/.yard/runtimes/{key}.toml"))
+}
+
+/// `fill_node` and `fill_runtimes`: what every answer that carries a site fills per request.
+pub fn fill_sites(sites: &mut [SiteInfo], paths: &Paths, runtimes: &Runtimes, brew: &yard_core::brew::Brew) {
+    crate::node::fill_node(sites, paths);
+    fill_runtimes(sites, paths, runtimes, brew);
 }

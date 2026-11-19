@@ -296,7 +296,7 @@ pub(super) async fn site_detail(ctx: &Context, p: SiteDetailParams) -> Result<Si
         _ => vec![],
     };
     let mut site = [site.clone()];
-    crate::node::fill_node(&mut site, &ctx.paths);
+    crate::runtimes::fill_sites(&mut site, &ctx.paths, &ctx.runtimes, &ctx.brew);
     let [site] = site;
     Ok(SiteDetail { php_full: php_full(ctx, &site), sources: sources(&snap, &site), services, site })
 }

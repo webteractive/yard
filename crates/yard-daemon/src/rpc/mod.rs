@@ -9,6 +9,7 @@ mod info;
 mod node;
 mod php;
 mod project;
+mod runtimes;
 pub mod server;
 mod services;
 mod sources;

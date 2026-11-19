@@ -36,7 +36,7 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::DOCTOR => json(Ok(doctor(ctx, doctor_params(params)?).await)),
         methods::SITES_LIST => {
             let mut sites = snapshot(ctx).await?.resolution.sites;
-            crate::node::fill_node(&mut sites, &ctx.paths);
+            crate::runtimes::fill_sites(&mut sites, &ctx.paths, &ctx.runtimes, &ctx.brew);
             json(Ok(sites))
         }
         methods::SITES_LINK => json(link(ctx, parse(params)?).await),
@@ -100,6 +100,13 @@ pub async fn handle(ctx: &Context, method: &str, params: Value) -> Result<Value,
         methods::NODE_DEFAULT => json(node::set_default(ctx, parse(params)?).await),
         methods::NODE_USE => json(node::use_spec(ctx, parse(params)?).await),
         methods::NODE_UNUSE => json(node::unuse(ctx, parse(params)?).await),
+        methods::RUNTIMES_LIST => json(super::runtimes::list_all(ctx).await),
+        methods::RUNTIME_LIST => json(super::runtimes::list(ctx, parse(params)?).await),
+        methods::RUNTIME_INSTALL => json(super::runtimes::install(ctx, parse(params)?).await),
+        methods::RUNTIME_UNINSTALL => json(super::runtimes::uninstall(ctx, parse(params)?).await),
+        methods::RUNTIME_DEFAULT => json(super::runtimes::set_default(ctx, parse(params)?).await),
+        methods::RUNTIME_USE => json(super::runtimes::use_spec(ctx, parse(params)?).await),
+        methods::RUNTIME_UNUSE => json(super::runtimes::unuse(ctx, parse(params)?).await),
         methods::PHP_CONFIG_GET => json(php::config_get(ctx, parse(params)?)),
         methods::PHP_CONFIG_SET => json(php::config_edit(ctx, parse(params)?, true).await.map(|_| ())),
         methods::PHP_CONFIG_UNSET => json(php::config_edit(ctx, parse(params)?, false).await),
@@ -185,7 +192,7 @@ pub(super) async fn site(ctx: &Context, name: &str) -> Result<SiteInfo, YardErro
         .find(|s| s.name == name)
         .ok_or_else(|| not_found(name))?;
     let mut one = [site];
-    crate::node::fill_node(&mut one, &ctx.paths);
+    crate::runtimes::fill_sites(&mut one, &ctx.paths, &ctx.runtimes, &ctx.brew);
     let [site] = one;
     Ok(site)
 }
