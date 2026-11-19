@@ -273,7 +273,8 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         }
         checks.extend(managed_checks(paths, sites));
         let mut sites = sites.clone();
-        crate::node::fill_node(&mut sites, paths);
+        crate::runtimes::fill_sites(&mut sites, paths, &crate::runtimes::registry(), brew);
+        checks.extend(runtime_checks(&sites));
         let default = view.yard.as_ref().and_then(|y| y.default_node.clone()).unwrap_or(DEFAULT_SPEC);
         checks.extend(node_checks(
             &sites,
@@ -282,6 +283,7 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             &crate::node::lts(paths),
         ));
     }
+    checks.extend(composer_brew(paths, brew));
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
     if let Some(services) = &view.services {
         checks.extend(old_php_mysql_login(sites, &view.projects, services));
@@ -569,6 +571,68 @@ fn node_checks(
         ));
     }
     checks
+}
+
+/// Each site's recipe runtimes (runtimes spec §14): one not installed, a pin that cannot be
+/// used, a version too new for the site's PHP, and a `[runtimes]` key no runtime defines.
+fn runtime_checks(sites: &[SiteInfo]) -> Vec<Check> {
+    let mut checks = vec![];
+    for site in sites {
+        for rt in &site.runtimes {
+            let at = format!("{}:{}", site.name, rt.key);
+            match (&rt.error, &rt.spec, &rt.version) {
+                (Some(e), ..) if e.code == yard_proto::ErrorCode::RuntimeUnknown => {
+                    let hint = e.hint.clone().unwrap_or_default();
+                    checks.push(warn(
+                        &format!("runtime-unknown:{at}"),
+                        format!("{}: {}", site.name, e.message),
+                        hint,
+                    ));
+                }
+                (Some(e), ..) if e.data.as_ref().is_some_and(|d| d.get("needs_php").is_some()) => {
+                    let hint = e.hint.clone().unwrap_or_default();
+                    checks.push(warn(
+                        &format!("{}-php:{}", rt.key, site.name),
+                        format!("{}: {}", site.name, e.message),
+                        hint,
+                    ));
+                }
+                (Some(e), ..) => {
+                    let hint = e.hint.clone().unwrap_or_else(|| "yard info shows the site's runtimes".into());
+                    checks.push(warn(&format!("runtime-spec:{at}"), e.message.clone(), hint));
+                }
+                (None, Some(spec), None) => {
+                    let from = match (&rt.file, rt.source) {
+                        (Some(file), _) => file.clone(),
+                        (None, SettingSource::Default) => "the default".to_string(),
+                        (None, _) => "yard runtime use".to_string(),
+                    };
+                    checks.push(warn(
+                        &format!("runtime-missing:{at}"),
+                        format!("{} needs {} {spec} ({from}), which is not installed", site.name, rt.name),
+                        format!("yard runtime install {} {spec}", rt.key),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    checks
+}
+
+/// Brew's `composer`, which the shim falls back to for one release while Yard has none.
+fn composer_brew(paths: &Paths, brew: &Brew) -> Option<Check> {
+    if !brew.prefix.join("bin/composer").exists() || !crate::runtimes::installed(paths, "composer").is_empty()
+    {
+        return None;
+    }
+    Some(Check {
+        id: "composer-brew".into(),
+        status: CheckStatus::Ok,
+        message: "composer runs brew's Composer until Yard installs its own; Yard picks one per project"
+            .into(),
+        hint: Some("yard runtime install composer".into()),
+    })
 }
 
 const FIREFOX: &str = "/Applications/Firefox.app";

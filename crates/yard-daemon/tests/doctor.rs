@@ -2043,3 +2043,97 @@ mod recipes {
         d.shutdown().await.unwrap();
     }
 }
+
+// ---- runtimes (runtimes spec §14) ----
+
+/// A Composer version as `runtime.install` leaves it, without a download.
+fn put_composer(paths: &yard_core::Paths, version: &str) {
+    let root = paths.install_root("composer", version);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("composer.phar"), "<?php\n").unwrap();
+    let v: yard_core::runtimes::version::RuntimeVersion = version.parse().unwrap();
+    let record = yard_core::runtimes::select::InstallRecord {
+        requires_php: (v >= "2.3.0".parse().unwrap()).then(|| "7.2.5".parse().unwrap()),
+        version: v,
+        url: String::new(),
+        sha256: "a".repeat(64),
+        installed_at: String::new(),
+    };
+    std::fs::write(paths.install_record("composer", version), record.render()).unwrap();
+}
+
+fn runtime_ids(report: &DoctorReport) -> Vec<&str> {
+    report
+        .checks
+        .iter()
+        .map(|c| c.id.as_str())
+        .filter(|id| id.starts_with("runtime") || id.starts_with("composer"))
+        .collect()
+}
+
+#[tokio::test]
+async fn doctor_warns_a_sites_missing_composer() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("shop", &[("composer.json", "{}")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "runtime-missing:shop:composer");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "shop needs Composer 2 (the default), which is not installed");
+    assert_eq!(c.hint.as_deref(), Some("yard runtime install composer 2"));
+    put_composer(&e.fx.paths, "2.11.2");
+    assert!(runtime_ids(&e.offline(&e.helper).await).is_empty());
+}
+
+#[tokio::test]
+async fn doctor_warns_a_composer_too_new_for_the_sites_php() {
+    let e = env().await;
+    e.fx.add_php("7.1");
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site(
+        "old",
+        &[("composer.json", "{}"), (".yard", "php = \"7.1\"\n\n[runtimes]\ncomposer = \"2\"\n")],
+        &dir,
+    );
+    put_composer(&e.fx.paths, "2.11.2");
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "composer-php:old");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("Composer 2.11.2 needs PHP 7.2.5"), "{c:?}");
+    assert_eq!(
+        c.hint.as_deref(),
+        Some("yard runtime install composer 2.2, or pin composer = \"2.2\" in the project's .yard")
+    );
+}
+
+#[tokio::test]
+async fn doctor_names_an_unknown_runtime() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("shop", &[(".yard", "[runtimes]\nbun = \"1\"\n")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "runtime-unknown:shop:bun");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some("add ~/.yard/runtimes/bun.toml"));
+}
+
+#[tokio::test]
+async fn doctor_notes_brews_composer_while_yard_has_none() {
+    let e = env().await;
+    std::fs::create_dir_all(e.fx.brew.path().join("bin")).unwrap();
+    std::fs::write(e.fx.brew.path().join("bin/composer"), "").unwrap();
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "composer-brew");
+    assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+    assert_eq!(c.hint.as_deref(), Some("yard runtime install composer"));
+    put_composer(&e.fx.paths, "2.11.2");
+    assert!(!ids(&e.offline(&e.helper).await).contains(&"composer-brew"));
+}
+
+#[tokio::test]
+async fn doctor_is_quiet_for_a_site_without_composer_json() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("plain", &[], &dir);
+    assert!(runtime_ids(&e.offline(&e.helper).await).is_empty());
+}

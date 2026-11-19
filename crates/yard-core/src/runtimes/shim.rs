@@ -114,7 +114,8 @@ pub fn pick_composer(
             .with_hint(format!(
                 "yard runtime install {key} {fits}, or pin {key} = \"{fits}\" in the project's .yard",
                 key = recipe.key
-            )));
+            ))
+            .with_data(serde_json::json!({ "version": v.to_string(), "needs_php": needs.to_string() })));
         }
         return Ok(Pick::Run(v.clone(), paths.install_root(&recipe.key, &v.to_string())));
     }
