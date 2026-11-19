@@ -12,7 +12,9 @@ use yard_proto::YardError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YardConfig {
-    pub default_php: PhpVersion,
+    /// `default_php`: what runs where nothing pins a PHP. Yard writes it when it is missing
+    /// (explicit-defaults spec §2.2); `None` only until a PHP is installed.
+    pub default_php: Option<PhpVersion>,
     pub tld: Option<String>,
     /// Sites without their own `secure` are served over HTTPS (spec §5.4).
     pub secure_by_default: bool,
@@ -138,6 +140,17 @@ struct Raw {
     runtimes: BTreeMap<toml::Spanned<String>, RawRuntime>,
 }
 
+impl YardConfig {
+    /// The written `default_php`, or `RUNTIME_MISSING`. yardd writes one as soon as a PHP is
+    /// installed, so the hint is the install (explicit-defaults spec §2.3).
+    pub fn php_default(&self) -> Result<PhpVersion, YardError> {
+        self.default_php.ok_or_else(|| {
+            YardError::new(yard_proto::ErrorCode::RuntimeMissing, "no default PHP is written in yard.toml")
+                .with_hint(format!("yard php install {}", PhpVersion::FIRST_DEFAULT))
+        })
+    }
+}
+
 /// `[runtimes.<key>]`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -260,7 +273,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
     }
     Ok((
         YardConfig {
-            default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT),
+            default_php: raw.default_php,
             tld,
             secure_by_default: raw.secure_by_default,
             extensions,
@@ -295,9 +308,27 @@ mod tests {
     #[test]
     fn missing_yard_toml_uses_defaults() {
         let (c, warnings) = parse_yard(None, Path::new(FILE)).unwrap();
-        assert_eq!(c.default_php, crate::PhpVersion::DEFAULT);
+        assert_eq!(c.default_php, None);
         assert_eq!(c.tld, None);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn an_unset_default_php_is_none() {
+        assert_eq!(parse(Some("")).unwrap().default_php, None);
+    }
+
+    #[test]
+    fn a_written_default_php_parses() {
+        assert_eq!(parse(Some("default_php = \"8.4\"\n")).unwrap().default_php, Some("8.4".parse().unwrap()));
+    }
+
+    #[test]
+    fn php_default_without_one_is_runtime_missing() {
+        let e = parse(Some("")).unwrap().php_default().unwrap_err();
+        assert_eq!(e.code, ErrorCode::RuntimeMissing);
+        assert_eq!(e.message, "no default PHP is written in yard.toml");
+        assert_eq!(e.hint.as_deref(), Some("yard php install 8.4"));
     }
 
     #[test]

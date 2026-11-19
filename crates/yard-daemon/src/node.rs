@@ -11,8 +11,8 @@ use yard_core::Paths;
 use yard_core::brew::Brew;
 use yard_core::config::{SitesConfig, YardConfig, load_sites, load_yard};
 use yard_core::node::{
-    DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, lts_from, matches, newest, newest_per_line, parse_ls_remote,
-    parse_spec, pick,
+    LtsMap, NodeSpec, NodeVersion, lts_from, matches, newest, newest_per_line, parse_ls_remote, parse_spec,
+    pick,
 };
 use yard_core::shim::{NodeSource, child_path, failed_pin, resolve_node, uses_node};
 use yard_proto::{ErrorCode, NodeRelease, SettingSource, SiteInfo, SiteKind, SiteNode, YardError};
@@ -96,6 +96,9 @@ pub fn fill_node(sites: &mut [SiteInfo], paths: &Paths) {
             {
                 None
             }
+            // No default is written (no Node installed yet): only a site with a
+            // `package.json` needs one.
+            Err(e) if e.code == ErrorCode::NodeMissing && !has_package_json => None,
             // `source` and `file` are the pin at fault, as for one that resolves.
             Err(e) => {
                 let (source, file) = failed_pin(&e, paths).map_or((SettingSource::Default, None), setting);
@@ -224,8 +227,9 @@ pub fn in_use(v: NodeVersion, mut sites: Vec<SiteInfo>, paths: &Paths) -> Result
         let matching: Vec<&NodeVersion> = installed.iter().filter(|i| matches(spec, **i, &lts)).collect();
         matching == [&v]
     };
-    let default = load_yard(paths)?.0.default_node.unwrap_or(DEFAULT_SPEC);
-    if only_v(&default) {
+    if let Some(default) = load_yard(paths)?.0.default_node
+        && only_v(&default)
+    {
         let hint = match installed.iter().rev().find(|o| **o != v) {
             Some(other) => format!("yard node default {other}"),
             None => "yard node list --available".to_string(),

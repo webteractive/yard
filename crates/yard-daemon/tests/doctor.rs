@@ -121,6 +121,7 @@ fn check(id: &str, status: CheckStatus) -> Check {
 #[tokio::test]
 async fn all_ok_on_healthy_fixture() {
     let e = env().await;
+    std::fs::write(e.fx.paths.yard_toml(), "default_php = \"8.4\"\n").unwrap();
     let bus = EventBus::new();
     let sup = Arc::new(Supervisor::new(
         fast(),
@@ -497,7 +498,7 @@ async fn ca_check_names_node_extra_ca_certs_when_trusted() {
 /// Yard's php.ini for the default PHP, naming `bundle` as reconcile would, and the bundle with
 /// `extra` after the public roots.
 fn php_with_bundle(paths: &yard_core::Paths, extra: &str) -> std::path::PathBuf {
-    let v = yard_core::PhpVersion::DEFAULT;
+    let v = yard_core::PhpVersion::FIRST_DEFAULT;
     let bundle = paths.php_ca_bundle(v);
     std::fs::create_dir_all(paths.php_conf_d(v)).unwrap();
     let file = bundle.display();
@@ -526,7 +527,7 @@ async fn php_ca_check_names_the_ini_whose_bundle_lacks_the_ca() {
     tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
     let ca = std::fs::read_to_string(e.fx.paths.ca_cert()).unwrap();
     php_with_bundle(&e.fx.paths, &ca);
-    let v = yard_core::PhpVersion::DEFAULT;
+    let v = yard_core::PhpVersion::FIRST_DEFAULT;
     let stale = e.fx.root.path().join("old-bundle.pem");
     std::fs::write(&stale, support::PUBLIC_ROOTS).unwrap();
     let ini = e.fx.paths.php_conf_d(v).join("10-brew-zz-ca.ini");
@@ -543,7 +544,7 @@ async fn php_ca_check_names_the_ini_whose_bundle_lacks_the_ca() {
 async fn php_ca_check_warns_when_nothing_names_a_bundle() {
     let e = env().await;
     tls::ensure_ca(&e.fx.paths, "me", time::OffsetDateTime::now_utc()).unwrap();
-    let v = yard_core::PhpVersion::DEFAULT;
+    let v = yard_core::PhpVersion::FIRST_DEFAULT;
     std::fs::create_dir_all(e.fx.paths.php_conf_d(v)).unwrap();
     std::fs::write(e.fx.paths.php_ini(v), "memory_limit = 512M\n").unwrap();
 
@@ -1462,6 +1463,7 @@ async fn an_unusable_nvmrc_is_node_spec() {
 #[tokio::test]
 async fn a_missing_default_used_by_a_site_warns_once() {
     let e = env().await;
+    std::fs::write(e.fx.paths.yard_toml(), "default_node = \"22\"\n").unwrap();
     let dir = tempfile::tempdir().unwrap();
     e.node_site("one", &[("package.json", "{}")], &dir);
     e.node_site("two", &[("package.json", "{}")], &dir);
@@ -1472,6 +1474,18 @@ async fn a_missing_default_used_by_a_site_warns_once() {
     assert_eq!(c.hint.as_deref(), Some("yard node install 22"));
     assert_eq!(only(&report, "node:one").message, "one needs Node 22 (the default), which is not installed");
     only(&report, "node:two");
+}
+
+#[tokio::test]
+async fn no_default_node_written_names_the_install() {
+    let e = env().await;
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("one", &[("package.json", "{}")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "node-spec:one");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "no default Node is written in yard.toml");
+    assert_eq!(c.hint.as_deref(), Some("yard node install 22"));
 }
 
 // ---- emailulator (M4d) ----

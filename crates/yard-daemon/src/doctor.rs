@@ -18,7 +18,7 @@ use yard_core::config::{ServiceEntry, ServicesConfig, YardConfig, load_services,
 use yard_core::constraint::{best_version, satisfies};
 use yard_core::emailulator::{MAIL_HOST_LABEL, MIN_VERSION, NAME as EMAILULATOR, locate};
 use yard_core::generated::{Hashes, sha256_hex};
-use yard_core::node::{DEFAULT_SPEC, LtsMap, NodeSpec, NodeVersion, install_hint, pick};
+use yard_core::node::{LtsMap, NodeSpec, NodeVersion, install_hint, pick};
 use yard_core::paths::RESOLVER_MARKER;
 use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry};
 use yard_core::project::{Loaded, Projects, ServiceWant};
@@ -70,7 +70,7 @@ pub struct DoctorInput<'a> {
 /// A `None` field could not be worked out because a TOML file does not parse.
 struct View {
     config_error: Option<YardError>,
-    default_php: PhpVersion,
+    default_php: Option<PhpVersion>,
     tld: Option<String>,
     registry: Option<Registry>,
     /// The resolution warnings, and the sites.
@@ -150,7 +150,7 @@ impl View {
         };
         View {
             config_error,
-            default_php: yard.as_ref().map_or(PhpVersion::DEFAULT, |y| y.default_php),
+            default_php: yard.as_ref().ok().and_then(|y| y.default_php),
             tld,
             registry: registry.ok(),
             sites,
@@ -204,12 +204,26 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             Err(e) => from_error(&id, &e),
         });
     }
-    let v = view.default_php;
-    checks.push(match brew.php_opt(v, &exists, &read_link) {
-        Ok(opt) => ok("formula.php", format!("PHP {v}, the default, is at {}", opt.display())),
-        Err(e) => from_error("formula.php", &e),
+    let installed_php = brew.installed_php(&exists, &read_link);
+    checks.push(match (view.default_php, installed_php.last()) {
+        (Some(v), _) => match brew.php_opt(v, &exists, &read_link) {
+            Ok(opt) => ok("formula.php", format!("PHP {v}, the default, is at {}", opt.display())),
+            Err(e) => from_error("formula.php", &e),
+        },
+        // yardd writes a default once a PHP is installed (explicit-defaults spec §2.2).
+        (None, Some(newest)) if view.yard.is_some() => warn(
+            "formula.php",
+            "no default PHP is written in yard.toml",
+            format!("yard php default {newest}"),
+        ),
+        // yard.toml does not parse, so its default is not known; `config` says so.
+        (None, Some(newest)) => ok("formula.php", format!("PHP {newest} is installed")),
+        (None, None) => match brew.php_opt(PhpVersion::FIRST_DEFAULT, &exists, &read_link) {
+            Ok(_) => ok("formula.php", "PHP is installed"),
+            Err(e) => from_error("formula.php", &e),
+        },
     });
-    checks.extend(stale_brew_inis(brew, &brew.installed_php(&exists, &read_link)));
+    checks.extend(stale_brew_inis(brew, &installed_php));
 
     checks.push(match &view.config_error {
         None => ok("config", "yard.toml, sites.toml and ports.toml parse"),
@@ -277,10 +291,10 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         crate::runtimes::fill_sites(&mut sites, paths, &registry, brew);
         let on_brew = on_brew_composer(&sites, paths, brew, &registry);
         checks.extend(runtime_checks(&sites, &on_brew));
-        let default = view.yard.as_ref().and_then(|y| y.default_node.clone()).unwrap_or(DEFAULT_SPEC);
+        let default = view.yard.as_ref().and_then(|y| y.default_node.clone());
         checks.extend(node_checks(
             &sites,
-            &default,
+            default.as_ref(),
             &crate::node::installed(paths),
             &crate::node::lts(paths),
         ));
@@ -537,7 +551,7 @@ fn mail_url(view: &View) -> Option<String> {
 /// nothing reports Ok, so a machine without Node sees the same report as before.
 fn node_checks(
     sites: &[SiteInfo],
-    default: &NodeSpec,
+    default: Option<&NodeSpec>,
     installed: &[NodeVersion],
     lts: &LtsMap,
 ) -> Vec<Check> {
@@ -567,11 +581,14 @@ fn node_checks(
             ));
         }
     }
-    if !on_default.is_empty() && pick(default, installed, lts).is_none() {
+    if let Some(default) = default
+        && !on_default.is_empty()
+        && pick(default, installed, lts).is_none()
+    {
         checks.push(warn(
             "node-default",
             format!("the default Node ({default}) is not installed, and {} use it", on_default.join(", ")),
-            install_hint(&default),
+            install_hint(default),
         ));
     }
     checks

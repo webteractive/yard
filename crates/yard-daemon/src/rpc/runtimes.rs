@@ -72,11 +72,11 @@ pub(super) async fn list_all(ctx: &Context) -> Result<RuntimesList, YardError> {
                         .iter()
                         .map(ToString::to_string)
                         .collect(),
-                    Some(yard.default_php.to_string()),
+                    yard.default_php.map(|v| v.to_string()),
                 ),
                 RuntimeKind::Node => (
                     crate::node::installed(&ctx.paths).iter().map(ToString::to_string).collect(),
-                    Some(yard.default_node.clone().unwrap_or(yard_core::node::DEFAULT_SPEC).to_string()),
+                    yard.default_node.as_ref().map(ToString::to_string),
                 ),
                 RuntimeKind::Recipe => (
                     versions(ctx, rt.key()).iter().map(ToString::to_string).collect(),

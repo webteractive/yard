@@ -152,7 +152,7 @@ async fn first_reconcile_writes_configs_and_starts_units() {
     let report = e.rec.reconcile().await.unwrap();
     assert!(report.written.contains(&e.conf("blog")), "{report:?}");
     for file in
-        [e.conf("blog"), e.fx.paths.fpm_conf(yard_core::PhpVersion::DEFAULT), e.fx.paths.dnsmasq_conf()]
+        [e.conf("blog"), e.fx.paths.fpm_conf(yard_core::PhpVersion::FIRST_DEFAULT), e.fx.paths.dnsmasq_conf()]
     {
         assert!(file.exists(), "{}", file.display());
     }

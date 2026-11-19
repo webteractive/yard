@@ -7,7 +7,7 @@ use crate::managed::edit_managed;
 use crate::node::{available, fill_node, fnm_env, in_use, installed, lts, resolve_at};
 use toml_edit::value;
 use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::node::{DEFAULT_SPEC, NodeSpec, NodeVersion, install_hint, parse_spec, pick};
+use yard_core::node::{NodeSpec, NodeVersion, install_hint, parse_spec, pick};
 use yard_proto::methods::{
     NodeInstallParams, NodeListParams, NodeSpecParams, NodeUseParams, NodeVersionParams, SiteParams,
 };
@@ -23,11 +23,11 @@ pub(super) async fn list(ctx: &Context, p: NodeListParams) -> Result<NodeList, Y
         true => available(&ctx.brew, &ctx.paths, p.major).await?,
         false => vec![],
     };
-    let default = load_yard(&ctx.paths)?.0.default_node.unwrap_or(DEFAULT_SPEC);
+    let default = load_yard(&ctx.paths)?.0.default_node;
     let mut sites = snapshot(ctx).await?.resolution.sites;
     fill_node(&mut sites, &ctx.paths);
     let installed = installed(&ctx.paths);
-    let default_version = pick(&default, &installed, &lts(&ctx.paths));
+    let default_version = default.as_ref().and_then(|d| pick(d, &installed, &lts(&ctx.paths)));
     let versions = installed
         .iter()
         .rev()
@@ -41,7 +41,7 @@ pub(super) async fn list(ctx: &Context, p: NodeListParams) -> Result<NodeList, Y
             NodeInfo { default: Some(*v) == default_version, version, sites }
         })
         .collect();
-    Ok(NodeList { default: default.to_string(), versions, available })
+    Ok(NodeList { default: default.map(|d| d.to_string()).unwrap_or_default(), versions, available })
 }
 
 /// `yard node install`: the spec given, or the one `path` resolves to. The job resolves it

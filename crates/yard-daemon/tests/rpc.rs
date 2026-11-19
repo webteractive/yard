@@ -94,7 +94,7 @@ async fn link_answers_once_a_pool_it_started_listens() {
     let d = prepared("").await;
     std::fs::write(d.fx.brew.path().join("fake-fpm-delay"), "500").unwrap();
     let d = d.start().await;
-    let socket = d.fx.paths.fpm_socket(yard_core::PhpVersion::DEFAULT);
+    let socket = d.fx.paths.fpm_socket(yard_core::PhpVersion::FIRST_DEFAULT);
     assert!(!socket.exists(), "no site uses PHP yet, so no pool should listen");
     let project = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(project.path().join("public")).unwrap();
@@ -575,7 +575,7 @@ async fn php_trusts_yards_ca_once_there_is_one_and_follows_brews_roots() {
     let d = prepared("").await;
     d.project("blog");
     let d = d.start().await;
-    let v = yard_core::PhpVersion::DEFAULT;
+    let v = yard_core::PhpVersion::FIRST_DEFAULT;
     let ini = d.fx.paths.php_ini(v);
     let bundle = d.fx.paths.php_ca_bundle(v);
     assert!(!std::fs::read_to_string(&ini).unwrap().contains("openssl.cafile"), "no CA, so brew's roots");

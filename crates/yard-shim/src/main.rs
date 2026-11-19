@@ -136,11 +136,11 @@ struct Php {
 impl Php {
     fn resolve(name: &str) -> Result<Php, YardError> {
         let paths = Paths::from_env()?;
-        // A TOML being edited must not stop every php on the machine: warn and carry on.
+        // A TOML being edited must not stop a pinned php: warn and carry on with no default.
         let yard = match load_yard(&paths) {
             Ok((yard, _)) => yard,
             Err(e) => {
-                eprintln!("yard: {}; using PHP {}", e.message, PhpVersion::DEFAULT);
+                eprintln!("yard: {}", e.message);
                 parse_yard(None, &paths.yard_toml())?.0
             }
         };
@@ -311,7 +311,7 @@ fn run_node(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     let yard = match load_yard(&paths) {
         Ok((yard, _)) => yard,
         Err(e) => {
-            eprintln!("yard: {}; using Node {}", e.message, yard_core::node::DEFAULT_SPEC);
+            eprintln!("yard: {}", e.message);
             parse_yard(None, &paths.yard_toml())?.0
         }
     };

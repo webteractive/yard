@@ -91,8 +91,9 @@ impl From<NodeSpec> for String {
 
 /// The oldest major with an arm64 macOS build.
 pub const MIN_MAJOR: u32 = 16;
-/// What runs where nothing pins a version and `yard.toml` sets no `default_node`.
-pub const DEFAULT_SPEC: NodeSpec = NodeSpec::Major(22);
+/// The major whose newest installed version yardd writes as `default_node` when none is
+/// written (explicit-defaults spec §2.2). Nothing runs it by itself.
+pub const FIRST_DEFAULT: NodeSpec = NodeSpec::Major(22);
 
 /// Words nvm and `.node-version` files accept that name no fixed version.
 const NOT_VERSIONS: [&str; 5] = ["node", "stable", "latest", "system", "iojs"];

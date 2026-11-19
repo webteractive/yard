@@ -25,13 +25,14 @@ struct Setup {
 }
 
 /// A site `old` isolated to 7.1, a 7.1 keg whose `php` prints its argv, PHPRC and PATH,
-/// and a Herd `bin` with a `php` that prints HERD.
+/// a Herd `bin` with a `php` that prints HERD, and the defaults yardd writes (8.4, 22).
 fn setup() -> Setup {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path().canonicalize().unwrap();
     let (root, brew, project) = (base.join("root"), base.join("brew"), base.join("code/old"));
     std::fs::create_dir_all(project.join("app")).unwrap();
     std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("yard.toml"), "default_php = \"8.4\"\ndefault_node = \"22\"\n").unwrap();
     std::fs::write(
         root.join("sites.toml"),
         format!("[sites.old]\npath = {:?}\nphp = \"7.1\"\n", project.display().to_string()),
@@ -131,6 +132,18 @@ fn a_broken_yard_toml_warns_and_keeps_site_isolation() {
     assert!(out.status.success(), "{stderr}");
     assert!(stdout.contains("php@7.1/bin/php"), "{stdout}");
     assert!(stderr.starts_with("yard: ") && stderr.contains("yard.toml"), "{stderr}");
+}
+
+#[test]
+fn an_unpinned_project_with_no_default_names_the_install() {
+    let s = setup();
+    std::fs::write(s.root.join("yard.toml"), "").unwrap();
+    std::fs::write(s.project.join(".yard"), "docroot = \"public\"\n").unwrap();
+    let out = run(&s, &[], false);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("yard: no default PHP is written in yard.toml"), "{stderr}");
+    assert!(stderr.contains("  hint: yard php install 8.4"), "{stderr}");
 }
 
 #[test]

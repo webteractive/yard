@@ -173,7 +173,7 @@ fn site_body(ctx: &RenderCtx, site: &SiteInfo, wake: bool, tunnelled: bool) -> S
             let socket = php
                 .parse::<PhpVersion>()
                 .map(|v| ctx.paths.fpm_socket(v))
-                .unwrap_or_else(|_| ctx.paths.fpm_socket(PhpVersion::DEFAULT));
+                .unwrap_or_else(|_| ctx.paths.fpm_socket(PhpVersion::FIRST_DEFAULT));
             let (ask, wake_block) = if wake {
                 (WAKE_ASK, format!("\n{}", wake_location(&ctx.paths.wake_socket(), &site.name)))
             } else {

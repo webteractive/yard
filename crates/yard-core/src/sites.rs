@@ -85,6 +85,9 @@ pub fn resolve(
         None => detect_docroot(project, is_dir),
     };
 
+    // The daemon writes a default before it resolves; with none (no PHP installed yet) a
+    // site is offered the first default on its setup page.
+    let default_php = cfg.default_php.unwrap_or(crate::PhpVersion::FIRST_DEFAULT);
     let mut out = Vec::new();
     for (name, entry) in &sites.sites {
         if !is_site_name(name) {
@@ -107,21 +110,18 @@ pub fn resolve(
                 let loaded = projects.get(name);
                 let (php, docroot, secure, project_error) = match loaded.map(|l| &l.parsed) {
                     Some(Ok(file)) => (
-                        file.php.unwrap_or(cfg.default_php),
+                        file.php.unwrap_or(default_php),
                         file.docroot
                             .as_ref()
                             .map_or_else(|| detect_docroot(path, is_dir), |d| under(path, d)),
                         file.secure.unwrap_or(cfg.secure_by_default),
                         None,
                     ),
-                    Some(Err(e)) => (
-                        cfg.default_php,
-                        detect_docroot(path, is_dir),
-                        cfg.secure_by_default,
-                        Some(e.clone()),
-                    ),
+                    Some(Err(e)) => {
+                        (default_php, detect_docroot(path, is_dir), cfg.secure_by_default, Some(e.clone()))
+                    }
                     None => (
-                        entry.php.unwrap_or(cfg.default_php),
+                        entry.php.unwrap_or(default_php),
                         docroot_for(path, entry.docroot.as_ref()),
                         secure,
                         None,
@@ -211,7 +211,7 @@ mod tests {
 
     fn cfg() -> YardConfig {
         YardConfig {
-            default_php: crate::PhpVersion::DEFAULT,
+            default_php: Some(crate::PhpVersion::FIRST_DEFAULT),
             tld: None,
             secure_by_default: false,
             extensions: Default::default(),
@@ -281,6 +281,25 @@ mod tests {
                 project: Some("/code/old-app".into()),
             })
         );
+    }
+
+    #[test]
+    fn a_site_with_no_php_and_no_default_offers_first_default() {
+        let fs = Fs::new(&["/code/app"]);
+        let c = YardConfig { default_php: None, ..cfg() };
+        let r = resolve(
+            &c,
+            &sites(&[("app", linked("/code/app"))]),
+            &Projects::new(),
+            "yard",
+            8080,
+            8443,
+            &fs.is_dir(),
+        );
+        match &r.sites[0].kind {
+            SiteKind::Php { php, .. } => assert_eq!(php, "8.4"),
+            other => panic!("expected php site, got {other:?}"),
+        }
     }
 
     #[test]

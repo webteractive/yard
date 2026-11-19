@@ -19,7 +19,9 @@ pub const SUPPORTED: [PhpVersion; 11] =
     [v(7, 0), v(7, 1), v(7, 2), v(7, 3), v(7, 4), v(8, 0), v(8, 1), v(8, 2), v(8, 3), v(8, 4), v(8, 5)];
 
 impl PhpVersion {
-    pub const DEFAULT: PhpVersion = v(8, 4);
+    /// What yardd writes as `default_php` when none is written and it is installed
+    /// (explicit-defaults spec §2.2), and what a site is offered while nothing is written.
+    pub const FIRST_DEFAULT: PhpVersion = v(8, 4);
 }
 
 impl fmt::Display for PhpVersion {
@@ -115,7 +117,7 @@ mod tests {
         assert_eq!("7.0".parse::<PhpVersion>().unwrap().to_string(), "7.0");
         assert_eq!("8.5".parse::<PhpVersion>().unwrap().to_string(), "8.5");
         assert_eq!(SUPPORTED.len(), 11);
-        assert_eq!(PhpVersion::DEFAULT.to_string(), "8.4");
+        assert_eq!(PhpVersion::FIRST_DEFAULT.to_string(), "8.4");
         assert!("7.4".parse::<PhpVersion>().unwrap() < "8.0".parse().unwrap());
     }
 

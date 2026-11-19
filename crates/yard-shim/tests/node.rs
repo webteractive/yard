@@ -114,14 +114,27 @@ fn a_half_installed_version_is_missing() {
 }
 
 #[test]
-fn the_default_is_22_and_says_so() {
+fn the_written_default_runs_and_says_so() {
     let s = setup();
+    std::fs::write(s.root.join("yard.toml"), "default_node = \"22\"\n").unwrap();
     std::fs::remove_file(s.project.join(".nvmrc")).unwrap();
     let out = run(&s, "npx", &[], &[]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
         "yard: Node 22 is not installed (the default)\n  hint: yard node install 22\n"
+    );
+}
+
+#[test]
+fn no_written_default_names_the_install() {
+    let s = setup();
+    std::fs::remove_file(s.project.join(".nvmrc")).unwrap();
+    let out = run(&s, "npx", &[], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "yard: no default Node is written in yard.toml\n  hint: yard node install 22\n"
     );
 }
 

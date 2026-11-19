@@ -43,14 +43,14 @@ impl Fixture {
         place(&brew.dnsmasq_bin(), |dst| symlink(&fake, dst));
         let security = brew_dir.path().join("security/security");
         place(&security, |dst| symlink(&fake, dst));
-        let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::DEFAULT));
+        let php_opt = brew_dir.path().join(format!("opt/php@{}", PhpVersion::FIRST_DEFAULT));
         for bin in ["sbin/php-fpm", "bin/php", "bin/pecl"] {
             place(&php_opt.join(bin), |dst| symlink(&fake, dst));
         }
         for file in [brew.nginx_mime_types(), brew.nginx_fastcgi_params()] {
             place(&file, |dst| std::fs::write(dst, ""));
         }
-        std::fs::create_dir_all(brew.php_conf_d(PhpVersion::DEFAULT)).unwrap();
+        std::fs::create_dir_all(brew.php_conf_d(PhpVersion::FIRST_DEFAULT)).unwrap();
         // brew's public roots, which PHP's CA bundle starts with.
         place(&brew.ca_certificates(), |dst| std::fs::write(dst, PUBLIC_ROOTS));
         // What `brew trust --json=v1` reports: the two taps Yard's PHP and extension installs

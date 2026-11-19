@@ -4,7 +4,7 @@
 
 use crate::brew::Brew;
 use crate::config::{SiteEntry, SitesConfig, YardConfig};
-use crate::node::{DEFAULT_SPEC, NodeSpec, NodeVersion, parse_spec, spec_line};
+use crate::node::{NodeSpec, NodeVersion, parse_spec, spec_line};
 use crate::project::ProjectFile;
 use crate::runtimes::resolve::{PinSource, failed_source, resolve_pin, uses_runtime};
 use crate::{Paths, PhpVersion, project};
@@ -70,7 +70,7 @@ pub fn resolve_version(
         let file = dir.join(project::FILE);
         if let Some(text) = read(&file) {
             let php = project::parse(&text?, &file)?.php;
-            return Ok((php.unwrap_or(yard.default_php), Source::Project(file)));
+            return Ok((php.map_or_else(|| yard.php_default(), Ok)?, Source::Project(file)));
         }
     }
     let innermost = innermost(cwd, sites, canonical);
@@ -80,7 +80,7 @@ pub fn resolve_version(
             let (managed, project) =
                 text.and_then(|text| project::parse_managed(&text, &file)).map_err(naming(&file))?;
             if project.as_deref() == Some(*path) {
-                return Ok((managed.php.unwrap_or(yard.default_php), Source::Managed(file)));
+                return Ok((managed.php.map_or_else(|| yard.php_default(), Ok)?, Source::Managed(file)));
             }
         }
     }
@@ -99,7 +99,7 @@ pub fn resolve_version(
             return Ok((v, Source::File(file)));
         }
     }
-    Ok((yard.default_php, Source::Default))
+    Ok((yard.php_default()?, Source::Default))
 }
 
 /// The linked site whose path holds `cwd` most closely: the last of [`innermost`].
@@ -191,7 +191,13 @@ pub fn resolve_node(
     )?;
     Ok(match found {
         Some((spec, source)) => (spec, node_source(source)),
-        None => (yard.default_node.clone().unwrap_or(DEFAULT_SPEC), NodeSource::Default),
+        None => {
+            let spec = yard.default_node.clone().ok_or_else(|| {
+                YardError::new(ErrorCode::NodeMissing, "no default Node is written in yard.toml")
+                    .with_hint(crate::node::install_hint(&crate::node::FIRST_DEFAULT))
+            })?;
+            (spec, NodeSource::Default)
+        }
     })
 }
 
@@ -350,7 +356,9 @@ mod tests {
     }
 
     fn configs(sites: &str) -> (crate::config::YardConfig, crate::config::SitesConfig) {
-        let (yard, _) = parse_yard(Some("default_php = \"8.4\"\n"), Path::new("/r/yard.toml")).unwrap();
+        let (yard, _) =
+            parse_yard(Some("default_php = \"8.4\"\ndefault_node = \"22\"\n"), Path::new("/r/yard.toml"))
+                .unwrap();
         (yard, parse_sites(Some(sites), Path::new("/r/sites.toml")).unwrap())
     }
 
@@ -379,6 +387,26 @@ php = "7.4"
         assert_eq!(at("/elsewhere"), (v("8.4"), Source::Default));
         // A path that only shares a prefix is not inside the site.
         assert_eq!(at("/code/older").1, Source::File("/code/.yard-php".into()));
+    }
+
+    #[test]
+    fn an_unpinned_cwd_with_no_default_php_is_runtime_missing() {
+        let (yard, _) = parse_yard(Some(""), Path::new("/r/yard.toml")).unwrap();
+        let sites = parse_sites(Some(""), Path::new("/r/sites.toml")).unwrap();
+        let read = |_: &Path| None;
+        let e = resolve_version(Path::new("/elsewhere"), &yard, &sites, &Paths::new("/r"), &read, &same)
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::RuntimeMissing);
+        assert_eq!(e.hint.as_deref(), Some("yard php install 8.4"));
+    }
+
+    #[test]
+    fn an_unpinned_cwd_with_no_default_node_is_node_missing() {
+        let (yard, _) = parse_yard(Some(""), Path::new("/r/yard.toml")).unwrap();
+        let sites = parse_sites(Some(""), Path::new("/r/sites.toml")).unwrap();
+        let e = node_at(&BTreeMap::new(), &yard, &sites, "/elsewhere").unwrap_err();
+        assert_eq!(e.code, ErrorCode::NodeMissing);
+        assert_eq!(e.hint.as_deref(), Some("yard node install 22"));
     }
 
     #[test]

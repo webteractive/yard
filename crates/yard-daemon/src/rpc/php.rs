@@ -34,7 +34,7 @@ pub(super) async fn list(ctx: &Context, p: PhpListParams) -> Result<Vec<PhpInfo>
     let units = ctx.supervisor().list();
     let mut versions = installed(&ctx.brew);
     let default = snap.yard.default_php;
-    versions.push(default);
+    versions.extend(default);
     if p.available {
         versions.extend(SUPPORTED);
     }
@@ -45,7 +45,7 @@ pub(super) async fn list(ctx: &Context, p: PhpListParams) -> Result<Vec<PhpInfo>
         .into_iter()
         .map(|v| PhpInfo {
             version: v.to_string(),
-            default: v == default,
+            default: Some(v) == default,
             installed: installed.contains(&v),
             sites: snap
                 .resolution
@@ -110,7 +110,7 @@ pub(super) async fn uninstall(ctx: &Context, p: PhpParams) -> Result<JobStarted,
 /// isolated to it), or an extension Yard installed for it is recorded.
 fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Result<(), YardError> {
     let (yard, _) = load_yard(paths)?;
-    if yard.default_php == v {
+    if yard.default_php == Some(v) {
         let hint = match versions.iter().rev().find(|o| **o != v) {
             Some(o) => format!("yard php default {o}"),
             None => {
@@ -134,11 +134,13 @@ fn refuse_in_use(paths: &Paths, v: PhpVersion, versions: &[PhpVersion]) -> Resul
     if let Some((_, file)) = from_files.first() {
         let names: Vec<&str> = from_files.iter().map(|(n, _)| n.as_str()).collect();
         let message = format!("PHP {v} runs {}, from its .yard", names.join(", "));
-        return Err(YardError::new(ErrorCode::PhpInUse, message).with_hint(format!(
-            "edit {}: php = \"{}\"",
-            file.display(),
-            yard.default_php
-        )));
+        let other =
+            yard.default_php.filter(|d| *d != v).or_else(|| versions.iter().rev().copied().find(|o| *o != v));
+        let hint = match other {
+            Some(o) => format!("edit {}: php = \"{o}\"", file.display()),
+            None => format!("edit {}: php", file.display()),
+        };
+        return Err(YardError::new(ErrorCode::PhpInUse, message).with_hint(hint));
     }
     let isolated: Vec<&String> = sites
         .sites
@@ -237,7 +239,7 @@ pub(super) async fn isolate(ctx: &Context, p: IsolateParams) -> Result<SiteInfo,
 pub(super) fn config_version(ctx: &Context, php: Option<&str>) -> Result<PhpVersion, YardError> {
     let v = match php {
         Some(v) => v.parse()?,
-        None => load_yard(&ctx.paths)?.0.default_php,
+        None => load_yard(&ctx.paths)?.0.php_default()?,
     };
     if installed(&ctx.brew).contains(&v) { Ok(v) } else { Err(not_installed(v)) }
 }
