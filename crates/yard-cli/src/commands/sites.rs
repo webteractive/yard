@@ -5,7 +5,7 @@ use super::{Ctx, Outcome, cwd, init};
 use crate::output::{for_agents, table};
 use serde_json::Value;
 use std::path::Path;
-use yard_core::present::missing_node;
+use yard_core::present::{missing_node, missing_runtimes};
 use yard_core::sites::host_label;
 use yard_proto::methods::{
     self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams, SiteParams,
@@ -54,7 +54,10 @@ pub async fn link(ctx: &Ctx, name: Option<String>, yes: bool) -> Outcome {
     let params = LinkParams { name, path: dir.display().to_string() };
     let site: SiteInfo = ctx.client().await?.call(methods::SITES_LINK, params).await?;
     let note = managed_note(&site);
-    if !site.needs_setup() && missing_node(site.node.as_ref()).is_none() {
+    if !site.needs_setup()
+        && missing_node(site.node.as_ref()).is_none()
+        && missing_runtimes(&site.runtimes).is_empty()
+    {
         ctx.emit(&site, || format!("Linked {} → {}\n{note}", dir.display(), site.url));
         return Ok(0);
     }

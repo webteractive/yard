@@ -4,11 +4,11 @@ use super::services::{account_parts, address, failure_line};
 use super::{Ctx, Outcome, cwd_absolute};
 use crate::output::{for_agents, table};
 use yard_core::node::install_hint;
-use yard_core::present::{missing_node, state_text};
+use yard_core::present::{missing_node, missing_runtimes, state_text};
 use yard_proto::methods::{self, ExtListParams, SiteDetailParams};
 use yard_proto::{
-    ExtInfo, Need, ProjectFileKind, ServiceState, SettingSource, SiteDetail, SiteKind, SiteNode, SiteSource,
-    YardError,
+    ErrorCode, ExtInfo, Need, ProjectFileKind, ServiceState, SettingSource, SiteDetail, SiteKind, SiteNode,
+    SiteRuntime, SiteSource, YardError,
 };
 
 /// The label column: `extensions` is the longest.
@@ -79,6 +79,22 @@ fn node_row(node: &SiteNode) -> (String, Option<&'static str>) {
     }
 }
 
+/// A runtime's row (Composer): as Node's, plus a key no runtime defines and a version too
+/// new for the site's PHP. `problems` shows the error itself.
+fn runtime_row(rt: &SiteRuntime) -> (String, Option<&'static str>) {
+    let source = Some(source_label(Some(&rt.source)));
+    match (&rt.spec, &rt.version, &rt.error) {
+        (_, _, Some(e)) if e.code == ErrorCode::RuntimeUnknown => ("unknown runtime".to_string(), None),
+        (Some(spec), _, Some(e)) if e.data.as_ref().and_then(|d| d.get("needs_php")).is_some() => {
+            (format!("{spec}, needs a newer PHP"), source)
+        }
+        (_, _, Some(_)) | (None, _, _) => ("unusable pin".to_string(), None),
+        (Some(spec), Some(v), None) if spec == v => (v.clone(), source),
+        (Some(spec), Some(v), None) => (format!("{v} ({spec})"), source),
+        (Some(spec), None, None) => (format!("{spec}, not installed"), source),
+    }
+}
+
 /// `path` with the home directory as `~`.
 fn tilde(path: &str, home: Option<&str>) -> String {
     match home.filter(|h| !h.is_empty()) {
@@ -124,6 +140,10 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
             if let Some(node) = &site.node {
                 let (value, source) = node_row(node);
                 settings.push(("node", value, source));
+            }
+            for rt in &site.runtimes {
+                let (value, source) = runtime_row(rt);
+                settings.push((rt.key.as_str(), value, source));
             }
             settings.push(("docroot", shown_docroot, Some(source_name(detail, "docroot"))));
         }
@@ -208,7 +228,9 @@ fn services_block(detail: &SiteDetail) -> String {
 fn problems(detail: &SiteDetail) -> String {
     let mut out = String::new();
     let node_error = detail.site.node.as_ref().and_then(|n| n.error.as_ref());
-    for e in detail.site.project_error.iter().chain(node_error) {
+    let runtime_errors: Vec<&YardError> =
+        detail.site.runtimes.iter().filter_map(|r| r.error.as_ref()).collect();
+    for e in detail.site.project_error.iter().chain(node_error).chain(runtime_errors.iter().copied()) {
         out.push_str(&line("error", &e.message));
         if let Some(hint) = &e.hint {
             out.push_str(&line("", &format!("→ {hint}")));
@@ -216,10 +238,18 @@ fn problems(detail: &SiteDetail) -> String {
     }
     let node =
         missing_node(detail.site.node.as_ref()).map(|spec| format!("Node {spec}  ({})", install_hint(&spec)));
-    let mut needs =
-        detail.site.needs.iter().map(|n: &Need| format!("{}  ({})", n.describe(), n.command())).chain(node);
+    let runtimes = missing_runtimes(&detail.site.runtimes)
+        .into_iter()
+        .map(|(rt, spec)| format!("{} {spec}  (yard runtime install {} {spec})", rt.name, rt.key));
+    let mut needs = detail
+        .site
+        .needs
+        .iter()
+        .map(|n: &Need| format!("{}  ({})", n.describe(), n.command()))
+        .chain(node)
+        .chain(runtimes);
     match needs.next() {
-        None if detail.site.project_error.is_none() && node_error.is_none() => {
+        None if detail.site.project_error.is_none() && node_error.is_none() && runtime_errors.is_empty() => {
             out.push_str(&line("needs", "nothing"))
         }
         None => {}

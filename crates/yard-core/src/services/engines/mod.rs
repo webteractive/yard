@@ -39,6 +39,8 @@ pub const YARD_COMMANDS: &[&str] = &[
     "ports",
     "php",
     "node",
+    "runtimes",
+    "runtime",
     "ext",
     "xdebug",
     "install-shims",

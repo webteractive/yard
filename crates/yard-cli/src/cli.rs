@@ -163,6 +163,15 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<NodeAction>,
     },
+    /// List every runtime (PHP, Node, Composer) with its shims, installed versions and default.
+    Runtimes,
+    /// A runtime's versions: list, install, remove, choose the default, or set a site's.
+    /// For php and node this is the same as yard php and yard node; Composer is per project,
+    /// from getcomposer.org.
+    Runtime {
+        #[command(subcommand)]
+        action: RuntimeAction,
+    },
     /// PHP extensions: list, add, enable, disable and remove them.
     Ext {
         #[command(subcommand)]
@@ -591,6 +600,57 @@ pub enum NodeAction {
     },
     /// Remove a site's pin set with yard node use.
     Unuse {
+        /// The site; defaults to the site that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RuntimeAction {
+    /// Installed versions of a runtime, the default and the sites on each.
+    List {
+        /// The runtime: composer, php or node (yard runtimes lists them).
+        key: String,
+    },
+    /// Install a version: composer 2 (the current line), 2.2 (the LTS for PHP below 7.2.5) or
+    /// an exact one such as 2.7.7. With none, the version this directory runs. Ctrl-C cancels.
+    Install {
+        /// The runtime: composer, php or node.
+        key: String,
+        /// The version; without one, the .yard here or the project's PHP decides.
+        spec: Option<String>,
+    },
+    /// Remove an installed version; refused while the default or a linked site has no other
+    /// version to run.
+    Uninstall {
+        /// The runtime: composer, php or node.
+        key: String,
+        /// An installed version, as yard runtime list shows it.
+        version: String,
+    },
+    /// Run projects with no pin of their own on this version; it must be installed.
+    Default {
+        /// The runtime: composer, php or node.
+        key: String,
+        /// The version, e.g. 2 or 2.2.
+        spec: String,
+    },
+    /// Pin a site to a version, in its managed .yard or sites.toml. A project's own .yard is
+    /// yours to edit: [runtimes] composer = "2.2".
+    Use {
+        /// The runtime: composer, php or node.
+        key: String,
+        /// The version, e.g. 2.2.
+        spec: String,
+        /// The site; defaults to the site that contains the current directory.
+        #[arg(long)]
+        site: Option<String>,
+    },
+    /// Remove a site's pin set with yard runtime use.
+    Unuse {
+        /// The runtime: composer, php or node.
+        key: String,
         /// The site; defaults to the site that contains the current directory.
         #[arg(long)]
         site: Option<String>,

@@ -5,8 +5,10 @@ use super::{Ctx, Outcome, confirm, cwd, finished, interactive, run_job, services
 use crate::client::{CliError, protocol_version};
 use serde_json::{Value, json};
 use yard_core::node::install_hint;
-use yard_core::present::missing_node;
-use yard_proto::methods::{self, ExtAddParams, InitParams, NodeInstallParams, PhpParams};
+use yard_core::present::{missing_node, missing_runtimes};
+use yard_proto::methods::{
+    self, ExtAddParams, InitParams, NodeInstallParams, PhpParams, RuntimeInstallParams,
+};
 use yard_proto::{ErrorCode, InitResult, Need, SiteInfo, YardError};
 
 /// `yard init`'s flags.
@@ -73,13 +75,20 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
 /// `NEEDS_INSTALL` and nothing is installed. A `.yard` that does not parse is its error.
 ///
 /// A Node nothing installed matches is offered too, and installed last, but it never
-/// stops the site serving: alone, declining it leaves a hint and serves (M4c spec §8).
+/// stops the site serving: alone, declining it leaves a hint and serves (M4c spec §8). A
+/// missing runtime (Composer) is offered the same way, installed after Node (runtimes spec
+/// §12).
 pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, CliError> {
     if let Some(e) = &site.project_error {
         return Err(e.clone().into());
     }
     let node = missing_node(site.node.as_ref()).map(str::to_string);
-    if site.needs.is_empty() && node.is_none() {
+    // Runtimes (Composer) are offered and installed like Node, after it.
+    let runtimes: Vec<(String, String, String)> = missing_runtimes(&site.runtimes)
+        .into_iter()
+        .map(|(rt, spec)| (rt.key.clone(), rt.name.clone(), spec.to_string()))
+        .collect();
+    if site.needs.is_empty() && node.is_none() && runtimes.is_empty() {
         if !ctx.json {
             println!("Serving {}", site.url);
         }
@@ -93,11 +102,21 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         if let Some(spec) = &node {
             println!("  Node {spec}  ({})", install_hint(spec));
         }
+        for (key, name, spec) in &runtimes {
+            println!("  {name} {spec}  (yard runtime install {key} {spec})");
+        }
     }
     let agreed = yes || (interactive(ctx) && confirm("Install these? [y/N] "));
     if !agreed && site.needs.is_empty() {
-        let spec = node.as_deref().unwrap_or_default();
-        eprintln!("{} runs Node {spec}, which is not installed: {}", site.name, install_hint(&spec));
+        if let Some(spec) = node.as_deref() {
+            eprintln!("{} runs Node {spec}, which is not installed: {}", site.name, install_hint(&spec));
+        }
+        for (key, name, spec) in &runtimes {
+            eprintln!(
+                "{} runs {name} {spec}, which is not installed: yard runtime install {key} {spec}",
+                site.name
+            );
+        }
         if !ctx.json {
             println!("Serving {}", site.url);
         }
@@ -171,12 +190,18 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         let done = format!("Installed Node {spec}.\n");
         let params = NodeInstallParams { spec: Some(spec.clone()), path: None };
         match run_job(ctx, methods::NODE_INSTALL, params, || done).await {
-            Err(CliError::Yard(e)) => {
-                eprintln!("warning: {}", e.message);
-                if let Some(hint) = &e.hint {
-                    eprintln!("  hint: {hint}");
-                }
+            Err(CliError::Yard(e)) => warn(&e),
+            outcome => {
+                finished(outcome)?;
+                site = refetch(ctx, &site.name).await?;
             }
+        }
+    }
+    for (key, name, spec) in &runtimes {
+        let done = format!("Installed {name} {spec}.\n");
+        let params = RuntimeInstallParams { key: key.clone(), spec: Some(spec.clone()), path: None };
+        match run_job(ctx, methods::RUNTIME_INSTALL, params, || done).await {
+            Err(CliError::Yard(e)) => warn(&e),
             outcome => {
                 finished(outcome)?;
                 site = refetch(ctx, &site.name).await?;
@@ -208,6 +233,14 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
         println!("Serving {}", site.url);
     }
     Ok(site)
+}
+
+/// A failed install of something the site serves without (Node, Composer).
+fn warn(e: &YardError) {
+    eprintln!("warning: {}", e.message);
+    if let Some(hint) = &e.hint {
+        eprintln!("  hint: {hint}");
+    }
 }
 
 async fn refetch(ctx: &Ctx, name: &str) -> Result<SiteInfo, CliError> {

@@ -14,6 +14,7 @@ mod lifecycle;
 mod node;
 mod php;
 mod ports;
+mod runtime;
 mod services;
 mod shims;
 mod sites;
@@ -27,7 +28,7 @@ mod version;
 
 use crate::cli::{
     Cli, Command, DbAt, DbSub, DomainCommand, EnginesAction, ExtAction, HelperAction, NodeAction, OnOff,
-    PhpAction, PortsAction, ServiceAction, SourceAction, TunnelsCommand,
+    PhpAction, PortsAction, RuntimeAction, ServiceAction, SourceAction, TunnelsCommand,
 };
 use crate::client::{CliError, Client};
 use crate::output::{print_error, print_json, print_json_line};
@@ -176,6 +177,15 @@ pub async fn run(cli: Cli) -> i32 {
             node::pin(&ctx, Some(spec), site).await
         }
         Command::Node { action: Some(NodeAction::Unuse { site }) } => node::pin(&ctx, None, site).await,
+        Command::Runtimes => runtime::list_all(&ctx).await,
+        Command::Runtime { action } => match action {
+            RuntimeAction::List { key } => runtime::list(&ctx, key).await,
+            RuntimeAction::Install { key, spec } => runtime::install(&ctx, key, spec).await,
+            RuntimeAction::Uninstall { key, version } => runtime::uninstall(&ctx, key, version).await,
+            RuntimeAction::Default { key, spec } => runtime::set_default(&ctx, key, spec).await,
+            RuntimeAction::Use { key, spec, site } => runtime::pin(&ctx, key, Some(spec), site).await,
+            RuntimeAction::Unuse { key, site } => runtime::pin(&ctx, key, None, site).await,
+        },
         Command::Ext { action: ExtAction::List { php } } => ext::list(&ctx, php).await,
         Command::Ext { action: ExtAction::Add { name, php } } => ext::add(&ctx, name, php).await,
         Command::Ext { action: ExtAction::Enable { name, php } } => ext::toggle(&ctx, name, php, true).await,

@@ -77,6 +77,16 @@ pub fn missing_node(node: Option<&SiteNode>) -> Option<&str> {
     node.filter(|n| n.error.is_none() && n.version.is_none()).and_then(|n| n.spec.as_deref())
 }
 
+/// The site's runtimes (Composer) whose spec nothing installed meets, with that spec: offered
+/// for install like Node, and never a reason the site does not serve.
+pub fn missing_runtimes(runtimes: &[yard_proto::SiteRuntime]) -> Vec<(&yard_proto::SiteRuntime, &str)> {
+    runtimes
+        .iter()
+        .filter(|r| r.error.is_none() && r.version.is_none())
+        .filter_map(|r| Some((r, r.spec.as_deref()?)))
+        .collect()
+}
+
 /// Takes emailulator's note out of its block when the block still has lines (emailulator is
 /// caught but not answering): it is a warning for the reader, not a line to paste. Returns the
 /// blocks to paste and the notes taken out.
