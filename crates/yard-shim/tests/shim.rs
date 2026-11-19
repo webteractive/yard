@@ -147,6 +147,34 @@ fn an_unpinned_project_with_no_default_names_the_install() {
 }
 
 #[test]
+fn a_broken_yard_toml_runs_the_last_good_defaults() {
+    let s = setup();
+    script(&s.brew.join("opt/php@7.4/bin/php"), "echo \"argv0:$0\"");
+    std::fs::create_dir_all(s.root.join("run")).unwrap();
+    std::fs::write(s.root.join("run/defaults.toml"), "default_php = \"7.4\"\n").unwrap();
+    std::fs::write(s.root.join("yard.toml"), "default_php = \n").unwrap();
+    std::fs::write(s.project.join(".yard"), "docroot = \"public\"\n").unwrap();
+    let out = run(&s, &[], false);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{stderr}");
+    assert!(stdout.contains("php@7.4/bin/php"), "the last good default, not 8.4: {stdout}");
+    assert!(stderr.contains("using the last good defaults from"), "{stderr}");
+}
+
+#[test]
+fn a_broken_yard_toml_with_no_last_good_fails_an_unpinned_project() {
+    let s = setup();
+    script(&s.brew.join("opt/php@8.4/bin/php"), "echo \"argv0:$0\"");
+    std::fs::write(s.root.join("yard.toml"), "default_php = \n").unwrap();
+    std::fs::write(s.project.join(".yard"), "docroot = \"public\"\n").unwrap();
+    let out = run(&s, &[], false);
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    assert!(!stdout.contains("argv0:"), "PHP ran: {stdout}");
+    assert!(stderr.contains("yard.toml line "), "the config error itself: {stderr}");
+}
+
+#[test]
 fn missing_project_php_hints_init() {
     let s = setup();
     std::fs::write(s.project.join(".yard"), "php = \"7.3\"\n").unwrap();

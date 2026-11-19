@@ -284,6 +284,12 @@ impl Paths {
     }
 
     /// The sites with a sleeping instance, one per line, for the shims (M4e spec §5.2).
+    /// The defaults of the last `yard.toml` yardd read whole, for the shims while a hand
+    /// edit leaves it unreadable (explicit-defaults spec §2.4).
+    pub fn defaults_toml(&self) -> PathBuf {
+        self.run_dir().join("defaults.toml")
+    }
+
     pub fn sleeping_file(&self) -> PathBuf {
         self.run_dir().join("sleeping")
     }

@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 use yard_core::brew::Brew;
+use yard_core::config::yard::load_yard_for_shim;
 use yard_core::config::yard::parse_yard;
-use yard_core::config::{SiteEntry, SitesConfig, YardConfig, load_sites, load_yard};
+use yard_core::config::{SiteEntry, SitesConfig, YardConfig, load_sites};
 use yard_core::node::{LtsMap, install_hint, installed, pick};
 use yard_core::php::full_version;
 use yard_core::project::ProjectFile;
@@ -125,6 +126,8 @@ fn exists(p: &Path) -> bool {
 struct Php {
     paths: Paths,
     yard: YardConfig,
+    /// `yard.toml`'s error while it does not parse and no last good defaults exist.
+    broken: Option<YardError>,
     sites: SitesConfig,
     cwd: PathBuf,
     v: PhpVersion,
@@ -133,17 +136,39 @@ struct Php {
     opt: PathBuf,
 }
 
+/// `yard.toml`, else the last good defaults with a warning (explicit-defaults spec §2.4).
+/// With neither, a TOML being edited must not stop a pinned project: the error is printed
+/// and kept, the config has no defaults, and [`unless_broken`] gives it back to an unpinned
+/// one in place of "no default is written".
+fn shim_yard(paths: &Paths) -> Result<(YardConfig, Option<YardError>), YardError> {
+    match load_yard_for_shim(paths) {
+        Ok((yard, warning)) => {
+            if let Some(warning) = warning {
+                eprintln!("{warning}");
+            }
+            Ok((yard, None))
+        }
+        Err(e) => {
+            eprintln!("yard: {}", e.message);
+            Ok((parse_yard(None, &paths.yard_toml())?.0, Some(e)))
+        }
+    }
+}
+
+/// `result`, except that a missing default while `yard.toml` is broken is the config's error.
+fn unless_broken<T>(result: Result<T, YardError>, broken: &Option<YardError>) -> Result<T, YardError> {
+    match (result, broken) {
+        (Err(e), Some(broken)) if matches!(e.code, ErrorCode::RuntimeMissing | ErrorCode::NodeMissing) => {
+            Err(broken.clone())
+        }
+        (result, _) => result,
+    }
+}
+
 impl Php {
     fn resolve(name: &str) -> Result<Php, YardError> {
         let paths = Paths::from_env()?;
-        // A TOML being edited must not stop a pinned php: warn and carry on with no default.
-        let yard = match load_yard(&paths) {
-            Ok((yard, _)) => yard,
-            Err(e) => {
-                eprintln!("yard: {}", e.message);
-                parse_yard(None, &paths.yard_toml())?.0
-            }
-        };
+        let (yard, broken) = shim_yard(&paths)?;
         let sites = load_sites(&paths).unwrap_or_else(|e| {
             eprintln!("yard: {}; ignoring site isolation", e.message);
             SitesConfig::default()
@@ -152,7 +177,8 @@ impl Php {
             YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
                 .with_hint("cd into an existing directory")
         })?;
-        let (v, source) = resolve_version(&cwd, &yard, &sites, &paths, &read_small, &canonical)?;
+        let (v, source) =
+            unless_broken(resolve_version(&cwd, &yard, &sites, &paths, &read_small, &canonical), &broken)?;
         if debug() {
             eprintln!("yard-shim: {name} runs PHP {v} ({source})");
         }
@@ -166,7 +192,7 @@ impl Php {
             .with_hint("yard init"),
             _ => e,
         })?;
-        Ok(Php { paths, yard, sites, cwd, v, source, brew, opt })
+        Ok(Php { paths, yard, broken, sites, cwd, v, source, brew, opt })
     }
 
     fn command(&self, name: &str) -> Result<ShimCommand, YardError> {
@@ -237,7 +263,7 @@ fn run_composer(args: Vec<OsString>) -> Result<Infallible, YardError> {
     let brew_composer = Some(php.brew.prefix.join("bin/composer")).filter(|p| p.exists());
     let full = php.full();
     let php_cmd = php.command("php")?;
-    let (program, pre, env) = match pick_composer(
+    let picked = pick_composer(
         recipe,
         pin.clone(),
         &full,
@@ -245,7 +271,8 @@ fn run_composer(args: Vec<OsString>) -> Result<Infallible, YardError> {
         &installs,
         brew_composer,
         &php.paths,
-    )? {
+    );
+    let (program, pre, env) = match unless_broken(picked, &php.broken)? {
         Pick::Run(v, home) => {
             if debug() {
                 // A Yard-installed version runs only for a pin or the written default.
@@ -305,13 +332,7 @@ fn wake(paths: &Paths, site: &str) -> Result<(), YardError> {
 
 fn run_node(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     let paths = Paths::from_env()?;
-    let yard = match load_yard(&paths) {
-        Ok((yard, _)) => yard,
-        Err(e) => {
-            eprintln!("yard: {}", e.message);
-            parse_yard(None, &paths.yard_toml())?.0
-        }
-    };
+    let (yard, broken) = shim_yard(&paths)?;
     let sites = load_sites(&paths).unwrap_or_else(|e| {
         eprintln!("yard: {}; ignoring site settings", e.message);
         SitesConfig::default()
@@ -321,7 +342,8 @@ fn run_node(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
             .with_hint("cd into an existing directory")
     })?;
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let (spec, source) = resolve_node(&cwd, &yard, &sites, &paths, &read_small, &canonical)?;
+    let (spec, source) =
+        unless_broken(resolve_node(&cwd, &yard, &sites, &paths, &read_small, &canonical), &broken)?;
     let lts = read_small(&paths.lts_toml()).and_then(Result::ok).and_then(|t| LtsMap::parse(&t));
     let lts = lts.unwrap_or_else(LtsMap::builtin);
     let list = |dir: &Path| {
