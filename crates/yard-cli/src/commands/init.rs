@@ -197,7 +197,13 @@ pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, Cl
             }
         }
     }
-    for (key, name, spec) in &runtimes {
+    // Read again from the site as it is now: which Composer runs depends on the full version
+    // of a PHP that may have just been installed.
+    let runtimes_now: Vec<(String, String, String)> = missing_runtimes(&site.runtimes)
+        .into_iter()
+        .map(|(rt, spec)| (rt.key.clone(), rt.name.clone(), spec.to_string()))
+        .collect();
+    for (key, name, spec) in &runtimes_now {
         let done = format!("Installed {name} {spec}.\n");
         let params = RuntimeInstallParams { key: key.clone(), spec: Some(spec.clone()), path: None };
         match run_job(ctx, methods::RUNTIME_INSTALL, params, || done).await {

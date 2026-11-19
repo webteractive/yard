@@ -231,7 +231,7 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   2026-11-19, run natively) is built on main with protocol 2.14: `yard_core::runtimes` (the contract,
   the carried `php`, `node` and `composer` recipes in `crates/yard-core/runtimes/`, one pin walk that
   Node now runs on, Composer's rules), the `composer` shim running the Composer Yard installed in
-  `~/.yard/installs/composer/<v>/` for the project's PHP (2.2 below 7.2.5, `self-update` refused,
+  `~/.yard/installs/composer/<v>/` (read-only) for the project's PHP (2.2 below 7.2.5, `self-update` refused,
   brew's for one release while Yard has none), `yard runtime …` and `yard runtimes`, `runtime.*`,
   doctor's `runtime-*` and `composer-*` checks, Composer offered by `yard link`/`init` after Node, and
   Yard.app's Composer row. The spec's §21 lists what the build decided. `scripts/e2e-composer.sh` has

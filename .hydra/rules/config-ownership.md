@@ -45,8 +45,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     recipes installed; Yard deletes one only when no instance records it and no recipe pins it.
   - `installs/<key>/<version>/` holds a runtime version Yard downloaded (Composer's
     `composer.phar`), with a generated `.yard-install.toml` (version, URL, SHA-256, the PHP it
-    needs); a directory without that record is not installed, and the shims never run it. Only
-    `yard runtime uninstall` removes one. `[runtimes] <key>` in a managed `.yard` (or
+    needs); a directory without that record is not installed, and the shims never run it. An
+    install is read-only once in place (0444 files, 0555 directories), so Composer's self-update
+    cannot replace it; only `yard runtime uninstall` removes one, giving write access back first. `[runtimes] <key>` in a managed `.yard` (or
     `[sites.<s>.runtimes]` in `sites.toml`) is written by `yard runtime use`; a committed `.yard` is
     the user's, so `runtime.use` is refused for it with the line to add. `yard.toml`'s
     `[runtimes.<key>] default` is written by `yard runtime default`.

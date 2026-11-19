@@ -579,7 +579,12 @@ local HTTPS fixture.
   the runtime as closures; `resolve_node` runs on it, with Node's tests unchanged.
 - **`yard.toml`** refuses `[runtimes.php]` and `[runtimes.node]` (`default_php` and `default_node` say
   those).
-- **`refuse`** matches the first argument that is not an option, so `composer -n self-update` is caught.
+- **`refuse`** matches the command past options, an option's value (`-d <dir>`) and `global`, and any
+  abbreviation of a refused word in any case (`self-u`, `SELF-UPDATE`), as Composer's console accepts
+  them. The real guard is that an install is read-only (files 0444, directories 0555) once it is in
+  place: Composer's self-update refuses a phar it cannot write. Uninstall gives write access back,
+  moves the version into a stage at once and deletes it there, so a shim sees all of it or none.
+- **`yard init`** moves a site's `[sites.<s>.runtimes]` into the file it writes, as it does `node`.
 - **A PHP whose full version cannot be read** counts as `x.y.0`, so an unknown 7.2 gets Composer 2.2.
 - **With the index unreachable**, the recipe's pinned versions stand in only for their own channel:
   `2.2` installs the pinned 2.2.32, `2` fails naming the index. A major.minor that is not a channel is

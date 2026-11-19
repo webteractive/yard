@@ -192,3 +192,31 @@ fn there_is_no_yard_composer_command() {
     let out = d.yard().args(["composer", "install"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
 }
+
+/// The Composer a project runs depends on its PHP's full version, which yardd only knows
+/// once that PHP is installed: link installs the one the site asks for after the PHP stage.
+#[test]
+fn link_installs_the_composer_the_installed_php_asks_for() {
+    let mut before = site(json!([composer(Value::Null)]));
+    before["needs"] = json!([{"kind": "php", "php": "7.2"}]);
+    let mut current = composer(Value::Null);
+    current["spec"] = json!("2");
+    let mut done = current.clone();
+    done["version"] = json!("2.11.2");
+    let d = MockDaemon::start_sequenced_with_events(
+        &[
+            ("sites.link", vec![Ok(before)]),
+            ("subscribe", vec![Ok(json!(null))]),
+            ("php.install", vec![Ok(json!({"job_id": "php-install-1"}))]),
+            ("runtime.install", vec![Ok(json!({"job_id": "runtime-install-1"}))]),
+            ("sites.list", vec![Ok(json!([site(json!([current]))])), Ok(json!([site(json!([done]))]))]),
+        ],
+        &[
+            ("php.install", vec![json!({"type": "job_finished", "job_id": "php-install-1", "error": null})]),
+            ("runtime.install", job_events("runtime-install-1")),
+        ],
+    );
+    let out = d.yard().args(["link", "shop", "--yes"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(d.params("runtime.install"), [json!({"key": "composer", "spec": "2"})]);
+}

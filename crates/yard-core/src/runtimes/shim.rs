@@ -11,12 +11,32 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use yard_proto::{ErrorCode, YardError};
 
-/// The `refuse` entry `args` meet: its first word is the first argument that is not an
-/// option, and the rest follow it, so `composer -n self-update` is caught as well.
+/// Composer's options that take the next argument as their value.
+const VALUE_OPTIONS: [&str; 2] = ["-d", "--working-dir"];
+
+/// The `refuse` entry `args` meet. The command is the first argument that is neither an
+/// option nor an option's value (`-d <dir>`), past `global`, which runs any command again;
+/// it matches a refused word it abbreviates, as Composer's console accepts `self-u` or
+/// `SELF-UPDATE`. Any further words of the entry follow it exactly. The install root is
+/// read-only besides, so a spelling this misses still cannot replace the phar.
 pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
-    let at = args.iter().position(|a| !a.to_string_lossy().starts_with('-'))?;
-    let words: Vec<String> = args[at..].iter().map(|a| a.to_string_lossy().into_owned()).collect();
-    def.refuse.iter().find(|r| words.starts_with(&r.args))
+    let words: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let mut at = 0;
+    loop {
+        while at < words.len() && words[at].starts_with('-') {
+            at += if VALUE_OPTIONS.contains(&words[at].as_str()) { 2 } else { 1 };
+        }
+        let command = words.get(at)?.to_lowercase();
+        if !command.is_empty() && "global".starts_with(&command) && at + 1 < words.len() {
+            at += 1;
+            continue;
+        }
+        let rest = &words[at + 1..];
+        return def.refuse.iter().find(|r| {
+            let Some((first, more)) = r.args.split_first() else { return false };
+            !command.is_empty() && first.to_lowercase().starts_with(&command) && rest.starts_with(more)
+        });
+    }
 }
 
 /// The command shim `shim` of `recipe` runs for `version`, installed at `home`: its `exec`

@@ -172,7 +172,7 @@ pub async fn init(ctx: &Context, p: InitParams) -> Result<InitResult, YardError>
     };
 
     TomlFile::edit(&ctx.paths.sites_toml(), |toml| {
-        for key in ["php", "node", "secure", "docroot"] {
+        for key in ["php", "node", "secure", "docroot", "runtimes"] {
             toml.remove(&["sites", &name, key]);
         }
         if linked.is_none() {

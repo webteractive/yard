@@ -6,7 +6,7 @@
 # Composer each PHP runs from getcomposer.org (2.2 for 7.1, the current 2.x for 8.4), that
 # Yard's composer shim runs it and `composer install` works in both, that [runtimes]
 # composer = "2.2" in the 8.4 project's .yard moves it to 2.2, that self-update is refused
-# even after an option, and that `yard runtime uninstall` refuses a version a site runs. It
+# in every spelling and the phar is read-only, and that `yard runtime uninstall` refuses a version a site runs. It
 # needs yardd running (built from this checkout), brew's php@7.1 and php@8.4 (it installs no
 # PHP), and the network. yard.toml and sites.toml are backed up and put back, only the
 # Composer versions this run installed are removed, and the run fails if Herd's resolver
@@ -76,7 +76,8 @@ cleanup() {
   done
   # Every version is this run's: step 1 refused to start over any other.
   for v in $(installed); do
-    "$yard" runtime uninstall composer "$v" >/dev/null 2>&1 || rm -rf "${installs:?}/$v"
+    "$yard" runtime uninstall composer "$v" >/dev/null 2>&1 \
+      || { chmod -R u+w "${installs:?}/$v" && rm -rf "${installs:?}/$v"; }
   done
 }
 trap 'cleanup; rm -rf "$work"' EXIT
@@ -112,13 +113,16 @@ v="$(composer $new -V 2>&1)"
 [[ $v == *"Composer version 2.2."* ]] || fail "with [runtimes] composer = \"2.2\", composer -V printed '$v'"
 pass "[runtimes] composer = \"2.2\" runs Composer 2.2 on PHP 8.4"
 
-# 6. self-update is refused, after an option too, and leaves the phar alone.
-for args in "self-update" "-n self-update" "--no-ansi selfupdate"; do
+# 6. self-update is refused in every spelling, and the phar is read-only besides.
+for args in "self-update" "-n self-update" "--no-ansi selfupdate" "-d /tmp self-update" "self-u" "global self-update"; do
   # shellcheck disable=SC2086 # the words are the arguments
   if composer $new $args >"$work/update.out" 2>&1; then fail "composer $args succeeded: $(cat "$work/update.out")"; fi
   grep -q 'managed by Yard' "$work/update.out" || fail "composer $args said: $(cat "$work/update.out")"
 done
-pass "composer self-update is refused, before and after options"
+for phar in "$installs"/*/composer.phar; do
+  [[ ! -w $phar ]] || fail "$phar is writable"
+done
+pass "composer self-update is refused in every spelling, and the phar is read-only"
 
 # 7. yard runtime uninstall refuses the version a site runs.
 lts="$(installed | grep '^2\.2\.' | head -n 1)"

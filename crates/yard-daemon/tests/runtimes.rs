@@ -21,7 +21,7 @@ const OPTS: LoadOptions = LoadOptions { allow_file_urls: true };
 const INDEX: &str = include_str!("../../yard-core/src/runtimes/testdata/composer-versions.json");
 
 struct Fixture {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     site: PathBuf,
     paths: Paths,
     hashes: std::collections::BTreeMap<String, String>,
@@ -45,7 +45,14 @@ fn fixture() -> Fixture {
         hashes.insert(v.to_string(), hash);
     }
     let paths = Paths::new(dir.path().join("root"));
-    Fixture { _dir: dir, site, paths, hashes }
+    Fixture { dir, site, paths, hashes }
+}
+
+impl Drop for Fixture {
+    /// Installs are read-only; let the temp dir go.
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("/bin/chmod").args(["-R", "u+w"]).arg(self.dir.path()).status();
+    }
 }
 
 /// The carried Composer recipe with its URLs pointing at the fixture.
@@ -105,6 +112,28 @@ async fn installs_a_channel_from_the_index() {
     assert_eq!(got[0].1.requires_php, None);
     assert_eq!(got[0].1.sha256, f.hashes["2.2.32"]);
     assert!(lines.iter().any(|l| l == "Installed Composer 2.2.32"), "{lines:?}");
+}
+
+/// Composer's self-update refuses a phar it cannot write, so a spelling the shim's refusal
+/// misses still cannot replace Yard's checked file; uninstall can still remove it.
+#[tokio::test]
+async fn an_installed_version_is_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let r = recipe(&f, "versions");
+    assert_eq!(install(&f, &r, "2.2").await.1, None);
+    let root = f.paths.install_root("composer", "2.2.32");
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&root.join("composer.phar")), 0o444);
+    assert_eq!(mode(&root.join(".yard-install.toml")), 0o444);
+    assert_eq!(mode(&root), 0o555);
+    assert!(std::fs::write(root.join("composer.phar"), "x").is_err());
+    let (paths, rr) = (f.paths.clone(), r.clone());
+    let v = "2.2.32".parse().unwrap();
+    let (_, error) = job(move |ctx| async move { runtimes::uninstall(&ctx, &paths, &rr, &v).await }).await;
+    assert_eq!(error, None);
+    assert!(!root.exists());
+    assert_eq!(children(&f.paths.installs_dir().join("composer")), Vec::<String>::new());
 }
 
 #[tokio::test]
@@ -413,5 +442,29 @@ async fn runtime_install_node_delegates() {
     assert_eq!(e.code, ErrorCode::InvalidArgument);
     let e = c.call("runtime.list", json!({"key": "bun"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::RuntimeUnknown);
+    d.shutdown().await.unwrap();
+}
+
+/// `yard init` moves a site's `yard runtime use` pin from sites.toml into the managed `.yard`,
+/// so a later `init --force` cannot write the old pin back over a newer one.
+#[tokio::test]
+async fn init_moves_a_runtime_pin_out_of_sites_toml() {
+    let d = prepared("").await;
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("runtime.use", json!({"key": "composer", "site": "shop", "spec": "2.2"})).await.unwrap();
+    c.call("sites.init", json!({"path": dir.display().to_string(), "name": "shop"})).await.unwrap();
+    let sites = yard_core::config::load_sites(&d.fx.paths).unwrap();
+    assert!(sites.sites["shop"].runtimes.is_empty(), "{:?}", sites.sites["shop"]);
+    let managed = d.fx.paths.managed_project_file("shop");
+    assert!(std::fs::read_to_string(&managed).unwrap().contains("[runtimes]\ncomposer = \"2.2\""));
+    c.call("runtime.use", json!({"key": "composer", "site": "shop", "spec": "2"})).await.unwrap();
+    c.call("sites.init", json!({"path": dir.display().to_string(), "name": "shop", "force": true}))
+        .await
+        .unwrap();
+    let text = std::fs::read_to_string(&managed).unwrap();
+    assert!(text.contains("composer = \"2\"") && !text.contains("composer = \"2.2\""), "{text}");
     d.shutdown().await.unwrap();
 }

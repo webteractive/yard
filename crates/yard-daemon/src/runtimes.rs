@@ -194,15 +194,64 @@ pub async fn install(
         std::fs::write(&record_file, record.render()).map_err(|e| io("write", &record_file, e))?;
         // A directory there without its record is not an install (a half-deleted one).
         if root.exists() {
-            std::fs::remove_dir_all(&root).map_err(|e| io("remove", &root, e))?;
+            remove(&root, &dir)?;
         }
-        std::fs::rename(&unpacked, &root).map_err(|e| io("move the download to", &root, e))
+        std::fs::rename(&unpacked, &root).map_err(|e| io("move the download to", &root, e))?;
+        // Sealed once in place: macOS will not move a read-only directory to another parent.
+        seal(&root).inspect_err(|_| {
+            let _ = remove(&root, &dir);
+        })
     }
     .await;
+    let _ = unseal(&stage);
     let _ = std::fs::remove_dir_all(&stage);
     result?;
     job.line(format!("Installed {} {version}", recipe.name));
     Ok(version)
+}
+
+/// Makes an install read-only (files 0444, directories 0555): Composer's self-update refuses
+/// a phar it cannot write, so nothing replaces the file Yard checked.
+fn seal(dir: &Path) -> Result<(), YardError> {
+    set_modes(dir, 0o444, 0o555)
+}
+
+/// Gives the user write access back, so the install can be moved and removed.
+fn unseal(dir: &Path) -> Result<(), YardError> {
+    set_modes(dir, 0o644, 0o755)
+}
+
+/// Directories get `dirs` after their contents, so a sealed one is still walked.
+fn set_modes(dir: &Path, files: u32, dirs: u32) -> Result<(), YardError> {
+    use std::os::unix::fs::PermissionsExt;
+    let set = |p: &Path, mode: u32| {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| io("change the mode of", p, e))
+    };
+    // Open the directory before reading it, in case it is sealed already.
+    set(dir, 0o755)?;
+    for entry in std::fs::read_dir(dir).map_err(|e| io("read", dir, e))?.flatten() {
+        let path = entry.path();
+        let kind = entry.file_type().map_err(|e| io("read", &path, e))?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            set_modes(&path, files, dirs)?;
+        } else {
+            set(&path, files)?;
+        }
+    }
+    set(dir, dirs)
+}
+
+/// Moves `root` out of the way into a stage in `dir`, at once, then deletes it: a shim sees
+/// the whole version or none of it.
+fn remove(root: &Path, dir: &Path) -> Result<(), YardError> {
+    unseal(root)?;
+    let gone = stage_in(dir);
+    std::fs::rename(root, &gone).map_err(|e| io("move away", root, e))?;
+    std::fs::remove_dir_all(&gone).map_err(|e| io("remove", &gone, e))
 }
 
 fn io(what: &str, path: &Path, e: std::io::Error) -> YardError {
@@ -298,7 +347,7 @@ pub async fn uninstall(
         .with_hint(format!("yard runtime list {}", recipe.key)));
     }
     let root = paths.install_root(&recipe.key, &v.to_string());
-    std::fs::remove_dir_all(&root).map_err(|e| io("remove", &root, e))?;
+    remove(&root, &paths.installs_dir().join(&recipe.key))?;
     job.line(format!("Removed {} {v}", recipe.name));
     Ok(())
 }
