@@ -6,6 +6,7 @@ use crate::config::yard::{ExtName, parse_ext_name};
 use crate::config::{ServicesConfig, SiteEntry, SitesConfig};
 use crate::constraint::best_version;
 use crate::node::{NodeSpec, parse_spec};
+use crate::runtimes::version::VersionSpec;
 use crate::services::engines::{EngineKey, Engines, instance_name, versioned_lines};
 use crate::sites::detect_docroot;
 use crate::{Paths, PhpVersion};
@@ -31,6 +32,9 @@ pub struct ProjectFile {
     pub services: BTreeMap<EngineKey, ServiceWant>,
     /// `[services] emailulator = true`: met by any emailulator Yard can reach (M4d).
     pub emailulator: bool,
+    /// `[runtimes]`: a spec per runtime key (`composer = "2.2"`). A key no runtime defines is
+    /// kept, and reported where it is used (runtimes spec §7.1).
+    pub runtimes: BTreeMap<String, VersionSpec>,
 }
 
 /// What a `[services]` value asks for.
@@ -100,6 +104,8 @@ struct Raw {
     #[serde(default)]
     services: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
     project: Option<Spanned<PathBuf>>,
+    #[serde(default)]
+    runtimes: BTreeMap<Spanned<String>, Spanned<toml::Value>>,
 }
 
 /// `PROJECT_FILE_INVALID` at the line at fault for a file that does not parse, has an
@@ -155,6 +161,25 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
         None => None,
     };
     let (services, emailulator) = parse_services(raw.services, &invalid)?;
+    let mut runtimes = BTreeMap::new();
+    for (key, value) in raw.runtimes {
+        let k = key.get_ref();
+        if k == "php" || k == "node" {
+            return Err(invalid(
+                Some(key.span()),
+                &format!("runtimes: write {k} at the top level, not under [runtimes]"),
+            ));
+        }
+        let Some(text) = value.get_ref().as_str() else {
+            return Err(invalid(
+                Some(value.span()),
+                &format!("runtimes.{k} must be a version in quotes, such as \"2.2\""),
+            ));
+        };
+        let spec = VersionSpec::parse(text)
+            .map_err(|e| invalid(Some(value.span()), &format!("runtimes.{k}: {e}")))?;
+        runtimes.insert(key.into_inner(), spec);
+    }
     let project = match (raw.project, kind) {
         (Some(p), FileKind::Committed) => {
             return Err(invalid(Some(p.span()), "project is only for a managed .yard"));
@@ -166,7 +191,16 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
         (p, _) => p.map(Spanned::into_inner),
     };
     Ok((
-        ProjectFile { php: raw.php, node, docroot, secure: raw.secure, extensions, services, emailulator },
+        ProjectFile {
+            php: raw.php,
+            node,
+            docroot,
+            secure: raw.secure,
+            extensions,
+            services,
+            emailulator,
+            runtimes,
+        },
         project,
     ))
 }
@@ -321,6 +355,8 @@ pub struct Detected {
     pub secure: Option<bool>,
     /// The site's own `node`, never `.nvmrc`'s, which the project already carries.
     pub node: Option<NodeSpec>,
+    /// The site's own `[runtimes]` (`yard runtime use`).
+    pub runtimes: BTreeMap<String, VersionSpec>,
 }
 
 /// `php`: the site's isolation, else the version that best meets `composer.json`'s
@@ -362,7 +398,8 @@ pub fn detect(
     };
     let secure = entry.and_then(|e| e.secure).or(secure_by_default.then_some(true));
     let node = entry.and_then(|e| e.node.clone());
-    Ok(Detected { php, docroot, secure, node })
+    let runtimes = entry.map(|e| e.runtimes.clone()).unwrap_or_default();
+    Ok(Detected { php, docroot, secure, node, runtimes })
 }
 
 /// What `yard init` writes for `[services]`: one commented line per engine, since Yard does
@@ -372,7 +409,7 @@ const SERVICES_BLOCK: &str = "\n# [services]\n# mysql = \"8.4\"\n# postgres = \"
 /// A new `.yard`. `secure` is written only when detected: absent, HTTPS follows each
 /// teammate's `secure_by_default`.
 pub fn render(d: &Detected) -> String {
-    format!("{HEADER}{}{SERVICES_BLOCK}", render_keys(d))
+    format!("{HEADER}{}{}{SERVICES_BLOCK}", render_keys(d), render_runtimes(d))
 }
 
 /// A new managed `.yard` for the site `name`, written for the directory `project` (as
@@ -380,7 +417,21 @@ pub fn render(d: &Detected) -> String {
 /// `project` after the detected keys.
 pub fn render_managed(name: &str, project: &Path, d: &Detected) -> String {
     let project = toml_edit::Value::from(project.display().to_string());
-    format!("{}{}project = {project}\n{SERVICES_BLOCK}", managed_header(name), render_keys(d))
+    format!(
+        "{}{}project = {project}\n{}{SERVICES_BLOCK}",
+        managed_header(name),
+        render_keys(d),
+        render_runtimes(d)
+    )
+}
+
+/// `[runtimes]`, after every top-level key, when the site has any.
+fn render_runtimes(d: &Detected) -> String {
+    if d.runtimes.is_empty() {
+        return String::new();
+    }
+    let lines: String = d.runtimes.iter().map(|(k, spec)| format!("{k} = \"{spec}\"\n")).collect();
+    format!("\n[runtimes]\n{lines}")
 }
 
 fn render_keys(d: &Detected) -> String {
@@ -438,6 +489,12 @@ pub fn rewrite(existing: &str, d: &Detected) -> Result<String, YardError> {
     doc["docroot"] = toml_edit::value(d.docroot.display().to_string());
     if let Some(on) = d.secure {
         doc["secure"] = toml_edit::value(on);
+    }
+    if !d.runtimes.is_empty() && !doc.contains_key("runtimes") {
+        doc["runtimes"] = toml_edit::table();
+    }
+    for (k, spec) in &d.runtimes {
+        doc["runtimes"][k.as_str()] = toml_edit::value(spec.to_string());
     }
     Ok(doc.to_string())
 }
@@ -543,6 +600,68 @@ mod tests {
         assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
         assert_eq!(e.data.as_ref().unwrap()["line"], 2);
         assert!(e.message.contains("latest"), "{}", e.message);
+    }
+
+    #[test]
+    fn runtimes_table_parses() {
+        let f = parse_ok("[runtimes]\ncomposer = \"2.2\"\n");
+        assert_eq!(f.runtimes.len(), 1);
+        assert_eq!(f.runtimes["composer"].to_string(), "2.2");
+    }
+
+    #[test]
+    fn php_or_node_under_runtimes_is_invalid() {
+        for key in ["php", "node"] {
+            let e = parse(&format!("[runtimes]\n{key} = \"8.4\"\n"), Path::new(FILE)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+            assert!(e.message.contains(&format!("write {key} at the top level")), "{}", e.message);
+        }
+    }
+
+    #[test]
+    fn a_bad_runtime_spec_names_its_line() {
+        let e = parse("[runtimes]\ncomposer = \"^2\"\n", Path::new(FILE)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert_eq!(e.data.as_ref().unwrap()["line"], 2);
+        assert!(e.message.contains("composer"), "{}", e.message);
+    }
+
+    #[test]
+    fn an_unknown_runtime_key_is_kept() {
+        let f = parse_ok("[runtimes]\nbun = \"1\"\n");
+        assert_eq!(f.runtimes["bun"].to_string(), "1");
+    }
+
+    #[test]
+    fn a_runtime_value_must_be_a_string() {
+        let e = parse("[runtimes]\ncomposer = 2\n", Path::new(FILE)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert_eq!(e.data.as_ref().unwrap()["line"], 2);
+    }
+
+    #[test]
+    fn managed_files_take_runtimes_too() {
+        let (f, _) =
+            parse_managed("project = \"/code/shop\"\n[runtimes]\ncomposer = \"2\"\n", Path::new(FILE))
+                .unwrap();
+        assert_eq!(f.runtimes["composer"].to_string(), "2");
+    }
+
+    #[test]
+    fn init_moves_site_runtimes_into_the_file() {
+        let mut runtimes = BTreeMap::new();
+        runtimes.insert("composer".to_string(), crate::runtimes::version::VersionSpec::parse("2.2").unwrap());
+        let entry = SiteEntry { runtimes, ..Default::default() };
+        let d = detect(Some(&entry), Path::new("/p"), None, &[], false, &|_: &Path| false).unwrap();
+        assert!(render(&d).contains("[runtimes]\ncomposer = \"2.2\"\n"), "{}", render(&d));
+        let managed = render_managed("shop", Path::new("/p"), &d);
+        let (f, project) = parse_managed(&managed, Path::new(FILE)).unwrap();
+        assert_eq!(
+            (f.runtimes["composer"].to_string(), project),
+            ("2.2".to_string(), Some(PathBuf::from("/p")))
+        );
+        let back = parse(&rewrite("php = \"8.4\"\n", &d).unwrap(), Path::new(FILE)).unwrap();
+        assert_eq!(back.runtimes["composer"].to_string(), "2.2");
     }
 
     #[test]
@@ -730,7 +849,8 @@ mod tests {
 
     #[test]
     fn init_comments_emailulator() {
-        let detected = Detected { php: None, docroot: ".".into(), secure: None, node: None };
+        let detected =
+            Detected { php: None, docroot: ".".into(), secure: None, node: None, runtimes: BTreeMap::new() };
         let text = render(&detected);
         assert!(text.lines().any(|l| l == "# emailulator = true"), "{text}");
         // Uncommenting the table and that line parses.
@@ -788,20 +908,38 @@ mod tests {
 
     #[test]
     fn render_for_eepower() {
-        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None, node: None };
+        let d = Detected {
+            php: Some(v("7.3")),
+            docroot: "public".into(),
+            secure: None,
+            node: None,
+            runtimes: BTreeMap::new(),
+        };
         assert_eq!(
             render(&d),
             format!(
                 "# .yard: how Yard serves this project. Commit it.\nphp = \"7.3\"\ndocroot = \"public\"\n{BLOCK}"
             )
         );
-        let off = Detected { php: None, docroot: ".".into(), secure: Some(false), node: None };
+        let off = Detected {
+            php: None,
+            docroot: ".".into(),
+            secure: Some(false),
+            node: None,
+            runtimes: BTreeMap::new(),
+        };
         assert!(
             render(&off).ends_with(&format!("docroot = \".\"\nsecure = false\n{BLOCK}")),
             "{}",
             render(&off)
         );
-        let d = Detected { php: None, docroot: ".".into(), secure: Some(true), node: None };
+        let d = Detected {
+            php: None,
+            docroot: ".".into(),
+            secure: Some(true),
+            node: None,
+            runtimes: BTreeMap::new(),
+        };
         assert_eq!(
             render(&d),
             format!(
@@ -829,7 +967,16 @@ mod tests {
         // Isolation wins over composer.json.
         let entry = SiteEntry { php: Some(v("7.1")), ..Default::default() };
         let d = detect(Some(&entry), project, composer, &[v("7.1")], false, &is_dir).unwrap();
-        assert_eq!(d, Detected { php: Some(v("7.1")), docroot: "public".into(), secure: None, node: None });
+        assert_eq!(
+            d,
+            Detected {
+                php: Some(v("7.1")),
+                docroot: "public".into(),
+                secure: None,
+                node: None,
+                runtimes: BTreeMap::new()
+            }
+        );
         // composer.json: the lowest supported fit when none installed fits.
         let d = detect(None, project, composer, &[v("8.4")], false, &is_dir).unwrap();
         assert_eq!(d.php, Some(v("7.3")));
@@ -859,6 +1006,7 @@ mod tests {
             docroot: "public".into(),
             secure: None,
             node: Some(NodeSpec::Major(16)),
+            runtimes: BTreeMap::new(),
         };
         assert!(render(&d).contains("php = \"7.4\"\nnode = \"16\"\ndocroot"), "{}", render(&d));
         let none = Detected { node: None, ..d.clone() };
@@ -880,7 +1028,13 @@ mod tests {
     #[test]
     fn rewrite_keeps_extensions_and_comments() {
         let existing = "# ours\nphp = \"7.1\" # legacy\nextensions = [\"redis\"]\ndocroot = \"web\"\n";
-        let d = Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None, node: None };
+        let d = Detected {
+            php: Some(v("7.3")),
+            docroot: "public".into(),
+            secure: None,
+            node: None,
+            runtimes: BTreeMap::new(),
+        };
         let out = rewrite(existing, &d).unwrap();
         let f = parse(&out, Path::new(FILE)).unwrap();
         assert_eq!((f.php, f.docroot.as_deref()), (Some(v("7.3")), Some(Path::new("public"))));
@@ -889,12 +1043,18 @@ mod tests {
         // A key detection does not produce is kept.
         let kept = rewrite(
             "php = \"7.1\"\nsecure = true\n",
-            &Detected { php: None, docroot: ".".into(), secure: None, node: None },
+            &Detected { php: None, docroot: ".".into(), secure: None, node: None, runtimes: BTreeMap::new() },
         )
         .unwrap();
         let f = parse(&kept, Path::new(FILE)).unwrap();
         assert_eq!((f.php, f.secure), (Some(v("7.1")), Some(true)));
-        let off = Detected { php: None, docroot: ".".into(), secure: Some(false), node: None };
+        let off = Detected {
+            php: None,
+            docroot: ".".into(),
+            secure: Some(false),
+            node: None,
+            runtimes: BTreeMap::new(),
+        };
         let f = parse(&rewrite("secure = true\n", &off).unwrap(), Path::new(FILE)).unwrap();
         assert_eq!(f.secure, Some(false));
         assert_eq!(rewrite("php = [", &d).unwrap_err().code, ErrorCode::ProjectFileInvalid);
@@ -1020,7 +1180,13 @@ mod tests {
     }
 
     fn eepower() -> Detected {
-        Detected { php: Some(v("7.3")), docroot: "public".into(), secure: None, node: None }
+        Detected {
+            php: Some(v("7.3")),
+            docroot: "public".into(),
+            secure: None,
+            node: None,
+            runtimes: BTreeMap::new(),
+        }
     }
 
     #[test]

@@ -74,9 +74,18 @@ impl RuntimeVersion {
 /// What a pin or a command asks for: a major (`2`), a major.minor (`2.2`) or an exact
 /// version (`2.2.32`), with a leading `v` accepted. Ranges, `latest` and `stable` are not
 /// specs: a project pins what it was tested on.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(try_from = "String")]
 pub struct VersionSpec {
     pub parts: Vec<u32>,
+}
+
+impl TryFrom<String> for VersionSpec {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        VersionSpec::parse(&s)
+    }
 }
 
 impl VersionSpec {

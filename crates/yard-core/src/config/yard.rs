@@ -2,6 +2,7 @@
 
 use super::{config_error, read_optional};
 use crate::node::NodeSpec;
+use crate::runtimes::version::VersionSpec;
 use crate::services::sleep::SleepAfter;
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
@@ -23,6 +24,8 @@ pub struct YardConfig {
     pub service_sleep_after: Option<SleepAfter>,
     /// `[tunnels.cloudflared] domains`: where `yard tunnel --host` may put a name (tunnels spec §4.1).
     pub tunnel_domains: Vec<String>,
+    /// `[runtimes.<key>] default`: what a runtime runs where nothing pins it (runtimes spec §7).
+    pub runtime_defaults: BTreeMap<String, VersionSpec>,
 }
 
 /// Where an extension comes from. `bundled` is one PHP ships with (opcache), listed only
@@ -131,6 +134,15 @@ struct Raw {
     php: BTreeMap<toml::Spanned<String>, RawPhp>,
     #[serde(default)]
     tunnels: RawTunnels,
+    #[serde(default)]
+    runtimes: BTreeMap<toml::Spanned<String>, RawRuntime>,
+}
+
+/// `[runtimes.<key>]`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRuntime {
+    default: VersionSpec,
 }
 
 /// `[tunnels.<provider>]`; only cloudflared is built.
@@ -172,6 +184,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             secure_by_default: false,
             php: BTreeMap::new(),
             tunnels: RawTunnels::default(),
+            runtimes: BTreeMap::new(),
         },
     };
     let mut warnings = vec![];
@@ -237,6 +250,14 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
         }
         tunnel_domains.push(domain.into_inner());
     }
+    let mut runtime_defaults = BTreeMap::new();
+    for (key, rt) in raw.runtimes {
+        if let Some(own) = ["php", "node"].into_iter().find(|k| k == key.get_ref()) {
+            let message = format!("[runtimes.{own}] is not read; write default_{own} at the top level");
+            return Err(config_error(file, text, Some(key.span()), &message));
+        }
+        runtime_defaults.insert(key.into_inner(), rt.default);
+    }
     Ok((
         YardConfig {
             default_php: raw.default_php.unwrap_or(PhpVersion::DEFAULT),
@@ -246,6 +267,7 @@ pub fn parse_yard(text: Option<&str>, file: &Path) -> Result<(YardConfig, Vec<St
             default_node: raw.default_node,
             service_sleep_after: raw.service_sleep_after,
             tunnel_domains,
+            runtime_defaults,
         },
         warnings,
     ))
@@ -286,6 +308,25 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("parked is no longer used"), "{}", warnings[0]);
         assert!(warnings[0].contains(FILE), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn runtime_defaults_parse() {
+        let c = parse(Some("[runtimes.composer]\ndefault = \"2\"\n")).unwrap();
+        assert_eq!(c.runtime_defaults["composer"].to_string(), "2");
+        assert!(parse(None).unwrap().runtime_defaults.is_empty());
+    }
+
+    #[test]
+    fn a_bad_runtime_default_is_config_invalid() {
+        for bad in [
+            "[runtimes.composer]\ndefault = \"^2\"\n",
+            "[runtimes.composer]\ndefalt = \"2\"\n",
+            "[runtimes.php]\ndefault = \"8.4\"\n",
+        ] {
+            let e = parse(Some(bad)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ConfigInvalid, "{bad}");
+        }
     }
 
     #[test]

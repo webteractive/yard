@@ -27,6 +27,10 @@ pub struct SiteEntry {
     pub secure: Option<bool>,
     /// `yard node use`: the Node spec this site runs, unless a `.yard` or `.nvmrc` says.
     pub node: Option<crate::node::NodeSpec>,
+    /// `yard runtime use`: `[sites.<name>.runtimes]`, a spec per runtime key (Composer's),
+    /// unless a `.yard` says (runtimes spec §7).
+    #[serde(default)]
+    pub runtimes: BTreeMap<String, crate::runtimes::version::VersionSpec>,
     /// `[sites.<name>.tunnel]`: the site is shared through a named tunnel (tunnels spec §6).
     pub tunnel: Option<TunnelEntry>,
 }
@@ -98,6 +102,23 @@ fn check_tunnels(sites: &BTreeMap<String, SiteEntry>, text: &str, file: &Path) -
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn site_runtimes_are_parsed() {
+        let c = parse_sites(
+            Some("[sites.shop]\npath = \"/code/shop\"\nruntimes = { composer = \"2.2\" }\n"),
+            std::path::Path::new("/r/sites.toml"),
+        )
+        .unwrap();
+        assert_eq!(c.sites["shop"].runtimes["composer"].to_string(), "2.2");
+        let e = parse_sites(
+            Some("[sites.shop]\npath = \"/code/shop\"\nruntimes = { composer = \"latest\" }\n"),
+            std::path::Path::new("/r/sites.toml"),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, yard_proto::ErrorCode::ConfigInvalid);
+    }
+
     use super::*;
     use std::path::{Path, PathBuf};
     use yard_proto::ErrorCode;
