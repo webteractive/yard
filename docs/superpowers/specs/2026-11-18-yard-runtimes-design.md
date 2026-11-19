@@ -14,7 +14,8 @@ Homebrew": brew stays the source of the plain builds, §10) and the main spec's 
 
 **Plan 1 (the contract and Composer, §17) is built on main (2026-11-19),** planned in
 `docs/superpowers/plans/2026-11-18-yard-runtimes-1-contract-composer.md`, with protocol 2.14. What
-the build decided is in §21. `scripts/e2e-composer.sh` has not run on a real Mac yet.
+the build decided is in §21. `scripts/e2e-composer.sh` passed on the Mac mini on 2026-11-19, on its first run, against yardd
+built from 73e4e4f (after the review's minor findings were fixed).
 
 Decisions marked **(maintainer)** are the maintainer's, from the 2026-11-18 conversation. Decisions
 marked **(my call)** were made while writing this and can be reversed on their own.

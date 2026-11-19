@@ -234,8 +234,9 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `~/.yard/installs/composer/<v>/` (read-only) for the project's PHP (2.2 below 7.2.5, `self-update` refused,
   brew's for one release while Yard has none), `yard runtime …` and `yard runtimes`, `runtime.*`,
   doctor's `runtime-*` and `composer-*` checks, Composer offered by `yard link`/`init` after Node, and
-  Yard.app's Composer row. The spec's §21 lists what the build decided. `scripts/e2e-composer.sh` has
-  not run on a real Mac yet.
+  Yard.app's Composer row. The spec's §21 lists what the build decided. The final review's minor
+  findings were fixed in 73e4e4f, and `scripts/e2e-composer.sh` passed on the Mac mini on 2026-11-19 on
+  its first run against yardd built from it (maintainer approved the run).
 - PHP trusts Yard's CA (maintainer, 2026-11-17, from a cURL error 60 found moving the main Mac's
   Herd sites): reconcile writes `php/<v>/ca-bundle.pem` (brew's `ca-certificates` and
   `yard-ca.pem`) once a CA exists, and Yard's `php.ini` names it as `openssl.cafile` and
