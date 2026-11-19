@@ -36,6 +36,7 @@ fn sites() -> Vec<SiteInfo> {
             needs: vec![],
             project_error: None,
             node: None,
+            runtimes: vec![],
         },
         SiteInfo {
             name: "api".into(),
@@ -50,6 +51,7 @@ fn sites() -> Vec<SiteInfo> {
             needs: vec![],
             project_error: None,
             node: None,
+            runtimes: vec![],
         },
     ]
 }
@@ -434,6 +436,7 @@ fn php_site(name: &str, path: &str, php: &str) -> Value {
         needs: vec![],
         project_error: None,
         node: None,
+        runtimes: vec![],
     })
     .unwrap()
 }

@@ -20,6 +20,7 @@ fn sites() -> Value {
         needs: vec![],
         project_error: None,
         node: None,
+        runtimes: vec![],
     })
     .unwrap()])
 }

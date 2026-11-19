@@ -147,6 +147,7 @@ pub fn resolve(
                     needs: vec![],
                     project_error,
                     node: None,
+                    runtimes: vec![],
                 });
             }
             (None, Some(target)) => match parse_proxy_target(target) {
@@ -163,6 +164,7 @@ pub fn resolve(
                     needs: vec![],
                     project_error: None,
                     node: None,
+                    runtimes: vec![],
                 }),
                 Err(e) => warnings.push(format!("sites.toml: {name}: {}", e.message)),
             },

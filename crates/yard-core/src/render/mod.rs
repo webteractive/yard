@@ -128,6 +128,7 @@ mod tests {
             needs: vec![],
             project_error: None,
             node: None,
+            runtimes: vec![],
         }
     }
 
@@ -145,6 +146,7 @@ mod tests {
             needs: vec![],
             project_error: None,
             node: None,
+            runtimes: vec![],
         }
     }
 

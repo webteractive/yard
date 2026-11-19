@@ -132,6 +132,15 @@ pub enum ErrorCode {
     /// brew will not install a formula beside a linked one that ships the same binaries
     /// (Valkey beside Redis); the hint names the formula to unlink, which Yard never does.
     FormulaConflict,
+    /// The runtime version a project or command asks for (Composer's, say) is not installed.
+    RuntimeMissing,
+    /// A runtime version is the only one the default or a linked site resolves to, so it
+    /// cannot be removed.
+    RuntimeInUse,
+    /// A runtime recipe does not load; the message names its file and line.
+    RuntimeRecipeInvalid,
+    /// No runtime has that key (a `[runtimes]` key in a `.yard`, a `yard runtime` argument).
+    RuntimeUnknown,
     Internal,
     /// A code a newer yardd sends that this build does not know (`"OTHER"`); never sent.
     #[serde(other)]
@@ -237,6 +246,10 @@ mod tests {
             (ErrorCode::DownloadHashMismatch, "DOWNLOAD_HASH_MISMATCH"),
             (ErrorCode::PathNotAllowed, "PATH_NOT_ALLOWED"),
             (ErrorCode::FormulaConflict, "FORMULA_CONFLICT"),
+            (ErrorCode::RuntimeMissing, "RUNTIME_MISSING"),
+            (ErrorCode::RuntimeInUse, "RUNTIME_IN_USE"),
+            (ErrorCode::RuntimeRecipeInvalid, "RUNTIME_RECIPE_INVALID"),
+            (ErrorCode::RuntimeUnknown, "RUNTIME_UNKNOWN"),
         ] {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
         }

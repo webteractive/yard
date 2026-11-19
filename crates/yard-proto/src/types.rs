@@ -110,6 +110,76 @@ pub struct SiteInfo {
     /// on its setup page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<SiteNode>,
+    /// The recipe runtimes the site uses (Composer for a project with a `composer.json`),
+    /// and any `[runtimes]` key of its `.yard` no runtime defines; filled per request, as
+    /// `node` is. PHP and Node are `kind`'s PHP and `node`, never listed here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtimes: Vec<SiteRuntime>,
+}
+
+/// A site's runtime (Composer): the spec its root resolves to and the installed version
+/// that meets it. A missing version never puts the site on its setup page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteRuntime {
+    pub key: String,
+    /// What the runtime is called (`Composer`).
+    pub name: String,
+    /// `None` only with `error`.
+    pub spec: Option<String>,
+    pub source: SettingSource,
+    /// The `.yard` or pin file the spec comes from, or with `error` the one that cannot be
+    /// used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// `None` while nothing installed matches.
+    pub version: Option<String>,
+    /// Why the spec cannot be resolved or run (`RUNTIME_UNKNOWN`, a bad pin, a Composer
+    /// too new for the site's PHP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<YardError>,
+}
+
+/// One row of `runtimes.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSummary {
+    pub key: String,
+    pub name: String,
+    /// `"carried"` (compiled into Yard) or `"user"` (a file in `~/.yard/runtimes`).
+    pub origin: String,
+    /// The recipe file, for a user recipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    pub shims: Vec<String>,
+    pub installed: Vec<String>,
+    /// The default spec, when one is set or the recipe has a single one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// `runtimes.list`: every runtime, and the recipes that did not load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimesList {
+    pub runtimes: Vec<RuntimeSummary>,
+    #[serde(default)]
+    pub errors: Vec<YardError>,
+}
+
+/// One row of `runtime.list`: an installed version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeVersionInfo {
+    pub version: String,
+    /// What the default spec runs.
+    pub default: bool,
+    /// Linked sites that run this version.
+    pub sites: Vec<String>,
+}
+
+/// `runtime.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeList {
+    pub key: String,
+    pub default: String,
+    pub versions: Vec<RuntimeVersionInfo>,
 }
 
 /// A site's Node: the spec its root resolves to and the installed version that meets it.
@@ -703,6 +773,8 @@ pub enum SettingSource {
     Nvmrc,
     /// The nearest `.node-version` (a site's Node).
     NodeVersionFile,
+    /// A runtime's pin file (`.bun-version`; protocol 2.14).
+    PinFile,
     /// A source a newer yardd reports that this client does not know; never sent.
     #[serde(other)]
     Other,
@@ -1109,6 +1181,36 @@ pub(crate) mod tests {
         let site = serde_json::from_value::<SiteInfo>(v.clone()).unwrap();
         assert!(!site.needs_setup());
         assert_eq!(serde_json::to_value(&site).unwrap(), v);
+    }
+
+    #[test]
+    fn site_info_without_runtimes_omits_them() {
+        let v = json!({"name":"blog","host":"blog.yard","url":"http://blog.yard:8080/","source":"linked",
+            "kind":"proxy","target":"http://127.0.0.1:3000","secure":false});
+        let mut site = serde_json::from_value::<SiteInfo>(v.clone()).unwrap();
+        assert_eq!(site.runtimes, vec![]);
+        assert!(serde_json::to_value(&site).unwrap().get("runtimes").is_none());
+        site.runtimes = vec![SiteRuntime {
+            key: "composer".into(),
+            name: "Composer".into(),
+            spec: Some("2.2".into()),
+            source: SettingSource::Default,
+            file: None,
+            version: Some("2.2.32".into()),
+            error: None,
+        }];
+        let back = serde_json::to_value(&site).unwrap();
+        assert_eq!(back["runtimes"][0]["key"], json!("composer"));
+        assert_eq!(serde_json::from_value::<SiteInfo>(back).unwrap(), site);
+    }
+
+    #[test]
+    fn setting_source_pin_file_round_trips() {
+        assert_eq!(serde_json::to_value(SettingSource::PinFile).unwrap(), json!("pin_file"));
+        assert_eq!(
+            serde_json::from_value::<SettingSource>(json!("pin_file")).unwrap(),
+            SettingSource::PinFile
+        );
     }
 
     #[test]

@@ -59,6 +59,13 @@ pub const NODE_UNINSTALL: &str = "node.uninstall";
 pub const NODE_DEFAULT: &str = "node.default";
 pub const NODE_USE: &str = "node.use";
 pub const NODE_UNUSE: &str = "node.unuse";
+pub const RUNTIMES_LIST: &str = "runtimes.list";
+pub const RUNTIME_LIST: &str = "runtime.list";
+pub const RUNTIME_INSTALL: &str = "runtime.install";
+pub const RUNTIME_UNINSTALL: &str = "runtime.uninstall";
+pub const RUNTIME_DEFAULT: &str = "runtime.default";
+pub const RUNTIME_USE: &str = "runtime.use";
+pub const RUNTIME_UNUSE: &str = "runtime.unuse";
 pub const TUNNELS_LIST: &str = "tunnels.list";
 pub const TUNNELS_DOMAINS: &str = "tunnels.domains";
 pub const TUNNELS_DOMAIN_ADD: &str = "tunnels.domain_add";
@@ -131,6 +138,13 @@ pub const ALL: &[&str] = &[
     NODE_DEFAULT,
     NODE_USE,
     NODE_UNUSE,
+    RUNTIMES_LIST,
+    RUNTIME_LIST,
+    RUNTIME_INSTALL,
+    RUNTIME_UNINSTALL,
+    RUNTIME_DEFAULT,
+    RUNTIME_USE,
+    RUNTIME_UNUSE,
     TUNNELS_LIST,
     TUNNELS_DOMAINS,
     TUNNELS_DOMAIN_ADD,
@@ -314,6 +328,52 @@ pub struct NodeSpecParams {
 pub struct NodeUseParams {
     pub site: String,
     pub spec: String,
+}
+
+/// `runtime.list`: a runtime's key (`composer`, `php`, `node`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeKeyParams {
+    pub key: String,
+}
+
+/// `runtime.install`: a `spec` (`2`, `2.2`, `2.2.32`), or the absolute `path` of a directory
+/// whose pin is installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeInstallParams {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// `runtime.uninstall`: an installed version such as `"2.2.32"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeVersionParams {
+    pub key: String,
+    pub version: String,
+}
+
+/// `runtime.default`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSpecParams {
+    pub key: String,
+    pub spec: String,
+}
+
+/// `runtime.use`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeUseParams {
+    pub key: String,
+    pub site: String,
+    pub spec: String,
+}
+
+/// `runtime.unuse`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSiteParams {
+    pub key: String,
+    pub site: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -515,6 +575,37 @@ mod tests {
     }
 
     #[test]
+    fn runtime_method_names() {
+        assert_eq!(
+            [
+                RUNTIMES_LIST,
+                RUNTIME_LIST,
+                RUNTIME_INSTALL,
+                RUNTIME_UNINSTALL,
+                RUNTIME_DEFAULT,
+                RUNTIME_USE,
+                RUNTIME_UNUSE
+            ],
+            [
+                "runtimes.list",
+                "runtime.list",
+                "runtime.install",
+                "runtime.uninstall",
+                "runtime.default",
+                "runtime.use",
+                "runtime.unuse"
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_install_params_accept_a_path() {
+        let p: RuntimeInstallParams =
+            serde_json::from_value(json!({"key":"composer","path":"/code/shop"})).unwrap();
+        assert_eq!((p.key.as_str(), p.spec, p.path.as_deref()), ("composer", None, Some("/code/shop")));
+    }
+
+    #[test]
     fn node_list_params_accept_null() {
         let p: NodeListParams = serde_json::from_value(json!({})).unwrap();
         assert_eq!((p.available, p.major), (false, None));
@@ -693,8 +784,8 @@ mod db_tests {
     use serde_json::json;
 
     #[test]
-    fn protocol_is_2_13() {
-        assert_eq!(crate::PROTOCOL_VERSION, "2.13");
+    fn protocol_is_2_14() {
+        assert_eq!(crate::PROTOCOL_VERSION, "2.14");
     }
 
     #[test]
