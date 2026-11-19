@@ -78,10 +78,27 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Outcome {
 /// stops the site serving: alone, declining it leaves a hint and serves (M4c spec §8). A
 /// missing runtime (Composer) is offered the same way, installed after Node (runtimes spec
 /// §12).
+/// A committed `.yard` whose PHP cannot run a runtime's default is the user's to edit: name
+/// the line on stderr, and serve (explicit-defaults spec §2.1).
+pub(super) fn pin_notes(site: &SiteInfo) {
+    for rt in &site.runtimes {
+        let needs_pin = |e: &&YardError| e.data.as_ref().is_some_and(|d| d.get("needs_pin").is_some());
+        if let Some(e) = rt.error.as_ref().filter(needs_pin) {
+            eprintln!(
+                "{} needs its own {} pin: {}",
+                site.name,
+                rt.name,
+                e.hint.as_deref().unwrap_or_default()
+            );
+        }
+    }
+}
+
 pub async fn settle(ctx: &Ctx, site: SiteInfo, yes: bool) -> Result<SiteInfo, CliError> {
     if let Some(e) = &site.project_error {
         return Err(e.clone().into());
     }
+    pin_notes(&site);
     let node = missing_node(site.node.as_ref()).map(str::to_string);
     // Runtimes (Composer) are offered and installed like Node, after it.
     let runtimes: Vec<(String, String, String)> = missing_runtimes(&site.runtimes)

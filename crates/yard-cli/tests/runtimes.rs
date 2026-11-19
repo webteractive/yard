@@ -132,7 +132,9 @@ fn info_shows_a_sites_composer() {
     let text = info(json!([composer(json!("2.2.32"))]));
     let row =
         text.lines().find(|l| l.trim_start().starts_with("composer ")).unwrap_or_else(|| panic!("{text}"));
-    assert!(row.contains("2.2.32 (2.2)") && row.ends_with("from default"), "{text}");
+    assert!(row.contains("2.2.32 (2.2)") && row.ends_with("from default (yard.toml)"), "{text}");
+    let php = text.lines().find(|l| l.trim_start().starts_with("php ")).unwrap_or_else(|| panic!("{text}"));
+    assert!(php.ends_with("from default (yard.toml)"), "{text}");
     let text = info(json!([composer(Value::Null)]));
     assert!(
         text.lines().any(|l| l.trim_start().starts_with("composer ") && l.contains("2.2, not installed")),
@@ -229,4 +231,31 @@ fn runtime_default_lists_the_sites_it_leaves_behind() {
     );
     let out = d.yard().args(["runtime", "default", "composer", "2.11.2", "--json"]).output().unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap(), unfit);
+}
+
+#[test]
+fn link_names_the_pin_a_committed_yard_needs_and_serves() {
+    let needs_pin = json!({
+        "key": "composer", "name": "Composer", "spec": "2.2", "source": "default", "version": null,
+        "error": {
+            "code": "RUNTIME_MISSING",
+            "message": "shop's PHP 7.1.33 cannot run the Composer default, and its .yard pins none",
+            "hint": "add [runtimes] composer = \"2.2.32\" to /Users/me/code/shop/.yard",
+            "data": {"needs_pin": "2.2.32"}
+        }
+    });
+    let d = MockDaemon::start(&[("sites.link", Ok(site(json!([needs_pin]))))]);
+    let out = d.yard().args(["link", "shop"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("shop needs its own Composer pin: add [runtimes] composer = \"2.2.32\" to /Users/me/code/shop/.yard"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).contains("http://shop.yard:8080/"), "it serves: {}", stdout(&out));
+    assert!(d.params("runtime.install").is_empty());
+    let text = info(json!([needs_pin.clone()]));
+    let row =
+        text.lines().find(|l| l.trim_start().starts_with("composer ")).unwrap_or_else(|| panic!("{text}"));
+    assert!(row.contains("needs a pin in .yard"), "{text}");
 }

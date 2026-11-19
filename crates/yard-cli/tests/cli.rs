@@ -37,6 +37,7 @@ fn sites() -> Vec<SiteInfo> {
             project_error: None,
             node: None,
             runtimes: vec![],
+            php_source: Some(yard_proto::SettingSource::Default),
         },
         SiteInfo {
             name: "api".into(),
@@ -52,6 +53,7 @@ fn sites() -> Vec<SiteInfo> {
             project_error: None,
             node: None,
             runtimes: vec![],
+            php_source: None,
         },
     ]
 }
@@ -437,6 +439,7 @@ fn php_site(name: &str, path: &str, php: &str) -> Value {
         project_error: None,
         node: None,
         runtimes: vec![],
+        php_source: None,
     })
     .unwrap()
 }
@@ -1171,7 +1174,7 @@ fn sites_shows_needs_setup() {
     assert!(out.status.success(), "{}", stderr(&out));
     let so = stdout(&out);
     let header = so.lines().next().unwrap();
-    assert!(header.ends_with("PHP  STATUS"), "{so}");
+    assert!(header.contains(" PHP ") && header.ends_with("STATUS"), "{so}");
     assert!(so.lines().nth(1).unwrap().ends_with("needs setup"), "{so}");
     assert!(so.lines().nth(2).unwrap().ends_with("serving"), "{so}");
 }

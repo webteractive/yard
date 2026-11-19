@@ -17,7 +17,9 @@ pub async fn list(ctx: &Ctx, available: Option<Option<u32>>) -> Outcome {
     let list: NodeList = ctx.client().await?.call(methods::NODE_LIST, params).await?;
     ctx.emit(&list, || {
         let mut out = if list.versions.is_empty() {
-            format!("No Node installed. {} installs the default.\n", install_hint(&list.default))
+            // Nothing is written until a Node is installed; the first one becomes the default.
+            let hint = install_hint(&yard_core::node::FIRST_DEFAULT);
+            format!("No Node installed. {hint} installs one, and the first becomes the default.\n")
         } else {
             let rows: Vec<Vec<String>> = list
                 .versions

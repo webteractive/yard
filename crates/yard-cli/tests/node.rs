@@ -54,10 +54,13 @@ fn node_list_prints_versions_default_and_sites() {
     d.yard().args(["node", "list", "--available", "16"]).output().unwrap();
     assert_eq!(d.params("node.list").last().unwrap(), &json!({"available": true, "major": 16}));
 
-    let d = MockDaemon::start(&[("node.list", Ok(json!({"default": "22", "versions": []})))]);
+    // Nothing installed, so nothing written (explicit-defaults spec §2.3).
+    let d = MockDaemon::start(&[("node.list", Ok(json!({"default": "", "versions": []})))]);
     let out = d.yard().args(["node", "list"]).output().unwrap();
     assert!(
-        stdout(&out).starts_with("No Node installed. yard node install 22 installs the default.\n"),
+        stdout(&out).starts_with(
+            "No Node installed. yard node install 22 installs one, and the first becomes the default.\n"
+        ),
         "{}",
         stdout(&out)
     );

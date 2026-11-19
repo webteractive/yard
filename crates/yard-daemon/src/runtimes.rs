@@ -12,8 +12,8 @@ use yard_core::project::{FileKind, ProjectFile};
 use yard_core::runtimes::recipe::{IndexDef, RuntimeRecipe, SourceDef, VersionEntry, expand_version};
 use yard_core::runtimes::resolve::{PinSource, failed_source, pin_file_version, resolve_pin, uses_runtime};
 use yard_core::runtimes::select::{
-    InstallRecord, composer_channel, composer_channels, fill_candidate, index_version, needs_pin, offer_spec,
-    parse_sha256sum, requires_php,
+    InstallRecord, composer_channel, composer_channels, fill_candidate, fitting, index_version, needs_pin,
+    offer_spec, parse_sha256sum, requires_php,
 };
 use yard_core::runtimes::shim::{Pick, pick_composer};
 use yard_core::runtimes::version::{RuntimeVersion, VersionSpec, pick};
@@ -449,6 +449,30 @@ pub fn spec_for(
     })
 }
 
+/// A committed `.yard` whose PHP cannot run the default: the line to add, as the version that
+/// fits (installed, else the one Yard offers), in `data.needs_pin`.
+fn committed_pin_error(
+    recipe: &RuntimeRecipe,
+    installed: &[RuntimeVersion],
+    php_full: &RuntimeVersion,
+    site: &SiteInfo,
+) -> YardError {
+    let fit = fitting(recipe, installed, php_full)
+        .map(|v| v.to_string())
+        .or_else(|| offer_spec(recipe, php_full, true).map(|s| s.to_string()))
+        .unwrap_or_default();
+    let file = site.project_file.clone().unwrap_or_else(|| ".yard".into());
+    YardError::new(
+        ErrorCode::RuntimeMissing,
+        format!(
+            "{}'s PHP {php_full} cannot run the {} default, and its .yard pins none",
+            site.name, recipe.name
+        ),
+    )
+    .with_hint(format!("add [runtimes] {} = \"{fit}\" to {file}", recipe.key))
+    .with_data(serde_json::json!({ "needs_pin": fit }))
+}
+
 /// Fills `runtimes` on each linked PHP site whose root exists (runtimes spec §7): every recipe
 /// runtime the site uses (one of its `uses_when` files in the root, or its own pin), with the
 /// spec it resolves to and the installed version that runs, or why none does; and every
@@ -490,6 +514,7 @@ pub fn fill_runtimes(
                     };
                     let (setting, file) = setting(&source);
                     // yard.toml's default counts as a pin where the site's PHP runs it.
+                    let has_own_pin = pin.is_some();
                     let pin = pin_or_default(recipe, pin, &yard, &versions, &php_full);
                     let picked = pick_composer(
                         recipe,
@@ -500,7 +525,16 @@ pub fn fill_runtimes(
                         None,
                         paths,
                     );
+                    // A committed `.yard` that needs its own pin is the user's to edit: say which
+                    // line (explicit-defaults spec §2.1). Yard pins any other site itself.
+                    let committed = site.project_file_kind == Some(yard_proto::ProjectFileKind::Project);
+                    let needs_own = committed
+                        && !has_own_pin
+                        && needs_pin(recipe, yard.runtime_defaults.get(&recipe.key), &versions, &php_full);
                     let (version, error) = match picked {
+                        _ if needs_own => {
+                            (None, Some(committed_pin_error(recipe, &versions, &php_full, site)))
+                        }
                         Ok(Pick::Run(v, _)) => (Some(v.to_string()), None),
                         Ok(Pick::BrewComposer(_)) => (None, None),
                         Err(e) if e.code == ErrorCode::RuntimeMissing => (None, None),

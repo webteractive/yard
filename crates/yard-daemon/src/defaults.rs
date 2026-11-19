@@ -164,14 +164,14 @@ pub fn unfit(
     paths: &Paths,
     brew: &Brew,
     recipe: &RuntimeRecipe,
-    default: &VersionSpec,
+    default: Option<&VersionSpec>,
 ) -> Vec<yard_proto::UnfitSite> {
     let (Ok((yard, _)), Ok(sites)) = (load_yard(paths), load_sites(paths)) else { return vec![] };
     let installed = versions(paths, &recipe.key);
     let key = &recipe.key;
     let mut out = vec![];
     for site in unpinned(paths, brew, recipe, &yard, &sites) {
-        if !needs_pin(recipe, Some(default), &installed, &site.php) {
+        if !needs_pin(recipe, default, &installed, &site.php) {
             continue;
         }
         let fit = fitting(recipe, &installed, &site.php).map(|v| v.to_string());

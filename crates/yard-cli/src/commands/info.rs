@@ -67,10 +67,19 @@ pub(super) fn source_label(source: Option<&SettingSource>) -> &'static str {
     }
 }
 
+/// Where a runtime's version comes from: as [`source_label`], except that a runtime's
+/// default is the one written in `yard.toml` (explicit-defaults spec §2.5).
+fn runtime_label(source: Option<&SettingSource>) -> &'static str {
+    match source {
+        Some(SettingSource::Default) | None => "default (yard.toml)",
+        other => source_label(other),
+    }
+}
+
 /// The `node` row: the version and where its spec comes from, or why there is none. An
 /// unusable pin names no source here; `problems` shows its error, which names the file.
 fn node_row(node: &SiteNode) -> (String, Option<&'static str>) {
-    let source = Some(source_label(Some(&node.source)));
+    let source = Some(runtime_label(Some(&node.source)));
     match (&node.spec, &node.version, &node.error) {
         (_, _, Some(_)) | (None, _, _) => ("unusable pin".to_string(), None),
         (Some(spec), Some(v), None) if spec == v => (v.clone(), source),
@@ -82,9 +91,12 @@ fn node_row(node: &SiteNode) -> (String, Option<&'static str>) {
 /// A runtime's row (Composer): as Node's, plus a key no runtime defines and a version too
 /// new for the site's PHP. `problems` shows the error itself.
 fn runtime_row(rt: &SiteRuntime) -> (String, Option<&'static str>) {
-    let source = Some(source_label(Some(&rt.source)));
+    let source = Some(runtime_label(Some(&rt.source)));
     match (&rt.spec, &rt.version, &rt.error) {
         (_, _, Some(e)) if e.code == ErrorCode::RuntimeUnknown => ("unknown runtime".to_string(), None),
+        (_, _, Some(e)) if e.data.as_ref().is_some_and(|d| d.get("needs_pin").is_some()) => {
+            ("needs a pin in .yard".to_string(), None)
+        }
         (Some(spec), _, Some(e)) if e.data.as_ref().and_then(|d| d.get("needs_php")).is_some() => {
             (format!("{spec}, needs a newer PHP"), source)
         }
@@ -136,7 +148,7 @@ fn render(detail: &SiteDetail, extensions: Option<&[String]>, home: Option<&str>
                 (None, _) => "none".to_string(),
             };
             out.push_str(&line("config", &config));
-            settings.push(("php", shown_php, Some(source_name(detail, "php"))));
+            settings.push(("php", shown_php, Some(runtime_label(detail.sources.get("php")))));
             if let Some(node) = &site.node {
                 let (value, source) = node_row(node);
                 settings.push(("node", value, source));

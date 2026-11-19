@@ -21,6 +21,7 @@ fn sites() -> Value {
         project_error: None,
         node: None,
         runtimes: vec![],
+        php_source: None,
     })
     .unwrap()])
 }

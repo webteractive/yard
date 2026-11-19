@@ -65,6 +65,17 @@ async fn site_detail_renders_sources(cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
+/// A runtime's default is the one written in yard.toml (explicit-defaults spec §2.5); a
+/// docroot's default is detected, so it stays "the default".
+#[test]
+fn a_defaulted_php_names_yard_toml() {
+    let settings = super::detail::settings(&detail("default"));
+    let php = settings.iter().find(|s| s.key == "php").unwrap();
+    assert_eq!(format!("{} — {}", php.value, php.from), "8.3.21 — the default in yard.toml");
+    let docroot = settings.iter().find(|s| s.key == "docroot").unwrap();
+    assert_eq!(docroot.from, "the default");
+}
+
 /// Each setting is one row of the detail with where it comes from under its control (spec §4,
 /// Sites): no separate list of sources repeating them, and Detect docroot sits in the Docroot row.
 #[gpui::test]
@@ -186,7 +197,7 @@ fn detail_rows_show_composer_installed_and_missing() {
     assert_eq!(rows.len(), 1);
     assert_eq!(
         (rows[0].name.as_str(), rows[0].value.as_str(), rows[0].from.as_str()),
-        ("Composer", "2.2.32 (2.2)", "the default")
+        ("Composer", "2.2.32 (2.2)", "the default in yard.toml")
     );
     assert_eq!(rows[0].install, None);
     let rows = with(

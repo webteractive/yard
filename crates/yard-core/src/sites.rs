@@ -4,7 +4,9 @@
 use crate::config::{SitesConfig, YardConfig};
 use crate::project::{FileKind, IgnoredBecause, IgnoredFiles, Projects};
 use std::path::{Component, Path, PathBuf};
-use yard_proto::{ErrorCode, IgnoredManagedFile, ProjectFileKind, SiteInfo, SiteKind, SiteSource, YardError};
+use yard_proto::{
+    ErrorCode, IgnoredManagedFile, ProjectFileKind, SettingSource, SiteInfo, SiteKind, SiteSource, YardError,
+};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Resolution {
@@ -108,6 +110,15 @@ pub fn resolve(
             }
             (Some(path), None) => {
                 let loaded = projects.get(name);
+                let from_file = match loaded.map(|l| l.kind) {
+                    Some(FileKind::Managed) => SettingSource::ManagedFile,
+                    _ => SettingSource::ProjectFile,
+                };
+                let php_source = match loaded.map(|l| &l.parsed) {
+                    Some(Ok(file)) if file.php.is_some() => from_file,
+                    None if entry.php.is_some() => SettingSource::SitesToml,
+                    _ => SettingSource::Default,
+                };
                 let (php, docroot, secure, project_error) = match loaded.map(|l| &l.parsed) {
                     Some(Ok(file)) => (
                         file.php.unwrap_or(default_php),
@@ -148,6 +159,7 @@ pub fn resolve(
                     project_error,
                     node: None,
                     runtimes: vec![],
+                    php_source: Some(php_source),
                 });
             }
             (None, Some(target)) => match parse_proxy_target(target) {
@@ -165,6 +177,7 @@ pub fn resolve(
                     project_error: None,
                     node: None,
                     runtimes: vec![],
+                    php_source: None,
                 }),
                 Err(e) => warnings.push(format!("sites.toml: {name}: {}", e.message)),
             },
@@ -281,6 +294,18 @@ mod tests {
                 project: Some("/code/old-app".into()),
             })
         );
+    }
+
+    #[test]
+    fn php_source_says_where_the_version_comes_from() {
+        let fs = Fs::new(&["/code/a", "/code/b", "/code/ee"]);
+        let isolated = SiteEntry { php: Some("7.1".parse().unwrap()), ..linked("/code/b") };
+        let s = sites(&[("a", linked("/code/a")), ("b", isolated), ("ee", linked("/code/ee"))]);
+        let r = resolve(&cfg(), &s, &project("ee", "php = \"7.3\"\n"), "yard", 8080, 8443, &fs.is_dir());
+        let source = |name: &str| r.sites.iter().find(|s| s.name == name).unwrap().php_source;
+        assert_eq!(source("a"), Some(SettingSource::Default));
+        assert_eq!(source("b"), Some(SettingSource::SitesToml));
+        assert_eq!(source("ee"), Some(SettingSource::ProjectFile));
     }
 
     #[test]

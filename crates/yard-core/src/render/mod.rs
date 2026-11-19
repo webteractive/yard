@@ -129,6 +129,7 @@ mod tests {
             project_error: None,
             node: None,
             runtimes: vec![],
+            php_source: None,
         }
     }
 
@@ -147,6 +148,7 @@ mod tests {
             project_error: None,
             node: None,
             runtimes: vec![],
+            php_source: None,
         }
     }
 

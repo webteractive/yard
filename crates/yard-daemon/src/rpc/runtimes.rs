@@ -271,7 +271,7 @@ pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<R
         file.set(&["runtimes", &p.key, "default"], value(spec.to_string()));
         Ok(())
     })?;
-    let unfit = crate::defaults::unfit(&ctx.paths, &ctx.brew, recipe, &spec);
+    let unfit = crate::defaults::unfit(&ctx.paths, &ctx.brew, recipe, Some(&spec));
     reconcile(ctx).await?;
     Ok(RuntimeDefaultSet { unfit })
 }

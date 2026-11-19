@@ -2144,7 +2144,7 @@ async fn doctor_notes_brews_composer_while_yard_has_none() {
 
 /// While the shim falls back to brew's composer, a site it serves is not missing anything: it
 /// is named under composer-brew instead. A PHP 7.1 site, which brew's Composer cannot run on,
-/// still warns.
+/// still warns, for the pin its committed .yard needs.
 #[tokio::test]
 async fn brews_composer_covers_the_sites_it_runs_for() {
     let e = env().await;
@@ -2157,7 +2157,7 @@ async fn brews_composer_covers_the_sites_it_runs_for() {
     let report = e.offline(&e.helper).await;
     let ids = runtime_ids(&report);
     assert!(!ids.contains(&"runtime-missing:shop:composer"), "{ids:?}");
-    assert!(ids.contains(&"runtime-missing:old:composer"), "{ids:?}");
+    assert!(ids.contains(&"composer-pin:old"), "it needs a pin of its own: {ids:?}");
     let c = only(&report, "composer-brew");
     assert!(c.message.contains("shop"), "{c:?}");
     assert!(!c.message.contains("old"), "{c:?}");
@@ -2169,4 +2169,61 @@ async fn doctor_is_quiet_for_a_site_without_composer_json() {
     let dir = tempfile::tempdir().unwrap();
     e.node_site("plain", &[], &dir);
     assert!(runtime_ids(&e.offline(&e.helper).await).is_empty());
+}
+
+// ---- explicit defaults (explicit-defaults spec §2.4, §2.5) ----
+
+#[tokio::test]
+async fn written_defaults_show_as_info() {
+    let d = prepared("").await.start().await;
+    let file = d.fx.paths.yard_toml();
+    let written = || std::fs::read_to_string(&file).unwrap_or_default().contains("default_php");
+    assert!(wait_until(written, Duration::from_secs(10)).await);
+    let report = doctor_of(&d).await;
+    let c = only(&report, "runtime-default-written:php");
+    assert_eq!(c.status, CheckStatus::Ok, "{c:?}");
+    assert_eq!(
+        c.message,
+        "wrote default_php = \"8.4\" to yard.toml; yard runtime default php <version> changes it"
+    );
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_prefix_default_warns_with_its_exact_version() {
+    let e = env().await;
+    e.fx.add_node("22.3.0");
+    e.fx.add_node("22.23.5");
+    std::fs::write(e.fx.paths.yard_toml(), "default_php = \"8.4\"\ndefault_node = \"22\"\n").unwrap();
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "runtime-default-not-exact:node");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert_eq!(c.message, "default_node = \"22\" in yard.toml is not one version; it runs Node 22.23.5 now");
+    assert_eq!(c.hint.as_deref(), Some("yard node default 22.23.5"));
+}
+
+#[tokio::test]
+async fn a_committed_old_project_without_a_pin_is_named() {
+    let e = env().await;
+    e.fx.add_php("7.1");
+    put_composer(&e.fx.paths, "2.2.32");
+    put_composer(&e.fx.paths, "2.11.2");
+    std::fs::write(
+        e.fx.paths.yard_toml(),
+        "default_php = \"8.4\"\n\n[runtimes.composer]\ndefault = \"2.11.2\"\n",
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let project = e.node_site("old", &[("composer.json", "{}"), (".yard", "php = \"7.1\"\n")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "composer-pin:old");
+    assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
+    assert!(c.message.contains("cannot run Composer 2.11.2"), "{c:?}");
+    let file = project.join(".yard");
+    assert_eq!(c.hint, Some(format!("add [runtimes] composer = \"2.2.32\" to {}", file.display())));
+    assert!(
+        runtime_ids(&report).iter().all(|id| !id.starts_with("runtime-") || !id.contains(":old")),
+        "named once: {report:#?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "php = \"7.1\"\n", "never edited");
 }

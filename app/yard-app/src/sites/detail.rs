@@ -102,6 +102,15 @@ fn from(source: Option<&SettingSource>) -> &'static str {
     }
 }
 
+/// Where a runtime's version comes from: as [`from`], except that a runtime's default is the
+/// one written in yard.toml (explicit-defaults spec §2.5).
+fn runtime_from(source: Option<&SettingSource>) -> &'static str {
+    match source {
+        Some(SettingSource::Default) | None => "the default in yard.toml",
+        other => from(other),
+    }
+}
+
 /// A setting the detail shows on its own row: the row's id, the value, and where it comes from
 /// (`8.4.3`, `from the managed .yard`).
 #[derive(Debug, Clone, PartialEq)]
@@ -119,7 +128,7 @@ pub fn settings(d: &SiteDetail) -> Vec<Setting> {
         out.push(setting(
             "php",
             d.php_full.clone().unwrap_or_else(|| php.clone()),
-            from(d.sources.get("php")),
+            runtime_from(d.sources.get("php")),
         ));
         out.push(setting("docroot", docroot.clone(), from(d.sources.get("docroot"))));
     }
@@ -131,7 +140,7 @@ pub fn settings(d: &SiteDetail) -> Vec<Setting> {
     if let Some(node) = &d.site.node {
         let source = match &node.file {
             Some(file) => format!("from {file}"),
-            None => from(Some(&node.source)).to_string(),
+            None => runtime_from(Some(&node.source)).to_string(),
         };
         let value = match (&node.error, &node.version, &node.spec) {
             (Some(e), _, _) => e.message.clone(),
@@ -161,7 +170,7 @@ pub fn runtime_rows(site: &SiteInfo) -> Vec<RuntimeRow> {
         .map(|rt| {
             let from = match &rt.file {
                 Some(file) => format!("from {file}"),
-                None => from(Some(&rt.source)).to_string(),
+                None => runtime_from(Some(&rt.source)).to_string(),
             };
             let spec = rt.spec.clone().unwrap_or_else(|| "?".into());
             let (value, install) = match (&rt.error, &rt.version) {

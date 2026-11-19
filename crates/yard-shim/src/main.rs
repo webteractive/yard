@@ -271,7 +271,8 @@ fn run_composer(args: Vec<OsString>) -> Result<Infallible, YardError> {
         &installs,
         brew_composer,
         &php.paths,
-    );
+    )
+    .map_err(|e| committed_pin_hint(e, recipe, &pin, &php.source, &installs, &full));
     let (program, pre, env) = match unless_broken(picked, &php.broken)? {
         Pick::Run(v, home) => {
             if debug() {
@@ -293,6 +294,34 @@ fn run_composer(args: Vec<OsString>) -> Result<Infallible, YardError> {
     };
     php.wake_if(runtime.wakes("composer"))?;
     exec(&program, pre, args, env)
+}
+
+/// A project with a committed `.yard` that runs the default and cannot: the file is the
+/// user's, so the hint is the line to add there, not a `yard runtime use` that would be
+/// refused (explicit-defaults spec §2.1).
+fn committed_pin_hint(
+    e: YardError,
+    recipe: &yard_core::runtimes::recipe::RuntimeRecipe,
+    pin: &Option<(yard_core::runtimes::version::VersionSpec, PinSource)>,
+    source: &Source,
+    installs: &[(yard_core::runtimes::version::RuntimeVersion, yard_core::runtimes::select::InstallRecord)],
+    full: &yard_core::runtimes::version::RuntimeVersion,
+) -> YardError {
+    let (Source::Project(file), Some((_, PinSource::Default)) | None) = (source, pin) else { return e };
+    if !matches!(e.code, ErrorCode::InvalidArgument | ErrorCode::RuntimeMissing) {
+        return e;
+    }
+    let versions: Vec<_> = installs.iter().map(|(v, _)| v.clone()).collect();
+    let fit = yard_core::runtimes::select::fitting(recipe, &versions, full)
+        .map(|v| v.to_string())
+        .or_else(|| yard_core::runtimes::select::offer_spec(recipe, full, true).map(|s| s.to_string()));
+    match fit {
+        Some(fit) => YardError {
+            hint: Some(format!("add [runtimes] {} = \"{fit}\" to {}", recipe.key, file.display())),
+            ..e
+        },
+        None => e,
+    }
 }
 
 /// How long a shim waits for yardd to wake a site's services: yardd's own cap is 30 s.

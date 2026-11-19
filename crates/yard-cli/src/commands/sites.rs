@@ -11,7 +11,8 @@ use yard_proto::methods::{
     self, DocrootParams, IsolateParams, LinkParams, NameParams, ProxyParams, SiteParams,
 };
 use yard_proto::{
-    CaInfo, ErrorCode, IgnoredBecause, ProjectFileKind, SiteInfo, SiteKind, SiteSource, YardError,
+    CaInfo, ErrorCode, IgnoredBecause, ProjectFileKind, SettingSource, SiteInfo, SiteKind, SiteSource,
+    YardError,
 };
 
 pub async fn list(ctx: &Ctx) -> Outcome {
@@ -21,13 +22,22 @@ pub async fn list(ctx: &Ctx) -> Outcome {
             "No sites yet. Serve a project with yard link, run inside it.\n".to_string()
         } else {
             let rows: Vec<Vec<String>> = sites.iter().map(row).collect();
-            table(&["SITE", "URL", "SOURCE", "TARGET", "PHP", "STATUS"], &rows)
+            let mut out = table(&["SITE", "URL", "SOURCE", "TARGET", "PHP", "STATUS"], &rows);
+            if sites.iter().any(on_default) {
+                out.push_str("\n* the default in yard.toml\n");
+            }
+            out
         };
         out.push('\n');
         out.push_str(&for_agents("yard sites"));
         out
     });
     Ok(0)
+}
+
+/// A PHP site that runs `yard.toml`'s `default_php` (explicit-defaults spec §2.5).
+fn on_default(site: &SiteInfo) -> bool {
+    site.php_source == Some(SettingSource::Default)
 }
 
 fn row(site: &SiteInfo) -> Vec<String> {
@@ -38,7 +48,10 @@ fn row(site: &SiteInfo) -> Vec<String> {
     };
     let (target, php) = match &site.kind {
         // The directory nginx serves, so a `public/` that appears later shows up here.
-        SiteKind::Php { docroot, php, .. } => (docroot.clone(), php.clone()),
+        SiteKind::Php { docroot, php, .. } => {
+            let mark = if on_default(site) { "*" } else { "" };
+            (docroot.clone(), format!("{php}{mark}"))
+        }
         SiteKind::Proxy { target } => (target.clone(), "-".into()),
         SiteKind::Other => ("unknown".into(), "-".into()),
     };
@@ -58,6 +71,7 @@ pub async fn link(ctx: &Ctx, name: Option<String>, yes: bool) -> Outcome {
         && missing_node(site.node.as_ref()).is_none()
         && missing_runtimes(&site.runtimes).is_empty()
     {
+        init::pin_notes(&site);
         ctx.emit(&site, || format!("Linked {} → {}\n{note}", dir.display(), site.url));
         return Ok(0);
     }

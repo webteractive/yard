@@ -794,3 +794,22 @@ async fn moving_the_default_lists_sites_that_cannot_run_it() {
     );
     d.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_committed_old_projects_composer_names_the_line_to_add() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let dir = d.project("old");
+    write(&dir, "composer.json", "{}");
+    write(&dir, ".yard", "php = \"7.1\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let composer = composer_of(&site(&mut c, "old").await);
+    assert_eq!(composer["version"], Value::Null, "{composer}");
+    let hint = format!("add [runtimes] composer = \"2.2.32\" to {}", dir.join(".yard").display());
+    assert_eq!(composer["error"]["hint"], hint.as_str(), "{composer}");
+    assert_eq!(composer["error"]["data"]["needs_pin"], "2.2.32", "{composer}");
+    d.shutdown().await.unwrap();
+}

@@ -518,3 +518,22 @@ fn composer_wakes_a_listed_site() {
     assert!(out.status.success(), "{}", texts(&out).1);
     assert_eq!(*seen.lock().unwrap(), ["GET /wake/old?wait=30 HTTP/1.1"]);
 }
+
+#[test]
+fn composer_in_an_unpinned_old_project_names_the_pin() {
+    let s = setup();
+    put_composer(&s, "2.2.32", true);
+    put_composer(&s, "2.11.2", true);
+    std::fs::write(
+        s.root.join("yard.toml"),
+        "default_php = \"8.4\"\n\n[runtimes.composer]\ndefault = \"2.11.2\"\n",
+    )
+    .unwrap();
+    std::fs::write(s.project.join(".yard"), "php = \"7.1\"\n").unwrap();
+    let out = run_as(&s, "composer", &["install"]);
+    let (stdout, stderr) = texts(&out);
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    assert!(stderr.contains("Composer 2.11.2 needs PHP 7.2.5 or later"), "{stderr}");
+    let line = format!("hint: add [runtimes] composer = \"2.2.32\" to {}", s.project.join(".yard").display());
+    assert!(stderr.contains(&line), "{stderr}");
+}

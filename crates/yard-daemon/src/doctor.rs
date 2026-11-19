@@ -24,6 +24,7 @@ use yard_core::ports::{DNSMASQ, DNSMASQ_PORT, NGINX_HTTP, NGINX_HTTPS, Registry}
 use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
 use yard_core::render::php::{ini_loads, is_stale};
+use yard_core::runtimes::RuntimeKind;
 use yard_core::services::brew_info;
 use yard_core::services::engines::{EngineKey, LineSpec, ServiceEngine, SourceSpec, versioned_lines};
 use yard_core::services::render::old_php_can_log_in;
@@ -85,6 +86,8 @@ struct View {
     emailulator: Option<Probe>,
     /// The engines: the snapshot's, or with no daemon the built-ins and carried recipes.
     engines: std::sync::Arc<yard_core::services::Engines>,
+    /// What yardd's defaults check wrote since it started; empty without yardd.
+    defaults_written: Vec<crate::defaults::Written>,
 }
 
 impl View {
@@ -102,6 +105,7 @@ impl View {
             hashes: Ok(state.hashes.clone()),
             emailulator: snap.emailulator.clone(),
             engines: snap.engines.clone(),
+            defaults_written: state.defaults_written.clone(),
         })
     }
 
@@ -160,6 +164,7 @@ impl View {
             hashes: Hashes::load(&paths.hashes()),
             emailulator,
             engines,
+            defaults_written: vec![],
         }
     }
 
@@ -290,7 +295,28 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         let registry = crate::runtimes::registry();
         crate::runtimes::fill_sites(&mut sites, paths, &registry, brew);
         let on_brew = on_brew_composer(&sites, paths, brew, &registry);
-        checks.extend(runtime_checks(&sites, &on_brew));
+        let pins = pin_checks(paths, brew, &registry, view.yard.as_ref());
+        // A site that needs its own pin is named once, by its pin check.
+        let runtime = runtime_checks(&sites, &on_brew).into_iter().filter(|c| {
+            !pins.iter().any(|(site, key, _)| {
+                c.id == format!("runtime-missing:{site}:{key}")
+                    || c.id == format!("runtime-spec:{site}:{key}")
+                    || c.id == format!("{key}-php:{site}")
+            })
+        });
+        checks.extend(runtime);
+        checks.extend(pins.into_iter().map(|(_, _, check)| check));
+        if let Some(yard) = &view.yard {
+            checks.extend(not_exact_checks(paths, &registry, yard));
+        }
+        // What yardd wrote since it started, so a filled-in default is never a surprise.
+        checks.extend(view.defaults_written.iter().map(|w| {
+            let id = match &w.site {
+                None => format!("runtime-default-written:{}", w.key),
+                Some(site) => format!("runtime-pin-written:{}:{site}", w.key),
+            };
+            ok(&id, w.describe())
+        }));
         let default = view.yard.as_ref().and_then(|y| y.default_node.clone());
         checks.extend(node_checks(
             &sites,
@@ -621,6 +647,87 @@ fn on_brew_composer(
 /// Each site's recipe runtimes (runtimes spec §14): one not installed, a pin that cannot be
 /// used, a version too new for the site's PHP, and a `[runtimes]` key no runtime defines. A
 /// Composer brew's runs (`on_brew`) is not missing: `composer-brew` names those sites.
+/// A site whose PHP cannot run the Composer default and that Yard cannot pin itself (a
+/// committed `.yard`, or nothing fitting installed): `composer-pin:<site>`, with the line
+/// to add or the install (explicit-defaults spec §2.1). Answers `(site, key, check)`.
+fn pin_checks(
+    paths: &Paths,
+    brew: &Brew,
+    runtimes: &yard_core::runtimes::Runtimes,
+    yard: Option<&YardConfig>,
+) -> Vec<(String, String, Check)> {
+    let Some(yard) = yard else { return vec![] };
+    let mut out = vec![];
+    for rt in runtimes.iter().filter(|r| r.kind() == RuntimeKind::Recipe && !r.recipe().requires.is_empty()) {
+        let recipe = rt.recipe();
+        let default = yard.runtime_defaults.get(&recipe.key);
+        for unfit in crate::defaults::unfit(paths, brew, recipe, default) {
+            let message = match default {
+                Some(d) => format!(
+                    "{}'s PHP cannot run {} {d}, the default, and the site has no {} pin of its own",
+                    unfit.site, recipe.name, recipe.name
+                ),
+                None => format!("{}'s PHP needs a {} pin of its own", unfit.site, recipe.name),
+            };
+            let check = warn(&format!("{}-pin:{}", recipe.key, unfit.site), message, unfit.hint);
+            out.push((unfit.site, recipe.key.clone(), check));
+        }
+    }
+    out
+}
+
+/// A default in `yard.toml` that is not one version (a hand edit): it is read as the prefix
+/// it is, and this names the version it runs now (explicit-defaults spec §2.4).
+fn not_exact_checks(
+    paths: &Paths,
+    runtimes: &yard_core::runtimes::Runtimes,
+    yard: &YardConfig,
+) -> Vec<Check> {
+    let mut checks = vec![];
+    if let Some(spec) = &yard.default_node
+        && !matches!(spec, NodeSpec::Exact(_))
+    {
+        let line = format!("default_node = \"{spec}\"");
+        checks.push(match pick(spec, &crate::node::installed(paths), &crate::node::lts(paths)) {
+            Some(v) => warn(
+                "runtime-default-not-exact:node",
+                format!("{line} in yard.toml is not one version; it runs Node {v} now"),
+                format!("yard node default {v}"),
+            ),
+            None => warn(
+                "runtime-default-not-exact:node",
+                format!("{line} in yard.toml is not one version, and no installed Node matches it"),
+                install_hint(spec),
+            ),
+        });
+    }
+    for (key, spec) in &yard.runtime_defaults {
+        if spec.is_exact() {
+            continue;
+        }
+        let Some(rt) = runtimes.get(key) else { continue };
+        let line = format!("[runtimes.{key}] default = \"{spec}\"");
+        let id = format!("runtime-default-not-exact:{key}");
+        let versions: Vec<_> = crate::runtimes::installed(paths, key).into_iter().map(|(v, _)| v).collect();
+        checks.push(match yard_core::runtimes::version::pick(spec, &versions) {
+            Some(v) => warn(
+                &id,
+                format!("{line} in yard.toml is not one version; it runs {} {v} now", rt.display()),
+                format!("yard runtime default {key} {v}"),
+            ),
+            None => warn(
+                &id,
+                format!(
+                    "{line} in yard.toml is not one version, and no installed {} matches it",
+                    rt.display()
+                ),
+                format!("yard runtime install {key} {spec}"),
+            ),
+        });
+    }
+    checks
+}
+
 fn runtime_checks(sites: &[SiteInfo], on_brew: &[String]) -> Vec<Check> {
     let mut checks = vec![];
     for site in sites {

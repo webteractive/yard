@@ -115,6 +115,10 @@ pub struct SiteInfo {
     /// `node` is. PHP and Node are `kind`'s PHP and `node`, never listed here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtimes: Vec<SiteRuntime>,
+    /// Where a PHP site's version comes from (protocol 2.15): `default` for `yard.toml`'s
+    /// `default_php`, else the site's `.yard`, managed `.yard` or `sites.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub php_source: Option<SettingSource>,
 }
 
 /// A site's runtime (Composer): the spec its root resolves to and the installed version
