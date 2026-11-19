@@ -3,10 +3,86 @@
 //! instead of being refused, keeping every other key and comment.
 
 use crate::project::read_project_file;
-use std::path::Path;
-use yard_core::config::TomlFile;
+use std::path::{Path, PathBuf};
+use yard_core::Paths;
+use yard_core::config::{TomlFile, load_sites};
 use yard_core::project;
 use yard_proto::{ErrorCode, YardError};
+
+/// The file that holds a linked site's settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SiteFile {
+    /// The project's own `.yard`: the user's, never edited.
+    Committed(PathBuf),
+    /// The managed `.yard` written for the site's path (managed-file spec §4).
+    Managed(PathBuf),
+    /// Its `sites.toml` entry: a proxy, a site with no path, or one with no file of its own.
+    SitesToml,
+}
+
+/// Which file holds `site`'s settings. A managed file written for another directory is not
+/// the site's; one that does not parse is its error.
+pub fn site_file(paths: &Paths, site: &str) -> Result<SiteFile, YardError> {
+    let sites = load_sites(paths)?;
+    let Some(path) = sites.sites.get(site).and_then(|e| e.path.as_ref()) else {
+        return Ok(SiteFile::SitesToml);
+    };
+    let file = path.join(project::FILE);
+    if file.symlink_metadata().is_ok() {
+        return Ok(SiteFile::Committed(file));
+    }
+    let managed = paths.managed_project_file(site);
+    let Some(text) = read_project_file(&managed) else { return Ok(SiteFile::SitesToml) };
+    match project::parse_managed(&text?, &managed)? {
+        (_, Some(project)) if project == *path => Ok(SiteFile::Managed(managed)),
+        _ => Ok(SiteFile::SitesToml),
+    }
+}
+
+/// Sets (or with `None` removes) `[runtimes] <key>` for a linked PHP site: in its managed
+/// `.yard`, else in `[sites.<site>.runtimes]`. A committed `.yard` is the user's to edit:
+/// `SITE_HAS_PROJECT_FILE`, naming the line to add.
+pub fn set_site_runtime(paths: &Paths, site: &str, key: &str, spec: Option<&str>) -> Result<(), YardError> {
+    let set = |toml: &mut TomlFile, keys: &[&str]| match spec {
+        Some(spec) => toml.set(keys, toml_edit::value(spec)),
+        None => {
+            toml.remove(keys);
+        }
+    };
+    match site_file(paths, site)? {
+        SiteFile::Committed(file) => {
+            let change = match spec {
+                Some(spec) => format!("[runtimes] {key} = \"{spec}\""),
+                None => format!("remove {key} from [runtimes]"),
+            };
+            Err(YardError::new(
+                ErrorCode::SiteHasProjectFile,
+                format!("{site} is configured by {}", file.display()),
+            )
+            .with_hint(format!("edit {}: {change}", file.display())))
+        }
+        SiteFile::Managed(file) => edit_managed(&file, |toml| {
+            set(toml, &["runtimes", key]);
+            Ok(())
+        }),
+        SiteFile::SitesToml => TomlFile::edit(&paths.sites_toml(), |toml| {
+            let entry = toml.doc().get("sites").and_then(|s| s.get(site));
+            if entry.is_none() {
+                return Err(YardError::new(ErrorCode::SiteNotFound, format!("no site named {site:?}"))
+                    .with_hint("yard sites lists them"));
+            }
+            if entry.and_then(|e| e.get("path")).is_none() {
+                return Err(YardError::new(
+                    ErrorCode::InvalidArgument,
+                    format!("{site} is a proxy, so no {key} runs for it"),
+                )
+                .with_hint("yard sites shows which sites run PHP"));
+            }
+            set(toml, &["sites", site, "runtimes", key]);
+            Ok(())
+        }),
+    }
+}
 
 /// Applies `f` to the managed `.yard` at `file` under `TomlFile`'s lock, and saves it
 /// only if the result is still a valid managed file. A symlinked file is never written

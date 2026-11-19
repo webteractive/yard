@@ -410,12 +410,24 @@ impl Reconciler {
         report.warnings.extend(crate::engines::errors(&engines).into_iter().map(|e| e.message));
         let engines = Arc::new(engines);
 
+        // 0b. Write any default that is missing, and the pins old-PHP sites need, before the
+        // config is read (explicit-defaults spec §2.2).
+        let written = crate::defaults::fill(&state.paths, &crate::runtimes::registry(), &state.brew);
+        state.defaults_written.extend(written);
+
         // 1. Load config. A parse error keeps the last good state serving.
         let loaded = load_yard(&state.paths).and_then(|y| {
             Ok((y, load_sites(&state.paths)?, load_services(&state.paths)?, Registry::load(&state.paths)?))
         });
         let ((yard, yard_warnings), sites_cfg, services_cfg, mut registry) = loaded?;
         report.warnings.extend(yard_warnings);
+        // The shims' fallback while a hand edit leaves yard.toml unreadable (spec §2.4).
+        let defaults = yard_core::config::yard::render_defaults(&yard);
+        if std::fs::read_to_string(state.paths.defaults_toml()).ok().as_deref() != Some(defaults.as_str())
+            && let Err(e) = yard_core::generated::write_atomic(&state.paths.defaults_toml(), &defaults)
+        {
+            report.warnings.push(format!("could not write {}: {e}", state.paths.defaults_toml().display()));
+        }
         // emailulator's agent decides its ports and whether mail.<tld> is served (M4d); it was
         // asked before the lock was taken.
         state.emailulator = mail;

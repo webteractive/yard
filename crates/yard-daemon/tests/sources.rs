@@ -127,7 +127,7 @@ async fn ext_add_refuses_untrusted_formula() {
     assert_eq!(err.hint.as_deref(), Some("yard source trust shivammathur/extensions/redis@8.4"));
     assert_eq!(err.data.unwrap()["tap"], "shivammathur/extensions");
     assert!(!brew_log(&d).contains("install"), "{}", brew_log(&d));
-    assert!(!d.fx.paths.yard_toml().exists());
+    assert!(!std::fs::read_to_string(d.fx.paths.yard_toml()).unwrap_or_default().contains("extensions"));
     d.shutdown().await.unwrap();
 }
 

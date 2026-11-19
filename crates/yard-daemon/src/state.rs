@@ -69,6 +69,9 @@ pub struct State {
     pub recipes: crate::engines::RecipeLoader,
     /// The recipe files changed at the last reconcile: `engines_changed` follows `reconciled`.
     pub engines_changed: bool,
+    /// What the defaults check wrote since yardd started, oldest first (explicit-defaults
+    /// spec §2.2), for doctor's `runtime-default-written` lines.
+    pub defaults_written: Vec<crate::defaults::Written>,
 }
 
 impl State {
@@ -87,6 +90,7 @@ impl State {
             slept: BTreeMap::new(),
             recipes: crate::engines::RecipeLoader::default(),
             engines_changed: false,
+            defaults_written: vec![],
         })
     }
 }

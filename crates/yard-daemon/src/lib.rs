@@ -2,6 +2,7 @@
 
 pub mod conns;
 pub mod daemon;
+pub mod defaults;
 pub mod doctor;
 pub mod emailulator;
 pub mod engines;

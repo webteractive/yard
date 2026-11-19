@@ -5,7 +5,6 @@ use super::{db, ext, info, node, php, project, services, sources, tunnels};
 use crate::daemon::{BUILD_DATE, COMMIT, Context, VERSION};
 use crate::doctor::{self, DoctorInput};
 use crate::managed::edit_managed;
-use crate::project::read_project_file;
 use crate::reconcile::Reconciler;
 use crate::state::Snapshot;
 use crate::{holder, portscan, probe};
@@ -16,8 +15,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use toml_edit::value;
 use yard_core::config::yard::DEFAULT_TLD;
-use yard_core::config::{TomlFile, load_sites, load_yard};
-use yard_core::project::{FILE as PROJECT_FILE, FileKind, relative_docroot};
+use yard_core::config::{TomlFile, load_yard};
+use yard_core::project::{FileKind, relative_docroot};
 
 use yard_core::ports::{NGINX_HTTP, NGINX_HTTPS, PortRange, Registry};
 use yard_core::sites::{host_label, parse_proxy_target};
@@ -214,24 +213,14 @@ pub(super) enum Target {
 /// in the file instead, since Yard never edits a project's own file. A site served from
 /// its managed `.yard` is changed there; one that does not parse is its error.
 pub(super) fn project_file_target(ctx: &Context, site: &str, change: &str) -> Result<Target, YardError> {
-    let sites = load_sites(&ctx.paths)?;
-    let Some(path) = sites.sites.get(site).and_then(|e| e.path.as_ref()) else {
-        return Ok(Target::SitesToml);
-    };
-    let file = path.join(PROJECT_FILE);
-    if file.symlink_metadata().is_ok() {
-        return Err(YardError::new(
+    match crate::managed::site_file(&ctx.paths, site)? {
+        crate::managed::SiteFile::Committed(file) => Err(YardError::new(
             ErrorCode::SiteHasProjectFile,
             format!("{site} is configured by {}", file.display()),
         )
-        .with_hint(format!("edit {}: {change}", file.display())));
-    }
-    let managed = ctx.paths.managed_project_file(site);
-    let Some(text) = read_project_file(&managed) else { return Ok(Target::SitesToml) };
-    match yard_core::project::parse_managed(&text?, &managed)? {
-        (_, Some(project)) if project == *path => Ok(Target::Managed(managed)),
-        // Written for another directory: not this site's, so not used and not edited.
-        _ => Ok(Target::SitesToml),
+        .with_hint(format!("edit {}: {change}", file.display()))),
+        crate::managed::SiteFile::Managed(file) => Ok(Target::Managed(file)),
+        crate::managed::SiteFile::SitesToml => Ok(Target::SitesToml),
     }
 }
 

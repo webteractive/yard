@@ -127,8 +127,11 @@ async fn ext_add_with_no_source_leaves_yard_toml_unchanged() {
 #[tokio::test]
 async fn ext_add_refuses_a_managed_name_and_a_bad_one() {
     let d = prepared("").await.start().await;
-    std::fs::write(d.fx.paths.yard_toml(), "[php.\"8.4\".extensions]\nredis = { source = \"pecl\" }\n")
-        .unwrap();
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "default_php = \"8.4\"\n\n[php.\"8.4\".extensions]\nredis = { source = \"pecl\" }\n",
+    )
+    .unwrap();
     let mut c = d.client().await;
     let e = c.call("ext.add", json!({"name": "redis", "php": "8.4"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidArgument);
@@ -242,7 +245,7 @@ async fn remove_refuses_bundled() {
     let d = prepared("").await.start().await;
     std::fs::write(
         d.fx.paths.yard_toml(),
-        "[php.\"8.4\".extensions]\nopcache = { source = \"bundled\", enabled = false }\n",
+        "default_php = \"8.4\"\n\n[php.\"8.4\".extensions]\nopcache = { source = \"bundled\", enabled = false }\n",
     )
     .unwrap();
     let mut c = d.client().await;
@@ -377,7 +380,8 @@ async fn a_cancelled_ext_add_leaves_yard_toml_alone() {
         }
     };
     assert_eq!(error.map(|e| e.code), Some(ErrorCode::JobCancelled));
-    assert_eq!(yard_toml(&d), None, "nothing was recorded");
+    // Only the default yardd wrote at start: nothing was recorded for the extension.
+    assert_eq!(yard_toml(&d).as_deref(), Some(&b"default_php = \"8.4\"\n"[..]), "nothing was recorded");
     assert!(!d.fx.brew.path().join("opt/redis@8.4").exists(), "brew was stopped before it installed");
     let e = c.call("jobs.cancel", json!({"job_id": id})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::JobNotFound);

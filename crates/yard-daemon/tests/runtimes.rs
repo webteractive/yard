@@ -448,6 +448,8 @@ async fn uninstall_refuses_the_only_version_a_site_runs() {
     write(&dir, ".yard", "php = \"7.1\"\n\n[runtimes]\ncomposer = \"2.2.32\"\n");
     put_composer(&d.fx.paths, "2.2.32");
     put_composer(&d.fx.paths, "2.11.2");
+    // The newest becomes the written default, so 2.11.2 is free to go.
+    put_composer(&d.fx.paths, "2.12.0");
     let d = d.start().await;
     let mut c = d.client().await;
     let e = c.call("runtime.uninstall", json!({"key": "composer", "version": "2.2.32"})).await.unwrap_err();
@@ -539,5 +541,184 @@ async fn init_moves_a_runtime_pin_out_of_sites_toml() {
         .unwrap();
     let text = std::fs::read_to_string(&managed).unwrap();
     assert!(text.contains("composer = \"2\"") && !text.contains("composer = \"2.2\""), "{text}");
+    d.shutdown().await.unwrap();
+}
+
+// ---- explicit defaults (explicit-defaults spec §2.2) ----
+
+use std::time::Duration;
+use support::wait_until;
+
+fn yard_toml(paths: &Paths) -> String {
+    std::fs::read_to_string(paths.yard_toml()).unwrap_or_default()
+}
+
+/// Waits up to 10 s for `file` to hold `text`.
+async fn holds(file: PathBuf, text: &str) -> bool {
+    let text = text.to_string();
+    wait_until(
+        move || std::fs::read_to_string(&file).unwrap_or_default().contains(&text),
+        Duration::from_secs(10),
+    )
+    .await
+}
+
+/// Touches `sites.toml` and waits for the reconcile it causes, drained of earlier events.
+async fn reconcile(c: &mut Client, paths: &Paths) {
+    c.call("subscribe", json!({"topics": ["state"]})).await.unwrap();
+    while c.event(Duration::from_millis(100)).await.is_some() {}
+    let mut text = std::fs::read_to_string(paths.sites_toml()).unwrap_or_default();
+    text.push('\n');
+    std::fs::write(paths.sites_toml(), text).unwrap();
+    assert!(c.event_where(Duration::from_secs(10), |e| e["type"] == "reconciled").await.is_some());
+}
+
+#[tokio::test]
+async fn a_fresh_root_with_php_installed_gets_default_php_written() {
+    let d = prepared("").await;
+    d.fx.add_php("7.4");
+    let d = d.start().await;
+    assert!(holds(d.fx.paths.yard_toml(), "default_php = \"8.4\"").await, "{}", yard_toml(&d.fx.paths));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn with_only_an_older_php_its_line_is_written() {
+    let d = prepared("").await;
+    d.fx.add_php("7.4");
+    std::fs::remove_dir_all(d.fx.brew.path().join("opt/php@8.4")).unwrap();
+    let d = d.start().await;
+    assert!(holds(d.fx.paths.yard_toml(), "default_php = \"7.4\"").await, "{}", yard_toml(&d.fx.paths));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_deleted_default_php_is_written_back() {
+    let d = prepared("").await;
+    d.project("blog");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert!(holds(d.fx.paths.yard_toml(), "default_php = \"8.4\"").await);
+    std::fs::write(d.fx.paths.yard_toml(), "# the user's own note\n").unwrap();
+    let file = d.fx.paths.yard_toml();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        // Never the setup page while the line is missing: the site keeps 8.4 throughout.
+        let blog = site(&mut c, "blog").await;
+        assert_eq!(blog["php"], "8.4", "{blog}");
+        assert!(blog.get("needs").is_none_or(|n| n == &json!([])), "{blog}");
+        let text = std::fs::read_to_string(&file).unwrap();
+        if text.contains("default_php = \"8.4\"") {
+            assert!(text.contains("# the user's own note"), "{text}");
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "not written back: {text}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_written_default_is_never_moved_by_an_install() {
+    let d = prepared("").await;
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "default_php = \"8.4\"\n\n[runtimes.composer]\ndefault = \"2.11.2\"\n",
+    )
+    .unwrap();
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    put_composer(&d.fx.paths, "2.12.0");
+    reconcile(&mut c, &d.fx.paths).await;
+    let (yard, _) = yard_core::config::load_yard(&d.fx.paths).unwrap();
+    assert_eq!(yard.runtime_defaults["composer"].to_string(), "2.11.2");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_composer_default_needs_the_main_line() {
+    let d = prepared("").await;
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    assert!(holds(d.fx.paths.yard_toml(), "[runtimes.composer]").await, "{}", yard_toml(&d.fx.paths));
+    let (yard, _) = yard_core::config::load_yard(&d.fx.paths).unwrap();
+    assert_eq!(yard.runtime_defaults["composer"].to_string(), "2.11.2");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn linking_an_old_php_project_first_pins_it_and_writes_no_default() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    put_composer(&d.fx.paths, "2.2.32");
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    let mut sites = yard_core::config::TomlFile::load(&d.fx.paths.sites_toml()).unwrap();
+    sites.set(&["sites", "shop", "php"], toml_edit::value("7.1"));
+    sites.save().unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert!(holds(d.fx.paths.sites_toml(), "composer = \"2.2.32\"").await);
+    reconcile(&mut c, &d.fx.paths).await;
+    assert!(!yard_toml(&d.fx.paths).contains("[runtimes.composer]"), "{}", yard_toml(&d.fx.paths));
+    assert_eq!(composer_of(&site(&mut c, "shop").await)["version"], "2.2.32");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn isolating_below_7_2_5_pins_composer() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "default_php = \"8.4\"\n\n[runtimes.composer]\ndefault = \"2.11.2\"\n",
+    )
+    .unwrap();
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    let managed = d.fx.paths.managed_project_file("shop");
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, format!("project = {:?}\nphp = \"8.4\"\n", dir.display().to_string())).unwrap();
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("sites.isolate", json!({"site": "shop", "php": "7.1"})).await.unwrap();
+    assert!(
+        holds(managed.clone(), "composer = \"2.2.32\"").await,
+        "{}",
+        std::fs::read_to_string(&managed).unwrap()
+    );
+    assert!(std::fs::read_to_string(&managed).unwrap().contains("php = \"7.1\""));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_fill_in_does_not_loop() {
+    let d = prepared("").await;
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    assert!(holds(d.fx.paths.yard_toml(), "[runtimes.composer]").await);
+    assert!(holds(d.fx.paths.yard_toml(), "default_php").await);
+    // Let the reconcile the write itself caused run, then watch for 5 s.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mtime = || std::fs::metadata(d.fx.paths.yard_toml()).unwrap().modified().unwrap();
+    let (before, text) = (mtime(), yard_toml(&d.fx.paths));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(mtime(), before, "yard.toml was written again");
+    assert_eq!(yard_toml(&d.fx.paths), text);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn run_defaults_toml_follows_a_good_yard_toml() {
+    let d = prepared("").await;
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    let file = d.fx.paths.defaults_toml();
+    assert!(holds(file.clone(), "default_php = \"8.4\"").await);
+    assert!(holds(file.clone(), "default = \"2.11.2\"").await);
     d.shutdown().await.unwrap();
 }

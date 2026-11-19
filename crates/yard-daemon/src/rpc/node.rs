@@ -63,9 +63,10 @@ pub(super) async fn install(ctx: &Context, p: NodeInstallParams) -> Result<JobSt
             .with_hint("yard node install 22"));
         }
     };
-    let (paths, brew) = (ctx.paths.clone(), ctx.brew.clone());
+    let (paths, brew, reconciler) = (ctx.paths.clone(), ctx.brew.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("node-install", move |job: JobCtx| async move {
-        crate::node::install_node(&job, &paths, &brew, spec).await.map(|_| ())
+        crate::node::install_node(&job, &paths, &brew, spec).await?;
+        crate::defaults::reconcile_after_install(&job, &reconciler).await
     }))
 }
 

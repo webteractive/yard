@@ -2,11 +2,10 @@
 //! methods. PHP's and Node's go to their own `php.*`, `sites.isolate` and `node.*` handlers;
 //! a recipe runtime's (Composer's) are here.
 
-use super::handlers::{Target, directory, not_found, project_file_target, site, snapshot, snapshot_of};
+use super::handlers::{directory, site, snapshot, snapshot_of};
 use super::{node, php};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
-use crate::managed::edit_managed;
 use crate::runtimes::{fill_runtimes, in_use, installed, php_full, resolve_at, spec_for, unknown};
 use std::path::Path;
 use std::sync::Arc;
@@ -190,9 +189,10 @@ pub(super) async fn install(ctx: &Context, p: RuntimeInstallParams) -> Result<Jo
         return Err(YardError::new(ErrorCode::InvalidArgument, why)
             .with_hint(format!("yard runtime install {} 2.7.7", p.key)));
     }
-    let (paths, opts) = (ctx.paths.clone(), ctx.recipe_options.clone());
+    let (paths, opts, reconciler) = (ctx.paths.clone(), ctx.recipe_options.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("runtime-install", move |job: JobCtx| async move {
-        crate::runtimes::install(&job, &paths, &recipe, spec, &opts).await.map(|_| ())
+        crate::runtimes::install(&job, &paths, &recipe, spec, &opts).await?;
+        crate::defaults::reconcile_after_install(&job, &reconciler).await
     }))
 }
 
@@ -284,36 +284,7 @@ async fn set_site_runtime(
     key: &str,
     spec: Option<VersionSpec>,
 ) -> Result<SiteInfo, YardError> {
-    let change = match &spec {
-        Some(spec) => format!("[runtimes] {key} = \"{spec}\""),
-        None => format!("remove {key} from [runtimes]"),
-    };
-    let set = |toml: &mut TomlFile, keys: &[&str]| match &spec {
-        Some(spec) => toml.set(keys, value(spec.to_string())),
-        None => {
-            toml.remove(keys);
-        }
-    };
-    match project_file_target(ctx, name, &change)? {
-        Target::Managed(file) => edit_managed(&file, |toml| {
-            set(toml, &["runtimes", key]);
-            Ok(())
-        })?,
-        Target::SitesToml => TomlFile::edit(&ctx.paths.sites_toml(), |toml| {
-            let entry = toml.doc().get("sites").and_then(|s| s.get(name));
-            if entry.is_none() {
-                return Err(not_found(name));
-            }
-            if entry.and_then(|e| e.get("path")).is_none() {
-                return Err(YardError::new(
-                    ErrorCode::InvalidArgument,
-                    format!("{name} is a proxy, so no {key} runs for it"),
-                )
-                .with_hint("yard sites shows which sites run PHP"));
-            }
-            set(toml, &["sites", name, "runtimes", key]);
-            Ok(())
-        })?,
-    }
+    let spec = spec.map(|s| s.to_string());
+    crate::managed::set_site_runtime(&ctx.paths, name, key, spec.as_deref())?;
     site(ctx, name).await
 }
