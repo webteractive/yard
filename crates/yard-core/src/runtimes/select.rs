@@ -1,9 +1,10 @@
-//! Which version a runtime's rules choose and what is installed (runtimes spec §6, §9.2):
-//! the `[[default]]` and `[[requires]]` rules, the generated `.yard-install.toml`, and
-//! getcomposer.org's index.
+//! What a runtime's `[[requires]]` rules allow and what is installed (runtimes spec §6, §9.2;
+//! explicit-defaults spec §2): which version yardd may write as a default, which sites need
+//! their own pin, the generated `.yard-install.toml`, and getcomposer.org's index.
 
 use super::recipe::RuntimeRecipe;
-use super::version::{RuntimeVersion, VersionSpec};
+use super::recipe::SourceDef;
+use super::version::{RuntimeVersion, VersionSpec, pick};
 use crate::{Paths, PhpVersion};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -88,22 +89,66 @@ pub fn installed(
     out
 }
 
-/// The spec a runtime runs where nothing pins it: the first `[[default]]` rule that
-/// applies, and the specs it never matches. A rule with `php_below` applies under a PHP
-/// below it, and never when `php_full` is `None`. No rules: `None` (the newest installed).
-pub fn default_spec(
+/// The newest `[[requires]] from`: the first version of the line a default must be on.
+pub fn requires_boundary(recipe: &RuntimeRecipe) -> Option<RuntimeVersion> {
+    recipe.requires.iter().map(|r| r.from.clone()).max()
+}
+
+/// The version yardd writes as a default when none is written (explicit-defaults spec
+/// §2.2): the newest installed at or above [`requires_boundary`], or the newest installed
+/// when the recipe has no `[[requires]]`. A version kept for an old project's pin never
+/// becomes every project's default.
+pub fn fill_candidate(recipe: &RuntimeRecipe, installed: &[RuntimeVersion]) -> Option<RuntimeVersion> {
+    let boundary = requires_boundary(recipe);
+    installed.iter().filter(|v| boundary.as_ref().is_none_or(|b| *v >= b)).max().cloned()
+}
+
+/// Whether `v` runs under a PHP whose full version is `php_full`.
+pub fn runs_on(recipe: &RuntimeRecipe, v: &RuntimeVersion, php_full: &RuntimeVersion) -> bool {
+    requires_php(recipe, v).is_none_or(|needs| needs <= *php_full)
+}
+
+/// Whether a project on `php_full` with no pin of its own needs one (spec §2.1): with a
+/// default, when the version it picks does not run on that PHP; with none, when that PHP is
+/// below what the boundary version needs.
+pub fn needs_pin(
     recipe: &RuntimeRecipe,
-    php_full: Option<&RuntimeVersion>,
-) -> Option<(VersionSpec, Vec<VersionSpec>)> {
-    recipe
-        .defaults
-        .iter()
-        .find(|rule| match (&rule.php_below, php_full) {
-            (None, _) => true,
-            (Some(below), Some(php)) => php < below,
-            (Some(_), None) => false,
-        })
-        .map(|rule| (rule.spec.clone(), rule.exclude.clone()))
+    default: Option<&VersionSpec>,
+    installed: &[RuntimeVersion],
+    php_full: &RuntimeVersion,
+) -> bool {
+    match default {
+        Some(spec) => match pick(spec, installed) {
+            Some(v) => !runs_on(recipe, &v, php_full),
+            None => {
+                let v = RuntimeVersion(spec.parts.clone());
+                spec.is_exact() && !runs_on(recipe, &v, php_full)
+            }
+        },
+        None => requires_boundary(recipe).is_some_and(|b| !runs_on(recipe, &b, php_full)),
+    }
+}
+
+/// The newest installed version that runs on `php_full`: an old project's pin.
+pub fn fitting(
+    recipe: &RuntimeRecipe,
+    installed: &[RuntimeVersion],
+    php_full: &RuntimeVersion,
+) -> Option<RuntimeVersion> {
+    installed.iter().filter(|v| runs_on(recipe, v, php_full)).max().cloned()
+}
+
+/// What a site with nothing fitting installed is offered to install: for a PHP `below` the
+/// boundary, the newest `[versions]` entry that runs on it, else the boundary itself; with
+/// an index, as its getcomposer.org channel (`2.2`, `2`), else exact.
+pub fn offer_spec(recipe: &RuntimeRecipe, php_full: &RuntimeVersion, below: bool) -> Option<VersionSpec> {
+    let v = match below {
+        true => recipe.versions.keys().filter(|v| runs_on(recipe, v, php_full)).max().cloned()?,
+        false => requires_boundary(recipe).or_else(|| recipe.versions.keys().max().cloned())?,
+    };
+    let indexed = matches!(&recipe.source, SourceDef::Download { index: Some(_), .. });
+    let text = if indexed { composer_channel(&v) } else { v.to_string() };
+    VersionSpec::parse(&text).ok()
 }
 
 /// The PHP version `v` needs: the `php` of the last `[[requires]]` rule from or before it.
@@ -201,22 +246,63 @@ mod tests {
 
     const INDEX: &str = include_str!("testdata/composer-versions.json");
 
+    fn vs(list: &[&str]) -> Vec<RuntimeVersion> {
+        list.iter().map(|s| v(s)).collect()
+    }
+
     #[test]
-    fn php_below_compares_the_full_version() {
+    fn the_boundary_is_the_newest_requires_from() {
+        assert_eq!(requires_boundary(&composer()), Some(v("2.3.0")));
+    }
+
+    #[test]
+    fn fill_candidate_skips_versions_below_the_boundary() {
         let r = composer();
-        assert_eq!(default_spec(&r, Some(&v("7.2.4"))), Some((spec("2.2"), vec![])));
-        assert_eq!(default_spec(&r, Some(&v("7.2.5"))), Some((spec("2"), vec![spec("2.2")])));
-        assert_eq!(default_spec(&r, Some(&v("7.1.33"))), Some((spec("2.2"), vec![])));
-        assert_eq!(default_spec(&r, Some(&v("8.4.27"))), Some((spec("2"), vec![spec("2.2")])));
-        // Without a PHP, rules naming php_below are skipped.
-        assert_eq!(default_spec(&r, None), Some((spec("2"), vec![spec("2.2")])));
+        assert_eq!(fill_candidate(&r, &vs(&["2.2.32"])), None);
+        assert_eq!(fill_candidate(&r, &vs(&["2.2.32", "2.11.2"])), Some(v("2.11.2")));
+        let mut plain = r.clone();
+        plain.requires.clear();
+        assert_eq!(fill_candidate(&plain, &vs(&["2.2.32"])), Some(v("2.2.32")));
+    }
+
+    #[test]
+    fn needs_pin_without_a_default_follows_the_boundary() {
+        let r = composer();
+        let installed = vs(&["2.2.32"]);
+        assert!(needs_pin(&r, None, &installed, &v("7.1.33")));
+        assert!(!needs_pin(&r, None, &installed, &v("8.4.15")));
+    }
+
+    #[test]
+    fn needs_pin_with_a_default_follows_what_it_picks() {
+        let r = composer();
+        let installed = vs(&["2.2.32", "2.11.2"]);
+        assert!(needs_pin(&r, Some(&spec("2.11.2")), &installed, &v("7.1.33")));
+        assert!(!needs_pin(&r, Some(&spec("2.2.32")), &installed, &v("7.1.33")));
+        assert!(!needs_pin(&r, Some(&spec("2.11.2")), &installed, &v("8.4.15")));
+    }
+
+    #[test]
+    fn fitting_takes_the_newest_the_php_runs() {
+        let r = composer();
+        assert_eq!(fitting(&r, &vs(&["2.2.32", "2.11.2"]), &v("7.1.33")), Some(v("2.2.32")));
+        assert_eq!(fitting(&r, &vs(&["2.2.32", "2.11.2"]), &v("8.4.15")), Some(v("2.11.2")));
+        assert_eq!(fitting(&r, &vs(&["2.11.2"]), &v("7.1.33")), None);
+        assert!(runs_on(&r, &v("2.2.32"), &v("7.1.33")));
+        assert!(!runs_on(&r, &v("2.3.0"), &v("7.2.4")));
+    }
+
+    #[test]
+    fn offer_spec_is_the_lts_channel_below_and_the_main_one_above() {
+        let r = composer();
+        assert_eq!(offer_spec(&r, &v("7.1.33"), true), Some(spec("2.2")));
+        assert_eq!(offer_spec(&r, &v("8.4.15"), false), Some(spec("2")));
     }
 
     #[test]
     fn an_unreadable_full_version_counts_as_patch_zero() {
         let php = php_full_or_zero(None, "7.2".parse().unwrap());
         assert_eq!(php, v("7.2.0"));
-        assert_eq!(default_spec(&composer(), Some(&php)), Some((spec("2.2"), vec![])));
         assert_eq!(php_full_or_zero(Some("8.4.27"), "8.4".parse().unwrap()), v("8.4.27"));
         assert_eq!(php_full_or_zero(Some("garbage"), "8.4".parse().unwrap()), v("8.4.0"));
     }

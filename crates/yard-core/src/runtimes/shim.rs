@@ -3,7 +3,7 @@
 
 use super::recipe::{Refuse, RuntimeRecipe, ShimDef, Vars, expand};
 use super::resolve::PinSource;
-use super::select::{InstallRecord, default_spec, requires_php};
+use super::select::{InstallRecord, fill_candidate, fitting, needs_pin, offer_spec, requires_php};
 use super::version::{RuntimeVersion, VersionSpec, pick};
 use crate::Paths;
 use crate::shim::{ShimCommand, child_path};
@@ -96,13 +96,13 @@ pub enum Pick {
     BrewComposer(PathBuf),
 }
 
-/// The Composer a project runs (runtimes spec §9.2). A pin (`[runtimes] composer`, the
-/// site's setting, or `yard.toml`'s default passed as [`PinSource::Default`]) is a plain
-/// prefix; with none, the recipe's `[[default]]` rule for the project's PHP `php_full`.
-/// The newest installed match runs, unless it needs a newer PHP than the project's
-/// (`INVALID_ARGUMENT`, naming where the PHP came from, `php_from`). Nothing matching is
-/// `RUNTIME_MISSING`, except that while Yard has no Composer installed at all, brew's
-/// `bin/composer` runs where the project's PHP can run it.
+/// The Composer a project runs (runtimes spec §9.2, explicit-defaults spec §2). A pin
+/// (`[runtimes] composer`, the site's setting, or `yard.toml`'s default passed as
+/// [`PinSource::Default`]) is a prefix, and an exact one is itself; the newest installed
+/// match runs, unless it needs a newer PHP than the project's (`INVALID_ARGUMENT`, naming
+/// where the PHP came from, `php_from`, and the version that fits). With no pin nothing is
+/// picked by rule: while Yard has no Composer installed at all, brew's `bin/composer` runs
+/// where the project's PHP can run it; otherwise it is `RUNTIME_MISSING`.
 pub fn pick_composer(
     recipe: &RuntimeRecipe,
     pin: Option<(VersionSpec, PinSource)>,
@@ -112,18 +112,36 @@ pub fn pick_composer(
     brew_composer: Option<PathBuf>,
     paths: &Paths,
 ) -> Result<Pick, YardError> {
-    let rule = default_spec(recipe, Some(php_full));
-    let (spec, exclude, source) = match (pin, &rule) {
-        (Some((spec, source)), _) => (spec, vec![], source),
-        (None, Some((spec, exclude))) => (spec.clone(), exclude.clone(), PinSource::Default),
-        (None, None) => (VersionSpec { parts: vec![] }, vec![], PinSource::Default),
-    };
     let versions: Vec<RuntimeVersion> = installed.iter().map(|(v, _)| v.clone()).collect();
-    if let Some(v) = pick(&spec, &exclude, &versions) {
+    let key = &recipe.key;
+    let Some((spec, source)) = pin else {
+        let newest_needs = recipe.requires.iter().map(|r| &r.php).max();
+        if installed.is_empty()
+            && let Some(brew) = brew_composer
+            && newest_needs.is_none_or(|needs| php_full >= needs)
+        {
+            return Ok(Pick::BrewComposer(brew));
+        }
+        let (message, hint) = if needs_pin(recipe, None, &versions, php_full) {
+            let message = format!(
+                "{} has no pin for this project, whose PHP {php_full} ({php_from}) is older than its default needs",
+                recipe.name
+            );
+            (message, fit_hint(recipe, &versions, php_full))
+        } else {
+            let message = format!("no {} default is written in yard.toml", recipe.name);
+            let hint = match fill_candidate(recipe, &versions) {
+                Some(v) => format!("yard runtime default {key} {v}"),
+                None => format!("yard runtime install {key}"),
+            };
+            (message, hint)
+        };
+        return Err(YardError::new(ErrorCode::RuntimeMissing, message).with_hint(hint));
+    };
+    if let Some(v) = pick(&spec, &versions) {
         let record = installed.iter().find(|(iv, _)| *iv == v).map(|(_, r)| r);
         let needs = record.and_then(|r| r.requires_php.clone()).or_else(|| requires_php(recipe, &v));
         if let Some(needs) = needs.filter(|needs| php_full < needs) {
-            let fits = rule.as_ref().map_or_else(|| "2.2".to_string(), |(s, _)| s.to_string());
             return Err(YardError::new(
                 ErrorCode::InvalidArgument,
                 format!(
@@ -131,22 +149,25 @@ pub fn pick_composer(
                     recipe.name
                 ),
             )
-            .with_hint(format!(
-                "yard runtime install {key} {fits}, or pin {key} = \"{fits}\" in the project's .yard",
-                key = recipe.key
-            ))
+            .with_hint(fit_hint(recipe, &versions, php_full))
             .with_data(serde_json::json!({ "version": v.to_string(), "needs_php": needs.to_string() })));
         }
-        return Ok(Pick::Run(v.clone(), paths.install_root(&recipe.key, &v.to_string())));
-    }
-    let newest_needs = recipe.requires.iter().map(|r| &r.php).max();
-    if installed.is_empty()
-        && let Some(brew) = brew_composer
-        && newest_needs.is_none_or(|needs| php_full >= needs)
-    {
-        return Ok(Pick::BrewComposer(brew));
+        return Ok(Pick::Run(v.clone(), paths.install_root(key, &v.to_string())));
     }
     Err(missing(recipe, &spec, &source))
+}
+
+/// What a project on `php_full` should run instead: `yard runtime use` of the newest
+/// installed version that runs on it, else the install of the one Yard offers it.
+pub fn fit_hint(recipe: &RuntimeRecipe, installed: &[RuntimeVersion], php_full: &RuntimeVersion) -> String {
+    let key = &recipe.key;
+    match fitting(recipe, installed, php_full) {
+        Some(v) => format!("yard runtime use {key} {v}"),
+        None => match offer_spec(recipe, php_full, true) {
+            Some(spec) => format!("yard runtime install {key} {spec}"),
+            None => format!("yard runtime install {key}"),
+        },
+    }
 }
 
 /// `RUNTIME_MISSING`: `<Name> <spec> is not installed (<where the spec came from>)`.
@@ -272,28 +293,28 @@ mod tests {
     }
 
     #[test]
-    fn no_pin_picks_by_php() {
-        let both = ["2.2.32", "2.11.2"];
+    fn pick_composer_with_no_pin_and_installs_is_missing_not_a_rule() {
+        let e = pick(None, "8.4.27", &["2.11.2"], None).unwrap_err();
+        assert_eq!(e.code, ErrorCode::RuntimeMissing);
+        assert_eq!(e.message, "no Composer default is written in yard.toml");
+        assert_eq!(e.hint.as_deref(), Some("yard runtime default composer 2.11.2"));
+        let e = pick(None, "8.4.27", &["2.2.32"], None).unwrap_err();
+        assert_eq!(e.hint.as_deref(), Some("yard runtime install composer"));
+        let e = pick(None, "7.1.33", &["2.2.32", "2.11.2"], None).unwrap_err();
+        assert_eq!(e.hint.as_deref(), Some("yard runtime use composer 2.2.32"));
+    }
+
+    #[test]
+    fn the_written_default_runs_exactly() {
+        let default = Some(("2.11.2", PinSource::Default));
         assert_eq!(
-            pick(None, "7.1.33", &both, None).unwrap(),
-            Pick::Run(v("2.2.32"), PathBuf::from("/r/installs/composer/2.2.32"))
-        );
-        assert_eq!(
-            pick(None, "8.4.27", &both, None).unwrap(),
+            pick(default, "8.4.27", &["2.2.32", "2.11.2", "2.12.0"], None).unwrap(),
             Pick::Run(v("2.11.2"), PathBuf::from("/r/installs/composer/2.11.2"))
         );
     }
 
     #[test]
-    fn only_the_lts_installed_is_missing_for_a_new_php() {
-        let e = pick(None, "8.4.27", &["2.2.32"], None).unwrap_err();
-        assert_eq!(e.code, ErrorCode::RuntimeMissing);
-        assert_eq!(e.message, "Composer 2 is not installed (the default)");
-        assert_eq!(e.hint.as_deref(), Some("yard runtime install composer 2"));
-    }
-
-    #[test]
-    fn a_pin_beats_the_rules() {
+    fn a_pin_beats_the_default() {
         let pin = Some(("2.2", PinSource::Project("/code/shop/.yard".into())));
         assert_eq!(
             pick(pin, "8.4.27", &["2.2.32", "2.11.2"], None).unwrap(),
@@ -313,10 +334,10 @@ mod tests {
             e.message,
             "Composer 2.11.2 needs PHP 7.2.5 or later; this project runs PHP 7.1.33 (the default)"
         );
-        assert_eq!(
-            e.hint.as_deref(),
-            Some("yard runtime install composer 2.2, or pin composer = \"2.2\" in the project's .yard")
-        );
+        assert_eq!(e.hint.as_deref(), Some("yard runtime install composer 2.2"));
+        let pin = Some(("2.11.2", PinSource::Default));
+        let e = pick(pin, "7.1.33", &["2.2.32", "2.11.2"], None).unwrap_err();
+        assert_eq!(e.hint.as_deref(), Some("yard runtime use composer 2.2.32"));
     }
 
     #[test]
@@ -328,7 +349,7 @@ mod tests {
         );
         let e = pick(None, "7.1.33", &[], brew).unwrap_err();
         assert_eq!(e.code, ErrorCode::RuntimeMissing);
-        assert!(e.message.starts_with("Composer 2.2 is not installed"), "{}", e.message);
+        assert_eq!(e.hint.as_deref(), Some("yard runtime install composer 2.2"));
         assert_eq!(pick(None, "8.4.27", &["2.2.32"], brew).unwrap_err().code, ErrorCode::RuntimeMissing);
     }
 }

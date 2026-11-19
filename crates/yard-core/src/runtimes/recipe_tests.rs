@@ -138,17 +138,18 @@ fn exec_must_start_under_home_or_at_php() {
 }
 
 #[test]
-fn php_below_and_requires_need_runs_on() {
-    let rule =
-        bun().replace("[shims.bun]", "[[default]]\nspec = \"1\"\nphp_below = \"7.2.5\"\n\n[shims.bun]");
-    assert!(err(&rule).contains("runs_on"), "{}", err(&rule));
+fn requires_needs_runs_on() {
     let req = bun().replace("[shims.bun]", "[[requires]]\nfrom = \"1.1.0\"\nphp = \"7.2.5\"\n\n[shims.bun]");
     assert!(err(&req).contains("runs_on"), "{}", err(&req));
     let both = req.replace("name = \"Bun\"", "name = \"Bun\"\nruns_on = \"php\"");
     let r = user(&both).unwrap();
     assert_eq!(r.requires[0].php.to_string(), "7.2.5");
+}
+
+#[test]
+fn a_recipe_with_a_default_table_is_refused() {
     let plain = bun().replace("[shims.bun]", "[[default]]\nspec = \"1\"\n\n[shims.bun]");
-    assert_eq!(user(&plain).unwrap().defaults[0].spec.to_string(), "1");
+    assert!(err(&plain).contains("[[default]] is no longer read"), "{}", err(&plain));
 }
 
 #[test]

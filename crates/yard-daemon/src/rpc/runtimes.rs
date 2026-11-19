@@ -7,13 +7,13 @@ use super::{node, php};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
 use crate::managed::edit_managed;
-use crate::runtimes::{fill_runtimes, in_use, installed, php_full, resolve_at, unknown};
+use crate::runtimes::{fill_runtimes, in_use, installed, php_full, resolve_at, spec_for, unknown};
 use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 use yard_core::config::{TomlFile, load_sites, load_yard};
 use yard_core::runtimes::recipe::{RuntimeRecipe, SourceDef};
-use yard_core::runtimes::select::{default_spec, index_version};
+use yard_core::runtimes::select::index_version;
 use yard_core::runtimes::version::{RuntimeVersion, VersionSpec, pick};
 use yard_core::runtimes::{Origin, Runtime, RuntimeKind};
 use yard_proto::methods::{
@@ -42,29 +42,12 @@ fn versions(ctx: &Context, key: &str) -> Vec<RuntimeVersion> {
     installed(&ctx.paths, key).into_iter().map(|(v, _)| v).collect()
 }
 
-/// What a recipe's default is, in words: `yard.toml`'s spec, else its rules.
-fn default_words(recipe: &RuntimeRecipe, configured: Option<&VersionSpec>) -> Option<String> {
-    if let Some(spec) = configured {
-        return Some(spec.to_string());
-    }
-    let words: Vec<String> = recipe
-        .defaults
-        .iter()
-        .map(|d| match &d.php_below {
-            Some(below) => format!("{} below PHP {below}", d.spec),
-            None => d.spec.to_string(),
-        })
-        .collect();
-    (!words.is_empty()).then(|| words.join(", else "))
-}
-
 pub(super) async fn list_all(ctx: &Context) -> Result<RuntimesList, YardError> {
     let (yard, _) = load_yard(&ctx.paths)?;
     let runtimes = ctx
         .runtimes
         .iter()
         .map(|rt| {
-            let recipe = rt.recipe();
             let (installed, default) = match rt.kind() {
                 RuntimeKind::Php => (
                     ctx.brew
@@ -80,7 +63,7 @@ pub(super) async fn list_all(ctx: &Context) -> Result<RuntimesList, YardError> {
                 ),
                 RuntimeKind::Recipe => (
                     versions(ctx, rt.key()).iter().map(ToString::to_string).collect(),
-                    default_words(recipe, yard.runtime_defaults.get(rt.key())),
+                    yard.runtime_defaults.get(rt.key()).map(ToString::to_string),
                 ),
             };
             let (origin, file) = match rt.origin() {
@@ -124,17 +107,11 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
             Ok(RuntimeList { key: p.key, default: list.default, versions })
         }
         RuntimeKind::Recipe => {
-            let recipe = rt.recipe();
             let (yard, _) = load_yard(&ctx.paths)?;
             let configured = yard.runtime_defaults.get(&p.key);
             let installed = versions(ctx, &p.key);
-            // What a project without a pin runs: the configured spec, or any of the rules'.
-            let defaults: Vec<RuntimeVersion> = match configured {
-                Some(spec) => pick(spec, &[], &installed).into_iter().collect(),
-                None => {
-                    recipe.defaults.iter().filter_map(|d| pick(&d.spec, &d.exclude, &installed)).collect()
-                }
-            };
+            // What a project without a pin runs: the written default.
+            let default_version = configured.and_then(|spec| pick(spec, &installed));
             let mut sites = snapshot(ctx).await?.resolution.sites;
             fill_runtimes(&mut sites, &ctx.paths, &ctx.runtimes, &ctx.brew);
             let versions = installed
@@ -151,11 +128,11 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
                         })
                         .map(|s| s.name.clone())
                         .collect();
-                    RuntimeVersionInfo { default: defaults.contains(v), version, sites }
+                    RuntimeVersionInfo { default: default_version.as_ref() == Some(v), version, sites }
                 })
                 .collect();
             Ok(RuntimeList {
-                default: default_words(recipe, configured).unwrap_or_default(),
+                default: configured.map(ToString::to_string).unwrap_or_default(),
                 key: p.key,
                 versions,
             })
@@ -164,20 +141,19 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
 }
 
 /// The spec a recipe runtime installs for directory `dir`: its pin, else `yard.toml`'s
-/// default, else the recipe's rule for the PHP that runs there.
+/// default where the PHP there runs it, else what Yard offers that PHP ([`spec_for`]).
 fn spec_at(ctx: &Context, recipe: &RuntimeRecipe, dir: &Path) -> Result<Option<VersionSpec>, YardError> {
     let (yard, _) = load_yard(&ctx.paths)?;
     let sites = load_sites(&ctx.paths)?;
-    if let Some((spec, _)) = resolve_at(dir, recipe, &sites, &ctx.paths)? {
-        return Ok(Some(spec));
-    }
-    if let Some(spec) = yard.runtime_defaults.get(&recipe.key) {
+    let pin = resolve_at(dir, recipe, &sites, &ctx.paths)?;
+    if let Some((spec, _)) = &pin {
         return Ok(Some(spec.clone()));
     }
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let (v, _) =
         yard_core::shim::resolve_version(dir, &yard, &sites, &ctx.paths, &crate::node::read_pin, &canonical)?;
-    Ok(default_spec(recipe, Some(&php_full(&ctx.brew, v))).map(|(spec, _)| spec))
+    let php = php_full(&ctx.brew, v);
+    Ok(spec_for(recipe, pin, &yard, &versions(ctx, &recipe.key), &php).map(|(spec, _)| spec))
 }
 
 pub(super) async fn install(ctx: &Context, p: RuntimeInstallParams) -> Result<JobStarted, YardError> {
@@ -268,7 +244,7 @@ pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<(
         RuntimeKind::Recipe => {}
     }
     let spec = spec_arg(&p.spec, &p.key)?;
-    if pick(&spec, &[], &versions(ctx, &p.key)).is_none() {
+    if pick(&spec, &versions(ctx, &p.key)).is_none() {
         return Err(crate::runtimes::missing_spec(rt.recipe(), &spec));
     }
     TomlFile::edit(&ctx.paths.yard_toml(), |file| {

@@ -336,12 +336,12 @@ async fn a_site_with_composer_json_shows_its_composer() {
     d.fx.add_php("7.1");
     let dir = d.project("shop");
     write(&dir, "composer.json", "{}");
-    write(&dir, ".yard", "php = \"7.1\"\n");
+    write(&dir, ".yard", "php = \"7.1\"\n\n[runtimes]\ncomposer = \"2.2.32\"\n");
     let d = d.start().await;
     let mut c = d.client().await;
     let composer = composer_of(&site(&mut c, "shop").await);
-    assert_eq!(composer["spec"], "2.2", "{composer}");
-    assert_eq!(composer["source"], "default", "{composer}");
+    assert_eq!(composer["spec"], "2.2.32", "{composer}");
+    assert_eq!(composer["source"], "project_file", "{composer}");
     assert_eq!(composer["name"], "Composer", "{composer}");
     assert_eq!(composer["version"], Value::Null, "{composer}");
     put_composer(&d.fx.paths, "2.2.32");
@@ -445,7 +445,7 @@ async fn uninstall_refuses_the_only_version_a_site_runs() {
     d.fx.add_php("7.1");
     let dir = d.project("shop");
     write(&dir, "composer.json", "{}");
-    write(&dir, ".yard", "php = \"7.1\"\n");
+    write(&dir, ".yard", "php = \"7.1\"\n\n[runtimes]\ncomposer = \"2.2.32\"\n");
     put_composer(&d.fx.paths, "2.2.32");
     put_composer(&d.fx.paths, "2.11.2");
     let d = d.start().await;

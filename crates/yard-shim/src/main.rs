@@ -24,7 +24,7 @@ use yard_core::php::full_version;
 use yard_core::project::ProjectFile;
 use yard_core::runtimes::Runtimes;
 use yard_core::runtimes::resolve::{PinSource, pin_file_version, resolve_pin};
-use yard_core::runtimes::select::{default_spec, installed as runtime_installed, php_full_or_zero};
+use yard_core::runtimes::select::{installed as runtime_installed, php_full_or_zero};
 use yard_core::runtimes::shim::{Pick, pick_composer, recipe_command, refused};
 use yard_core::runtimes::version::RuntimeVersion;
 use yard_core::services::sleep::lists_site;
@@ -248,14 +248,11 @@ fn run_composer(args: Vec<OsString>) -> Result<Infallible, YardError> {
     )? {
         Pick::Run(v, home) => {
             if debug() {
-                let (spec, from) = match &pin {
-                    Some((spec, source)) => (spec.to_string(), source.to_string()),
-                    None => (
-                        default_spec(recipe, Some(&full))
-                            .map_or_else(|| "newest".into(), |(s, _)| s.to_string()),
-                        PinSource::Default.to_string(),
-                    ),
-                };
+                // A Yard-installed version runs only for a pin or the written default.
+                let (spec, from) = pin.as_ref().map_or_else(
+                    || (String::new(), PinSource::Default.to_string()),
+                    |(spec, source)| (spec.to_string(), source.to_string()),
+                );
                 eprintln!("yard-shim: composer runs Composer {v} ({spec} from {from}) on PHP {full}");
             }
             let inherited = std::env::var_os("PATH").unwrap_or_default();

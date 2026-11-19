@@ -7,12 +7,8 @@ runs_on = "php"
 wake = true
 uses_when = ["composer.json"]
 
-[[default]]
-php_below = "7.2.5"
-spec = "2.2"
-[[default]]
-spec = "2"
-exclude = ["2.2"]                   # an 8.4 project never gets 2.2 because it is all there is
+# No default here: yard.toml holds the exact version unpinned projects run, and a project
+# whose PHP is below 7.2.5 carries its own 2.2 pin (explicit-defaults spec §2.1).
 
 [[requires]]
 from = "2.3.0"

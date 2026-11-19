@@ -2096,6 +2096,7 @@ async fn doctor_warns_a_sites_missing_composer() {
     assert_eq!(c.message, "shop needs Composer 2 (the default), which is not installed");
     assert_eq!(c.hint.as_deref(), Some("yard runtime install composer 2"));
     put_composer(&e.fx.paths, "2.11.2");
+    std::fs::write(e.fx.paths.yard_toml(), "[runtimes.composer]\ndefault = \"2.11.2\"\n").unwrap();
     assert!(runtime_ids(&e.offline(&e.helper).await).is_empty());
 }
 
@@ -2114,10 +2115,7 @@ async fn doctor_warns_a_composer_too_new_for_the_sites_php() {
     let c = only(&report, "composer-php:old");
     assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
     assert!(c.message.contains("Composer 2.11.2 needs PHP 7.2.5"), "{c:?}");
-    assert_eq!(
-        c.hint.as_deref(),
-        Some("yard runtime install composer 2.2, or pin composer = \"2.2\" in the project's .yard")
-    );
+    assert_eq!(c.hint.as_deref(), Some("yard runtime install composer 2.2"));
 }
 
 #[tokio::test]

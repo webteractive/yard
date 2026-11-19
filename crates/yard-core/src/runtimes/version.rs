@@ -107,17 +107,9 @@ impl fmt::Display for VersionSpec {
     }
 }
 
-/// The newest of `installed` that meets `spec` and none of `exclude`.
-pub fn pick(
-    spec: &VersionSpec,
-    exclude: &[VersionSpec],
-    installed: &[RuntimeVersion],
-) -> Option<RuntimeVersion> {
-    installed
-        .iter()
-        .filter(|v| v.prefix_matches(spec) && !exclude.iter().any(|e| v.prefix_matches(e)))
-        .max()
-        .cloned()
+/// The newest of `installed` that meets `spec`.
+pub fn pick(spec: &VersionSpec, installed: &[RuntimeVersion]) -> Option<RuntimeVersion> {
+    installed.iter().filter(|v| v.prefix_matches(spec)).max().cloned()
 }
 
 #[cfg(test)]
@@ -153,13 +145,11 @@ mod tests {
     }
 
     #[test]
-    fn pick_takes_the_newest_match_and_honours_exclude() {
+    fn pick_takes_the_newest_match() {
         let installed = [v("2.2.32"), v("2.11.2"), v("2.10.0")];
-        assert_eq!(pick(&spec("2"), &[], &installed), Some(v("2.11.2")));
-        assert_eq!(pick(&spec("2"), &[spec("2.2")], &installed), Some(v("2.11.2")));
+        assert_eq!(pick(&spec("2"), &installed), Some(v("2.11.2")));
         let lts = [v("2.2.32")];
-        assert_eq!(pick(&spec("2"), &[spec("2.2")], &lts), None);
-        assert_eq!(pick(&spec("2"), &[], &lts), Some(v("2.2.32")));
-        assert_eq!(pick(&spec("2.2.32"), &[], &lts), Some(v("2.2.32")));
+        assert_eq!(pick(&spec("2"), &lts), Some(v("2.2.32")));
+        assert_eq!(pick(&spec("2.2.32"), &lts), Some(v("2.2.32")));
     }
 }

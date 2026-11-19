@@ -3,7 +3,7 @@
 //! expansion then cannot fail. Pure: the caller reads the file.
 
 use super::Origin;
-use super::version::{RuntimeVersion, VersionSpec};
+use super::version::RuntimeVersion;
 use crate::services::engines::LoadOptions;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,8 +31,6 @@ pub struct RuntimeRecipe {
     /// Whether the shims ask wake.sock for the site's sleeping services first; a shim's own
     /// `wake` overrides it.
     pub wake: bool,
-    /// `[[default]]`, in order; the first that applies wins.
-    pub defaults: Vec<DefaultRule>,
     pub requires: Vec<Requires>,
     pub shims: BTreeMap<String, ShimDef>,
     /// Directories under `{home}` put first on the child's PATH.
@@ -53,15 +51,6 @@ pub enum Driver {
 pub enum RunsOn {
     Php,
     Node,
-}
-
-/// A `[[default]]` rule: `spec` when no pin applies, for a PHP below `php_below` when set,
-/// never matching a version under one of `exclude`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DefaultRule {
-    pub spec: VersionSpec,
-    pub php_below: Option<RuntimeVersion>,
-    pub exclude: Vec<VersionSpec>,
 }
 
 /// A `[[requires]]` rule: versions from `from` on need at least `php`.
@@ -226,8 +215,10 @@ struct Raw {
     path: Option<Spanned<Vec<String>>>,
     #[serde(default)]
     env: BTreeMap<Spanned<String>, Spanned<String>>,
-    #[serde(default, rename = "default")]
-    defaults: Vec<Spanned<RawDefault>>,
+    /// Read only to refuse it: a default is the version written in `yard.toml`
+    /// (explicit-defaults spec §2.1).
+    #[serde(rename = "default")]
+    defaults: Option<Spanned<toml::Value>>,
     #[serde(default)]
     requires: Vec<Spanned<RawRequires>>,
     #[serde(default)]
@@ -235,15 +226,6 @@ struct Raw {
     source: toml::Table,
     #[serde(default)]
     versions: BTreeMap<Spanned<String>, Spanned<RawVersion>>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDefault {
-    spec: String,
-    php_below: Option<String>,
-    #[serde(default)]
-    exclude: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -497,24 +479,15 @@ pub fn parse_runtime_recipe(
     let version = |s: &str, what: &str, offset: usize| -> Result<RuntimeVersion, RecipeError> {
         s.parse::<RuntimeVersion>().map_err(|e| at.err(Some(offset), format!("{what}: {e}")))
     };
-    let mut defaults = Vec::new();
-    for d in &raw.defaults {
-        let rule = d.get_ref();
-        let spec = VersionSpec::parse(&rule.spec).map_err(|m| at.at(d, format!("[[default]] spec: {m}")))?;
-        let php_below = match &rule.php_below {
-            None => None,
-            Some(_) if runs_on != Some(RunsOn::Php) => {
-                return Err(at.at(d, "[[default]] php_below needs runs_on = \"php\""));
-            }
-            Some(p) => Some(version(p, "[[default]] php_below", d.span().start)?),
-        };
-        let exclude = rule
-            .exclude
-            .iter()
-            .map(|e| VersionSpec::parse(e))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|m| at.at(d, format!("[[default]] exclude: {m}")))?;
-        defaults.push(DefaultRule { spec, php_below, exclude });
+    if let Some(d) = &raw.defaults {
+        return Err(at.at(
+            d,
+            format!(
+                "[[default]] is no longer read: a runtime's default is the exact version in yard.toml \
+                 (yard runtime default {} <version>)",
+                key
+            ),
+        ));
     }
     let mut requires = Vec::new();
     for r in &raw.requires {
@@ -564,7 +537,6 @@ pub fn parse_runtime_recipe(
         uses_when,
         runs_on,
         wake: raw.wake,
-        defaults,
         requires,
         shims,
         path,

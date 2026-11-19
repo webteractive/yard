@@ -12,8 +12,8 @@ use yard_core::project::{FileKind, ProjectFile};
 use yard_core::runtimes::recipe::{IndexDef, RuntimeRecipe, SourceDef, VersionEntry, expand_version};
 use yard_core::runtimes::resolve::{PinSource, failed_source, pin_file_version, resolve_pin, uses_runtime};
 use yard_core::runtimes::select::{
-    InstallRecord, composer_channel, composer_channels, default_spec, index_version, parse_sha256sum,
-    requires_php,
+    InstallRecord, composer_channel, composer_channels, index_version, needs_pin, offer_spec,
+    parse_sha256sum, requires_php,
 };
 use yard_core::runtimes::shim::{Pick, pick_composer};
 use yard_core::runtimes::version::{RuntimeVersion, VersionSpec, pick};
@@ -273,9 +273,7 @@ pub fn in_use(
 ) -> Result<(), YardError> {
     let others: Vec<RuntimeVersion> =
         installed(paths, &recipe.key).into_iter().map(|(iv, _)| iv).filter(|iv| iv != v).collect();
-    let alone = |spec: &VersionSpec, exclude: &[VersionSpec]| {
-        v.prefix_matches(spec) && pick(spec, exclude, &others).is_none()
-    };
+    let alone = |spec: &VersionSpec| v.prefix_matches(spec) && pick(spec, &others).is_none();
     for site in sites {
         for rt in site.runtimes.iter().filter(|rt| rt.key == recipe.key) {
             let (Some(spec), Some(version)) = (&rt.spec, &rt.version) else { continue };
@@ -283,18 +281,7 @@ pub fn in_use(
                 continue;
             }
             let Ok(spec) = VersionSpec::parse(spec) else { continue };
-            // A Default site runs yard.toml's default when there is one, a plain prefix as the
-            // shim takes it; only the recipe's own rule carries an exclude.
-            let exclude = match rt.source {
-                SettingSource::Default if default.is_none() => recipe
-                    .defaults
-                    .iter()
-                    .find(|d| d.spec == spec)
-                    .map(|d| d.exclude.clone())
-                    .unwrap_or_default(),
-                _ => vec![],
-            };
-            if alone(&spec, &exclude) {
+            if alone(&spec) {
                 let hint = match (&rt.source, &rt.file) {
                     (SettingSource::ProjectFile, Some(file)) => {
                         format!("edit {file}, or install another {} {spec} first", recipe.name)
@@ -316,7 +303,7 @@ pub fn in_use(
         }
     }
     if let Some(spec) = default
-        && alone(spec, &[])
+        && alone(spec)
     {
         return Err(YardError::new(
             ErrorCode::RuntimeInUse,
@@ -416,16 +403,35 @@ pub fn resolve_at(
     )
 }
 
-/// The spec a site's runtime resolves to and where from: its pin, else `yard.toml`'s
-/// default, else the recipe's rule for the PHP `php_full`.
+/// What a site runs: its pin, else `yard.toml`'s default when the site's PHP `php_full` runs
+/// it (explicit-defaults spec §2.1). `None`: nothing written applies, and the shim refuses.
+pub fn pin_or_default(
+    recipe: &RuntimeRecipe,
+    pin: Option<(VersionSpec, PinSource)>,
+    yard: &YardConfig,
+    installed: &[RuntimeVersion],
+    php_full: &RuntimeVersion,
+) -> Option<(VersionSpec, PinSource)> {
+    pin.or_else(|| {
+        let default = yard.runtime_defaults.get(&recipe.key)?;
+        (!needs_pin(recipe, Some(default), installed, php_full))
+            .then(|| (default.clone(), PinSource::Default))
+    })
+}
+
+/// The spec a site's runtime resolves to and where from: [`pin_or_default`], else what Yard
+/// offers it to install ([`offer_spec`]: `2.2` for a PHP below the boundary, else `2`).
 pub fn spec_for(
     recipe: &RuntimeRecipe,
     pin: Option<(VersionSpec, PinSource)>,
     yard: &YardConfig,
+    installed: &[RuntimeVersion],
     php_full: &RuntimeVersion,
 ) -> Option<(VersionSpec, PinSource)> {
-    pin.or_else(|| yard.runtime_defaults.get(&recipe.key).map(|s| (s.clone(), PinSource::Default)))
-        .or_else(|| default_spec(recipe, Some(php_full)).map(|(s, _)| (s, PinSource::Default)))
+    pin_or_default(recipe, pin, yard, installed, php_full).or_else(|| {
+        let below = needs_pin(recipe, yard.runtime_defaults.get(&recipe.key), installed, php_full);
+        offer_spec(recipe, php_full, below).map(|s| (s, PinSource::Default))
+    })
 }
 
 /// Fills `runtimes` on each linked PHP site whose root exists (runtimes spec §7): every recipe
@@ -461,20 +467,21 @@ pub fn fill_runtimes(
                     if !uses_runtime(&source, &root, has_uses) {
                         continue;
                     }
-                    // yard.toml's default counts as a pin: a plain prefix, as the shim takes it.
-                    let pin = pin.or_else(|| {
-                        yard.runtime_defaults.get(&recipe.key).map(|s| (s.clone(), PinSource::Default))
-                    });
-                    let Some((spec, source)) = spec_for(recipe, pin.clone(), &yard, &php_full) else {
+                    let installs = installed(paths, &recipe.key);
+                    let versions: Vec<RuntimeVersion> = installs.iter().map(|(v, _)| v.clone()).collect();
+                    let Some((spec, source)) = spec_for(recipe, pin.clone(), &yard, &versions, &php_full)
+                    else {
                         continue;
                     };
                     let (setting, file) = setting(&source);
+                    // yard.toml's default counts as a pin where the site's PHP runs it.
+                    let pin = pin_or_default(recipe, pin, &yard, &versions, &php_full);
                     let picked = pick_composer(
                         recipe,
                         pin,
                         &php_full,
                         &format!("site {}", site.name),
-                        &installed(paths, &recipe.key),
+                        &installs,
                         None,
                         paths,
                     );

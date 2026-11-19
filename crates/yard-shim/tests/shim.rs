@@ -354,6 +354,13 @@ fn put_composer(s: &Setup, version: &str, record: bool) -> PathBuf {
     root
 }
 
+/// Pins site `old`'s Composer in `sites.toml`, as yardd's fill-in does for a PHP below 7.2.5.
+fn pin_composer(s: &Setup, version: &str) {
+    let mut sites = std::fs::read_to_string(s.root.join("sites.toml")).unwrap();
+    sites.push_str(&format!("[sites.old.runtimes]\ncomposer = \"{version}\"\n"));
+    std::fs::write(s.root.join("sites.toml"), sites).unwrap();
+}
+
 fn texts(out: &Output) -> (String, String) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
@@ -363,6 +370,7 @@ fn composer_runs_the_lts_under_the_projects_php() {
     let s = setup();
     let home = put_composer(&s, "2.2.32", true);
     put_composer(&s, "2.11.2", true);
+    pin_composer(&s, "2.2.32");
     let out = run_as(&s, "composer", &["install", "--no-dev"]);
     let (stdout, stderr) = texts(&out);
     assert!(out.status.success(), "{stderr}");
@@ -377,17 +385,19 @@ fn composer_runs_the_lts_under_the_projects_php() {
 fn a_version_without_its_record_is_not_run() {
     let s = setup();
     put_composer(&s, "2.2.32", false);
+    pin_composer(&s, "2.2.32");
     let out = run_as(&s, "composer", &["install"]);
     let (stdout, stderr) = texts(&out);
     assert_eq!(out.status.code(), Some(1), "{stdout}");
-    assert!(stderr.contains("Composer 2.2 is not installed"), "{stderr}");
-    assert!(stderr.contains("hint: yard runtime install composer 2.2"), "{stderr}");
+    assert!(stderr.contains("Composer 2.2.32 is not installed"), "{stderr}");
+    assert!(stderr.contains("hint: yard runtime install composer 2.2.32"), "{stderr}");
 }
 
 #[test]
 fn self_update_is_refused_in_every_spelling() {
     let s = setup();
     put_composer(&s, "2.2.32", true);
+    pin_composer(&s, "2.2.32");
     for args in [
         &["self-update"][..],
         &["-n", "self-update"],
@@ -429,6 +439,23 @@ fn the_yard_toml_default_is_a_plain_prefix() {
 }
 
 #[test]
+fn the_written_default_never_follows_a_newer_install() {
+    let s = setup();
+    script(
+        &s.brew.join("opt/php@8.4/bin/php"),
+        "echo \"argv0:$0\"; for a in \"$@\"; do echo \"arg:$a\"; done",
+    );
+    std::fs::write(s.project.join(".yard"), "php = \"8.4\"\n").unwrap();
+    put_composer(&s, "2.11.2", true);
+    put_composer(&s, "2.12.0", true);
+    std::fs::write(s.root.join("yard.toml"), "[runtimes.composer]\ndefault = \"2.11.2\"\n").unwrap();
+    let out = run_as(&s, "composer", &["-V"]);
+    let (stdout, stderr) = texts(&out);
+    assert!(out.status.success(), "{stderr}");
+    assert!(stdout.contains("installs/composer/2.11.2/composer.phar"), "{stdout}");
+}
+
+#[test]
 fn brews_composer_runs_while_yard_has_none() {
     let s = setup();
     script(
@@ -447,13 +474,16 @@ fn brews_composer_runs_while_yard_has_none() {
     std::fs::remove_file(s.project.join(".yard")).unwrap();
     let out = run_as(&s, "composer", &["-V"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(texts(&out).1.contains("Composer 2.2 is not installed"), "{}", texts(&out).1);
+    let stderr = texts(&out).1;
+    assert!(stderr.contains("Composer has no pin for this project"), "{stderr}");
+    assert!(stderr.contains("hint: yard runtime install composer 2.2"), "{stderr}");
 }
 
 #[test]
 fn composer_wakes_a_listed_site() {
     let s = setup();
     put_composer(&s, "2.2.32", true);
+    pin_composer(&s, "2.2.32");
     write_sleeping(&s, "old\n");
     let seen = fake_wake(&s);
     let out = run_as(&s, "composer", &["install"]);
