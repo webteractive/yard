@@ -11,7 +11,7 @@ use yard_proto::methods::{
     self, RuntimeInstallParams, RuntimeKeyParams, RuntimeSiteParams, RuntimeSpecParams, RuntimeUseParams,
     RuntimeVersionParams,
 };
-use yard_proto::{RuntimeList, RuntimesList, SiteInfo};
+use yard_proto::{RuntimeDefaultSet, RuntimeList, RuntimesList, SiteInfo};
 
 fn dash(list: &[String]) -> String {
     if list.is_empty() { "-".to_string() } else { list.join(", ") }
@@ -29,7 +29,7 @@ pub async fn list_all(ctx: &Ctx) -> Outcome {
                     r.file.clone().unwrap_or_else(|| r.origin.clone()),
                     r.shims.join(", "),
                     dash(&r.installed),
-                    r.default.clone().unwrap_or_else(|| "newest installed".into()),
+                    r.default.clone().unwrap_or_else(|| "none".into()),
                 ]
             })
             .collect();
@@ -58,7 +58,7 @@ pub async fn list(ctx: &Ctx, key: String) -> Outcome {
                 .collect();
             table(&["VERSION", "DEFAULT", "SITES"], &rows)
         };
-        out.push_str(&format!("default: {}\n\n", list.default));
+        out.push_str(&format!("default: {}\n\n", list.default.as_deref().unwrap_or("none")));
         out.push_str(&for_agents(&format!("yard runtime list {key}")));
         out
     });
@@ -102,8 +102,19 @@ pub async fn set_default(ctx: &Ctx, key: String, spec: String) -> Outcome {
         _ => {}
     }
     let params = RuntimeSpecParams { key: key.clone(), spec: spec.clone() };
-    ctx.client().await?.call::<_, ()>(methods::RUNTIME_DEFAULT, params).await?;
-    ctx.emit(&(), || format!("{key} {spec} is now the default.\n"));
+    // A yardd before protocol 2.15 answers null.
+    let set: Option<RuntimeDefaultSet> = ctx.client().await?.call(methods::RUNTIME_DEFAULT, params).await?;
+    let set = set.unwrap_or_default();
+    ctx.emit(&set, || {
+        let mut out = format!("{key} {spec} is now the default.\n");
+        if !set.unfit.is_empty() {
+            out.push_str(&format!("These sites' PHP cannot run {key} {spec}:\n"));
+            for u in &set.unfit {
+                out.push_str(&format!("  {}: {}\n", u.site, u.hint));
+            }
+        }
+        out
+    });
     Ok(0)
 }
 

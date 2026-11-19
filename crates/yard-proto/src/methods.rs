@@ -784,8 +784,8 @@ mod db_tests {
     use serde_json::json;
 
     #[test]
-    fn protocol_is_2_14() {
-        assert_eq!(crate::PROTOCOL_VERSION, "2.14");
+    fn protocol_is_2_15() {
+        assert_eq!(crate::PROTOCOL_VERSION, "2.15");
     }
 
     #[test]

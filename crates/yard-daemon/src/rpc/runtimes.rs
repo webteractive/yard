@@ -2,7 +2,7 @@
 //! methods. PHP's and Node's go to their own `php.*`, `sites.isolate` and `node.*` handlers;
 //! a recipe runtime's (Composer's) are here.
 
-use super::handlers::{directory, site, snapshot, snapshot_of};
+use super::handlers::{directory, reconcile, site, snapshot, snapshot_of};
 use super::{node, php};
 use crate::daemon::Context;
 use crate::jobs::JobCtx;
@@ -21,7 +21,8 @@ use yard_proto::methods::{
     RuntimeUseParams, RuntimeVersionParams, SiteParams,
 };
 use yard_proto::{
-    ErrorCode, JobStarted, RuntimeList, RuntimeSummary, RuntimeVersionInfo, RuntimesList, SiteInfo, YardError,
+    ErrorCode, JobStarted, RuntimeDefaultSet, RuntimeList, RuntimeSummary, RuntimeVersionInfo, RuntimesList,
+    SiteInfo, YardError,
 };
 
 fn runtime(ctx: &Context, key: &str) -> Result<Arc<dyn Runtime>, YardError> {
@@ -88,7 +89,7 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
     match rt.kind() {
         RuntimeKind::Php => {
             let list = php::list(ctx, PhpListParams { available: false }).await?;
-            let default = list.iter().find(|i| i.default).map(|i| i.version.clone()).unwrap_or_default();
+            let default = list.iter().find(|i| i.default).map(|i| i.version.clone());
             let versions = list
                 .into_iter()
                 .filter(|i| i.installed)
@@ -103,7 +104,8 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
                 .into_iter()
                 .map(|i| RuntimeVersionInfo { version: i.version, default: i.default, sites: i.sites })
                 .collect();
-            Ok(RuntimeList { key: p.key, default: list.default, versions })
+            let default = Some(list.default).filter(|d| !d.is_empty());
+            Ok(RuntimeList { key: p.key, default, versions })
         }
         RuntimeKind::Recipe => {
             let (yard, _) = load_yard(&ctx.paths)?;
@@ -130,11 +132,7 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
                     RuntimeVersionInfo { default: default_version.as_ref() == Some(v), version, sites }
                 })
                 .collect();
-            Ok(RuntimeList {
-                default: configured.map(ToString::to_string).unwrap_or_default(),
-                key: p.key,
-                versions,
-            })
+            Ok(RuntimeList { default: configured.map(ToString::to_string), key: p.key, versions })
         }
     }
 }
@@ -236,21 +234,46 @@ pub(super) async fn uninstall(ctx: &Context, p: RuntimeVersionParams) -> Result<
 }
 
 /// `yard runtime default`: only to a spec something installed meets.
-pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<(), YardError> {
+pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<RuntimeDefaultSet, YardError> {
     let rt = runtime(ctx, &p.key)?;
     match rt.kind() {
-        RuntimeKind::Php => return php::set_default(ctx, PhpParams { php: p.spec }).await,
-        RuntimeKind::Node => return node::set_default(ctx, NodeSpecParams { spec: p.spec }).await,
+        RuntimeKind::Php => {
+            php::set_default(ctx, PhpParams { php: p.spec }).await?;
+            return Ok(RuntimeDefaultSet::default());
+        }
+        RuntimeKind::Node => {
+            node::set_default(ctx, NodeSpecParams { spec: p.spec }).await?;
+            return Ok(RuntimeDefaultSet::default());
+        }
         RuntimeKind::Recipe => {}
     }
+    let recipe = rt.recipe();
     let spec = spec_arg(&p.spec, &p.key)?;
-    if pick(&spec, &versions(ctx, &p.key)).is_none() {
-        return Err(crate::runtimes::missing_spec(rt.recipe(), &spec));
+    let installed = versions(ctx, &p.key);
+    // A default is one exact version, never a prefix (explicit-defaults spec §2.4).
+    let matching: Vec<String> =
+        installed.iter().rev().filter(|v| v.prefix_matches(&spec)).map(ToString::to_string).collect();
+    let Some(newest) = matching.first() else {
+        return Err(crate::runtimes::missing_spec(recipe, &spec));
+    };
+    if !spec.is_exact() {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!(
+                "a default is an exact version, not {spec}; installed {} {spec}: {}",
+                recipe.name,
+                matching.join(", ")
+            ),
+        )
+        .with_hint(format!("yard runtime default {} {newest}", p.key)));
     }
     TomlFile::edit(&ctx.paths.yard_toml(), |file| {
         file.set(&["runtimes", &p.key, "default"], value(spec.to_string()));
         Ok(())
-    })
+    })?;
+    let unfit = crate::defaults::unfit(&ctx.paths, &ctx.brew, recipe, &spec);
+    reconcile(ctx).await?;
+    Ok(RuntimeDefaultSet { unfit })
 }
 
 pub(super) async fn use_spec(ctx: &Context, p: RuntimeUseParams) -> Result<SiteInfo, YardError> {

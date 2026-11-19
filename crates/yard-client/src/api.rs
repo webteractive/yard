@@ -95,7 +95,8 @@ pub const RUNTIME_LIST: Method<RuntimeKeyParams, RuntimeList> = Method::quick(me
 pub const RUNTIME_INSTALL: Method<RuntimeInstallParams, JobStarted> = Method::quick(methods::RUNTIME_INSTALL);
 pub const RUNTIME_UNINSTALL: Method<RuntimeVersionParams, JobStarted> =
     Method::quick(methods::RUNTIME_UNINSTALL);
-pub const RUNTIME_DEFAULT: Method<RuntimeSpecParams, IgnoredAny> = Method::quick(methods::RUNTIME_DEFAULT);
+pub const RUNTIME_DEFAULT: Method<RuntimeSpecParams, Option<RuntimeDefaultSet>> =
+    Method::quick(methods::RUNTIME_DEFAULT);
 pub const RUNTIME_USE: Method<RuntimeUseParams, SiteInfo> = Method::quick(methods::RUNTIME_USE);
 pub const RUNTIME_UNUSE: Method<RuntimeSiteParams, SiteInfo> = Method::quick(methods::RUNTIME_UNUSE);
 pub const TUNNELS_LIST: Method<(), Vec<TunnelInfo>> = Method::quick(methods::TUNNELS_LIST);

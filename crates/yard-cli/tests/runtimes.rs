@@ -9,7 +9,7 @@ use support::{MockDaemon, stderr, stdout};
 fn runtimes_list() -> Value {
     json!({
         "runtimes": [
-            {"key": "composer", "name": "Composer", "origin": "carried", "shims": ["composer"], "installed": ["2.2.32"], "default": "2.2 below PHP 7.2.5, else 2"},
+            {"key": "composer", "name": "Composer", "origin": "carried", "shims": ["composer"], "installed": ["2.2.32"], "default": null},
             {"key": "node", "name": "Node", "origin": "carried", "shims": ["node", "npm", "npx"], "installed": [], "default": "22"},
             {"key": "php", "name": "PHP", "origin": "carried", "shims": ["pecl", "php", "php-config", "phpize"], "installed": ["8.4", "7.1"], "default": "8.4"},
         ],
@@ -49,12 +49,8 @@ fn runtimes_lists_the_carried_three() {
         assert!(text.lines().next().unwrap().contains(header), "{text}");
     }
     let composer = text.lines().find(|l| l.starts_with("composer")).unwrap();
-    assert!(
-        composer.contains("carried")
-            && composer.contains("2.2.32")
-            && composer.contains("2.2 below PHP 7.2.5"),
-        "{text}"
-    );
+    assert!(composer.contains("carried") && composer.contains("2.2.32"), "{text}");
+    assert!(composer.trim_end().ends_with(" none"), "nothing written: {text}");
     assert!(
         text.lines().any(|l| l.starts_with("node") && l.contains("node, npm, npx") && l.contains(" - ")),
         "{text}"
@@ -219,4 +215,18 @@ fn link_installs_the_composer_the_installed_php_asks_for() {
     let out = d.yard().args(["link", "shop", "--yes"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(d.params("runtime.install"), [json!({"key": "composer", "spec": "2"})]);
+}
+
+#[test]
+fn runtime_default_lists_the_sites_it_leaves_behind() {
+    let unfit = json!({"unfit": [{"site": "old", "hint": "add [runtimes] composer = \"2.2.32\" to /code/old/.yard"}]});
+    let d = MockDaemon::start(&[("runtime.default", Ok(unfit.clone()))]);
+    let out = d.yard().args(["runtime", "default", "composer", "2.11.2"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "composer 2.11.2 is now the default.\nThese sites' PHP cannot run composer 2.11.2:\n  old: add [runtimes] composer = \"2.2.32\" to /code/old/.yard\n"
+    );
+    let out = d.yard().args(["runtime", "default", "composer", "2.11.2", "--json"]).output().unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap(), unfit);
 }

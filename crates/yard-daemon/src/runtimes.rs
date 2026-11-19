@@ -12,7 +12,7 @@ use yard_core::project::{FileKind, ProjectFile};
 use yard_core::runtimes::recipe::{IndexDef, RuntimeRecipe, SourceDef, VersionEntry, expand_version};
 use yard_core::runtimes::resolve::{PinSource, failed_source, pin_file_version, resolve_pin, uses_runtime};
 use yard_core::runtimes::select::{
-    InstallRecord, composer_channel, composer_channels, index_version, needs_pin, offer_spec,
+    InstallRecord, composer_channel, composer_channels, fill_candidate, index_version, needs_pin, offer_spec,
     parse_sha256sum, requires_php,
 };
 use yard_core::runtimes::shim::{Pick, pick_composer};
@@ -301,6 +301,21 @@ pub fn in_use(
                 .with_hint(hint));
             }
         }
+    }
+    // An exact default (what Yard writes) holds its version whatever else is installed.
+    if let Some(spec) = default
+        && spec.is_exact()
+        && RuntimeVersion(spec.parts.clone()) == *v
+    {
+        let hint = match fill_candidate(recipe, &others).or_else(|| others.last().cloned()) {
+            Some(o) => format!("yard runtime default {} {o}", recipe.key),
+            None => format!("yard runtime install {}", recipe.key),
+        };
+        return Err(YardError::new(
+            ErrorCode::RuntimeInUse,
+            format!("{} {v} is the default in {}", recipe.name, paths.yard_toml().display()),
+        )
+        .with_hint(hint));
     }
     if let Some(spec) = default
         && alone(spec)

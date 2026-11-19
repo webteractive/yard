@@ -227,7 +227,21 @@ pub fn in_use(v: NodeVersion, mut sites: Vec<SiteInfo>, paths: &Paths) -> Result
         let matching: Vec<&NodeVersion> = installed.iter().filter(|i| matches(spec, **i, &lts)).collect();
         matching == [&v]
     };
-    if let Some(default) = load_yard(paths)?.0.default_node
+    let default = load_yard(paths)?.0.default_node;
+    if let Some(NodeSpec::Exact(dv)) = &default
+        && *dv == v
+    {
+        let hint = match installed.iter().rev().find(|o| **o != v) {
+            Some(other) => format!("yard node default {other}"),
+            None => "yard node list --available".to_string(),
+        };
+        return Err(YardError::new(
+            ErrorCode::NodeInUse,
+            format!("Node {v} is the default in {}", paths.yard_toml().display()),
+        )
+        .with_hint(hint));
+    }
+    if let Some(default) = default
         && only_v(&default)
     {
         let hint = match installed.iter().rev().find(|o| **o != v) {

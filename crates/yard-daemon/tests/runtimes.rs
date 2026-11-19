@@ -426,14 +426,17 @@ async fn use_writes_sites_toml_without_a_managed_file() {
 async fn default_writes_yard_toml_and_needs_an_installed_match() {
     let d = prepared("").await.start().await;
     let mut c = d.client().await;
-    let e = c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap_err();
+    let e = c.call("runtime.default", json!({"key": "composer", "spec": "2.11.2"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::RuntimeMissing);
-    put_composer(&d.fx.paths, "2.11.2");
-    c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap();
-    let (yard, _) = yard_core::config::load_yard(&d.fx.paths).unwrap();
-    assert_eq!(yard.runtime_defaults["composer"].to_string(), "2");
     let list = c.call("runtime.list", json!({"key": "composer"})).await.unwrap();
-    assert_eq!(list["default"], "2", "{list}");
+    assert_eq!(list["default"], Value::Null, "nothing written: {list}");
+    put_composer(&d.fx.paths, "2.11.2");
+    let set = c.call("runtime.default", json!({"key": "composer", "spec": "2.11.2"})).await.unwrap();
+    assert_eq!(set, json!({"unfit": []}));
+    let (yard, _) = yard_core::config::load_yard(&d.fx.paths).unwrap();
+    assert_eq!(yard.runtime_defaults["composer"].to_string(), "2.11.2");
+    let list = c.call("runtime.list", json!({"key": "composer"})).await.unwrap();
+    assert_eq!(list["default"], "2.11.2", "{list}");
     assert_eq!(list["versions"][0]["version"], "2.11.2", "{list}");
     assert_eq!(list["versions"][0]["default"], true, "{list}");
     d.shutdown().await.unwrap();
@@ -462,19 +465,20 @@ async fn uninstall_refuses_the_only_version_a_site_runs() {
     d.shutdown().await.unwrap();
 }
 
-/// yard.toml's default is a plain prefix, as the shim takes it, so the recipe's rule for the
-/// same spec (`2`, excluding 2.2) must not decide what else can run the site.
+/// A default written by hand as a prefix is read as one (explicit-defaults spec §2.4), as the
+/// shim takes it: uninstalling one match leaves the site on the next.
 #[tokio::test]
-async fn uninstall_follows_yard_toml_default_not_the_recipe_rule() {
+async fn a_hand_written_prefix_default_is_read_as_a_prefix() {
     let d = prepared("").await;
     let dir = d.project("shop");
     write(&dir, "composer.json", "{}");
     write(&dir, ".yard", "php = \"8.4\"\n");
     put_composer(&d.fx.paths, "2.2.32");
     put_composer(&d.fx.paths, "2.11.2");
+    std::fs::write(d.fx.paths.yard_toml(), "default_php = \"8.4\"\n\n[runtimes.composer]\ndefault = \"2\"\n")
+        .unwrap();
     let d = d.start().await;
     let mut c = d.client().await;
-    c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap();
     assert_eq!(composer_of(&site(&mut c, "shop").await)["version"], "2.11.2");
     let (_, error) =
         run_job(&mut c, "runtime.uninstall", json!({"key": "composer", "version": "2.11.2"})).await;
@@ -720,5 +724,73 @@ async fn run_defaults_toml_follows_a_good_yard_toml() {
     let file = d.fx.paths.defaults_toml();
     assert!(holds(file.clone(), "default_php = \"8.4\"").await);
     assert!(holds(file.clone(), "default = \"2.11.2\"").await);
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_default_refuses_a_prefix() {
+    let d = prepared("").await;
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgument);
+    assert!(e.message.contains("exact") && e.message.contains("2.11.2, 2.2.32"), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("yard runtime default composer 2.11.2"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn php_default_takes_a_line() {
+    let d = prepared("").await.start().await;
+    let mut c = d.client().await;
+    let set = c.call("runtime.default", json!({"key": "php", "spec": "8.4"})).await.unwrap();
+    assert_eq!(set, json!({"unfit": []}));
+    assert!(yard_toml(&d.fx.paths).contains("default_php = \"8.4\""));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_default_version_cannot_be_uninstalled() {
+    let d = prepared("").await;
+    std::fs::write(
+        d.fx.paths.yard_toml(),
+        "default_php = \"8.4\"\n\n[runtimes.composer]\ndefault = \"2.11.2\"\n",
+    )
+    .unwrap();
+    put_composer(&d.fx.paths, "2.11.2");
+    put_composer(&d.fx.paths, "2.12.0");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = c.call("runtime.uninstall", json!({"key": "composer", "version": "2.11.2"})).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::RuntimeInUse);
+    assert!(e.message.contains("yard.toml"), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("yard runtime default composer 2.12.0"));
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn moving_the_default_lists_sites_that_cannot_run_it() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let dir = d.project("old");
+    write(&dir, "composer.json", "{}");
+    write(&dir, ".yard", "php = \"7.1\"\n");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let set = c.call("runtime.default", json!({"key": "composer", "spec": "2.11.2"})).await.unwrap();
+    let file = dir.join(".yard");
+    assert_eq!(
+        set,
+        json!({"unfit": [{"site": "old", "hint": format!("add [runtimes] composer = \"2.2.32\" to {}", file.display())}]})
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "php = \"7.1\"\n",
+        "a committed .yard is never edited"
+    );
     d.shutdown().await.unwrap();
 }

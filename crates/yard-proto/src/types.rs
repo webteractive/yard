@@ -151,8 +151,9 @@ pub struct RuntimeSummary {
     pub file: Option<String>,
     pub shims: Vec<String>,
     pub installed: Vec<String>,
-    /// The default spec, when one is set or the recipe has a single one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The default written in `yard.toml` (an exact version), or `None` while none is
+    /// (explicit-defaults spec §2.5; protocol 2.15 always sends the field).
+    #[serde(default)]
     pub default: Option<String>,
 }
 
@@ -178,8 +179,27 @@ pub struct RuntimeVersionInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeList {
     pub key: String,
-    pub default: String,
+    /// The default written in `yard.toml`, or `None` while none is (protocol 2.15; before,
+    /// rule text or `""`).
+    #[serde(default)]
+    pub default: Option<String>,
     pub versions: Vec<RuntimeVersionInfo>,
+}
+
+/// `runtime.default` (protocol 2.15): the default is written; `unfit` lists the linked sites
+/// with no pin of their own whose PHP cannot run it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDefaultSet {
+    #[serde(default)]
+    pub unfit: Vec<UnfitSite>,
+}
+
+/// A site the new default leaves without a version it can run, and what fixes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnfitSite {
+    pub site: String,
+    /// `yard runtime use <key> <version>`, or for a committed `.yard` the line to add.
+    pub hint: String,
 }
 
 /// A site's Node: the spec its root resolves to and the installed version that meets it.

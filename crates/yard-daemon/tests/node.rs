@@ -179,9 +179,9 @@ async fn default_needs_an_installed_match() {
     let e = c.call("node.default", json!({"spec": "24"})).await.unwrap_err();
     assert_eq!(e.code, yard_proto::ErrorCode::NodeMissing);
     assert_eq!(e.hint.as_deref(), Some("yard node install 24"));
-    c.call("node.default", json!({"spec": "22"})).await.unwrap();
+    c.call("node.default", json!({"spec": "22.18.0"})).await.unwrap();
     let yard = std::fs::read_to_string(d.fx.paths.yard_toml()).unwrap();
-    assert!(yard.contains("default_node = \"22\""), "{yard}");
+    assert!(yard.contains("default_node = \"22.18.0\""), "{yard}");
     let e = c.call("node.default", json!({"spec": "latest"})).await.unwrap_err();
     assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument);
     d.shutdown().await.unwrap();
@@ -408,5 +408,19 @@ async fn without_a_22_the_newest_node_is_written() {
     )
     .await;
     assert!(written, "{}", std::fs::read_to_string(&file).unwrap_or_default());
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn node_default_refuses_a_prefix() {
+    let d = prepared("").await;
+    d.fx.add_node("22.3.0");
+    d.fx.add_node("22.18.0");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    let e = c.call("node.default", json!({"spec": "22"})).await.unwrap_err();
+    assert_eq!(e.code, yard_proto::ErrorCode::InvalidArgument);
+    assert!(e.message.contains("exact") && e.message.contains("22.18.0, 22.3.0"), "{}", e.message);
+    assert_eq!(e.hint.as_deref(), Some("yard node default 22.18.0"));
     d.shutdown().await.unwrap();
 }

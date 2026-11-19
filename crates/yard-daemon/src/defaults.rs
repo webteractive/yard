@@ -125,9 +125,82 @@ fn write_default(paths: &Paths, keys: &[&str], key: &str, line: &str, version: &
     }
 }
 
-/// The pins §2.1 writes: for each linked site that uses `recipe` (one of its `uses_when` files
-/// in the root), has no pin of its own and no committed `.yard`, and whose PHP cannot run the
-/// written default, the newest installed version it can run.
+/// A linked site that uses `recipe` (one of its `uses_when` files in its root) and has no pin
+/// of its own, with the file that holds its settings and the full version of its PHP.
+struct Unpinned {
+    name: String,
+    file: SiteFile,
+    php: RuntimeVersion,
+}
+
+fn unpinned(
+    paths: &Paths,
+    brew: &Brew,
+    recipe: &RuntimeRecipe,
+    yard: &YardConfig,
+    sites: &SitesConfig,
+) -> Vec<Unpinned> {
+    let mut out = vec![];
+    for (name, entry) in &sites.sites {
+        let Some(path) = &entry.path else { continue };
+        let Ok(root) = std::fs::canonicalize(path) else { continue };
+        if !recipe.uses_when.iter().any(|f| root.join(f).is_file()) {
+            continue;
+        }
+        if !matches!(resolve_at(&root, recipe, sites, paths), Ok(None)) {
+            continue;
+        }
+        let Ok(file) = site_file(paths, name) else { continue };
+        let Some(php) = site_php(paths, yard, sites, &root) else { continue };
+        out.push(Unpinned { name: name.clone(), file, php: php_full(brew, php) });
+    }
+    out
+}
+
+/// The sites a new `default` for `recipe` leaves without a version they can run and that
+/// yardd cannot pin itself (spec §2.4): a committed `.yard` (the line to add), or nothing
+/// fitting installed (the install). A site Yard can pin gets its pin at the next check.
+pub fn unfit(
+    paths: &Paths,
+    brew: &Brew,
+    recipe: &RuntimeRecipe,
+    default: &VersionSpec,
+) -> Vec<yard_proto::UnfitSite> {
+    let (Ok((yard, _)), Ok(sites)) = (load_yard(paths), load_sites(paths)) else { return vec![] };
+    let installed = versions(paths, &recipe.key);
+    let key = &recipe.key;
+    let mut out = vec![];
+    for site in unpinned(paths, brew, recipe, &yard, &sites) {
+        if !needs_pin(recipe, Some(default), &installed, &site.php) {
+            continue;
+        }
+        let fit = fitting(recipe, &installed, &site.php).map(|v| v.to_string());
+        let offer = || {
+            yard_core::runtimes::select::offer_spec(recipe, &site.php, true)
+                .map_or_else(|| "<version>".to_string(), |s| s.to_string())
+        };
+        let hint = match (&site.file, fit) {
+            (SiteFile::Committed(file), Some(fit)) => {
+                format!("add [runtimes] {key} = \"{fit}\" to {}", file.display())
+            }
+            (SiteFile::Committed(file), None) => {
+                let offer = offer();
+                format!(
+                    "yard runtime install {key} {offer}, then add [runtimes] {key} = \"{offer}\" to {}",
+                    file.display()
+                )
+            }
+            (_, Some(_)) => continue,
+            (_, None) => format!("yard runtime install {key} {}", offer()),
+        };
+        out.push(yard_proto::UnfitSite { site: site.name, hint });
+    }
+    out
+}
+
+/// The pins §2.1 writes: for each linked site that uses `recipe`, has no pin of its own and
+/// no committed `.yard`, and whose PHP cannot run the written default, the newest installed
+/// version it can run.
 fn pin_old_sites(
     paths: &Paths,
     brew: &Brew,
@@ -141,31 +214,18 @@ fn pin_old_sites(
     }
     let default = yard.runtime_defaults.get(&recipe.key);
     let mut written = vec![];
-    for (name, entry) in &sites.sites {
-        let Some(path) = &entry.path else { continue };
-        let Ok(root) = std::fs::canonicalize(path) else { continue };
-        if !recipe.uses_when.iter().any(|f| root.join(f).is_file()) {
-            continue;
-        }
-        if !matches!(resolve_at(&root, recipe, sites, paths), Ok(None)) {
-            continue;
-        }
-        if !matches!(site_file(paths, name), Ok(SiteFile::Managed(_) | SiteFile::SitesToml)) {
-            continue;
-        }
-        let Some(php) = site_php(paths, yard, sites, &root) else { continue };
-        let php = php_full(brew, php);
-        if !needs_pin(recipe, default, &installed, &php) {
+    for Unpinned { name, file, php } in unpinned(paths, brew, recipe, yard, sites) {
+        if matches!(file, SiteFile::Committed(_)) || !needs_pin(recipe, default, &installed, &php) {
             continue;
         }
         let Some(fit) = fitting(recipe, &installed, &php) else { continue };
         let line = format!("[runtimes] {} = \"{fit}\"", recipe.key);
-        match set_site_runtime(paths, name, &recipe.key, Some(&fit.to_string())) {
+        match set_site_runtime(paths, &name, &recipe.key, Some(&fit.to_string())) {
             Ok(()) => {
                 tracing::info!("wrote {line} for site {name}, whose PHP {php} cannot run the default");
                 written.push(Written {
                     key: recipe.key.clone(),
-                    site: Some(name.clone()),
+                    site: Some(name),
                     line,
                     version: fit.to_string(),
                 });

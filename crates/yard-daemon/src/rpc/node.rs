@@ -99,9 +99,27 @@ pub(super) async fn uninstall(ctx: &Context, p: NodeVersionParams) -> Result<Job
 /// pin stops running.
 pub(super) async fn set_default(ctx: &Context, p: NodeSpecParams) -> Result<(), YardError> {
     let spec = spec_arg(&p.spec, "yard node default 22")?;
-    if pick(&spec, &installed(&ctx.paths), &lts(&ctx.paths)).is_none() {
+    let (all, lts) = (installed(&ctx.paths), lts(&ctx.paths));
+    let matching: Vec<String> = all
+        .iter()
+        .rev()
+        .filter(|v| yard_core::node::matches(&spec, **v, &lts))
+        .map(ToString::to_string)
+        .collect();
+    let Some(newest) = matching.first() else {
         return Err(YardError::new(ErrorCode::NodeMissing, format!("Node {spec} is not installed"))
             .with_hint(install_hint(&spec)));
+    };
+    // A default is one exact version, never a line (explicit-defaults spec §2.4).
+    if !matches!(spec, NodeSpec::Exact(_)) {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!(
+                "a default is an exact version, not {spec}; installed Node {spec}: {}",
+                matching.join(", ")
+            ),
+        )
+        .with_hint(format!("yard node default {newest}")));
     }
     TomlFile::edit(&ctx.paths.yard_toml(), |file| {
         file.set(&["default_node"], value(spec.to_string()));
