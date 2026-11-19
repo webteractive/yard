@@ -137,6 +137,8 @@ pub struct Context {
     pub recipe_options: yard_core::services::engines::LoadOptions,
     /// `DaemonOptions.db_wake_wait`.
     pub db_wake_wait: Duration,
+    /// The runtimes this yardd knows (runtimes spec §4).
+    pub runtimes: yard_core::runtimes::Runtimes,
 }
 
 impl Context {
@@ -205,6 +207,7 @@ pub async fn run(opts: DaemonOptions, shutdown: impl Future<Output = ()>) -> Res
         tunnel_ready_wait: opts.tunnel_ready_wait,
         db_wake_wait: opts.db_wake_wait,
         recipe_options: opts.recipe_options(),
+        runtimes: crate::runtimes::registry(),
         resolve_host: opts.resolve_host,
         wake_slots: Arc::new(tokio::sync::Semaphore::new(crate::wake::WAKE_SLOTS)),
     });

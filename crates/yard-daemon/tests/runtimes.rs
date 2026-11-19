@@ -1,0 +1,198 @@
+//! Runtime installs (runtimes spec §6, §9): Composer versions from an index and the recipe's
+//! pinned versions, checked by SHA-256 and renamed into `installs/<key>/<version>/`. The
+//! downloads are `file://` fixtures shaped like getcomposer.org.
+
+use std::path::{Path, PathBuf};
+use yard_core::Paths;
+use yard_core::runtimes::Origin;
+use yard_core::runtimes::recipe::{RuntimeRecipe, parse_runtime_recipe};
+use yard_core::runtimes::version::VersionSpec;
+use yard_core::services::engines::LoadOptions;
+use yard_daemon::events::EventBus;
+use yard_daemon::jobs::{JobCtx, Jobs};
+use yard_daemon::runtimes;
+use yard_proto::{ErrorCode, Event, YardError};
+
+const OPTS: LoadOptions = LoadOptions { allow_file_urls: true };
+const INDEX: &str = include_str!("../../yard-core/src/runtimes/testdata/composer-versions.json");
+
+struct Fixture {
+    _dir: tempfile::TempDir,
+    site: PathBuf,
+    paths: Paths,
+    hashes: std::collections::BTreeMap<String, String>,
+}
+
+/// getcomposer.org's layout under a temp dir: `versions`, and per version `composer.phar`
+/// and its `.sha256sum`.
+fn fixture() -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let site = dir.path().join("getcomposer");
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(site.join("versions"), INDEX).unwrap();
+    let mut hashes = std::collections::BTreeMap::new();
+    for v in ["2.2.32", "2.11.2", "2.7.7"] {
+        let d = site.join(v);
+        std::fs::create_dir_all(&d).unwrap();
+        let phar = format!("<?php echo 'Composer version {v}';\n");
+        std::fs::write(d.join("composer.phar"), &phar).unwrap();
+        let hash = yard_core::install::sha256_hex(phar.as_bytes());
+        std::fs::write(d.join("composer.phar.sha256sum"), format!("{hash}  composer.phar\n")).unwrap();
+        hashes.insert(v.to_string(), hash);
+    }
+    let paths = Paths::new(dir.path().join("root"));
+    Fixture { _dir: dir, site, paths, hashes }
+}
+
+/// The carried Composer recipe with its URLs pointing at the fixture.
+fn recipe(f: &Fixture, index: &str) -> RuntimeRecipe {
+    let (_, text) =
+        yard_core::runtimes::carried::texts().into_iter().find(|(k, _)| *k == "composer").unwrap();
+    let base = format!("file://{}", f.site.display());
+    let text = text
+        .replace("https://getcomposer.org/download", &base)
+        .replace("https://getcomposer.org/versions", &format!("{base}/{index}"))
+        .replace("241a3d13b7c6d35d970b1f69a000298b66943541302148a438a932f5dd44a9fc", &f.hashes["2.2.32"]);
+    parse_runtime_recipe(&text, Path::new("composer.toml"), Origin::Carried, &OPTS).unwrap()
+}
+
+/// Runs `work` as a job and answers its progress lines and its error.
+async fn job<F, Fut>(work: F) -> (Vec<String>, Option<YardError>)
+where
+    F: FnOnce(JobCtx) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), YardError>> + Send + 'static,
+{
+    let bus = EventBus::new();
+    let mut events = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    let id = jobs.start("runtime-install", work).job_id;
+    let mut lines = vec![];
+    loop {
+        match events.recv().await.unwrap() {
+            Event::JobProgress { job_id, line } if job_id == id => lines.push(line),
+            Event::JobFinished { job_id, error, .. } if job_id == id => return (lines, error),
+            _ => {}
+        }
+    }
+}
+
+async fn install(f: &Fixture, r: &RuntimeRecipe, spec: &str) -> (Vec<String>, Option<YardError>) {
+    let (paths, r, spec) = (f.paths.clone(), r.clone(), VersionSpec::parse(spec).unwrap());
+    job(move |ctx| async move { runtimes::install(&ctx, &paths, &r, spec, &OPTS).await.map(|_| ()) }).await
+}
+
+fn children(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn installs_a_channel_from_the_index() {
+    let f = fixture();
+    let (lines, error) = install(&f, &recipe(&f, "versions"), "2.2").await;
+    assert_eq!(error, None, "{lines:?}");
+    let root = f.paths.install_root("composer", "2.2.32");
+    assert!(root.join("composer.phar").is_file());
+    let got = runtimes::installed(&f.paths, "composer");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].1.requires_php, None);
+    assert_eq!(got[0].1.sha256, f.hashes["2.2.32"]);
+    assert!(lines.iter().any(|l| l == "Installed Composer 2.2.32"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn installs_the_current_line_with_its_requirement() {
+    let f = fixture();
+    let (lines, error) = install(&f, &recipe(&f, "versions"), "2").await;
+    assert_eq!(error, None, "{lines:?}");
+    let got = runtimes::installed(&f.paths, "composer");
+    assert_eq!(got[0].0.to_string(), "2.11.2");
+    assert_eq!(got[0].1.requires_php.as_ref().map(ToString::to_string).as_deref(), Some("7.2.5"));
+    // An exact version the index does not list comes by the URL template.
+    let (lines, error) = install(&f, &recipe(&f, "versions"), "2.7.7").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(f.paths.install_root("composer", "2.7.7").join("composer.phar").is_file());
+}
+
+#[tokio::test]
+async fn an_installed_version_is_not_fetched_again() {
+    let f = fixture();
+    let r = recipe(&f, "versions");
+    assert_eq!(install(&f, &r, "2.2").await.1, None);
+    std::fs::remove_file(f.site.join("2.2.32/composer.phar")).unwrap();
+    let (lines, error) = install(&f, &r, "2.2").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(lines.iter().any(|l| l == "Composer 2.2.32 is installed"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn a_bad_hash_leaves_nothing() {
+    let f = fixture();
+    std::fs::write(
+        f.site.join("2.2.32/composer.phar.sha256sum"),
+        format!("{}  composer.phar\n", "0".repeat(64)),
+    )
+    .unwrap();
+    // 2.2.32 is pinned in the recipe, so its hash is the recipe's; 2.11.2's comes from the
+    // .sha256sum, which this test garbles.
+    std::fs::write(
+        f.site.join("2.11.2/composer.phar.sha256sum"),
+        format!("{}  composer.phar\n", "0".repeat(64)),
+    )
+    .unwrap();
+    let (_, error) = install(&f, &recipe(&f, "versions"), "2").await;
+    assert_eq!(error.unwrap().code, ErrorCode::DownloadHashMismatch);
+    assert_eq!(children(&f.paths.installs_dir().join("composer")), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_garbled_sha256sum_is_refused() {
+    let f = fixture();
+    std::fs::write(f.site.join("2.11.2/composer.phar.sha256sum"), "<html>not found</html>\n").unwrap();
+    let (_, error) = install(&f, &recipe(&f, "versions"), "2").await;
+    let error = error.unwrap();
+    assert!(error.message.contains("2.11.2/composer.phar.sha256sum"), "{}", error.message);
+    assert_eq!(children(&f.paths.installs_dir().join("composer")), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn an_unreachable_index_falls_back_to_the_pinned_lts() {
+    let f = fixture();
+    let r = recipe(&f, "missing-index");
+    let (lines, error) = install(&f, &r, "2.2").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(f.paths.install_root("composer", "2.2.32").join("composer.phar").is_file());
+    let (_, error) = install(&f, &r, "2").await;
+    let error = error.unwrap();
+    assert!(error.message.contains("missing-index"), "{}", error.message);
+}
+
+#[tokio::test]
+async fn a_partial_minor_is_refused_before_downloading() {
+    let f = fixture();
+    let (lines, error) = install(&f, &recipe(&f, "versions"), "2.7").await;
+    let error = error.unwrap();
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("exact"), "{}", error.message);
+    assert!(lines.iter().all(|l| !l.contains("downloading")), "{lines:?}");
+}
+
+#[tokio::test]
+async fn uninstall_removes_only_that_version() {
+    let f = fixture();
+    let r = recipe(&f, "versions");
+    assert_eq!(install(&f, &r, "2.2").await.1, None);
+    assert_eq!(install(&f, &r, "2").await.1, None);
+    let (paths, rr) = (f.paths.clone(), r.clone());
+    let v = "2.2.32".parse().unwrap();
+    let (_, error) = job(move |ctx| async move { runtimes::uninstall(&ctx, &paths, &rr, &v).await }).await;
+    assert_eq!(error, None);
+    assert_eq!(children(&f.paths.installs_dir().join("composer")), ["2.11.2"]);
+    let (paths, rr) = (f.paths.clone(), r.clone());
+    let v = "2.2.32".parse().unwrap();
+    let (_, error) = job(move |ctx| async move { runtimes::uninstall(&ctx, &paths, &rr, &v).await }).await;
+    assert_eq!(error.unwrap().code, ErrorCode::RuntimeMissing);
+}

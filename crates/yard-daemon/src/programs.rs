@@ -76,9 +76,14 @@ pub async fn install(
 
 /// `programs/<key>/.stage-<pid>-<n>`, a fresh directory beside the install roots.
 fn stage_dir(paths: &Paths, key: &str) -> PathBuf {
+    stage_in(&paths.programs_dir().join(key))
+}
+
+/// `<dir>/.stage-<pid>-<n>`, a fresh directory name beside the install roots in `dir`.
+pub fn stage_in(dir: &Path) -> PathBuf {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    paths.programs_dir().join(key).join(format!(".stage-{}-{n}", std::process::id()))
+    dir.join(format!(".stage-{}-{n}", std::process::id()))
 }
 
 fn io(what: &str, path: &Path, e: std::io::Error) -> YardError {
@@ -99,7 +104,7 @@ async fn download(
     opts: &LoadOptions,
 ) -> Result<(), YardError> {
     let stage = stage_dir(paths, key);
-    let result = fetch_into(job, &stage, url, sha256, strip, opts).await.and_then(|unpacked| {
+    let result = fetch(job, &stage, url, sha256, strip, None, opts).await.and_then(|unpacked| {
         let root = paths.program_root(key, version);
         std::fs::rename(&unpacked, &root).map_err(|e| io("move the download to", &root, e))
     });
@@ -107,12 +112,17 @@ async fn download(
     result
 }
 
-async fn fetch_into(
+/// Downloads `url` into `stage` with curl (`https://` only, `file://` too with
+/// `allow_file_urls`), checks its SHA-256, and unpacks it into `stage/root`, or keeps a bare
+/// (non-archive) file there as `file`, else under its URL's last segment. Answers
+/// `stage/root`; the caller renames it into place and removes the stage.
+pub async fn fetch(
     job: &JobCtx,
     stage: &Path,
     url: &str,
     sha256: &str,
     strip: u32,
+    file_name: Option<&str>,
     opts: &LoadOptions,
 ) -> Result<PathBuf, YardError> {
     std::fs::create_dir_all(stage).map_err(|e| io("create", stage, e))?;
@@ -141,8 +151,9 @@ async fn fetch_into(
         let (to, from) = (root.display().to_string(), file.display().to_string());
         job.run(Path::new(TAR), &["-xf", &from, "-C", &to, "--strip-components", &strip], &[]).await?;
     } else {
-        // A bare program, kept under its URL's last segment.
-        let name = url.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("program");
+        // A bare program, kept as `file_name` or under its URL's last segment.
+        let name =
+            file_name.or_else(|| url.rsplit('/').next().filter(|n| !n.is_empty())).unwrap_or("program");
         let program = root.join(name);
         std::fs::rename(&file, &program).map_err(|e| io("move", &program, e))?;
         use std::os::unix::fs::PermissionsExt;

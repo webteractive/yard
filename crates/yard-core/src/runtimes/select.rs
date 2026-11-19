@@ -161,6 +161,15 @@ pub fn index_version(
     Err(format!("Composer {name} is not a channel; name an exact version, such as 2.7.7"))
 }
 
+/// The getcomposer.org channel a release belongs to: `2.2` for the 2.2 LTS, else its major.
+pub fn composer_channel(v: &RuntimeVersion) -> String {
+    match v.0.as_slice() {
+        [2, 2, ..] => "2.2".to_string(),
+        [major, ..] => major.to_string(),
+        [] => String::new(),
+    }
+}
+
 /// The hash in a `.sha256sum` file (`<hash>  composer.phar`), lower-cased.
 pub fn parse_sha256sum(text: &str) -> Result<String, String> {
     let hash = text.split_whitespace().next().unwrap_or_default();
