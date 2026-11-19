@@ -1,8 +1,10 @@
 //! `yard-shim`: `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx`
 //! in Yard's `bin/`, chosen by `argv[0]` (spec §4.5, M4c spec §6). It resolves the version
 //! for the current directory from `yard.toml`, `sites.toml` and the project's files, with no
-//! daemon. A PHP shim `exec`s brew's binary with Yard's ini, and `php` and `composer` first
-//! ask yardd to wake their site's services when `run/sleeping` lists it (M4e spec §5.2). A
+//! daemon. A PHP shim `exec`s brew's binary with Yard's ini; `composer` runs the Composer
+//! Yard installed that the project's PHP can run, under that PHP (runtimes spec §9); `php`
+//! and `composer` first ask yardd to wake their site's services when `run/sleeping` lists
+//! it (M4e spec §5.2). A
 //! Node shim `exec`s the version fnm installed into Yard's `node/`, and never runs fnm or
 //! downloads anything. Neither PATH reaches Herd's `php` or `node`.
 
@@ -11,16 +13,24 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 use yard_core::brew::Brew;
 use yard_core::config::yard::parse_yard;
-use yard_core::config::{SitesConfig, load_sites, load_yard};
+use yard_core::config::{SiteEntry, SitesConfig, YardConfig, load_sites, load_yard};
 use yard_core::node::{LtsMap, install_hint, installed, pick};
+use yard_core::php::full_version;
+use yard_core::project::ProjectFile;
+use yard_core::runtimes::Runtimes;
+use yard_core::runtimes::resolve::{PinSource, pin_file_version, resolve_pin};
+use yard_core::runtimes::select::{default_spec, installed as runtime_installed, php_full_or_zero};
+use yard_core::runtimes::shim::{Pick, pick_composer, recipe_command, refused};
+use yard_core::runtimes::version::RuntimeVersion;
 use yard_core::services::sleep::lists_site;
 use yard_core::shim::{
-    NODE_SHIMS, Source, WAKE_SHIMS, command, node_command, resolve_node, resolve_version, site_at,
+    NODE_SHIMS, ShimCommand, Source, WAKE_SHIMS, command, node_command, resolve_node, resolve_version,
+    site_at,
 };
 use yard_core::{Paths, PhpVersion};
 use yard_proto::{ErrorCode, YardError};
@@ -84,49 +94,181 @@ fn run(name: &str, args: Vec<OsString>) -> Result<Infallible, YardError> {
     if NODE_SHIMS.contains(&name) {
         return run_node(name, args);
     }
-    let paths = Paths::from_env()?;
-    // A TOML being edited must not stop every php on the machine: warn and carry on.
-    let yard = match load_yard(&paths) {
-        Ok((yard, _)) => yard,
-        Err(e) => {
-            eprintln!("yard: {}; using PHP {}", e.message, PhpVersion::DEFAULT);
-            parse_yard(None, &paths.yard_toml())?.0
+    if name == "composer" {
+        return run_composer(args);
+    }
+    let php = Php::resolve(name)?;
+    let (program, pre, env) = php.command(name)?;
+    php.wake_if(WAKE_SHIMS.contains(&name))?;
+    exec(&program, pre, args, env)
+}
+
+fn exec(
+    program: &Path,
+    pre: Vec<OsString>,
+    args: Vec<OsString>,
+    env: Vec<(String, String)>,
+) -> Result<Infallible, YardError> {
+    let e = Command::new(program).args(pre).args(args).envs(env).exec();
+    Err(YardError::new(ErrorCode::Internal, format!("cannot run {}: {e}", program.display())))
+}
+
+fn canonical(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn exists(p: &Path) -> bool {
+    p.exists()
+}
+
+/// The PHP a directory runs, as every PHP shim and `composer` resolve it.
+struct Php {
+    paths: Paths,
+    yard: YardConfig,
+    sites: SitesConfig,
+    cwd: PathBuf,
+    v: PhpVersion,
+    source: Source,
+    brew: Brew,
+    opt: PathBuf,
+}
+
+impl Php {
+    fn resolve(name: &str) -> Result<Php, YardError> {
+        let paths = Paths::from_env()?;
+        // A TOML being edited must not stop every php on the machine: warn and carry on.
+        let yard = match load_yard(&paths) {
+            Ok((yard, _)) => yard,
+            Err(e) => {
+                eprintln!("yard: {}; using PHP {}", e.message, PhpVersion::DEFAULT);
+                parse_yard(None, &paths.yard_toml())?.0
+            }
+        };
+        let sites = load_sites(&paths).unwrap_or_else(|e| {
+            eprintln!("yard: {}; ignoring site isolation", e.message);
+            SitesConfig::default()
+        });
+        let cwd = std::env::current_dir().map_err(|e| {
+            YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
+                .with_hint("cd into an existing directory")
+        })?;
+        let (v, source) = resolve_version(&cwd, &yard, &sites, &paths, &read_small, &canonical)?;
+        if debug() {
+            eprintln!("yard-shim: {name} runs PHP {v} ({source})");
+        }
+        let brew = Brew::from_env(&exists)?;
+        let opt = brew.php_opt(v, &exists, &|p| std::fs::read_link(p).ok()).map_err(|e| match &source {
+            // The project asks for it, so `yard init` there is what installs it.
+            Source::Project(file) | Source::Managed(file) => YardError::new(
+                ErrorCode::FormulaMissing,
+                format!("PHP {v} is not installed ({})", file.display()),
+            )
+            .with_hint("yard init"),
+            _ => e,
+        })?;
+        Ok(Php { paths, yard, sites, cwd, v, source, brew, opt })
+    }
+
+    fn command(&self, name: &str) -> Result<ShimCommand, YardError> {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        command(name, self.v, &self.opt, &self.paths, &inherited, &exists)
+    }
+
+    /// The keg's full version (`7.1.33`), or `x.y.0` when its link cannot be read.
+    fn full(&self) -> RuntimeVersion {
+        let target = std::fs::read_link(&self.opt).ok().map(|t| t.to_string_lossy().into_owned());
+        php_full_or_zero(target.as_deref().and_then(full_version).as_deref(), self.v)
+    }
+
+    /// Asks yardd to wake the site's services first when `wakes` and `run/sleeping` lists
+    /// the site (M4e spec §5.2).
+    fn wake_if(&self, wakes: bool) -> Result<(), YardError> {
+        if wakes
+            && let Some(site) = site_at(&self.cwd, &self.sites, &canonical)
+            && read_small(&self.paths.sleeping_file())
+                .and_then(Result::ok)
+                .is_some_and(|t| lists_site(&t, &site))
+        {
+            wake(&self.paths, &site)?;
+        }
+        Ok(())
+    }
+}
+
+fn debug() -> bool {
+    std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1")
+}
+
+fn list_dir(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default()
+}
+
+/// `composer`: the Composer the project's PHP can run, from Yard's installs (runtimes spec
+/// §9), run under that PHP. `self-update` is refused, since the phar is Yard's.
+fn run_composer(args: Vec<OsString>) -> Result<Infallible, YardError> {
+    let runtimes = Runtimes::carried();
+    let runtime =
+        runtimes.get("composer").ok_or_else(|| YardError::new(ErrorCode::Internal, "no Composer recipe"))?;
+    let recipe = runtime.recipe();
+    if let Some(refuse) = recipe.shims.get("composer").and_then(|def| refused(def, &args)) {
+        return Err(YardError::new(
+            ErrorCode::InvalidArgument,
+            format!("composer {} is managed by Yard", refuse.args.join(" ")),
+        )
+        .with_hint(refuse.hint.clone()));
+    }
+    let php = Php::resolve("composer")?;
+    let pin = resolve_pin(
+        &php.cwd,
+        &recipe.pin_files,
+        &php.sites,
+        &php.paths,
+        &read_small,
+        &canonical,
+        &|f: &ProjectFile| f.runtimes.get("composer").cloned(),
+        &|s: &SiteEntry| s.runtimes.get("composer").cloned(),
+        &pin_file_version,
+    )?
+    .or_else(|| php.yard.runtime_defaults.get("composer").map(|s| (s.clone(), PinSource::Default)));
+    let read = |p: &Path| read_small(p).and_then(Result::ok);
+    let installs = runtime_installed(&php.paths, "composer", &list_dir, &read);
+    let brew_composer = Some(php.brew.prefix.join("bin/composer")).filter(|p| p.exists());
+    let full = php.full();
+    let php_cmd = php.command("php")?;
+    let (program, pre, env) = match pick_composer(
+        recipe,
+        pin.clone(),
+        &full,
+        &php.source.to_string(),
+        &installs,
+        brew_composer,
+        &php.paths,
+    )? {
+        Pick::Run(v, home) => {
+            if debug() {
+                let (spec, from) = match &pin {
+                    Some((spec, source)) => (spec.to_string(), source.to_string()),
+                    None => (
+                        default_spec(recipe, Some(&full))
+                            .map_or_else(|| "newest".into(), |(s, _)| s.to_string()),
+                        PinSource::Default.to_string(),
+                    ),
+                };
+                eprintln!("yard-shim: composer runs Composer {v} ({spec} from {from}) on PHP {full}");
+            }
+            let inherited = std::env::var_os("PATH").unwrap_or_default();
+            recipe_command(recipe, "composer", &home, &v, Some(&php_cmd), &php.paths, &inherited)?
+        }
+        Pick::BrewComposer(phar) => {
+            eprintln!("yard: using brew's composer; yard runtime install composer for per-project versions");
+            let (program, _, env) = php_cmd;
+            (program, vec![phar.into_os_string()], env)
         }
     };
-    let sites = load_sites(&paths).unwrap_or_else(|e| {
-        eprintln!("yard: {}; ignoring site isolation", e.message);
-        SitesConfig::default()
-    });
-    let cwd = std::env::current_dir().map_err(|e| {
-        YardError::new(ErrorCode::InvalidArgument, format!("cannot read the current directory: {e}"))
-            .with_hint("cd into an existing directory")
-    })?;
-    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let (v, source) = resolve_version(&cwd, &yard, &sites, &paths, &read_small, &canonical)?;
-    if std::env::var_os("YARD_SHIM_DEBUG").is_some_and(|d| d == "1") {
-        eprintln!("yard-shim: {name} runs PHP {v} ({source})");
-    }
-    let exists = |p: &Path| p.exists();
-    let brew = Brew::from_env(&exists)?;
-    let opt = brew.php_opt(v, &exists, &|p| std::fs::read_link(p).ok()).map_err(|e| match &source {
-        // The project asks for it, so `yard init` there is what installs it.
-        Source::Project(file) | Source::Managed(file) => YardError::new(
-            ErrorCode::FormulaMissing,
-            format!("PHP {v} is not installed ({})", file.display()),
-        )
-        .with_hint("yard init"),
-        _ => e,
-    })?;
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let (program, pre, env) = command(name, v, &opt, &brew, &paths, &inherited, &exists)?;
-    if WAKE_SHIMS.contains(&name)
-        && let Some(site) = site_at(&cwd, &sites, &canonical)
-        && read_small(&paths.sleeping_file()).and_then(Result::ok).is_some_and(|t| lists_site(&t, &site))
-    {
-        wake(&paths, &site)?;
-    }
-    let e = Command::new(&program).args(pre).args(args).envs(env).exec();
-    Err(YardError::new(ErrorCode::Internal, format!("cannot run {}: {e}", program.display())))
+    php.wake_if(runtime.wakes("composer"))?;
+    exec(&program, pre, args, env)
 }
 
 /// How long a shim waits for yardd to wake a site's services: yardd's own cap is 30 s.

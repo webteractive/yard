@@ -261,21 +261,12 @@ pub fn command(
     name: &str,
     v: PhpVersion,
     opt: &Path,
-    brew: &Brew,
     paths: &Paths,
     inherited: &OsStr,
     exists: &dyn Fn(&Path) -> bool,
 ) -> Result<ShimCommand, YardError> {
     let (program, pre) = match name {
         "php" | "pecl" | "phpize" | "php-config" => (Brew::php_bin(opt, name), vec![]),
-        "composer" => {
-            let phar = brew.prefix.join("bin/composer");
-            if !exists(&phar) {
-                return Err(YardError::new(ErrorCode::FormulaMissing, "composer is not installed")
-                    .with_hint("brew install composer"));
-            }
-            (Brew::php_bin(opt, "php"), vec![phar.into_os_string()])
-        }
         other => {
             return Err(YardError::new(
                 ErrorCode::InvalidArgument,
@@ -342,7 +333,6 @@ pub fn child_path(keg_bin: Option<&Path>, inherited: &OsStr) -> OsString {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brew::Brew;
     use crate::config::sites::parse_sites;
     use crate::config::yard::parse_yard;
     use crate::node::NodeSpec;
@@ -781,38 +771,32 @@ path = "/code/plain"
     }
 
     #[test]
-    fn composer_runs_the_phar_under_php() {
-        let (paths, brew) = (Paths::new("/r"), Brew::new("/b"));
+    fn composer_is_not_a_php_command() {
+        let paths = Paths::new("/r");
         let opt = Path::new("/b/opt/php@7.1");
         let exists = |p: &Path| p == Path::new("/b/bin/composer");
-        let (program, pre, _) =
-            command("composer", v("7.1"), opt, &brew, &paths, "/usr/bin".as_ref(), &exists).unwrap();
-        assert_eq!(program, Path::new("/b/opt/php@7.1/bin/php"));
-        assert_eq!(pre, [OsString::from("/b/bin/composer")]);
+        let e = command("composer", v("7.1"), opt, &paths, "/usr/bin".as_ref(), &exists).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidArgument);
 
         let none = |_: &Path| false;
-        let e = command("composer", v("7.1"), opt, &brew, &paths, "/usr/bin".as_ref(), &none).unwrap_err();
-        assert_eq!(e.code, ErrorCode::FormulaMissing);
-        assert_eq!(e.hint.as_deref(), Some("brew install composer"));
-
         let (program, pre, env) =
-            command("pecl", v("7.1"), opt, &brew, &paths, "/x/Herd/bin:/usr/bin".as_ref(), &none).unwrap();
+            command("pecl", v("7.1"), opt, &paths, "/x/Herd/bin:/usr/bin".as_ref(), &none).unwrap();
         assert_eq!(program, Path::new("/b/opt/php@7.1/bin/pecl"));
         assert!(pre.is_empty());
         assert_eq!(env_of(&env, "PATH").as_deref(), Some("/b/opt/php@7.1/bin:/r/bin:/usr/bin"));
-        assert!(command("perl", v("7.1"), opt, &brew, &paths, "".as_ref(), &none).is_err());
+        assert!(command("perl", v("7.1"), opt, &paths, "".as_ref(), &none).is_err());
     }
 
     #[test]
     fn ini_env_only_when_rendered() {
-        let (paths, brew) = (Paths::new("/r"), Brew::new("/b"));
+        let paths = Paths::new("/r");
         let opt = Path::new("/b/opt/php@7.1");
         let none = |_: &Path| false;
-        let (_, _, env) = command("php", v("7.1"), opt, &brew, &paths, "".as_ref(), &none).unwrap();
+        let (_, _, env) = command("php", v("7.1"), opt, &paths, "".as_ref(), &none).unwrap();
         assert_eq!(env_of(&env, "PHPRC"), None);
         let ini = paths.php_ini(v("7.1"));
         let rendered = |p: &Path| p == ini;
-        let (_, _, env) = command("php", v("7.1"), opt, &brew, &paths, "".as_ref(), &rendered).unwrap();
+        let (_, _, env) = command("php", v("7.1"), opt, &paths, "".as_ref(), &rendered).unwrap();
         assert_eq!(env_of(&env, "PHPRC").as_deref(), Some("/r/php/7.1"));
         assert_eq!(env_of(&env, "PHP_INI_SCAN_DIR").as_deref(), Some("/r/php/7.1/conf.d"));
     }
