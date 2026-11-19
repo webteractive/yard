@@ -1,0 +1,37 @@
+# Composer, downloaded from getcomposer.org and run under each project's PHP (runtimes spec §9).
+schema = 1
+key = "composer"
+name = "Composer"
+description = "PHP's dependency manager, per project"
+runs_on = "php"
+wake = true
+uses_when = ["composer.json"]
+
+[[default]]
+php_below = "7.2.5"
+spec = "2.2"
+[[default]]
+spec = "2"
+exclude = ["2.2"]                   # an 8.4 project never gets 2.2 because it is all there is
+
+[[requires]]
+from = "2.3.0"
+php = "7.2.5"
+
+[shims.composer]
+exec = ["{php}", "{home}/composer.phar"]
+refuse = [{ args = ["self-update"], hint = "yard runtime install composer <version>" },
+          { args = ["selfupdate"], hint = "yard runtime install composer <version>" }]
+
+[source]
+kind = "download"
+url = "https://getcomposer.org/download/{version}/composer.phar"
+file = "composer.phar"
+
+[source.index]
+kind = "composer"
+url = "https://getcomposer.org/versions"
+sha256_url = "https://getcomposer.org/download/{version}/composer.phar.sha256sum"
+
+[versions."2.2.32"]                 # the 2.2 LTS, pinned: used if the index stops listing 2.2
+sha256 = "241a3d13b7c6d35d970b1f69a000298b66943541302148a438a932f5dd44a9fc"

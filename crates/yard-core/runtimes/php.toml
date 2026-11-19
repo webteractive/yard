@@ -1,0 +1,26 @@
+# PHP, run by Yard's php driver from brew's kegs (runtimes spec §10). The driver resolves the
+# version (.yard's php, sites.toml, .yard-php, default_php) and builds each command; the exec
+# lines below document what each shim runs.
+schema = 1
+key = "php"
+name = "PHP"
+description = "PHP from Homebrew's shivammathur/php tap"
+driver = "php"
+pin_files = [".yard-php"]
+uses_when = []
+wake = true
+
+[shims.php]
+exec = ["{home}/bin/php"]
+[shims.pecl]
+exec = ["{home}/bin/pecl"]
+wake = false
+[shims.phpize]
+exec = ["{home}/bin/phpize"]
+wake = false
+[shims.php-config]
+exec = ["{home}/bin/php-config"]
+wake = false
+
+[source]
+kind = "brew"

@@ -1,0 +1,18 @@
+# Node, installed by brew's fnm into ~/.yard/node (M4c spec; runtimes spec §11). The fnm source
+# resolves the version (.yard's node, sites.toml, .nvmrc, .node-version, default_node).
+schema = 1
+key = "node"
+name = "Node"
+description = "Node.js, installed with fnm into Yard's own directory"
+pin_files = [".nvmrc", ".node-version"]
+uses_when = ["package.json"]
+
+[shims.node]
+exec = ["{home}/bin/node"]
+[shims.npm]
+exec = ["{home}/bin/npm"]
+[shims.npx]
+exec = ["{home}/bin/npx"]
+
+[source]
+kind = "fnm"

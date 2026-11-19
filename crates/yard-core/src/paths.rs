@@ -197,6 +197,31 @@ impl Paths {
         self.programs_dir().join(key).join(version)
     }
 
+    /// `installs/`: runtime versions Yard downloaded (runtimes spec §6).
+    pub fn installs_dir(&self) -> PathBuf {
+        self.root.join("installs")
+    }
+
+    /// `installs/<key>/<version>/`: one runtime version's install root, its `{home}`.
+    pub fn install_root(&self, key: &str, version: &str) -> PathBuf {
+        self.installs_dir().join(key).join(version)
+    }
+
+    /// `installs/<key>/<version>/.yard-install.toml`: what the install checked (generated).
+    pub fn install_record(&self, key: &str, version: &str) -> PathBuf {
+        self.install_root(key, version).join(".yard-install.toml")
+    }
+
+    /// `runtimes/`: the user's runtime recipes, one `<key>.toml` each (runtimes spec §5).
+    pub fn runtimes_dir(&self) -> PathBuf {
+        self.root.join("runtimes")
+    }
+
+    /// `cache/<key>/`: a runtime's `{cache}`.
+    pub fn runtime_cache(&self, key: &str) -> PathBuf {
+        self.root.join("cache").join(key)
+    }
+
     pub fn service_pid(&self, instance: &str) -> PathBuf {
         self.run_dir().join(format!("{instance}.pid"))
     }
