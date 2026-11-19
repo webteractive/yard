@@ -89,7 +89,7 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
     match rt.kind() {
         RuntimeKind::Php => {
             let list = php::list(ctx, PhpListParams { available: false }).await?;
-            let default = list.iter().find(|i| i.default).map(|i| i.version.clone());
+            let default = list.iter().find(|i| i.default).map(|i| i.version.clone()).unwrap_or_default();
             let versions = list
                 .into_iter()
                 .filter(|i| i.installed)
@@ -104,7 +104,7 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
                 .into_iter()
                 .map(|i| RuntimeVersionInfo { version: i.version, default: i.default, sites: i.sites })
                 .collect();
-            let default = Some(list.default).filter(|d| !d.is_empty());
+            let default = list.default;
             Ok(RuntimeList { key: p.key, default, versions })
         }
         RuntimeKind::Recipe => {
@@ -132,7 +132,11 @@ pub(super) async fn list(ctx: &Context, p: RuntimeKeyParams) -> Result<RuntimeLi
                     RuntimeVersionInfo { default: default_version.as_ref() == Some(v), version, sites }
                 })
                 .collect();
-            Ok(RuntimeList { default: configured.map(ToString::to_string), key: p.key, versions })
+            Ok(RuntimeList {
+                default: configured.map(ToString::to_string).unwrap_or_default(),
+                key: p.key,
+                versions,
+            })
         }
     }
 }
@@ -235,6 +239,16 @@ pub(super) async fn uninstall(ctx: &Context, p: RuntimeVersionParams) -> Result<
 
 /// `yard runtime default`: only to a spec something installed meets.
 pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<RuntimeDefaultSet, YardError> {
+    // What the move makes yardd write (pins for a `default_php` below 7.2.5) is reported, so
+    // one command never edits sites' files unannounced.
+    let before = ctx.reconciler.state().await.defaults_written.len();
+    let mut set = set_default_only(ctx, p).await?;
+    set.written =
+        ctx.reconciler.state().await.defaults_written.iter().skip(before).map(|w| w.describe()).collect();
+    Ok(set)
+}
+
+async fn set_default_only(ctx: &Context, p: RuntimeSpecParams) -> Result<RuntimeDefaultSet, YardError> {
     let rt = runtime(ctx, &p.key)?;
     match rt.kind() {
         RuntimeKind::Php => {
@@ -243,6 +257,7 @@ pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<R
         }
         RuntimeKind::Node => {
             node::set_default(ctx, NodeSpecParams { spec: p.spec }).await?;
+            reconcile(ctx).await?;
             return Ok(RuntimeDefaultSet::default());
         }
         RuntimeKind::Recipe => {}
@@ -273,7 +288,7 @@ pub(super) async fn set_default(ctx: &Context, p: RuntimeSpecParams) -> Result<R
     })?;
     let unfit = crate::defaults::unfit(&ctx.paths, &ctx.brew, recipe, Some(&spec));
     reconcile(ctx).await?;
-    Ok(RuntimeDefaultSet { unfit })
+    Ok(RuntimeDefaultSet { unfit, written: vec![] })
 }
 
 pub(super) async fn use_spec(ctx: &Context, p: RuntimeUseParams) -> Result<SiteInfo, YardError> {

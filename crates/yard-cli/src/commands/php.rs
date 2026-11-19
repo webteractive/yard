@@ -60,9 +60,18 @@ pub async fn uninstall(ctx: &Ctx, version: String) -> Outcome {
 }
 
 pub async fn set_default(ctx: &Ctx, version: String) -> Outcome {
-    let params = PhpParams { php: version.clone() };
-    ctx.client().await?.call::<_, ()>(methods::PHP_DEFAULT, params).await?;
-    ctx.emit(&(), || format!("PHP {version} is now the default.\n"));
+    // runtime.default (protocol 2.14) says what the move made yardd write; php.default does not.
+    let params = methods::RuntimeSpecParams { key: "php".into(), spec: version.clone() };
+    let set: Option<yard_proto::RuntimeDefaultSet> =
+        ctx.client().await?.call(methods::RUNTIME_DEFAULT, params).await?;
+    let set = set.unwrap_or_default();
+    ctx.emit(&set, || {
+        let mut out = format!("PHP {version} is now the default.\n");
+        for line in &set.written {
+            out.push_str(&format!("Yard {line}\n"));
+        }
+        out
+    });
     Ok(0)
 }
 

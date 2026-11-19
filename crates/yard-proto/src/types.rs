@@ -183,10 +183,9 @@ pub struct RuntimeVersionInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeList {
     pub key: String,
-    /// The default written in `yard.toml`, or `None` while none is (protocol 2.15; before,
-    /// rule text or `""`).
-    #[serde(default)]
-    pub default: Option<String>,
+    /// The default written in `yard.toml`, or `""` while none is (rule text before protocol
+    /// 2.15). A string on the wire, so a 2.14 client still reads it.
+    pub default: String,
     pub versions: Vec<RuntimeVersionInfo>,
 }
 
@@ -196,6 +195,10 @@ pub struct RuntimeList {
 pub struct RuntimeDefaultSet {
     #[serde(default)]
     pub unfit: Vec<UnfitSite>,
+    /// What yardd wrote because of the move, as `wrote …` sentences: the Composer pins a
+    /// `default_php` below 7.2.5 makes it write for the sites that use Composer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub written: Vec<String>,
 }
 
 /// A site the new default leaves without a version it can run, and what fixes it.

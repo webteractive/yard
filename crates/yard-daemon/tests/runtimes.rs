@@ -429,7 +429,7 @@ async fn default_writes_yard_toml_and_needs_an_installed_match() {
     let e = c.call("runtime.default", json!({"key": "composer", "spec": "2.11.2"})).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::RuntimeMissing);
     let list = c.call("runtime.list", json!({"key": "composer"})).await.unwrap();
-    assert_eq!(list["default"], Value::Null, "nothing written: {list}");
+    assert_eq!(list["default"], "", "nothing written, as a 2.14 client reads it: {list}");
     put_composer(&d.fx.paths, "2.11.2");
     let set = c.call("runtime.default", json!({"key": "composer", "spec": "2.11.2"})).await.unwrap();
     assert_eq!(set, json!({"unfit": []}));
@@ -811,5 +811,23 @@ async fn a_committed_old_projects_composer_names_the_line_to_add() {
     let hint = format!("add [runtimes] composer = \"2.2.32\" to {}", dir.join(".yard").display());
     assert_eq!(composer["error"]["hint"], hint.as_str(), "{composer}");
     assert_eq!(composer["error"]["data"]["needs_pin"], "2.2.32", "{composer}");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn moving_default_php_below_7_2_5_reports_the_pins_it_causes() {
+    let d = prepared("").await;
+    d.fx.add_php("7.1");
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    assert!(holds(d.fx.paths.yard_toml(), "[runtimes.composer]").await);
+    let set = c.call("runtime.default", json!({"key": "php", "spec": "7.1"})).await.unwrap();
+    let written: Vec<&str> = set["written"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect();
+    assert_eq!(written.len(), 1, "{set}");
+    assert!(written[0].starts_with("wrote [runtimes] composer = \"2.2.32\" for site shop"), "{set}");
     d.shutdown().await.unwrap();
 }

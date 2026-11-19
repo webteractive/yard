@@ -74,16 +74,18 @@ cleanup() {
   if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
   rm -rf "$managed_dir"
   local f v
-  for f in yard.toml sites.toml; do
-    if [[ -f $work/$f.bak ]] && ! cmp -s "$work/$f.bak" "$data/$f"; then cp -p "$work/$f.bak" "$data/$f"; fi
-  done
-  # Only what this run installed. Yard refuses to remove the last version the default
-  # matches, so that one goes through fnm itself, in Yard's FNM_DIR.
+  # Only what this run installed. Yard refuses to remove the default's version, so that one
+  # goes through fnm itself, in Yard's FNM_DIR. The versions go before the configs come back:
+  # with one installed, putting back a yard.toml with no default_node would have yardd write
+  # one into it.
   for v in $(comm -13 "$work/versions-before.txt" <(installed)); do
     "$yard" node uninstall "${v#v}" >/dev/null 2>&1 \
       || FNM_DIR="$data/node" "$fnm" uninstall "$v" >/dev/null 2>&1 || true
   done
   installed >"$work/versions-after.txt"
+  for f in yard.toml sites.toml; do
+    if [[ -f $work/$f.bak ]] && ! cmp -s "$work/$f.bak" "$data/$f"; then cp -p "$work/$f.bak" "$data/$f"; fi
+  done
 }
 trap 'cleanup; rm -rf "$work"' EXIT
 

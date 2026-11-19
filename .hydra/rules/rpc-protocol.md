@@ -63,9 +63,9 @@ triggers:
 - Protocol 2.15 (explicit defaults, explicit-defaults spec §2.4–§2.5): `runtime.default` answers
   `RuntimeDefaultSet { unfit: [UnfitSite { site, hint }] }` (a 2.14 yardd answered `null`, which
   the CLI and `yard-client` read as an empty set) and takes only an exact version for a recipe
-  runtime or Node (a prefix is `INVALID_ARGUMENT` listing the matches); `RuntimeList.default` and
-  `RuntimeSummary.default` are the version written in `yard.toml` or `null` (rule text or `""`
-  before); `SiteInfo.php_source` (absent from an older yardd) says where a PHP site's version comes
+  runtime or Node (a prefix is `INVALID_ARGUMENT` listing the matches); `RuntimeSummary.default`
+  is the version written in `yard.toml` or `null`, and `RuntimeList.default` the version or `""`
+  (a string still, so a 2.14 CLI reads it; rule text before); `SiteInfo.php_source` (absent from an older yardd) says where a PHP site's version comes
   from. A committed `.yard` that needs its own Composer pin has a `SiteRuntime.error`
   (`RUNTIME_MISSING`, `data.needs_pin` the version, hint the line to add). `NodeList.default` stays
   a string, `""` while none is written.

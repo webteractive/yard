@@ -417,11 +417,12 @@ fn a_job_result_leaves_run_job_output_unchanged() {
 
 #[test]
 fn php_default_and_uninstall_send_the_version() {
-    let d = MockDaemon::start(&[("php.default", Ok(json!(null)))]);
-    let out = d.yard().args(["php", "default", "8.3"]).output().unwrap();
+    let line = "wrote [runtimes] composer = \"2.2.32\" for site shop, whose PHP cannot run the default; yard runtime use composer <version> --site shop changes it";
+    let d = MockDaemon::start(&[("runtime.default", Ok(json!({"unfit": [], "written": [line]})))]);
+    let out = d.yard().args(["php", "default", "7.1"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("PHP 8.3 is now the default."), "{}", stdout(&out));
-    assert_eq!(d.params("php.default"), [json!({"php": "8.3"})]);
+    assert_eq!(stdout(&out), format!("PHP 7.1 is now the default.\nYard {line}\n"));
+    assert_eq!(d.params("runtime.default"), [json!({"key": "php", "spec": "7.1"})]);
 }
 
 fn php_site(name: &str, path: &str, php: &str) -> Value {

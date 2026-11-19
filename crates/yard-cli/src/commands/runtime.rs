@@ -58,7 +58,10 @@ pub async fn list(ctx: &Ctx, key: String) -> Outcome {
                 .collect();
             table(&["VERSION", "DEFAULT", "SITES"], &rows)
         };
-        out.push_str(&format!("default: {}\n\n", list.default.as_deref().unwrap_or("none")));
+        out.push_str(&format!(
+            "default: {}\n\n",
+            if list.default.is_empty() { "none" } else { &list.default }
+        ));
         out.push_str(&for_agents(&format!("yard runtime list {key}")));
         out
     });
@@ -107,6 +110,9 @@ pub async fn set_default(ctx: &Ctx, key: String, spec: String) -> Outcome {
     let set = set.unwrap_or_default();
     ctx.emit(&set, || {
         let mut out = format!("{key} {spec} is now the default.\n");
+        for line in &set.written {
+            out.push_str(&format!("Yard {line}\n"));
+        }
         if !set.unfit.is_empty() {
             out.push_str(&format!("These sites' PHP cannot run {key} {spec}:\n"));
             for u in &set.unfit {

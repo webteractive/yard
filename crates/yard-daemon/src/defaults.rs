@@ -253,7 +253,7 @@ impl Written {
                 self.line, self.key
             ),
             Some(site) => format!(
-                "wrote {} for site {site}, whose PHP cannot run the default; yard runtime unuse {} --site {site} removes it",
+                "wrote {} for site {site}, whose PHP cannot run the default; yard runtime use {} <version> --site {site} changes it",
                 self.line, self.key
             ),
         }
@@ -272,4 +272,24 @@ pub async fn reconcile_after_install(
         job.line(w.describe());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Written;
+
+    /// A pin yardd wrote comes back after `unuse` while the PHP still cannot run the default,
+    /// so the message names what moves it, not what removes it.
+    #[test]
+    fn a_written_pin_says_what_changes_it() {
+        let w = Written {
+            key: "composer".into(),
+            site: Some("old".into()),
+            line: "[runtimes] composer = \"2.2.32\"".into(),
+            version: "2.2.32".into(),
+        };
+        let text = w.describe();
+        assert!(text.contains("yard runtime use composer <version> --site old changes it"), "{text}");
+        assert!(!text.contains("unuse"), "{text}");
+    }
 }
