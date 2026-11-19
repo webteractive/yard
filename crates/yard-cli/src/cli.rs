@@ -556,7 +556,8 @@ pub enum PhpAction {
     /// Remove a PHP version with brew; refused while it is the default, a site is
     /// isolated to it, or it has extensions you added.
     Uninstall { version: String },
-    /// Make an installed version the default for sites that are not isolated.
+    /// Make an installed version the default for sites that are not isolated (default_php in
+    /// yard.toml; Yard writes one itself while none is).
     Default { version: String },
     /// Read or change your php.ini overrides (php/<ver>/conf.d/99-overrides.ini).
     Config {
@@ -585,9 +586,10 @@ pub enum NodeAction {
         /// An installed version, as yard node list shows it.
         version: String,
     },
-    /// Run sites and directories with no pin on this version; it must be installed.
+    /// Run sites and directories with no pin on this exact version (default_node in
+    /// yard.toml); it must be installed. Yard writes one itself while none is.
     Default {
-        /// The version, e.g. 22 or lts/iron.
+        /// The exact version, e.g. 22.23.5 (a line such as 22 is refused).
         spec: String,
     },
     /// Pin a site to a version, in its managed .yard or sites.toml.
@@ -629,11 +631,12 @@ pub enum RuntimeAction {
         /// An installed version, as yard runtime list shows it.
         version: String,
     },
-    /// Run projects with no pin of their own on this version; it must be installed.
+    /// Run projects with no pin of their own on this exact version ([runtimes.<key>] default
+    /// in yard.toml); it must be installed. Lists the sites whose PHP cannot run it.
     Default {
         /// The runtime: composer, php or node.
         key: String,
-        /// The version, e.g. 2 or 2.2.
+        /// The exact version, e.g. 2.11.2 (8.4 for php; a prefix such as 2 is refused).
         spec: String,
     },
     /// Pin a site to a version, in its managed .yard or sites.toml. A project's own .yard is

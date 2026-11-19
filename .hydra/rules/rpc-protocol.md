@@ -60,6 +60,15 @@ triggers:
   A client of an older yardd leaves `state` out of `subscribe`, which would refuse it.
   `SERVICE_VERSION_UNSUPPORTED` carries `data.available`, the lines brew has (Yard.app's line
   picker); the M6 design promised it with 2.11 and yardd sent it only from 2026-11-06.
+- Protocol 2.15 (explicit defaults, explicit-defaults spec §2.4–§2.5): `runtime.default` answers
+  `RuntimeDefaultSet { unfit: [UnfitSite { site, hint }] }` (a 2.14 yardd answered `null`, which
+  the CLI and `yard-client` read as an empty set) and takes only an exact version for a recipe
+  runtime or Node (a prefix is `INVALID_ARGUMENT` listing the matches); `RuntimeList.default` and
+  `RuntimeSummary.default` are the version written in `yard.toml` or `null` (rule text or `""`
+  before); `SiteInfo.php_source` (absent from an older yardd) says where a PHP site's version comes
+  from. A committed `.yard` that needs its own Composer pin has a `SiteRuntime.error`
+  (`RUNTIME_MISSING`, `data.needs_pin` the version, hint the line to add). `NodeList.default` stays
+  a string, `""` while none is written.
 - Protocol 2.14 (runtimes, runtimes spec §13): `runtimes.list` (`RuntimesList`: each
   `RuntimeSummary`, and the recipes that did not load) and `runtime.list|install|uninstall|default|use|unuse`,
   each with a `key`; for `php` and `node` they hand over to `php.*`, `sites.isolate` and `node.*`.

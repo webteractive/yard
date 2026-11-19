@@ -233,7 +233,7 @@ each generated file; `yard doctor` reports generated files that were hand-edited
   may wait behind another. After brew removes it, the version's `[php."<ver>"]` table,
   by then only bundled toggles, goes too.
 - `yard php default <ver>` sets the global default (`default_php` in `yard.toml`);
-  the version must be installed.
+  the version must be installed. yardd writes one itself when none is written (§4.5).
 - `yard php list` shows each installed version (and the default if it is not
   installed), whether it is the default, the sites on it and its pool's state.
   `--available` (`php.list { available: true }`, protocol 2.11) also lists every supported
@@ -367,7 +367,15 @@ For a site, the version is the first match of:
    the site's managed `.yard` (`sites/<name>/.yard`, managed-file spec §4), while its
    `project` is the site's path; those commands then edit it.
 2. `sites.toml` isolation (`yard isolate <ver> [--site <name>]`).
-3. The global default.
+3. The global default: `default_php` in `yard.toml`.
+
+The default is written, never compiled in (explicit-defaults spec,
+`docs/superpowers/specs/2026-11-19-yard-explicit-defaults-design.md`): when `yard.toml` has no
+`default_php`, yardd writes one at the start of its next reconcile, 8.4 when 8.4 is installed,
+else the newest installed line, and says so (`yard doctor`'s `runtime-default-written:php`). A
+written default moves only through `yard php default`. With no PHP installed nothing is written,
+and a site is offered 8.4 on its setup page. `yard sites` marks a PHP that comes from the
+default with `*`.
 
 For the CLI shims (current working directory), the version is the first match of:
 1. The nearest `.yard` in the cwd or any parent (project-file spec §5): its `php`, else
@@ -413,8 +421,11 @@ profile; Yard does not edit dotfiles.
   managed `.yard` is for it wins. When a `.yard`
   names a PHP that is not installed, the error is `FORMULA_MISSING`, `PHP <v> is not
   installed (<file>)`, hint `yard init`. A `yard.toml` or `sites.toml` that does not parse is only a warning
-  on stderr: the shim uses PHP 8.4 as the default, or ignores site isolation, so one
-  half-saved file does not stop every `php` on the machine.
+  on stderr: the shim uses the defaults yardd kept from the last `yard.toml` it read whole
+  (`run/defaults.toml`), or ignores site isolation, so one half-saved file does not stop every
+  `php` on the machine. With no such file a pinned project still runs and an unpinned one fails
+  with `yard.toml`'s own error; the shim never falls back to a compiled-in version.
+  With no `default_php` written, an unpinned project is `RUNTIME_MISSING`, naming the install.
 - It runs `<keg>/bin/<name>`. `composer` is a runtime of its own since the runtimes spec
   (`docs/superpowers/specs/2026-11-18-yard-runtimes-design.md` §9): the Composer Yard
   installed that the project's PHP can run, `<keg>/bin/php <installs>/composer/<v>/composer.phar`

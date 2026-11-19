@@ -140,9 +140,14 @@ order follows main spec §8.1 and project-file spec §5)**:
    `sites.toml` from before the file was committed is ignored, as a left-over `php` is.
 3. **`.nvmrc`**, then **`.node-version`**.
 
-With nothing found up to `/`, it is **the default**: `default_node` in `yard.toml`. When that
-is unset, the built-in default is `22` **(Claude's call: most of the maintainer's pinned projects use
-22)**.
+With nothing found up to `/`, it is **the default**: `default_node` in `yard.toml`. ~~When that
+is unset, the built-in default is `22`~~ *Amended 2026-11-19 by the explicit defaults
+(`2026-11-19-yard-explicit-defaults-design.md`): nothing is built in. When `default_node` is unset,
+yardd writes one at its next reconcile, the newest installed 22.x (most of the maintainer's pinned
+projects use 22), else the newest installed version, always exact (`22.23.5`); with no Node
+installed nothing is written, and a site with a `package.json` and no pin is `NODE_MISSING`
+naming `yard node install 22`. A written default never moves on an install. One written by hand as
+a prefix (`22`, `lts/iron`) is read as one and doctor warns `runtime-default-not-exact:node`.*
 
 - **Nearer beats kind.** A monorepo's `frontend/.nvmrc` wins in `frontend/` over the root's
   `.yard` `node` and over `yard node use`, which still beat an `.nvmrc` beside them in the
@@ -221,7 +226,9 @@ They go into one new protocol minor version **(builder's call: which number)**.
   nodejs.org through `fnm ls-remote` for the newest release of each line still supported
   (≥ 16), marks the LTS lines, and refreshes `lts.toml`.
 - **`yard node default <spec>`** sets `default_node` in `yard.toml`. A version matching the
-  spec must already be installed, as `yard php default` requires. This splits the main spec's
+  spec must already be installed, as `yard php default` requires. Since the explicit defaults it
+  takes only an exact version: a line (`22`) is refused, listing the installed versions it
+  matches; and the default's version cannot be uninstalled until the default moves. This splits the main spec's
   `yard node use <ver>` (without `--site`) into its own command, the way PHP separates
   `php default` from `isolate` **(Claude's call)**.
 - **`yard node use <spec> [--site <name>]`** works like `yard isolate`. The site is the one
@@ -290,7 +297,7 @@ They go into one new protocol minor version **(builder's call: which number)**.
 ```
 node/                        # FNM_DIR: written only by fnm, run by Yard (install/uninstall)
 node/lts.toml                # generated: LTS codename → major (§4)
-yard.toml   default_node = "22"          # user-owned, set by `yard node default`
+yard.toml   default_node = "22.23.5"     # user-owned, set by `yard node default`, or by yardd when unset
 sites.toml  [sites.<name>] node = "16"   # user-owned, set by `yard node use` for a site with no .yard
 ```
 

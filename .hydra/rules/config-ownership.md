@@ -51,6 +51,17 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     `[sites.<s>.runtimes]` in `sites.toml`) is written by `yard runtime use`; a committed `.yard` is
     the user's, so `runtime.use` is refused for it with the line to add. `yard.toml`'s
     `[runtimes.<key>] default` is written by `yard runtime default`.
+  - **yardd's defaults check (explicit-defaults spec §2.2)** is the one place yardd writes user
+    config without a command: at the start of every reconcile (`defaults::fill`) it writes a
+    default that is missing from `yard.toml` (`default_php`, `default_node`,
+    `[runtimes.<key>] default`), exact, from what is installed, and the `[runtimes] composer` pin a
+    linked site needs when its PHP cannot run the default, in its managed `.yard` or `sites.toml`
+    (`managed::set_site_runtime`, as `yard runtime use`). Each through `TomlFile` (or
+    `edit_managed`), only where nothing is written, so a written value is never moved and comments
+    survive; a committed `.yard` is never written. It logs each write, and doctor lists them.
+  - `run/defaults.toml` is generated: the defaults of the last `yard.toml` a reconcile read whole
+    (`render_defaults`, written atomically when it changed), which the shims use while a hand edit
+    leaves `yard.toml` unreadable. Nobody edits it.
   - Yard creates a database (never a role or bucket) only when asked: `db.create`, or `db.command`
     for an import into a name that does not exist (db spec). `yard link`, `init` and a `.yard` never
     create one, and nothing in Yard drops one.
@@ -174,7 +185,8 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
   `node-versions/v<x>` with no `bin/node` (a failed download) before retrying. `node/lts.toml`
   is generated (`write_lts`, header and all) from each `fnm ls-remote`. `default_node` in
   `yard.toml`, a site's `node` in `sites.toml` and the `node` key of a `.yard` are the user's,
-  edited only by `yard node default` and `use`/`unuse` through `TomlFile` or
+  edited only by `yard node default` (and yardd's defaults check, when `default_node` is missing)
+  and `use`/`unuse` through `TomlFile` or
   `managed::edit_managed`, and `use`/`unuse` are refused for a committed `.yard`. A project's
   `.nvmrc` and `.node-version` are read only (at most 64 KiB, regular files).
 - Yard never writes project `.env` files (spec non-goal).

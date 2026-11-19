@@ -237,6 +237,19 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   Yard.app's Composer row. The spec's §21 lists what the build decided. The final review's minor
   findings were fixed in 73e4e4f, and `scripts/e2e-composer.sh` passed on the Mac mini on 2026-11-19 on
   its first run against yardd built from it (maintainer approved the run).
+- Explicit defaults (maintainer, 2026-11-19: "I want yard to be explicit on what it runs"): a
+  runtime's default is an exact version written in `yard.toml` (`default_php = "8.4"`,
+  `default_node = "22.23.5"`, `[runtimes.composer] default = "2.11.2"`), filled in by yardd at the
+  start of every reconcile when missing (`yard_daemon::defaults`), never moved by an install, moved
+  only by `yard runtime default` (exact versions only); one Composer default, and a project whose
+  PHP cannot run it carries its own pin, which yardd writes in its managed `.yard` or `sites.toml`
+  (a committed `.yard` is never edited: link, doctor's `composer-pin:<site>` and the shim name the
+  line to add). The recipe format's `[[default]]` rules are gone, and the shims fall back to
+  `run/defaults.toml`, never a compiled-in version. Designed in
+  `docs/superpowers/specs/2026-11-19-yard-explicit-defaults-design.md` and planned in
+  `docs/superpowers/plans/2026-11-19-yard-explicit-defaults.md` (both approved 2026-11-19, run
+  natively), built on main with protocol 2.15; the spec's §7 lists what the build decided.
+  `scripts/e2e-composer.sh` checks it on a real Mac and has not run in this form yet.
 - PHP trusts Yard's CA (maintainer, 2026-11-17, from a cURL error 60 found moving the main Mac's
   Herd sites): reconcile writes `php/<v>/ca-bundle.pem` (brew's `ca-certificates` and
   `yard-ca.pem`) once a CA exists, and Yard's `php.ini` names it as `openssl.cafile` and
@@ -609,16 +622,22 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   recipe of those names, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails
   if Herd's resolver or the listeners on 3306, 5432 and 6379 (except a port Yard's own instance
   holds) changed; ask the maintainer first. `shellcheck scripts/e2e-engines.sh` stays clean.
-- `scripts/e2e-composer.sh` — real-machine runtimes check after `e2e-m1.sh`: links two scratch
-  projects under `$TMPDIR` whose `.yard` pins PHP 7.1 and 8.4, each with a `composer.json`; `yard link
-  --yes` installs Composer from getcomposer.org (2.2.x for 7.1, the current 2.x for 8.4), `composer -V`
-  and `composer install` run in both, `[runtimes] composer = "2.2"` moves the 8.4 project to 2.2,
-  `self-update` is refused before and after options, and `yard runtime uninstall` is refused with
-  `RUNTIME_IN_USE` while a site runs that version. It needs yardd built from this checkout, brew's
-  `php@7.1` and `php@8.4` (it installs no PHP) and the network; it refuses to start while
-  `~/.yard/installs/composer` holds any version, backs up and restores `yard.toml` and `sites.toml`,
-  removes what it installed, keeps Composer's home and cache in its temp dir, and fails if Herd's
-  resolver changed; ask the maintainer first. `shellcheck scripts/e2e-composer.sh` stays clean.
+- `scripts/e2e-composer.sh` — real-machine runtimes and explicit-defaults check after `e2e-m1.sh`, with
+  two scratch projects under `$TMPDIR`, each with a `composer.json`: `yard runtime install composer
+  2.7.7` writes `[runtimes.composer] default = "2.7.7"` and says so, the 8.4 project (a committed
+  `.yard`) linked with `--yes` runs it, and installing the current 2.x leaves it there; the other
+  project (no `.yard`) linked and isolated to 7.1 gets 2.2.x from `yard runtime install composer`
+  run in it, which yardd pins in `sites.toml` without moving the default; `composer install` runs in
+  both, `[runtimes] composer = "2.2"` moves the 8.4 project to 2.2, the committed `.yard` moved to
+  `php = "7.1"` with no pin is refused with the line to add (and not edited), `self-update` is refused
+  before and after options, and `yard runtime uninstall` is refused with `RUNTIME_IN_USE` for the
+  default and while a site runs a version. It needs yardd built from this checkout, brew's `php@7.1`
+  and `php@8.4` (it installs no PHP) and the network; it refuses to start while
+  `~/.yard/installs/composer` holds any version or `yard.toml` has a `[runtimes.composer]` default,
+  backs up and restores `yard.toml` and `sites.toml` (removing the Composer versions first, so yardd
+  writes no default into the restored file), keeps Composer's home and cache in its temp dir, and
+  fails if Herd's resolver changed; ask the maintainer first. `shellcheck scripts/e2e-composer.sh`
+  stays clean.
 
 ## Verifying a change on a real machine
 

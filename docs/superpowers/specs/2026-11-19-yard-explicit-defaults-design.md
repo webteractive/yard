@@ -1,6 +1,8 @@
 # Explicit runtime defaults
 
-Status: draft, 2026-11-19 (builder check done; §2.1 and §2.2 decided by the maintainer). Amends the runtimes design
+Status: **approved 2026-11-19 and built on main** (plan `docs/superpowers/plans/2026-11-19-yard-explicit-defaults.md`,
+run natively, protocol 2.15); §7 lists what the build decided. `scripts/e2e-composer.sh` checks it on a
+real Mac and has not run in this form yet. Builder check done; §2.1 and §2.2 decided by the maintainer. Amends the runtimes design
 (`2026-11-18-yard-runtimes-design.md` §7, §9.2, §21) and the main spec's PHP default (§4.5), and
 M4c's `default_node`.
 
@@ -187,3 +189,31 @@ Everywhere a runtime's version is shown, its source is shown with it: `pin` (`.y
 The exact doctor check names, the `yard sites` marker, the wording of the link and upgrade notices,
 and whether the start check runs in yardd's startup before the first reconcile or in the first
 reconcile itself, as long as no shim can run against a `yard.toml` that is half written.
+
+## 7. What the build decided (2026-11-19)
+
+- **A missing default's hint is the install** (`yard php install 8.4`, `yard node install 22`), not
+  `yard php default <version>`: with yardd running, a default is missing only while nothing is
+  installed (§2.3).
+- **Doctor's written lines are `ok`, not a new level**: `runtime-default-written:<key>` for a
+  default and `runtime-pin-written:<key>:<site>` for a site's pin, with the message the install's
+  output gives (`wrote default_php = "8.4" to yard.toml; yard runtime default php <version> changes
+  it`). `CheckStatus` has no info level, and a new one would read as unknown in older clients.
+- **`runtime.default`'s `unfit` lists only the sites Yard cannot pin itself**: a committed `.yard`
+  (the line to add) or a site with nothing fitting installed (the install). A managed or
+  `sites.toml` site is pinned by the reconcile `runtime.default` ends with, so listing it would tell
+  the user to do what Yard just did. Doctor names the same sites as `composer-pin:<site>`.
+- **A committed `.yard` that needs a pin** carries it as its Composer's `SiteRuntime.error`
+  (`RUNTIME_MISSING`, `data.needs_pin`, hint the line to add): `yard link` and `yard init` print it
+  and serve, `yard info` shows `needs a pin in .yard`, and the shim refuses with the line.
+- **A site that cannot run the default and has nothing fitting installed** resolves to what Yard
+  offers it (`2.2` for PHP below 7.2.5), so link and init still offer the install, and the install
+  job's reconcile writes the pin; no separate pin-writing code in the install jobs.
+- **`Written`** carries the site and the version besides the key and the line; the site-pin write
+  is `managed::set_site_runtime`, shared with `yard runtime use`.
+- **Displays**: `yard info` and Yard.app label a runtime's default `default (yard.toml)` / `the
+  default in yard.toml`; a docroot's or HTTPS's default (detected, `secure_by_default`) keeps
+  `default`. `NodeList.default` stays a string, `""` while none is written, and `yard node list`
+  with nothing installed hints at `yard node install 22`.
+- **With `yard.toml` broken and no `run/defaults.toml`**, a pinned project still runs and an
+  unpinned one fails with `yard.toml`'s own error, not "no default is written".

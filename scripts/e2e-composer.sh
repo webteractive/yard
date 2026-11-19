@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Runtimes plan 1 end-to-end check on a real Mac, after e2e-m1.sh passes: Composer per project.
+# Runtimes end-to-end check on a real Mac, after e2e-m1.sh passes: Composer per project, with
+# the explicit defaults (explicit-defaults spec).
 #
-# Links two scratch projects (never under ~/Herd), one whose .yard pins PHP 7.1 and one PHP
-# 8.4, each with a composer.json, and checks that `yard link --yes` offers and installs the
-# Composer each PHP runs from getcomposer.org (2.2 for 7.1, the current 2.x for 8.4), that
-# Yard's composer shim runs it and `composer install` works in both, that [runtimes]
-# composer = "2.2" in the 8.4 project's .yard moves it to 2.2, that self-update is refused
-# in every spelling and the phar is read-only, and that `yard runtime uninstall` refuses a version a site runs. It
-# needs yardd running (built from this checkout), brew's php@7.1 and php@8.4 (it installs no
-# PHP), and the network. yard.toml and sites.toml are backed up and put back, only the
-# Composer versions this run installed are removed, and the run fails if Herd's resolver
-# changed. Composer's home and cache go in a temp dir, so ~/.composer is not touched.
+# Installs an older exact Composer first and checks yardd writes it as the default, that linking
+# an 8.4 project (a committed .yard) runs it, and that installing the current 2.x never moves it.
+# Then links a second project with no .yard, isolates it to PHP 7.1, and checks that `yard runtime
+# install composer` there installs 2.2 and that yardd pins that site to it (no default moves).
+# Then: composer install works in both, a [runtimes] pin in the 8.4 project's .yard wins, the
+# committed .yard moved to 7.1 with no pin is refused with the line to add, self-update is refused
+# in every spelling and the phar is read-only, and `yard runtime uninstall` refuses the default
+# and a version a site runs. It needs yardd running (built from this checkout), brew's php@7.1 and
+# php@8.4 (it installs no PHP), and the network. yard.toml and sites.toml are backed up and put
+# back, only the Composer versions this run installed are removed, and the run fails if Herd's
+# resolver changed. Composer's home and cache go in a temp dir, so ~/.composer is not touched.
 set -euo pipefail
 unset YARD_ROOT
 
@@ -39,11 +41,15 @@ installed() {
 composer() { (cd "$work/$1" && "$data/bin/composer" "${@:2}"); }
 
 # 1. What this needs, and what must come out unchanged. A Composer already installed would
-# let link skip the install this checks, and is the maintainer's: it is never removed.
+# let link skip the install this checks, and is the maintainer's: it is never removed. A
+# written Composer default would keep yardd from writing the one this run checks.
 for v in 7.1 8.4; do
   [[ -x $brew_prefix/opt/php@$v/bin/php ]] || fail "PHP $v is not installed; run brew install shivammathur/php/php@$v first"
 done
 [[ -z "$(installed)" ]] || fail "Composer $(installed | tr '\n' ' ')is installed in $installs; this run checks the install, so move them away first"
+if grep -q '^\[runtimes\.composer\]' "$data/yard.toml" 2>/dev/null; then
+  fail "$data/yard.toml has a [runtimes.composer] default; move it away first"
+fi
 for s in $old $new; do
   [[ ! -e $data/sites/$s ]] || fail "$data/sites/$s already exists; move it away first"
 done
@@ -56,7 +62,7 @@ for s in $old $new; do
   cp -R "$fixtures/hello-php" "$work/$s"
   printf '{"name": "yard/%s", "require": {}}\n' "$s" >"$work/$s/composer.json"
 done
-printf 'php = "7.1"\n' >"$work/$old/.yard"
+# The old project has no .yard: it is isolated after linking, so Yard can pin its Composer.
 printf 'php = "8.4"\n' >"$work/$new/.yard"
 for f in yard.toml sites.toml; do
   if [[ -f $data/$f ]]; then cp -p "$data/$f" "$work/$f.bak"; fi
@@ -71,29 +77,61 @@ cleanup() {
     if [[ -f $stub && $(wc -l <"$stub") -le 1 ]] && grep -q '^# USER-OWNED' "$stub"; then rm -f "$stub"; fi
     rm -rf "${data:?}/sites/$s"
   done
-  for f in yard.toml sites.toml; do
-    if [[ -f $work/$f.bak ]] && ! cmp -s "$work/$f.bak" "$data/$f"; then cp -p "$work/$f.bak" "$data/$f"; fi
-  done
-  # Every version is this run's: step 1 refused to start over any other.
+  # Every version is this run's: step 1 refused to start over any other. They go before the
+  # configs come back: with one installed, putting back a yard.toml with no Composer default
+  # would have yardd write one into it. The default's version is refused by uninstall.
   for v in $(installed); do
     "$yard" runtime uninstall composer "$v" >/dev/null 2>&1 \
       || { chmod -R u+w "${installs:?}/$v" && rm -rf "${installs:?}/$v"; }
   done
+  for f in yard.toml sites.toml; do
+    if [[ -f $work/$f.bak ]] && ! cmp -s "$work/$f.bak" "$data/$f"; then cp -p "$work/$f.bak" "$data/$f"; fi
+  done
 }
 trap 'cleanup; rm -rf "$work"' EXIT
 
-# 3. yard link --yes offers Composer and installs the one each PHP runs.
-for s in $old $new; do
-  (cd "$work/$s" && "$yard" link "$s" --yes >"$work/link-$s.out" 2>&1) \
-    || fail "yard link $s --yes failed: $(cat "$work/link-$s.out")"
-  grep -q 'yard runtime install composer' "$work/link-$s.out" || fail "yard link $s offered no Composer: $(cat "$work/link-$s.out")"
-done
-v="$(composer $old -V 2>&1)"
-[[ $v == *"Composer version 2.2."* ]] || fail "composer -V on PHP 7.1 printed '$v', expected 2.2.x"
-pass "PHP 7.1's project runs Composer 2.2: ${v%% 20*}"
+# The [runtimes.composer] default written in yard.toml, or nothing.
+composer_default() { sed -n '/^\[runtimes\.composer\]/,/^\[/s/^default = "\(.*\)"/\1/p' "$data/yard.toml"; }
+# Waits up to 10 s for command $@ to succeed.
+within() { local _; for _ in $(seq 1 50); do if "$@"; then return 0; fi; sleep 0.2; done; return 1; }
+
+# 3. An older exact Composer becomes the written default; the 8.4 project runs it, and
+# installing the current 2.x never moves it.
+older=2.7.7
+"$yard" runtime install composer "$older" >"$work/install-older.out" 2>&1 \
+  || fail "yard runtime install composer $older failed: $(cat "$work/install-older.out")"
+grep -q "wrote \[runtimes.composer\] default = \"$older\"" "$work/install-older.out" \
+  || fail "the install did not say it wrote the default: $(cat "$work/install-older.out")"
+[[ $(composer_default) == "$older" ]] || fail "yard.toml's Composer default is '$(composer_default)', expected $older"
+pass "installing Composer $older wrote it as the default, and said so"
+(cd "$work/$new" && "$yard" link "$new" --yes >"$work/link-$new.out" 2>&1) \
+  || fail "yard link $new --yes failed: $(cat "$work/link-$new.out")"
 v="$(composer $new -V 2>&1)"
-[[ $v == *"Composer version 2."* && $v != *"Composer version 2.2."* ]] || fail "composer -V on PHP 8.4 printed '$v', expected 2.x after 2.2"
-pass "PHP 8.4's project runs the current Composer: ${v%% 20*}"
+[[ $v == *"Composer version $older "* ]] || fail "composer -V on PHP 8.4 printed '$v', expected the default $older"
+"$yard" runtime install composer 2 >"$work/install-current.out" 2>&1 \
+  || fail "yard runtime install composer 2 failed: $(cat "$work/install-current.out")"
+current="$(installed | grep -v "^$older\$" | grep -v '^2\.2\.' | head -n 1)"
+[[ -n $current ]] || fail "yard runtime install composer 2 installed nothing besides $older"
+[[ $(composer_default) == "$older" ]] || fail "installing $current moved the default to '$(composer_default)'"
+v="$(composer $new -V 2>&1)"
+[[ $v == *"Composer version $older "* ]] || fail "after installing $current, composer -V on PHP 8.4 printed '$v'"
+pass "installing Composer $current left the default, and the 8.4 project, on $older"
+
+# 3b. A project on PHP 7.1 gets its own pin when its Composer is installed, and no default moves.
+(cd "$work/$old" && "$yard" link "$old" --yes >"$work/link-$old.out" 2>&1) \
+  || fail "yard link $old --yes failed: $(cat "$work/link-$old.out")"
+"$yard" isolate 7.1 --site "$old" >/dev/null || fail "yard isolate 7.1 --site $old failed"
+(cd "$work/$old" && "$yard" runtime install composer >"$work/install-lts.out" 2>&1) \
+  || fail "yard runtime install composer in $old failed: $(cat "$work/install-lts.out")"
+lts="$(installed | grep '^2\.2\.' | head -n 1)"
+[[ -n $lts ]] || fail "yard runtime install composer under PHP 7.1 installed no 2.2: $(cat "$work/install-lts.out")"
+pinned() { grep -q "composer = \"$lts\"" "$data/sites.toml"; }
+within pinned || fail "sites.toml has no composer = \"$lts\" for $old: $(cat "$data/sites.toml")"
+grep -q "for site $old" "$work/install-lts.out" || fail "the install did not say it pinned $old: $(cat "$work/install-lts.out")"
+[[ $(composer_default) == "$older" ]] || fail "installing $lts moved the default to '$(composer_default)'"
+v="$(composer $old -V 2>&1)"
+[[ $v == *"Composer version $lts "* ]] || fail "composer -V on PHP 7.1 printed '$v', expected its pin $lts"
+pass "PHP 7.1's project is pinned to Composer $lts, and the default stayed $older"
 for f in "$installs"/*/.yard-install.toml; do
   [[ -f $f ]] || fail "no .yard-install.toml in $(dirname "$f")"
 done
@@ -107,11 +145,19 @@ for s in $old $new; do
 done
 pass "composer install works under PHP 7.1 and 8.4"
 
-# 5. A pin in the 8.4 project's .yard moves it to 2.2.
+# 5. A pin in the 8.4 project's .yard moves it to 2.2; moved to PHP 7.1 with no pin, the
+# committed .yard is refused with the line to add, and never edited.
 printf 'php = "8.4"\n\n[runtimes]\ncomposer = "2.2"\n' >"$work/$new/.yard"
 v="$(composer $new -V 2>&1)"
 [[ $v == *"Composer version 2.2."* ]] || fail "with [runtimes] composer = \"2.2\", composer -V printed '$v'"
 pass "[runtimes] composer = \"2.2\" runs Composer 2.2 on PHP 8.4"
+printf 'php = "7.1"\n' >"$work/$new/.yard"
+if composer $new -V >"$work/refused.out" 2>&1; then fail "composer ran Composer $older on PHP 7.1: $(cat "$work/refused.out")"; fi
+grep -q "add \[runtimes\] composer = \"$lts\" to " "$work/refused.out" \
+  || fail "the refusal named no line to add: $(cat "$work/refused.out")"
+[[ $(cat "$work/$new/.yard") == 'php = "7.1"' ]] || fail "the committed .yard was edited: $(cat "$work/$new/.yard")"
+pass "a committed .yard on PHP 7.1 with no pin is refused with the line to add, and left alone"
+printf 'php = "8.4"\n' >"$work/$new/.yard"
 
 # 6. self-update is refused in every spelling, and the phar is read-only besides.
 for args in "self-update" "-n self-update" "--no-ansi selfupdate" "-d /tmp self-update" "self-u" "global self-update"; do
@@ -124,8 +170,12 @@ for phar in "$installs"/*/composer.phar; do
 done
 pass "composer self-update is refused in every spelling, and the phar is read-only"
 
-# 7. yard runtime uninstall refuses the version a site runs.
-lts="$(installed | grep '^2\.2\.' | head -n 1)"
+# 7. yard runtime uninstall refuses the default and the version a site runs.
+if "$yard" runtime uninstall composer "$older" --json >"$work/uninstall-default.out" 2>&1; then
+  fail "yard runtime uninstall composer $older succeeded while it is the default"
+fi
+grep -q 'RUNTIME_IN_USE' "$work/uninstall-default.out" || fail "yard runtime uninstall said: $(cat "$work/uninstall-default.out")"
+pass "yard runtime uninstall composer $older is refused while it is the default"
 if "$yard" runtime uninstall composer "$lts" --json >"$work/uninstall.out" 2>&1; then
   fail "yard runtime uninstall composer $lts succeeded while $old runs it"
 fi

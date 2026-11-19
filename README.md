@@ -11,9 +11,16 @@ To build Yard yourself or work on it, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 - **PHP 7.0–8.5 side by side**, from Homebrew's `shivammathur/php` tap; each site runs the
   version it asks for, and the `php`, `composer` and `pecl` shims follow it.
+- **Explicit defaults**: what a project with no pin runs is an exact version written in
+  `yard.toml` (`default_php = "8.4"`, `default_node = "22.23.5"`, `[runtimes.composer] default =
+  "2.11.2"`), never a rule inside Yard. When one is missing, yardd writes it from what is installed
+  and says so (`yard doctor`); installing a newer version never moves it; `yard runtime default`
+  does. `yard sites` marks a PHP that comes from the default with `*`, and `yard info` says where
+  each version comes from.
 - **Composer per project**, downloaded from getcomposer.org and checked by SHA-256: a project on
-  PHP below 7.2.5 gets the 2.2 LTS, any other the current 2.x, and a `.yard` can pin one
-  (`[runtimes] composer = "2.2"`). `composer self-update` is refused: `yard runtime install
+  PHP below 7.2.5, which the default cannot run, gets its own pin to the 2.2 LTS, written by Yard
+  in its managed `.yard` or `sites.toml` (a committed `.yard` is yours: `yard link` and `yard
+  doctor` name the line to add), and a `.yard` can pin any version (`[runtimes] composer = "2.2"`). `composer self-update` is refused: `yard runtime install
   composer <version>` adds versions. Until Yard has installed a Composer, `composer` in a project
   on PHP 7.2.5 or later still runs brew's (saying so on stderr, and `yard doctor` lists those
   sites under `composer-brew`); this lasts one release. To move over, run `yard runtime install
@@ -228,15 +235,15 @@ error, 3 `yardd` is not running.
 | `yard trust` / `untrust` | yes | Adds Yard's CA to your login keychain as trusted, or removes it; macOS asks for your password. |
 | `yard php [list] [--available]` | yes | Installed PHP versions, the default, the sites on each and its pool; `--available` also lists the supported versions that are not installed (a yardd before protocol 2.11 refuses it; restart it). |
 | `yard php install <ver>` / `uninstall <ver>` | yes | Installs or removes a PHP version (7.0–8.5) with brew, showing brew's output; Ctrl-C cancels it. Homebrew 6+ must trust the formula or its tap (`brew trust`): Yard asks `brew trust --json=v1` first and refuses with `FORMULA_UNTRUSTED` instead of installing; on a terminal the CLI then asks `Trust <formula> (from the <tap> tap)? [y/N]` and, on yes, trusts that formula and retries. `--yes` never answers it. `uninstall` is refused while the version is the default, a site is isolated to it or names it in its `.yard`, or it has extensions you added. |
-| `yard php default <ver>` | yes | Makes an installed version the default. |
+| `yard php default <ver>` | yes | Makes an installed version the default (`default_php` in `yard.toml`). With none written, yardd writes 8.4 when it is installed, else the newest installed line. |
 | `yard node [list] [--available [<major>]]` | yes | Installed Node versions, the default and the sites on each; `--available` adds the newest release of each line (or one major) from nodejs.org. |
 | `yard node install [<spec>]` / `uninstall <version>` | yes | Installs a Node version (`22`, `22.17`, `16.14.0`, `lts/iron`, `lts/*`; with none, the one the current directory pins) with fnm, installing fnm with brew first if it is missing; Ctrl-C cancels it. `uninstall` takes an installed version and is refused with `NODE_IN_USE` while the default or a linked site would be left with no version to run. |
-| `yard node default <spec>` | yes | Sets the Node for sites and directories that pin none (`22` until you change it); it must be installed. |
+| `yard node default <version>` | yes | Sets the Node for sites and directories that pin none, an exact installed version (`22.23.5`; a line such as `22` is refused, listing what it matches). With none written, yardd writes the newest installed 22.x, else the newest installed. Its version cannot be uninstalled until the default moves. |
 | `yard node use <spec> [--site <name>]` / `unuse [--site <name>]` | yes | Pins a site's Node, in its managed `.yard` or else `sites.toml`, or removes that pin. Refused for a site with a committed `.yard`: edit its `node`. |
 | `yard runtimes` | yes | Every runtime (PHP, Node, Composer) with its shims, installed versions and default. |
 | `yard runtime list <key>` | yes | A runtime's installed versions, the default and the sites on each. |
 | `yard runtime install <key> [<spec>]` / `uninstall <key> <version>` | yes | Installs a version (`composer 2`, the current line; `2.2`, the LTS for PHP below 7.2.5; or an exact one such as `2.7.7`; with none, the one the current directory runs). `uninstall` is refused with `RUNTIME_IN_USE` while the default or a linked site would be left with no version to run. For `php` and `node` these are `yard php` and `yard node`. |
-| `yard runtime default <key> <spec>` | yes | The version for projects with no pin of their own (`[runtimes.<key>] default` in `yard.toml`); it must be installed. Without one, Composer follows the project's PHP. |
+| `yard runtime default <key> <version>` | yes | The version for projects with no pin of their own (`[runtimes.<key>] default` in `yard.toml`), an exact installed version; it lists the sites whose PHP cannot run it and Yard cannot pin itself, with the fix for each. With none written, yardd writes the newest installed Composer at or above 2.3.0. Its version cannot be uninstalled until the default moves. |
 | `yard runtime use <key> <spec> [--site <name>]` / `unuse <key> [--site <name>]` | yes | Pins a site's version in its managed `.yard` or else `sites.toml`, or removes that pin. Refused for a site with a committed `.yard`: add `[runtimes] composer = "2.2"` to it yourself. |
 | `yard php config get\|set\|unset <key> [value] [--php <ver>]` | yes | Reads or changes your php.ini overrides (`99-overrides.ini`) and reloads that version's pool. |
 | `yard ports` | yes | Registered ports with their mode, status and holder. |
@@ -264,7 +271,7 @@ error, 3 `yardd` is not running.
 | `yard info [site]` | yes | What one site runs on: path, `.yard`, PHP (full version), Node (with the spec it pins), docroot, HTTPS, extensions, each service with its state, address and account, and unmet needs with the command that fixes each. Each setting says whether it comes from `.yard`, the managed `.yard` (`managed`), `sites.toml`, `.nvmrc`, `.node-version` or the default. |
 | `yard sources` | yes | The brew taps Yard installs from (`shivammathur/php`, `shivammathur/extensions`, `minio/stable`): tapped, trusted, and the formulae trusted or installed. |
 | `yard source trust\|untrust <formula> [--tap]` | yes | Runs `brew trust` / `brew untrust` for one formula, or with `--tap` a whole tap. Needs no terminal. Untrusting something installed does not stop it serving, but brew will no longer load it. |
-| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx` first. The PHP ones follow the nearest `.yard`, then the site's managed `.yard`, then the site's isolated version, then `.yard-php`, then the default, and `composer` runs, under that PHP, the Composer Yard installed that the project pins (`[runtimes] composer`) or its PHP can run; the Node ones the nearest pin, where in one directory a `.yard`'s `node` beats the site's pin, which beats `.nvmrc`, then `.node-version`; with none, the default. Warns when another `php` or `node` would still win, naming nvm's, mise's, fnm's or brew's. |
+| `yard install-shims` | no | Prints the PATH line that puts Yard's `php`, `composer`, `pecl`, `phpize`, `php-config`, `node`, `npm` and `npx` first. The PHP ones follow the nearest `.yard`, then the site's managed `.yard`, then the site's isolated version, then `.yard-php`, then the default, and `composer` runs, under that PHP, the Composer Yard installed that the project pins (`[runtimes] composer`), else `yard.toml`'s default, refusing one the project's PHP cannot run; the Node ones the nearest pin, where in one directory a `.yard`'s `node` beats the site's pin, which beats `.nvmrc`, then `.node-version`; with none, the default. Warns when another `php` or `node` would still win, naming nvm's, mise's, fnm's or brew's. |
 | `yard tunnel [site] [--quick \| --host <hostname>] [--tunnel <name\|uuid>] [--overwrite-dns]` | yes | Shares a site at a public URL through cloudflared (`brew install cloudflared`). `--quick` gives a random `trycloudflare.com` URL until yardd stops; `--host` a name on a domain set up with `yard tunnels domain add`, kept in `sites.toml` until `yard untunnel`. With neither, it asks when a domain is set up (and without a terminal fails with `TUNNEL_KIND_REQUIRED`, exit 2), and makes a quick tunnel when none is. Prints the URL and the `APP_URL` to use. |
 | `yard untunnel [site] [--keep-tunnel]` | yes | Stops sharing a site. For a named tunnel it deletes the Cloudflare tunnel Yard made (unless `--keep-tunnel`, and never one adopted with `--tunnel`) and names the DNS record left for you to delete in Cloudflare's dashboard. |
 | `yard tunnels` | yes | One row per tunnel: `SITE URL KIND STATE TUNNEL`. |

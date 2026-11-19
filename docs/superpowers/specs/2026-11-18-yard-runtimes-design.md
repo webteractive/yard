@@ -17,6 +17,13 @@ Homebrew": brew stays the source of the plain builds, §10) and the main spec's 
 the build decided is in §21. `scripts/e2e-composer.sh` passed on the Mac mini on 2026-11-19, on its first run, against yardd
 built from 73e4e4f (after the review's minor findings were fixed).
 
+**Amended by the explicit defaults (2026-11-19,
+`docs/superpowers/specs/2026-11-19-yard-explicit-defaults-design.md`):** a runtime's default is an
+exact version written in `yard.toml`, filled in by yardd when missing and moved only by `yard
+runtime default`; the recipe format's `[[default]]` rules and their `exclude` are gone, and a
+project whose PHP cannot run the Composer default carries its own pin. §7, §9.2 and §21 below say
+so where they changed.
+
 Decisions marked **(maintainer)** are the maintainer's, from the 2026-11-18 conversation. Decisions
 marked **(my call)** were made while writing this and can be reversed on their own.
 
@@ -115,7 +122,7 @@ Anti-goals (a failure even if it works):
 | spec syntax | — | major, major.minor, exact, LTS names | build name | the driver's or the recipe engine's (§7.1) |
 | installed versions | brew's `bin/composer` | `node/node-versions/` | brew kegs | `installed(paths)`: read from disk, never a daemon |
 | install / uninstall | `brew install composer` | fnm, as a job | brew, as a job | `install(spec)`, `uninstall(version)`: jobs |
-| default | — | `default_node`, else 22 | `default_php`, else 8.4 | `default()`: rules, can depend on another runtime (§9.2) |
+| default | `[runtimes.composer] default` | `default_node` | `default_php` | written in `yard.toml`, an exact version, filled in by yardd (explicit-defaults spec §2.2) |
 | runs on | PHP | — | — | `runs_on()`: `php` or `node` |
 | site uses it | — | `package.json` in the root | always | `uses_when()`: files in the site root |
 | wakes services | yes | no | yes (`php`) | `wake()` |
@@ -150,10 +157,8 @@ uses_when = ["bun.lockb", "bun.lock"]   # files in a site root that mean the sit
 path = ["bin"]                      # dirs under {home} put first on the child's PATH; default ["bin"]
 env = { BUN_INSTALL_CACHE_DIR = "{cache}" }
 
-[[default]]                         # first matching rule wins; no rules: newest installed
-spec = "1"
-# php_below = "7.2.5"               # only with runs_on = "php" (composer, §9.2)
-# exclude = ["2.2"]                 # versions with these prefixes never match this rule's spec
+# No [[default]]: the default is the exact version in yard.toml ([runtimes.bun] default),
+# which yardd writes from the newest installed version (explicit-defaults spec §2.2).
 
 # [[requires]]                      # only with runs_on: versions from `from` on need this PHP
 # from = "2.3.0"
@@ -197,8 +202,8 @@ shims (except those of the carried runtime the recipe replaces: a user `composer
 `composer`), `yard`, `yardd` or `yard-shim`, and is not another loaded recipe's (the second to load, in
 file-name order, fails, naming the first); every `exec[0]` is under `{home}` or is `{php}`/`{node}`;
 `download` URLs are `https://`; each `[versions]` entry has a 64-hex `sha256` or an absolute `path`;
-an index appears only in a carried recipe and names a known kind and an `https://` `sha256_url`; `[[requires]]` and `php_below` appear
-only with `runs_on`. Whether a program exists is the install's job, not a load check.
+an index appears only in a carried recipe and names a known kind and an `https://` `sha256_url`; `[[requires]]` appears
+only with `runs_on`; a `[[default]]` table is refused, naming `yard runtime default`. Whether a program exists is the install's job, not a load check.
 
 ### 5.3 Loading, watching, a broken recipe
 
@@ -240,8 +245,7 @@ loaded runtime, and removes links it made for a runtime whose recipe is gone (it
 ### 6.1 Versions and specs
 
 A spec is a major (`2`), major.minor (`2.2`) or exact (`2.2.32`) version; it matches the newest
-installed version with that prefix (less any a `[[default]]` rule's `exclude` names, when the spec
-came from that rule), never re-resolved against the network (Node's rule, M4c §4). A
+installed version with that prefix, never re-resolved against the network (Node's rule, M4c §4). A
 leading `v` is accepted. Ranges, `latest` and `stable` are refused naming the file and line.
 
 ### 6.2 Where versions come from
@@ -281,8 +285,9 @@ inside one directory:
    `yard runtime use`). Skipped when the root has a committed `.yard`;
 3. the recipe's `pin_files`, in order.
 
-Nothing up to `/`: the default, `yard.toml`'s `[runtimes.<key>] default` (or `default_node`), else
-the recipe's `[[default]]` rules (§9.2), else the newest installed version. Every M4c rule about
+Nothing up to `/`: the default, `yard.toml`'s `[runtimes.<key>] default` (or `default_node`), an
+exact version yardd writes when it is missing (explicit-defaults spec §2.2). With none written, the
+runtime is `RUNTIME_MISSING` for that project, naming the install. Every M4c rule about
 files that exist but cannot be used, sizes, BOMs and comments carries over.
 
 ### 7.1 `.yard`
@@ -323,12 +328,8 @@ runs_on = "php"
 wake = true
 uses_when = ["composer.json"]
 
-[[default]]
-php_below = "7.2.5"
-spec = "2.2"
-[[default]]
-spec = "2"
-exclude = ["2.2"]                   # an 8.4 project never gets 2.2 because it is all there is
+# No default here: yard.toml holds the exact version unpinned projects run, and a project
+# whose PHP is below 7.2.5 carries its own 2.2 pin (explicit-defaults spec §2.1).
 
 [[requires]]
 from = "2.3.0"
@@ -358,18 +359,25 @@ and 2.7.7. The 2.2.32 hash above is that file's, fetched the same day.)
 
 ### 9.2 Which Composer runs
 
-- A pin (`.yard` `[runtimes] composer`, `yard runtime use composer`, or the default) wins. With no
-  pin, the `[[default]]` rules pick against the PHP the cwd resolves to: `2.2` below 7.2.5, else
-  `2` excluding 2.2.x. A rule's `php_below` compares the full PHP version, which the shim reads
-  without running PHP: a brew keg's from its Cellar directory name (`full_version`), a `path`
-  build's from what `php-config --version` said when the build was last checked (§10.3).
-- **No fallback to another line.** With only 2.2 installed, an 8.4 project gets `RUNTIME_MISSING`
-  for `2` (the rule's `exclude`), not 2.2 (anti-goal). With only 2 installed, a 7.1 project gets
-  `RUNTIME_MISSING` for 2.2. A pin the user wrote, `composer = "2"`, is a plain prefix and does
-  match 2.2.x, subject to the next rule.
-- A pinned version whose recorded requirement the project's PHP does not meet is refused before
-  exec: `Composer 2.11.2 needs PHP 7.2.5 or later; this project runs PHP 7.1 (<where the PHP came
-  from>)`, hint `yard runtime install composer 2.2`, or pin `composer = "2.2"`.
+*Amended 2026-11-19 (explicit-defaults spec §2.1): nothing picks by rule any more.*
+
+- A pin (`.yard` `[runtimes] composer`, `yard runtime use composer`) wins, else the default written
+  in `yard.toml` (`[runtimes.composer] default`, an exact version yardd fills in from the newest
+  installed at or above 2.3.0, never moved by an install). With neither, the shim is
+  `RUNTIME_MISSING`, hinting at `yard runtime default`, `use` or `install`. The project's PHP is
+  compared by its full version, which the shim reads without running PHP: a brew keg's from its
+  Cellar directory name (`full_version`), a `path` build's from what `php-config --version` said
+  when the build was last checked (§10.3).
+- **One default; an old project carries its own pin.** A linked project that uses Composer and
+  whose PHP is below what the default needs (2.3.0 needs PHP 7.2.5) gets the newest installed
+  version it can run (2.2.32) written as its own pin, in its managed `.yard` or `sites.toml`, at
+  the next reconcile (link, init, `yard isolate`, an install). A committed `.yard` is never
+  edited: `yard link`/`init`, `yard info`, doctor (`composer-pin:<site>`) and the shim name the line
+  to add. A pin the user wrote, `composer = "2"`, is a prefix and does match 2.2.x.
+- A version whose recorded requirement the project's PHP does not meet is refused before exec:
+  `Composer 2.11.2 needs PHP 7.2.5 or later; this project runs PHP 7.1 (<where the PHP came
+  from>)`, hinting `yard runtime use composer 2.2.32` (the newest installed that fits), the
+  install of 2.2 when none does, or for a committed `.yard` the line to add.
 - `composer.json`'s own `config.platform` and `require.php` are not read for this.
 
 ### 9.3 Moving off brew's Composer
@@ -598,10 +606,11 @@ local HTTPS fixture.
 - **`PHP_SHIMS` keeps `composer`**, read as the shims that run PHP; the PHP command builder no longer
   handles it.
 - **`yard info`** shows a runtime as a settings row in the Node row's style (`composer  2.2.32 (2.2)
-  from default`).
+  from default`; `from default (yard.toml)` since the explicit defaults).
 - **Yard.app**: a row per runtime below Node with an Install button while it is missing, and the settle
   sheet offers it after Node.
-- **`in_use` and `yard.toml`'s default**: once `[runtimes.<key>] default` is set, every unpinned site
-  runs it as a plain prefix, as the shim does, so the recipe rule's `exclude` no longer decides what
-  else can run a site, and uninstalling the newest 2.x while 2.2 is installed is allowed.
+- **`in_use` and `yard.toml`'s default**: the default is an exact version since the explicit
+  defaults (2026-11-19), so its own version cannot be uninstalled until the default moves; a
+  default written by hand as a prefix is read as one, and the recipe rules and their `exclude` are
+  gone.
 - **A `[runtimes]` key** that is not a bare TOML key is written quoted by `yard init`.
