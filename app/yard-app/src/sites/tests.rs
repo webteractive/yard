@@ -171,6 +171,36 @@ fn the_detail_shows_the_sites_node_and_offers_to_unpin_yards_own_pin() {
     assert_eq!(node(&detail("default")), None);
 }
 
+/// Each runtime the site uses gets a row below Node: the version that runs and its spec, or
+/// the spec with an Install button while it is missing, or the error.
+#[test]
+fn detail_rows_show_composer_installed_and_missing() {
+    let with = |runtimes: serde_json::Value| {
+        let mut d = detail_of("default", "managed");
+        d.site.runtimes = serde_json::from_value(runtimes).unwrap();
+        super::detail::runtime_rows(&d.site)
+    };
+    let rows = with(
+        json!([{"key": "composer", "name": "Composer", "spec": "2.2", "source": "default", "version": "2.2.32"}]),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].name.as_str(), rows[0].value.as_str(), rows[0].from.as_str()),
+        ("Composer", "2.2.32 (2.2)", "the default")
+    );
+    assert_eq!(rows[0].install, None);
+    let rows = with(
+        json!([{"key": "composer", "name": "Composer", "spec": "2", "source": "project_file", "file": "/p/.yard", "version": null}]),
+    );
+    assert_eq!((rows[0].value.as_str(), rows[0].from.as_str()), ("2 — not installed", "from /p/.yard"));
+    assert_eq!(rows[0].install.as_deref(), Some("2"));
+    let rows =
+        with(json!([{"key": "bun", "name": "bun", "spec": "1", "source": "project_file", "version": null,
+        "error": {"code": "RUNTIME_UNKNOWN", "message": "no runtime is called bun"}}]));
+    assert_eq!((rows[0].value.as_str(), rows[0].install.as_deref()), ("no runtime is called bun", None));
+    assert!(with(json!([])).is_empty());
+}
+
 struct Blank;
 
 impl Render for Blank {

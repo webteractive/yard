@@ -19,7 +19,9 @@ use std::path::PathBuf;
 use yard_app_model::hint::HintAction;
 use yard_app_model::settle::SettlePlan;
 use yard_client::api;
-use yard_proto::methods::{DocrootParams, EnvParams, InitParams, IsolateParams, NameParams, SiteParams};
+use yard_proto::methods::{
+    DocrootParams, EnvParams, InitParams, IsolateParams, NameParams, RuntimeInstallParams, SiteParams,
+};
 use yard_proto::{ProjectFileKind, SettingSource, SiteDetail, SiteInfo, SiteKind, SiteSource};
 
 /// Unlink's question, and what it leaves behind: a site's project, or what a proxy forwards to.
@@ -139,6 +141,38 @@ pub fn settings(d: &SiteDetail) -> Vec<Setting> {
         out.push(setting("node", value, &source));
     }
     out
+}
+
+/// A runtime the site uses (Composer), on its own row below Node: the version that runs and
+/// its spec, the spec with an Install button while nothing installed meets it, or its error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeRow {
+    pub key: String,
+    pub name: String,
+    pub value: String,
+    pub from: String,
+    /// The spec the Install button installs, while it is missing.
+    pub install: Option<String>,
+}
+
+pub fn runtime_rows(site: &SiteInfo) -> Vec<RuntimeRow> {
+    site.runtimes
+        .iter()
+        .map(|rt| {
+            let from = match &rt.file {
+                Some(file) => format!("from {file}"),
+                None => from(Some(&rt.source)).to_string(),
+            };
+            let spec = rt.spec.clone().unwrap_or_else(|| "?".into());
+            let (value, install) = match (&rt.error, &rt.version) {
+                (Some(e), _) => (e.message.clone(), None),
+                (None, Some(v)) if *v == spec => (v.clone(), None),
+                (None, Some(v)) => (format!("{v} ({spec})"), None),
+                (None, None) => (format!("{spec} — not installed"), Some(spec)),
+            };
+            RuntimeRow { key: rt.key.clone(), name: rt.name.clone(), value, from, install }
+        })
+        .collect()
 }
 
 /// Whether the site's Node is a pin Yard made (`yard node use`, kept in sites.toml or the managed
@@ -353,6 +387,37 @@ pub fn detail(env: &AppEnv, name: &str, window: &mut Window, cx: &mut App) -> An
                         .children(unuse),
                 )
                 .child(caption("node", node.from.clone())),
+        );
+    }
+    for row in runtime_rows(&site) {
+        let install = row.install.clone().map(|spec| {
+            let (e, n, key) = (env.clone(), name.to_string(), row.key.clone());
+            Button::new(format!("site:{name}:runtime:{}:install", row.key), "Install")
+                .small()
+                .description(format!("Install {} {spec}", row.name))
+                .on_click(move |_, _, cx| {
+                    let params =
+                        RuntimeInstallParams { key: key.clone(), spec: Some(spec.clone()), path: None };
+                    let title = format!("Install {key} {spec}");
+                    let id = ActionId(format!("site:{n}:runtime:{key}"));
+                    e.runner
+                        .update(cx, |r, cx| r.run_job(id, api::RUNTIME_INSTALL, params, title, cx))
+                        .detach();
+                })
+        });
+        group = group.row(
+            format!("runtime:{}", row.key),
+            row.name.clone(),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    crate::widgets::bar()
+                        .child(text(format!("site:{name}:runtime:{}", row.key), row.value.clone()))
+                        .children(install),
+                )
+                .child(caption(&format!("runtime:{}", row.key), row.from.clone())),
         );
     }
     if let Some(d) = detail.as_ref().filter(|d| !d.services.is_empty()) {

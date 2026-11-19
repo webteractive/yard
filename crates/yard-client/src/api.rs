@@ -90,6 +90,14 @@ pub const NODE_UNINSTALL: Method<NodeVersionParams, JobStarted> = Method::quick(
 pub const NODE_DEFAULT: Method<NodeSpecParams, IgnoredAny> = Method::quick(methods::NODE_DEFAULT);
 pub const NODE_USE: Method<NodeUseParams, SiteInfo> = Method::quick(methods::NODE_USE);
 pub const NODE_UNUSE: Method<SiteParams, SiteInfo> = Method::quick(methods::NODE_UNUSE);
+pub const RUNTIMES_LIST: Method<(), RuntimesList> = Method::quick(methods::RUNTIMES_LIST);
+pub const RUNTIME_LIST: Method<RuntimeKeyParams, RuntimeList> = Method::quick(methods::RUNTIME_LIST);
+pub const RUNTIME_INSTALL: Method<RuntimeInstallParams, JobStarted> = Method::quick(methods::RUNTIME_INSTALL);
+pub const RUNTIME_UNINSTALL: Method<RuntimeVersionParams, JobStarted> =
+    Method::quick(methods::RUNTIME_UNINSTALL);
+pub const RUNTIME_DEFAULT: Method<RuntimeSpecParams, IgnoredAny> = Method::quick(methods::RUNTIME_DEFAULT);
+pub const RUNTIME_USE: Method<RuntimeUseParams, SiteInfo> = Method::quick(methods::RUNTIME_USE);
+pub const RUNTIME_UNUSE: Method<RuntimeSiteParams, SiteInfo> = Method::quick(methods::RUNTIME_UNUSE);
 pub const TUNNELS_LIST: Method<(), Vec<TunnelInfo>> = Method::quick(methods::TUNNELS_LIST);
 pub const TUNNELS_DOMAINS: Method<(), Vec<TunnelDomain>> = Method::quick(methods::TUNNELS_DOMAINS);
 pub const TUNNELS_DOMAIN_ADD: Method<TunnelDomainAddParams, JobStarted> =
@@ -163,6 +171,13 @@ pub const NAMES: &[&str] = &[
     NODE_DEFAULT.name,
     NODE_USE.name,
     NODE_UNUSE.name,
+    RUNTIMES_LIST.name,
+    RUNTIME_LIST.name,
+    RUNTIME_INSTALL.name,
+    RUNTIME_UNINSTALL.name,
+    RUNTIME_DEFAULT.name,
+    RUNTIME_USE.name,
+    RUNTIME_UNUSE.name,
     TUNNELS_LIST.name,
     TUNNELS_DOMAINS.name,
     TUNNELS_DOMAIN_ADD.name,

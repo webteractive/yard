@@ -100,7 +100,7 @@ pub fn sheet(env: &AppEnv, sheet: &Sheet, window: &mut Window, cx: &mut App) -> 
                 close(&submit, cx);
             });
             if let Some(note) = plan.not_now {
-                let (later, id) = (env.clone(), ActionId(format!("site:{site}:node")));
+                let (later, id) = (env.clone(), ActionId(format!("site:{site}:{}", plan.not_now_id)));
                 return Some(
                     form.cancel_label("Not now")
                         .on_cancel(move |_, _, cx| {

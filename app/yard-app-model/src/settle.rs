@@ -1,7 +1,7 @@
 //! Installing what a site's `.yard` asks for, in the CLI's order (M6 design §8.2 Sites): PHP, then
-//! extensions, then services, then Node.
+//! extensions, then services, then Node, then runtimes (Composer).
 
-use yard_core::present::{install_hint, missing_node};
+use yard_core::present::{install_hint, missing_node, missing_runtimes};
 use yard_proto::{ErrorCode, Need, SiteInfo, YardError};
 
 /// One stage of a settle, run as jobs.
@@ -13,6 +13,8 @@ pub enum SettleStage {
     /// `(engine, version)`.
     Services(Vec<(String, Option<String>)>),
     Node(String),
+    /// `(key, spec)` of each runtime (Composer) nothing installed meets.
+    Runtimes(Vec<(String, String)>),
 }
 
 /// What the settle form shows before the user agrees.
@@ -23,16 +25,19 @@ pub struct SettlePlan {
     /// Needs the app cannot install (manual, or unknown to this build): listed, never run.
     pub manual: Vec<Need>,
     pub node_only: bool,
-    /// What **Not now** leaves beside the site when its Node is missing: the note `yard init`
-    /// prints, with the install command as its hint. A missing Node never blocks serving.
+    /// What **Not now** leaves beside the site when its Node or a runtime is missing: the note
+    /// `yard init` prints, with the install command as its hint. Neither ever blocks serving.
     pub not_now: Option<YardError>,
+    /// The detail row the note belongs to: `node`, or `runtime:<key>`.
+    pub not_now_id: String,
 }
 
 impl SettlePlan {
     /// `None` when the site needs nothing.
     pub fn new(site: &SiteInfo) -> Option<SettlePlan> {
         let node = missing_node(site.node.as_ref());
-        if site.needs.is_empty() && node.is_none() {
+        let runtimes = missing_runtimes(&site.runtimes);
+        if site.needs.is_empty() && node.is_none() && runtimes.is_empty() {
             return None;
         }
         let mut lines: Vec<String> =
@@ -40,15 +45,31 @@ impl SettlePlan {
         if let Some(spec) = node {
             lines.push(format!("Node {spec}  ({})", install_hint(&spec)));
         }
+        for (rt, spec) in &runtimes {
+            lines.push(format!("{} {spec}  (yard runtime install {} {spec})", rt.name, rt.key));
+        }
         let manual = site.needs.iter().filter(|n| !n.installable()).cloned().collect();
-        let not_now = node.map(|spec| {
-            YardError::new(
+        let node_note = node.map(|spec| {
+            let note = YardError::new(
                 ErrorCode::NodeMissing,
                 format!("{} runs Node {spec}, which is not installed", site.name),
             )
-            .with_hint(install_hint(&spec))
+            .with_hint(install_hint(&spec));
+            (note, "node".to_string())
         });
-        Some(SettlePlan { lines, manual, node_only: site.needs.is_empty(), not_now })
+        let runtime_note = runtimes.first().map(|(rt, spec)| {
+            let note = YardError::new(
+                ErrorCode::RuntimeMissing,
+                format!("{} runs {} {spec}, which is not installed", site.name, rt.name),
+            )
+            .with_hint(format!("yard runtime install {} {spec}", rt.key));
+            (note, format!("runtime:{}", rt.key))
+        });
+        let (not_now, not_now_id) = match node_note.or(runtime_note) {
+            Some((note, id)) => (Some(note), id),
+            None => (None, String::new()),
+        };
+        Some(SettlePlan { lines, manual, node_only: site.needs.is_empty(), not_now, not_now_id })
     }
 }
 
@@ -77,6 +98,13 @@ fn stages(site: &SiteInfo) -> Vec<SettleStage> {
     if let Some(spec) = missing_node(site.node.as_ref()) {
         out.push(SettleStage::Node(spec.to_string()));
     }
+    let runtimes: Vec<(String, String)> = missing_runtimes(&site.runtimes)
+        .into_iter()
+        .map(|(rt, spec)| (rt.key.clone(), spec.to_string()))
+        .collect();
+    if !runtimes.is_empty() {
+        out.push(SettleStage::Runtimes(runtimes));
+    }
     out
 }
 
@@ -86,6 +114,7 @@ fn rank(stage: &SettleStage) -> u8 {
         SettleStage::Extensions(_) => 1,
         SettleStage::Services(_) => 2,
         SettleStage::Node(_) => 3,
+        SettleStage::Runtimes(_) => 4,
     }
 }
 
@@ -172,6 +201,37 @@ mod tests {
         assert!(SettlePlan::new(&all()).unwrap().not_now.is_some());
         let php_only = site(json!([{"kind": "php", "php": "7.3"}]), json!(null));
         assert_eq!(SettlePlan::new(&php_only).unwrap().not_now, None);
+    }
+
+    #[test]
+    fn settle_offers_a_missing_composer_after_node() {
+        let mut s = site(
+            json!([{"kind": "php", "php": "7.3"}]),
+            json!({"spec": "22", "source": "project", "version": null}),
+        );
+        s.runtimes = serde_json::from_value(json!([
+            {"key": "composer", "name": "Composer", "spec": "2.2", "source": "default", "version": null},
+            {"key": "bun", "name": "bun", "spec": "1", "source": "project_file", "version": null,
+             "error": {"code": "RUNTIME_UNKNOWN", "message": "no runtime is called bun"}}
+        ]))
+        .unwrap();
+        let plan = SettlePlan::new(&s).unwrap();
+        assert_eq!(plan.lines.last().unwrap(), "Composer 2.2  (yard runtime install composer 2.2)");
+        let php = next_stage(&s, None);
+        let node = next_stage(&s, php.as_ref());
+        assert_eq!(node, Some(SettleStage::Node("22".into())));
+        let composer = next_stage(&s, node.as_ref());
+        assert_eq!(composer, Some(SettleStage::Runtimes(vec![("composer".into(), "2.2".into())])));
+        assert_eq!(next_stage(&s, composer.as_ref()), None);
+        // Composer alone: only offered, and Not now leaves its note.
+        s.needs = vec![];
+        s.node = None;
+        let plan = SettlePlan::new(&s).unwrap();
+        assert!(plan.node_only);
+        let note = plan.not_now.unwrap();
+        assert_eq!(note.message, "legacy runs Composer 2.2, which is not installed");
+        assert_eq!(note.hint.as_deref(), Some("yard runtime install composer 2.2"));
+        assert_eq!(plan.not_now_id, "runtime:composer");
     }
 
     #[test]

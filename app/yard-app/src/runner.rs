@@ -15,7 +15,8 @@ use yard_app_model::jobs::JobPhase;
 use yard_app_model::settle::{SettleStage, next_stage};
 use yard_client::api::{self, Method};
 use yard_proto::methods::{
-    ExtAddParams, JobParams, LinkParams, NodeInstallParams, PhpParams, ServiceAddParams, SourceParams,
+    ExtAddParams, JobParams, LinkParams, NodeInstallParams, PhpParams, RuntimeInstallParams,
+    ServiceAddParams, SourceParams,
 };
 use yard_proto::{ErrorCode, JobStarted, SiteInfo, YardError};
 
@@ -278,6 +279,15 @@ impl ActionRunner {
                 let params = NodeInstallParams { spec: Some(spec.clone()), path: None };
                 vec![self.run_job(id("node"), api::NODE_INSTALL, params, format!("Install Node {spec}"), cx)]
             }
+            SettleStage::Runtimes(runtimes) => runtimes
+                .iter()
+                .map(|(key, spec)| {
+                    let params =
+                        RuntimeInstallParams { key: key.clone(), spec: Some(spec.clone()), path: None };
+                    let title = format!("Install {key} {spec}");
+                    self.run_job(id(&format!("runtime:{key}")), api::RUNTIME_INSTALL, params, title, cx)
+                })
+                .collect(),
         }
     }
 }
