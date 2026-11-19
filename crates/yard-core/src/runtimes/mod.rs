@@ -4,6 +4,7 @@
 pub mod carried;
 pub mod recipe;
 pub mod resolve;
+pub mod select;
 pub mod version;
 
 use recipe::{Driver, RuntimeRecipe, SourceDef};
