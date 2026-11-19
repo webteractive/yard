@@ -94,6 +94,12 @@ up what they add:
   checks the instance secrets and `meilisearch.yard`, then adds a `path` and an `npm` recipe of its
   own from `~/.yard/engines`, and removes everything it added. It skips Valkey where brew's `redis`
   is linked, since brew will not install the two side by side.
+- `e2e-composer.sh` links two scratch projects on PHP 7.1 and 8.4 (both must be installed) and
+  checks that `yard link --yes` installs the Composer each runs from getcomposer.org (2.2 and the
+  current 2.x), that `composer install` works in both, that a `[runtimes] composer` pin moves a
+  project, that `self-update` is refused, and that `yard runtime uninstall` refuses a version in use.
+  It refuses to start while `~/.yard/installs/composer` holds any version, and removes what it
+  installed.
 
 The scripts that add or use instances check that the listeners on 3306, 5432 and 6379 (DBngin,
 Postgres.app) come out unchanged, leaving out a port Yard's own instance holds: it sleeps and wakes

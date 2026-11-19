@@ -226,7 +226,16 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `docs/superpowers/specs/2026-11-18-yard-runtimes-design.md` (approved 2026-11-18), to be built in
   three plans: the contract and Composer, PHP builds, user runtime recipes. PHP builds Yard
   downloads or compiles itself are parked in
-  `docs/superpowers/specs/2026-11-18-yard-php-builds-installed-design.md`.
+  `docs/superpowers/specs/2026-11-18-yard-php-builds-installed-design.md`. Plan 1 (the contract and
+  Composer, `docs/superpowers/plans/2026-11-18-yard-runtimes-1-contract-composer.md`, approved
+  2026-11-19, run natively) is built on main with protocol 2.14: `yard_core::runtimes` (the contract,
+  the carried `php`, `node` and `composer` recipes in `crates/yard-core/runtimes/`, one pin walk that
+  Node now runs on, Composer's rules), the `composer` shim running the Composer Yard installed in
+  `~/.yard/installs/composer/<v>/` for the project's PHP (2.2 below 7.2.5, `self-update` refused,
+  brew's for one release while Yard has none), `yard runtime …` and `yard runtimes`, `runtime.*`,
+  doctor's `runtime-*` and `composer-*` checks, Composer offered by `yard link`/`init` after Node, and
+  Yard.app's Composer row. The spec's §21 lists what the build decided. `scripts/e2e-composer.sh` has
+  not run on a real Mac yet.
 - PHP trusts Yard's CA (maintainer, 2026-11-17, from a cURL error 60 found moving the main Mac's
   Herd sites): reconcile writes `php/<v>/ca-bundle.pem` (brew's `ca-certificates` and
   `yard-ca.pem`) once a CA exists, and Yard's `php.ini` names it as `openssl.cafile` and
@@ -599,6 +608,16 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   recipe of those names, backs up and restores `services.toml`, `ports.toml` and `sites.toml`, and fails
   if Herd's resolver or the listeners on 3306, 5432 and 6379 (except a port Yard's own instance
   holds) changed; ask the maintainer first. `shellcheck scripts/e2e-engines.sh` stays clean.
+- `scripts/e2e-composer.sh` — real-machine runtimes check after `e2e-m1.sh`: links two scratch
+  projects under `$TMPDIR` whose `.yard` pins PHP 7.1 and 8.4, each with a `composer.json`; `yard link
+  --yes` installs Composer from getcomposer.org (2.2.x for 7.1, the current 2.x for 8.4), `composer -V`
+  and `composer install` run in both, `[runtimes] composer = "2.2"` moves the 8.4 project to 2.2,
+  `self-update` is refused before and after options, and `yard runtime uninstall` is refused with
+  `RUNTIME_IN_USE` while a site runs that version. It needs yardd built from this checkout, brew's
+  `php@7.1` and `php@8.4` (it installs no PHP) and the network; it refuses to start while
+  `~/.yard/installs/composer` holds any version, backs up and restores `yard.toml` and `sites.toml`,
+  removes what it installed, keeps Composer's home and cache in its temp dir, and fails if Herd's
+  resolver changed; ask the maintainer first. `shellcheck scripts/e2e-composer.sh` stays clean.
 
 ## Verifying a change on a real machine
 
@@ -627,15 +646,15 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
 ## Layout (planned, spec §3.2)
 
 - `crates/yard-proto` — wire types, error codes, JSON-RPC framing (shared by daemon, helper, CLI, and from M6 Yard.app, which uses the types directly).
-- `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here. `services/engines/` is the engine contract, the built-ins and the recipe engine; `crates/yard-core/engines/*.toml` are the carried recipes, compiled in.
+- `crates/yard-core` — pure logic: paths, config, port registry, site resolution, rendering, write planning, restart policy. Most unit tests live here. `services/engines/` is the engine contract, the built-ins and the recipe engine; `crates/yard-core/engines/*.toml` are the carried recipes, compiled in. `runtimes/` is the runtime contract, the runtime recipe format, the pin walk and Composer's rules; `crates/yard-core/runtimes/*.toml` are the carried runtime recipes.
 - `crates/yard-daemon` — every side effect; the `yardd` binary and the `yard-fake-unit` test fixture.
 - `crates/yard-helper` — the root helper.
 - `crates/yard-client` — the connection to yardd that the CLI and Yard.app share (M6).
 - `crates/yard-cli` — the `yard` binary.
 - `crates/yard-shim` — the `php`/`composer`/`pecl`/`phpize`/`php-config` and `node`/`npm`/`npx` shims, one binary
-  dispatching on `argv[0]`; it reads the TOMLs itself and runs without a daemon. `php` and
-  `composer` ask yardd's `run/wake.sock` to wake a site's sleeping services first, when
-  `run/sleeping` lists the site (M4e).
+  dispatching on `argv[0]`; it reads the TOMLs itself and runs without a daemon. `composer` runs
+  from the carried Composer recipe (runtimes spec §9). `php` and `composer` ask yardd's
+  `run/wake.sock` to wake a site's sleeping services first, when `run/sleeping` lists the site (M4e).
 - `app/` — Yard.app (M6, Rust and GPUI): a second Cargo workspace with its own toolchain (1.98.1),
   lockfile and `deny.toml`. `yard-app-model` holds the decisions (no GPUI, tokio, files or clock),
   `yard-app` the GPUI entities, platform glue, widgets and screens.

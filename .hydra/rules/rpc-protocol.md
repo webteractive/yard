@@ -60,6 +60,14 @@ triggers:
   A client of an older yardd leaves `state` out of `subscribe`, which would refuse it.
   `SERVICE_VERSION_UNSUPPORTED` carries `data.available`, the lines brew has (Yard.app's line
   picker); the M6 design promised it with 2.11 and yardd sent it only from 2026-11-06.
+- Protocol 2.14 (runtimes, runtimes spec §13): `runtimes.list` (`RuntimesList`: each
+  `RuntimeSummary`, and the recipes that did not load) and `runtime.list|install|uninstall|default|use|unuse`,
+  each with a `key`; for `php` and `node` they hand over to `php.*`, `sites.isolate` and `node.*`.
+  `runtime.install` and `runtime.uninstall` are jobs (`runtime-install-N`, `runtime-uninstall-N`).
+  `SiteInfo.runtimes` (absent from an older yardd: no row) carries each recipe runtime the site uses
+  as a `SiteRuntime`, filled per request like `node`; `SettingSource::PinFile`. New codes:
+  `RUNTIME_MISSING`, `RUNTIME_IN_USE`, `RUNTIME_RECIPE_INVALID`, `RUNTIME_UNKNOWN`. A Composer too new
+  for a site's PHP is `INVALID_ARGUMENT` whose data names `version` and `needs_php`.
 - Protocol 2.13 (service recipes, recipes spec §11): `engines.list` (`EnginesListResult`: each
   `EngineInfo`, and the recipes that failed with no last good version) and `engines.install { key }`
   (a job); event `engines_changed` (topic `state`); `ServiceInfo.engine_name` (empty from an older

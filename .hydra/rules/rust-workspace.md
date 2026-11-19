@@ -22,6 +22,13 @@ triggers:
   clock; only `yard-app` imports `gpui`, `tray-icon`, `muda` or `objc2*`. GPUI is pinned by git `rev`
   to a Zed release commit and bumped on purpose; never take a crate from Zed outside GPUI's tree
   (`ui`, `theme`, `editor` are GPL).
+- Runtimes (runtimes spec) live in `yard-core::runtimes` (the contract, the recipe format, the
+  carried `crates/yard-core/runtimes/*.toml`, the pin walk, Composer's rules, the shim's command) and
+  `yard-daemon::runtimes` (installs, `fill_runtimes`, `in_use`). Install tests use `file://`
+  fixtures shaped like getcomposer.org with `LoadOptions { allow_file_urls: true }` and a recipe
+  loaded as `Origin::Carried` (only a carried recipe may have an index); daemon tests that need an
+  installed Composer write `installs/composer/<v>/` and its `.yard-install.toml` by hand, so no test
+  reaches the network.
 - `yard-core` is pure: parse, render, decide. No spawning, binding, sockets or clock
   reads. Inject `exists` / `is_free` / `read_link` closures and `Instant`s instead.
   Side effects live in `yard-daemon`. The helper and CLI depend on core, never the reverse.

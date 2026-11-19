@@ -12,6 +12,10 @@ format and `download`/`path` sources it reuses. It changes one key decision ("PH
 Homebrew": brew stays the source of the plain builds, §10) and the main spec's `composer` shim
 (§4.5: it no longer runs brew's `composer`, §9).
 
+**Plan 1 (the contract and Composer, §17) is built on main (2026-11-19),** planned in
+`docs/superpowers/plans/2026-11-18-yard-runtimes-1-contract-composer.md`, with protocol 2.14. What
+the build decided is in §21. `scripts/e2e-composer.sh` has not run on a real Mac yet.
+
 Decisions marked **(maintainer)** are the maintainer's, from the 2026-11-18 conversation. Decisions
 marked **(my call)** were made while writing this and can be reversed on their own.
 
@@ -563,3 +567,28 @@ local HTTPS fixture.
 
 1. **Composer's hash from getcomposer.org (§6.2):** yes, for the carried recipe only.
 2. **Downloaded PHP builds (§10.3):** out of this design, into their own parked spec (§10.6).
+
+## 21. What plan 1's build decided (2026-11-19)
+
+- **The contract** is one `Runtime` trait over one `RecipeRuntime` struct; `RuntimeKind` (`Php`, `Node`,
+  `Recipe`) comes from the recipe's driver or source. PHP and Node keep every code path they had, and
+  `runtime.*` for them hands over to `php.*`, `sites.isolate` and `node.*`.
+- **A shim's own `wake`** (`[shims.<name>] wake = false`) overrides the recipe's, so PHP's `pecl`,
+  `phpize` and `php-config` never wake services.
+- **The pin walk** (`runtimes::resolve::resolve_pin`) is M4c's, taking what a `.yard` and a site say for
+  the runtime as closures; `resolve_node` runs on it, with Node's tests unchanged.
+- **`yard.toml`** refuses `[runtimes.php]` and `[runtimes.node]` (`default_php` and `default_node` say
+  those).
+- **`refuse`** matches the first argument that is not an option, so `composer -n self-update` is caught.
+- **A PHP whose full version cannot be read** counts as `x.y.0`, so an unknown 7.2 gets Composer 2.2.
+- **With the index unreachable**, the recipe's pinned versions stand in only for their own channel:
+  `2.2` installs the pinned 2.2.32, `2` fails naming the index. A major.minor that is not a channel is
+  refused before any job starts.
+- **A Composer too new for the project's PHP** is `INVALID_ARGUMENT` with the version and the PHP it needs
+  in its data; doctor reports it as `composer-php:<site>`.
+- **`PHP_SHIMS` keeps `composer`**, read as the shims that run PHP; the PHP command builder no longer
+  handles it.
+- **`yard info`** shows a runtime as a settings row in the Node row's style (`composer  2.2.32 (2.2)
+  from default`).
+- **Yard.app**: a row per runtime below Node with an Install button while it is missing, and the settle
+  sheet offers it after Node.

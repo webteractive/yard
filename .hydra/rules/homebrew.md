@@ -127,6 +127,12 @@ triggers:
   MinIO's `minio/stable/minio` counts as installed only when `opt/minio` exists and a MinIO instance
   in `services.toml` records that formula, or, with no instance, `brew info --json=v2 minio` says the
   keg is the tap's. `opt/minio` alone is not enough: homebrew/core's `minio` shares it.
+- **Composer is not brew's** (runtimes spec §9). Yard downloads each version from
+  getcomposer.org into `installs/composer/<v>/` (SHA-256 from the recipe's pinned `[versions]` or
+  the vendor's `.sha256sum`, over HTTPS only) and the `composer` shim runs it under the project's
+  keg PHP. For one release, while Yard has no Composer installed at all, the shim still runs brew's
+  `<prefix>/bin/composer` on a PHP that can run it (7.2.5 or later), saying so on stderr, and doctor
+  notes it (`composer-brew`, ok with a hint). Yard never runs `brew install composer`.
 - **fnm (M4c).** Run it only by absolute path (`Brew::fnm_bin`, `<prefix>/bin/fnm`) with
   `node::fnm_env` (`FNM_DIR=<root>/node`, `FNM_LOGLEVEL=info`), never a bare `fnm` and never
   fnm's own directory. brew installs fnm only inside a `node.install` job, when the binary is

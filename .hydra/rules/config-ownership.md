@@ -43,6 +43,13 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     writes it once (32 hex, mode 0600, atomically), replaces an empty or damaged one, and never
     starts such an instance without it. `programs/<key>/<version>/` holds what download and npm
     recipes installed; Yard deletes one only when no instance records it and no recipe pins it.
+  - `installs/<key>/<version>/` holds a runtime version Yard downloaded (Composer's
+    `composer.phar`), with a generated `.yard-install.toml` (version, URL, SHA-256, the PHP it
+    needs); a directory without that record is not installed, and the shims never run it. Only
+    `yard runtime uninstall` removes one. `[runtimes] <key>` in a managed `.yard` (or
+    `[sites.<s>.runtimes]` in `sites.toml`) is written by `yard runtime use`; a committed `.yard` is
+    the user's, so `runtime.use` is refused for it with the line to add. `yard.toml`'s
+    `[runtimes.<key>] default` is written by `yard runtime default`.
   - Yard creates a database (never a role or bucket) only when asked: `db.create`, or `db.command`
     for an import into a name that does not exist (db spec). `yard link`, `init` and a `.yard` never
     create one, and nothing in Yard drops one.

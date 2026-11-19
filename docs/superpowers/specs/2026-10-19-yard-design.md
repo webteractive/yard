@@ -160,8 +160,8 @@ yardd keeps the root `0700` at every start, since a home folder is often readabl
 local users and the old location inherited `~/Library`'s `0700`.
 
 ```
-yard.toml                     # global: default php, default_node, tld override, secure_by_default, [php."<ver>".extensions], [tunnels.cloudflared] domains (M5)
-sites.toml                    # links, per-site php and node, secure flag, docroot overrides, proxies, [sites.<site>.tunnel] (M5)
+yard.toml                     # global: default php, default_node, tld override, secure_by_default, [php."<ver>".extensions], [tunnels.cloudflared] domains (M5), [runtimes.<key>] default (runtimes)
+sites.toml                    # links, per-site php and node, secure flag, docroot overrides, proxies, [sites.<site>.tunnel] (M5), [sites.<site>.runtimes] (runtimes)
 ports.toml                    # port registry and active profile (§7)
 services.toml                 # the service instances (§8.2), one [services."<instance>"] table each, and [emailulator] path (M4d)
 state/hashes.json             # hash of every generated file as Yard last wrote it
@@ -197,6 +197,10 @@ run/sleeping                  # generated (M4e): the linked sites that need a sl
 bin/                          # shims: php, composer, pecl, phpize, php-config, node, npm, npx
 node/                         # FNM_DIR (M4c): written only by fnm, which Yard runs to install and uninstall
 node/lts.toml                 # generated: LTS codename → major, refreshed on each install
+installs/<key>/<version>/     # runtime versions Yard downloaded (Composer's composer.phar), built in installs/<key>/.stage-* and renamed into place
+installs/<key>/<version>/.yard-install.toml  # generated: the version, URL, SHA-256, the PHP it needs, when; a directory without it is not installed
+runtimes/                     # the user's runtime recipes (runtimes spec §5; not read until its plan 3)
+cache/<key>/                  # a runtime's {cache}
 yardd.sock
 ```
 
@@ -411,8 +415,11 @@ profile; Yard does not edit dotfiles.
   installed (<file>)`, hint `yard init`. A `yard.toml` or `sites.toml` that does not parse is only a warning
   on stderr: the shim uses PHP 8.4 as the default, or ignores site isolation, so one
   half-saved file does not stop every `php` on the machine.
-- It runs `<keg>/bin/<name>` (`composer`: `<keg>/bin/php <brew>/bin/composer`, and
-  `FORMULA_MISSING`, hint `brew install composer`, without it). When the version's
+- It runs `<keg>/bin/<name>`. `composer` is a runtime of its own since the runtimes spec
+  (`docs/superpowers/specs/2026-11-18-yard-runtimes-design.md` §9): the Composer Yard
+  installed that the project's PHP can run, `<keg>/bin/php <installs>/composer/<v>/composer.phar`
+  with the same ini and PATH (brew's `bin/composer` only for one release, while Yard has
+  none, §9.3). When the version's
   `php.ini` is rendered it sets `PHPRC=php/<ver>` and `PHP_INI_SCAN_DIR=php/<ver>/conf.d`,
   so the CLI loads the same extensions and overrides as FPM. PATH is the keg's `bin`,
   then Yard's `bin/`, then the caller's PATH without any `Herd` directory: nothing a
@@ -622,8 +629,9 @@ DNS record it cannot delete; `yard doctor` reminds the user until the record is 
   `sources.list|trust|untrust`,
   `ca.info`, `node.list|install|uninstall|default|use|unuse`,
   `tunnels.list|add|remove|domains|domain_add|domain_remove` (M5, tunnels spec §12), `units.restart`,
-  `jobs.cancel`, `env.print`, from 2.12 `db.list|create|connect|command` (db spec §11), and from
-  2.13 `engines.list|install` (recipes spec §11).
+  `jobs.cancel`, `env.print`, from 2.12 `db.list|create|connect|command` (db spec §11), from
+  2.13 `engines.list|install` (recipes spec §11), and from 2.14 `runtimes.list` and
+  `runtime.list|install|uninstall|default|use|unuse` (runtimes spec §13).
 - Long operations (brew installs) return `{ job_id }` immediately;
   progress arrives as `job_progress` events (one per output line) and the result as
   one `job_finished` event (`error` set on failure, `JOB_FAILED` with the last 20

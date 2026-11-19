@@ -58,6 +58,11 @@ triggers:
   <spec>` on stderr and still serves, with no `NEEDS_INSTALL`; a Node install that fails is a
   `warning:` with its hint, and the command still exits 0. Every printed `yard node install`
   goes through `node::install_hint`, which quotes `'lts/*'` so zsh does not glob it.
+- A missing runtime (Composer, from `SiteInfo.runtimes`) is offered by `settle` after Node, as
+  `  Composer 2.2  (yard runtime install composer 2.2)`, and follows Node's rule: never a `Need`,
+  a hint on stderr (`<site> runs Composer 2.2, which is not installed: yard runtime install composer
+  2.2`) when nobody agrees, and a failed install only a `warning:`. `yard runtime …` for `php` and
+  `node` runs `yard php`, `yard isolate` and `yard node`, output and all. There is no `yard composer`.
 - `yard init` without `--local` refuses a yardd older than protocol 2.6, which would write
   `.yard` into the project (`PROTOCOL_MISMATCH`, hint `yard stop && yard start`).
 - A `METHOD_NOT_FOUND` from a yardd whose protocol is older than the CLI's says
