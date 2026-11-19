@@ -5,6 +5,8 @@
 use crate::brew::Brew;
 use crate::config::{SiteEntry, SitesConfig, YardConfig};
 use crate::node::{DEFAULT_SPEC, NodeSpec, NodeVersion, parse_spec, spec_line};
+use crate::project::ProjectFile;
+use crate::runtimes::resolve::{PinSource, failed_source, resolve_pin, uses_runtime};
 use crate::{Paths, PhpVersion, project};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -107,7 +109,7 @@ pub fn site_at(cwd: &Path, sites: &SitesConfig, canonical: &dyn Fn(&Path) -> Pat
 
 /// The linked sites whose path holds `cwd` most closely, in `sites.toml`'s order. Several
 /// only when they share that path.
-fn innermost<'a>(
+pub(crate) fn innermost<'a>(
     cwd: &Path,
     sites: &'a SitesConfig,
     canonical: &dyn Fn(&Path) -> PathBuf,
@@ -175,67 +177,39 @@ pub fn resolve_node(
     read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
     canonical: &dyn Fn(&Path) -> PathBuf,
 ) -> Result<(NodeSpec, NodeSource), YardError> {
-    let innermost = innermost(cwd, sites, canonical);
-    let mut site_root = innermost.last().map(|(.., path)| (*path, canonical(path)));
-    for dir in cwd.ancestors() {
-        let file = dir.join(project::FILE);
-        if let Some(text) = read(&file)
-            && let Some(spec) =
-                project::parse(&text.map_err(naming(&file))?, &file).map_err(naming(&file))?.node
-        {
-            return Ok((spec, NodeSource::Project(file)));
-        }
-        if site_root.as_ref().is_some_and(|(path, real)| dir == *path || canonical(dir) == *real) {
-            site_root = None;
-            if let Some(found) = site_node(&innermost, paths, read)? {
-                return Ok(found);
-            }
-        }
-        for (name, source) in [
-            (".nvmrc", NodeSource::Nvmrc as fn(PathBuf) -> NodeSource),
-            (".node-version", NodeSource::NodeVersionFile),
-        ] {
-            let file = dir.join(name);
-            if let Some(text) = read(&file) {
-                let spec = text.and_then(|text| pin_file_spec(&text, &file)).map_err(naming(&file))?;
-                return Ok((spec, source(file)));
-            }
-        }
-    }
-    // The walk never met the site's root (a path only its canonical form contains).
-    if site_root.is_some()
-        && let Some(found) = site_node(&innermost, paths, read)?
-    {
-        return Ok(found);
-    }
-    Ok((yard.default_node.clone().unwrap_or(DEFAULT_SPEC), NodeSource::Default))
+    let pins = [".nvmrc".to_string(), ".node-version".to_string()];
+    let found = resolve_pin(
+        cwd,
+        &pins,
+        sites,
+        paths,
+        read,
+        canonical,
+        &|f: &ProjectFile| f.node.clone(),
+        &|s: &SiteEntry| s.node.clone(),
+        &pin_file_spec,
+    )?;
+    Ok(match found {
+        Some((spec, source)) => (spec, node_source(source)),
+        None => (yard.default_node.clone().unwrap_or(DEFAULT_SPEC), NodeSource::Default),
+    })
 }
 
-/// The site's own setting in [`resolve_node`]: `None` when the innermost site sets nothing.
-fn site_node(
-    innermost: &[(&String, &SiteEntry, &Path)],
-    paths: &Paths,
-    read: &dyn Fn(&Path) -> Option<Result<String, YardError>>,
-) -> Result<Option<(NodeSpec, NodeSource)>, YardError> {
-    let Some((name, entry, path)) = innermost.last() else { return Ok(None) };
-    if read(&path.join(project::FILE)).is_some() {
-        return Ok(None);
+/// A runtime's [`PinSource`] as Node names it.
+fn node_source(source: PinSource) -> NodeSource {
+    match source {
+        PinSource::Project(f) => NodeSource::Project(f),
+        PinSource::Managed(f) => NodeSource::Managed(f),
+        PinSource::Site(name) => NodeSource::Site(name),
+        PinSource::PinFile(f) if f.file_name().is_some_and(|n| n == ".nvmrc") => NodeSource::Nvmrc(f),
+        PinSource::PinFile(f) => NodeSource::NodeVersionFile(f),
+        PinSource::Default => NodeSource::Default,
     }
-    for (name, _, path) in innermost.iter().rev() {
-        let file = paths.managed_project_file(name);
-        if let Some(text) = read(&file) {
-            let (managed, project) = project::parse_managed(&text?, &file)?;
-            if project.as_deref() == Some(*path) {
-                return Ok(managed.node.map(|spec| (spec, NodeSource::Managed(file))));
-            }
-        }
-    }
-    Ok(entry.node.clone().map(|spec| (spec, NodeSource::Site((*name).clone()))))
 }
 
 /// `e` with `file` in its data, unless it has data already, so [`failed_pin`] can say which
 /// pin [`resolve_node`] could not use.
-fn naming(file: &Path) -> impl FnOnce(YardError) -> YardError + '_ {
+pub(crate) fn naming(file: &Path) -> impl FnOnce(YardError) -> YardError + '_ {
     move |e| match e.data {
         Some(_) => e,
         None => e.with_data(serde_json::json!({ "file": file.display().to_string() })),
@@ -244,14 +218,10 @@ fn naming(file: &Path) -> impl FnOnce(YardError) -> YardError + '_ {
 
 /// The pin a [`resolve_node`] error is about, as the source it would have been.
 pub fn failed_pin(e: &YardError, paths: &Paths) -> Option<NodeSource> {
-    let file = PathBuf::from(e.data.as_ref()?.get("file")?.as_str()?);
-    Some(match file.file_name()?.to_str()? {
-        ".nvmrc" => NodeSource::Nvmrc(file),
-        ".node-version" => NodeSource::NodeVersionFile(file),
-        project::FILE if file.starts_with(paths.managed_sites_dir()) => NodeSource::Managed(file),
-        project::FILE => NodeSource::Project(file),
-        _ => return None,
-    })
+    match failed_source(e, paths)? {
+        PinSource::PinFile(f) if !matches!(f.file_name()?.to_str()?, ".nvmrc" | ".node-version") => None,
+        source => Some(node_source(source)),
+    }
 }
 
 /// The spec in an `.nvmrc` or `.node-version`, `INVALID_ARGUMENT` naming the file when it
@@ -272,14 +242,14 @@ fn pin_file_spec(text: &str, file: &Path) -> Result<NodeSpec, YardError> {
 /// file in its root. A pin above the root, such as `~/.nvmrc`, still picks the version, but
 /// alone does not make a PHP-only site a Node one.
 pub fn uses_node(source: &NodeSource, root: &Path, has_package_json: bool) -> bool {
-    has_package_json
-        || match source {
-            NodeSource::Site(_) | NodeSource::Managed(_) => true,
-            NodeSource::Project(f) | NodeSource::Nvmrc(f) | NodeSource::NodeVersionFile(f) => {
-                f.parent() == Some(root)
-            }
-            NodeSource::Default => false,
-        }
+    let source = match source {
+        NodeSource::Project(f) => PinSource::Project(f.clone()),
+        NodeSource::Managed(f) => PinSource::Managed(f.clone()),
+        NodeSource::Site(name) => PinSource::Site(name.clone()),
+        NodeSource::Nvmrc(f) | NodeSource::NodeVersionFile(f) => PinSource::PinFile(f.clone()),
+        NodeSource::Default => PinSource::Default,
+    };
+    uses_runtime(&source, root, has_package_json)
 }
 
 /// What a shim `exec`s: the program, the arguments to put before the user's, and the

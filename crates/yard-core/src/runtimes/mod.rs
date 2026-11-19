@@ -3,6 +3,7 @@
 
 pub mod carried;
 pub mod recipe;
+pub mod resolve;
 pub mod version;
 
 use recipe::{Driver, RuntimeRecipe, SourceDef};
