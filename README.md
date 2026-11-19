@@ -14,7 +14,11 @@ To build Yard yourself or work on it, see [DEVELOPMENT.md](DEVELOPMENT.md).
 - **Composer per project**, downloaded from getcomposer.org and checked by SHA-256: a project on
   PHP below 7.2.5 gets the 2.2 LTS, any other the current 2.x, and a `.yard` can pin one
   (`[runtimes] composer = "2.2"`). `composer self-update` is refused: `yard runtime install
-  composer <version>` adds versions.
+  composer <version>` adds versions. Until Yard has installed a Composer, `composer` in a project
+  on PHP 7.2.5 or later still runs brew's (saying so on stderr, and `yard doctor` lists those
+  sites under `composer-brew`); this lasts one release. To move over, run `yard runtime install
+  composer` in a project, which installs the version that project runs, and `yard runtime install
+  composer 2.2` too if any project is on PHP below 7.2.5.
 - **Explicit sites**: `yard link` serves a directory as `<name>.yard`; nothing is written into
   the project unless you ask (`yard init --local`).
 - **A `.yard` project file** a project can commit: its PHP, docroot, HTTPS, extensions,

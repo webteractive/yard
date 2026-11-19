@@ -203,6 +203,58 @@ async fn an_unreachable_index_falls_back_to_the_pinned_lts() {
     assert!(error.message.contains("missing-index"), "{}", error.message);
 }
 
+/// A download cancelled while curl waits on it (the phar is a FIFO nobody writes) ends the job
+/// as JOB_CANCELLED and leaves no stage and no install.
+#[tokio::test]
+async fn a_cancelled_download_leaves_nothing() {
+    let f = fixture();
+    let phar = f.site.join("2.11.2/composer.phar");
+    std::fs::remove_file(&phar).unwrap();
+    assert!(std::process::Command::new("/usr/bin/mkfifo").arg(&phar).status().unwrap().success());
+    let (paths, r, spec) = (f.paths.clone(), recipe(&f, "versions"), VersionSpec::parse("2").unwrap());
+    let bus = EventBus::new();
+    let mut events = bus.subscribe();
+    let jobs = Jobs::new(bus.clone());
+    let id = jobs
+        .start("runtime-install", move |ctx| async move {
+            runtimes::install(&ctx, &paths, &r, spec, &OPTS).await.map(|_| ())
+        })
+        .job_id;
+    let error = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+            .await
+            .expect("the job finished")
+            .unwrap();
+        match event {
+            Event::JobProgress { job_id, line } if job_id == id && line.starts_with("downloading") => {
+                // Long enough for curl to be blocked opening the FIFO.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                jobs.cancel(&id).unwrap();
+            }
+            Event::JobFinished { job_id, error, .. } if job_id == id => break error,
+            _ => {}
+        }
+    };
+    assert_eq!(error.unwrap().code, ErrorCode::JobCancelled);
+    assert_eq!(children(&f.paths.installs_dir().join("composer")), Vec::<String>::new());
+}
+
+/// A captive portal answers the index URL with a page: as unreadable as no answer, so the
+/// pinned LTS still installs, and the error for the rest says why.
+#[tokio::test]
+async fn an_index_that_is_not_json_falls_back_to_the_pinned_lts() {
+    let f = fixture();
+    std::fs::write(f.site.join("portal"), "<html><body>Sign in to the Wi-Fi</body></html>\n").unwrap();
+    let r = recipe(&f, "portal");
+    let (lines, error) = install(&f, &r, "2.2").await;
+    assert_eq!(error, None, "{lines:?}");
+    assert!(f.paths.install_root("composer", "2.2.32").join("composer.phar").is_file());
+    let (_, error) = install(&f, &r, "2").await;
+    let error = error.unwrap();
+    assert_eq!(error.code, ErrorCode::JobFailed);
+    assert!(error.message.contains("portal") && error.message.contains("not JSON"), "{}", error.message);
+}
+
 #[tokio::test]
 async fn a_partial_minor_is_refused_before_downloading() {
     let f = fixture();
@@ -405,6 +457,27 @@ async fn uninstall_refuses_the_only_version_a_site_runs() {
         run_job(&mut c, "runtime.uninstall", json!({"key": "composer", "version": "2.11.2"})).await;
     assert_eq!(error, None);
     assert!(!d.fx.paths.install_root("composer", "2.11.2").exists());
+    d.shutdown().await.unwrap();
+}
+
+/// yard.toml's default is a plain prefix, as the shim takes it, so the recipe's rule for the
+/// same spec (`2`, excluding 2.2) must not decide what else can run the site.
+#[tokio::test]
+async fn uninstall_follows_yard_toml_default_not_the_recipe_rule() {
+    let d = prepared("").await;
+    let dir = d.project("shop");
+    write(&dir, "composer.json", "{}");
+    write(&dir, ".yard", "php = \"8.4\"\n");
+    put_composer(&d.fx.paths, "2.2.32");
+    put_composer(&d.fx.paths, "2.11.2");
+    let d = d.start().await;
+    let mut c = d.client().await;
+    c.call("runtime.default", json!({"key": "composer", "spec": "2"})).await.unwrap();
+    assert_eq!(composer_of(&site(&mut c, "shop").await)["version"], "2.11.2");
+    let (_, error) =
+        run_job(&mut c, "runtime.uninstall", json!({"key": "composer", "version": "2.11.2"})).await;
+    assert_eq!(error, None);
+    assert_eq!(composer_of(&site(&mut c, "shop").await)["version"], "2.2.32");
     d.shutdown().await.unwrap();
 }
 

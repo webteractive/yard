@@ -5,7 +5,7 @@
 use crate::jobs::JobCtx;
 use crate::programs::{fetch, stage_in};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use yard_core::Paths;
 use yard_core::config::{SiteEntry, SitesConfig, YardConfig, load_sites, load_yard};
 use yard_core::project::{FileKind, ProjectFile};
@@ -132,10 +132,9 @@ async fn index_pick(
         return Ok(RuntimeVersion(spec.parts.clone()));
     }
     let fallback = || pinned(recipe, spec, true).map(|(v, _)| v);
-    match get(job, &ix.url, opts).await {
-        Ok(json) => {
-            let channels = composer_channels(&json)
-                .map_err(|why| YardError::new(ErrorCode::JobFailed, format!("{}: {why}", ix.url)))?;
+    // An answer Yard cannot read (a captive portal's page) is as good as none.
+    match get(job, &ix.url, opts).await.and_then(|json| composer_channels(&json)) {
+        Ok(channels) => {
             let found = index_version(spec, &channels)
                 .map_err(|why| YardError::new(ErrorCode::InvalidArgument, why))?;
             found.or_else(fallback).ok_or_else(|| {
@@ -284,8 +283,10 @@ pub fn in_use(
                 continue;
             }
             let Ok(spec) = VersionSpec::parse(spec) else { continue };
+            // A Default site runs yard.toml's default when there is one, a plain prefix as the
+            // shim takes it; only the recipe's own rule carries an exclude.
             let exclude = match rt.source {
-                SettingSource::Default => recipe
+                SettingSource::Default if default.is_none() => recipe
                     .defaults
                     .iter()
                     .find(|d| d.spec == spec)
@@ -350,6 +351,25 @@ pub async fn uninstall(
     remove(&root, &paths.installs_dir().join(&recipe.key))?;
     job.line(format!("Removed {} {v}", recipe.name));
     Ok(())
+}
+
+/// Brew's `composer`, which the shim falls back to for one release (runtimes spec §9.3).
+pub fn brew_composer(brew: &yard_core::brew::Brew) -> Option<PathBuf> {
+    Some(brew.prefix.join("bin/composer")).filter(|p| p.exists())
+}
+
+/// Whether the `composer` shim runs brew's Composer for a project on PHP `php_full`: Yard has
+/// none installed, brew's is there and the PHP is new enough for it. A pin changes nothing
+/// while nothing is installed, so none is passed.
+pub fn brew_composer_runs(
+    paths: &Paths,
+    brew: &yard_core::brew::Brew,
+    recipe: &RuntimeRecipe,
+    php_full: &RuntimeVersion,
+) -> bool {
+    let picked =
+        pick_composer(recipe, None, php_full, "", &installed(paths, &recipe.key), brew_composer(brew), paths);
+    matches!(picked, Ok(Pick::BrewComposer(_)))
 }
 
 /// The full version of the PHP keg `v` (`7.1.33`), or `x.y.0` when it cannot be read.

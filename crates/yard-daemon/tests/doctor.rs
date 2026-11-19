@@ -2130,6 +2130,27 @@ async fn doctor_notes_brews_composer_while_yard_has_none() {
     assert!(!ids(&e.offline(&e.helper).await).contains(&"composer-brew"));
 }
 
+/// While the shim falls back to brew's composer, a site it serves is not missing anything: it
+/// is named under composer-brew instead. A PHP 7.1 site, which brew's Composer cannot run on,
+/// still warns.
+#[tokio::test]
+async fn brews_composer_covers_the_sites_it_runs_for() {
+    let e = env().await;
+    e.fx.add_php("7.1");
+    std::fs::create_dir_all(e.fx.brew.path().join("bin")).unwrap();
+    std::fs::write(e.fx.brew.path().join("bin/composer"), "").unwrap();
+    let (shop, old) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    e.node_site("shop", &[("composer.json", "{}")], &shop);
+    e.node_site("old", &[("composer.json", "{}"), (".yard", "php = \"7.1\"\n")], &old);
+    let report = e.offline(&e.helper).await;
+    let ids = runtime_ids(&report);
+    assert!(!ids.contains(&"runtime-missing:shop:composer"), "{ids:?}");
+    assert!(ids.contains(&"runtime-missing:old:composer"), "{ids:?}");
+    let c = only(&report, "composer-brew");
+    assert!(c.message.contains("shop"), "{c:?}");
+    assert!(!c.message.contains("old"), "{c:?}");
+}
+
 #[tokio::test]
 async fn doctor_is_quiet_for_a_site_without_composer_json() {
     let e = env().await;

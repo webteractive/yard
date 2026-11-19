@@ -132,7 +132,9 @@ triggers:
   the vendor's `.sha256sum`, over HTTPS only) and the `composer` shim runs it under the project's
   keg PHP. For one release, while Yard has no Composer installed at all, the shim still runs brew's
   `<prefix>/bin/composer` on a PHP that can run it (7.2.5 or later), saying so on stderr, and doctor
-  notes it (`composer-brew`, ok with a hint). Yard never runs `brew install composer`.
+  notes it (`composer-brew`, ok with a hint, naming those sites, which get no `runtime-missing`;
+  `runtimes::brew_composer_runs` asks `pick_composer` itself, so doctor and the shim agree). Yard
+  never runs `brew install composer`.
 - **fnm (M4c).** Run it only by absolute path (`Brew::fnm_bin`, `<prefix>/bin/fnm`) with
   `node::fnm_env` (`FNM_DIR=<root>/node`, `FNM_LOGLEVEL=info`), never a bare `fnm` and never
   fnm's own directory. brew installs fnm only inside a `node.install` job, when the binary is

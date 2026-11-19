@@ -273,8 +273,10 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         }
         checks.extend(managed_checks(paths, sites));
         let mut sites = sites.clone();
-        crate::runtimes::fill_sites(&mut sites, paths, &crate::runtimes::registry(), brew);
-        checks.extend(runtime_checks(&sites));
+        let registry = crate::runtimes::registry();
+        crate::runtimes::fill_sites(&mut sites, paths, &registry, brew);
+        let on_brew = on_brew_composer(&sites, paths, brew, &registry);
+        checks.extend(runtime_checks(&sites, &on_brew));
         let default = view.yard.as_ref().and_then(|y| y.default_node.clone()).unwrap_or(DEFAULT_SPEC);
         checks.extend(node_checks(
             &sites,
@@ -282,8 +284,10 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
             &crate::node::installed(paths),
             &crate::node::lts(paths),
         ));
+        checks.extend(composer_brew(paths, brew, &on_brew));
+    } else {
+        checks.extend(composer_brew(paths, brew, &[]));
     }
-    checks.extend(composer_brew(paths, brew));
     let sites = view.sites.as_ref().map_or(&[][..], |(_, sites)| sites.as_slice());
     if let Some(services) = &view.services {
         checks.extend(old_php_mysql_login(sites, &view.projects, services));
@@ -573,12 +577,40 @@ fn node_checks(
     checks
 }
 
+/// The sites whose Composer is missing and which the shim runs on brew's composer instead
+/// (runtimes spec §9.3).
+fn on_brew_composer(
+    sites: &[SiteInfo],
+    paths: &Paths,
+    brew: &Brew,
+    registry: &yard_core::runtimes::Runtimes,
+) -> Vec<String> {
+    let Some(recipe) = registry.get("composer").map(|r| r.recipe()) else { return vec![] };
+    sites
+        .iter()
+        .filter(|site| {
+            site.runtimes.iter().any(|rt| rt.key == "composer" && rt.version.is_none() && rt.error.is_none())
+        })
+        .filter(|site| match &site.kind {
+            SiteKind::Php { php, .. } => php.parse().is_ok_and(|v| {
+                crate::runtimes::brew_composer_runs(paths, brew, recipe, &crate::runtimes::php_full(brew, v))
+            }),
+            _ => false,
+        })
+        .map(|site| site.name.clone())
+        .collect()
+}
+
 /// Each site's recipe runtimes (runtimes spec §14): one not installed, a pin that cannot be
-/// used, a version too new for the site's PHP, and a `[runtimes]` key no runtime defines.
-fn runtime_checks(sites: &[SiteInfo]) -> Vec<Check> {
+/// used, a version too new for the site's PHP, and a `[runtimes]` key no runtime defines. A
+/// Composer brew's runs (`on_brew`) is not missing: `composer-brew` names those sites.
+fn runtime_checks(sites: &[SiteInfo], on_brew: &[String]) -> Vec<Check> {
     let mut checks = vec![];
     for site in sites {
         for rt in &site.runtimes {
+            if rt.key == "composer" && on_brew.contains(&site.name) {
+                continue;
+            }
             let at = format!("{}:{}", site.name, rt.key);
             match (&rt.error, &rt.spec, &rt.version) {
                 (Some(e), ..) if e.code == yard_proto::ErrorCode::RuntimeUnknown => {
@@ -620,17 +652,25 @@ fn runtime_checks(sites: &[SiteInfo]) -> Vec<Check> {
     checks
 }
 
-/// Brew's `composer`, which the shim falls back to for one release while Yard has none.
-fn composer_brew(paths: &Paths, brew: &Brew) -> Option<Check> {
-    if !brew.prefix.join("bin/composer").exists() || !crate::runtimes::installed(paths, "composer").is_empty()
+/// Brew's `composer`, which the shim falls back to for one release while Yard has none, and
+/// the sites (`on_brew`) it runs for.
+fn composer_brew(paths: &Paths, brew: &Brew, on_brew: &[String]) -> Option<Check> {
+    if crate::runtimes::brew_composer(brew).is_none()
+        || !crate::runtimes::installed(paths, "composer").is_empty()
     {
         return None;
     }
+    let sites = match on_brew {
+        [] => String::new(),
+        [one] => format!(" (site {one})"),
+        many => format!(" (sites {})", many.join(", ")),
+    };
     Some(Check {
         id: "composer-brew".into(),
         status: CheckStatus::Ok,
-        message: "composer runs brew's Composer until Yard installs its own; Yard picks one per project"
-            .into(),
+        message: format!(
+            "composer runs brew's Composer{sites} until Yard installs its own; Yard picks one per project"
+        ),
         hint: Some("yard runtime install composer".into()),
     })
 }

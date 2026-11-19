@@ -430,7 +430,12 @@ fn render_runtimes(d: &Detected) -> String {
     if d.runtimes.is_empty() {
         return String::new();
     }
-    let lines: String = d.runtimes.iter().map(|(k, spec)| format!("{k} = \"{spec}\"\n")).collect();
+    // A key from sites.toml can be any TOML key: quote it when it is not bare.
+    let lines: String = d
+        .runtimes
+        .iter()
+        .map(|(k, spec)| format!("{} = \"{spec}\"\n", toml_edit::Key::new(k.as_str()).display_repr()))
+        .collect();
     format!("\n[runtimes]\n{lines}")
 }
 
@@ -1014,6 +1019,21 @@ mod tests {
         assert_eq!(kept.node, Some(NodeSpec::Major(18)));
         let set = parse(&rewrite("node = \"18\"\n", &d).unwrap(), Path::new(FILE)).unwrap();
         assert_eq!(set.node, Some(NodeSpec::Major(16)));
+    }
+
+    /// A runtime key from `sites.toml` can be any TOML key; one that is not bare must come
+    /// out quoted, or the file `yard init` writes would not parse.
+    #[test]
+    fn render_quotes_a_runtime_key_that_is_not_bare() {
+        let mut runtimes = BTreeMap::new();
+        runtimes.insert("my tool".to_string(), VersionSpec::parse("1").unwrap());
+        runtimes.insert("composer".to_string(), VersionSpec::parse("2.2").unwrap());
+        let d = Detected { php: None, docroot: ".".into(), secure: None, node: None, runtimes };
+        for text in [render(&d), render_managed("ee", Path::new("/code/ee"), &d)] {
+            assert!(text.contains("\ncomposer = \"2.2\"\n"), "{text}");
+            let doc: toml::Table = text.parse().unwrap_or_else(|e| panic!("{e}\n{text}"));
+            assert_eq!(doc["runtimes"]["my tool"].as_str(), Some("1"), "{text}");
+        }
     }
 
     #[test]

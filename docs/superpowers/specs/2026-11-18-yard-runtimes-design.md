@@ -376,7 +376,9 @@ and 2.7.7. The 2.2.32 hash above is that file's, fetched the same day.)
 - **For one release, the shim falls back to brew's `composer`** when no Yard Composer is installed
   at all, brew's is there, and the project's PHP is 7.2.5 or later, printing one stderr line: `yard:
   using brew's composer; yard runtime install composer for per-project versions`. Doctor reports
-  `composer-brew` (`ok` with a hint: doctor has no info level, as the recipes spec §16 found). The release after removes the fallback, as `yard db` went **(my call:
+  `composer-brew` (`ok` with a hint: doctor has no info level, as the recipes spec §16 found),
+  naming the sites brew's runs, and gives those sites no `runtime-missing`, since their `composer`
+  works (a PHP 7.1 site, which it cannot run on, still warns). The release after removes the fallback, as `yard db` went **(my call:
   nobody's working `composer` breaks on update)**.
 - `yard link` and `yard init` offer the site's Composer in their install list when the root has a
   `composer.json`, as they offer Node. `yard runtime install composer` with no spec installs what
@@ -586,7 +588,8 @@ local HTTPS fixture.
   moves the version into a stage at once and deletes it there, so a shim sees all of it or none.
 - **`yard init`** moves a site's `[sites.<s>.runtimes]` into the file it writes, as it does `node`.
 - **A PHP whose full version cannot be read** counts as `x.y.0`, so an unknown 7.2 gets Composer 2.2.
-- **With the index unreachable**, the recipe's pinned versions stand in only for their own channel:
+- **With the index unreachable**, or answering with something that is not its JSON (a captive
+  portal's page), the recipe's pinned versions stand in only for their own channel:
   `2.2` installs the pinned 2.2.32, `2` fails naming the index. A major.minor that is not a channel is
   refused before any job starts.
 - **A Composer too new for the project's PHP** is `INVALID_ARGUMENT` with the version and the PHP it needs
@@ -597,3 +600,7 @@ local HTTPS fixture.
   from default`).
 - **Yard.app**: a row per runtime below Node with an Install button while it is missing, and the settle
   sheet offers it after Node.
+- **`in_use` and `yard.toml`'s default**: once `[runtimes.<key>] default` is set, every unpinned site
+  runs it as a plain prefix, as the shim does, so the recipe rule's `exclude` no longer decides what
+  else can run a site, and uninstalling the newest 2.x while 2.2 is installed is allowed.
+- **A `[runtimes]` key** that is not a bare TOML key is written quoted by `yard init`.
