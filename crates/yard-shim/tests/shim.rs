@@ -448,6 +448,15 @@ fn self_update_is_refused_in_every_spelling() {
         // `global` re-parses its arguments as one string, splitting an option word at spaces.
         &["global", "-n self-update"],
         &["global", "-n self-update --x=y"],
+        // Composer's second parse after `global` drops quotes and backslashes, and a skipped
+        // `-d` value may be `global` itself; any word that abbreviates the command is refused.
+        &["-d/dev/fd", "global", "-n self-update"],
+        &["global", "-n 'self-update'"],
+        &["global", "-n \"self-update\""],
+        &["global", "-n self\"-up\"date"],
+        &["global", "-n \\self-update"],
+        &["global", "-n global '-n self-update'"],
+        &["--working-dir=x", "sel"],
     ] {
         let out = run_as(&s, "composer", args);
         let (stdout, stderr) = texts(&out);
@@ -460,6 +469,8 @@ fn self_update_is_refused_in_every_spelling() {
         &["-d", "./self-update", "install"],
         &["global", "require", "x/y"],
         &["require", "self-update/x"],
+        &["show", "se"],
+        &["require", "symfony/console", "--working-dir=./app"],
     ] {
         let out = run_as(&s, "composer", args);
         assert!(out.status.success(), "{args:?}: {}", texts(&out).1);

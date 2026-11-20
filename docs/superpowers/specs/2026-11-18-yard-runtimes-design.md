@@ -615,7 +615,11 @@ local HTTPS fixture.
   as `-d`'s value that names a refused command is refused too (`-rd self-update`: when an option
   Composer does not bind globally makes its first pass fail, that word is the command), and any
   abbreviation of a refused word in any case (`self-u`, `SELF-UPDATE`), as Composer's console accepts
-  them. The real guard is that an install is read-only (files 0444, directories 0555) once it is in
+  them. Because every security review of that parsing found another spelling (`global "-n
+  'self-update'"`, which Composer's second parse unquotes; `-d/dev/fd global …`), a one-word entry
+  is also refused when any argument, with quotes and backslashes dropped and split at whitespace and
+  `=`, abbreviates it to three letters or more, wherever it stands (`sel` is the shortest Composer
+  resolves; `se` is also `search`), so `composer search self` is refused too. The real guard is that an install is read-only (files 0444, directories 0555) once it is in
   place: Composer's self-update refuses a phar it cannot write. Uninstall gives write access back,
   moves the version into a stage at once and deletes it there, so a shim sees all of it or none.
 - **`yard init`** moves a site's `[sites.<s>.runtimes]` into the file it writes, as it does `node`.

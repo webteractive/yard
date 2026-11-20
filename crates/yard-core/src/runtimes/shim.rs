@@ -11,6 +11,10 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use yard_proto::{ErrorCode, YardError};
 
+/// The shortest abbreviation of a refused command matched outside the command's place: `sel` is
+/// the shortest Composer resolves to `self-update` (`se` is also `search`).
+const SHORTEST: usize = 3;
+
 /// Whether an option word may take the next word as its value: `--working-dir`, or a
 /// short-option word ending in `d` (`-d`, Composer's working directory). Symfony's console
 /// skips the next word when it equals the value bound to the word's last letter, wherever that
@@ -27,6 +31,9 @@ fn takes_next(word: &str) -> bool {
 /// value that names a refused command is refused too: when an option Composer does not bind
 /// globally (`-r`, `--rollback`) makes its first pass fail, that word is the command after all.
 /// After `global`, an option word is split at whitespace, as Composer's second parse splits it.
+/// Since each review of that parsing found another spelling, a one-word entry is also refused
+/// when any word, unquoted and split at whitespace and `=`, abbreviates it to SHORTEST letters
+/// or more, wherever it stands (`composer search self` too: refusing too much is safe).
 /// The install root is read-only besides, so a spelling this misses still cannot replace the phar.
 pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
     let mut words: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -34,6 +41,24 @@ pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
         let word = word.to_lowercase();
         r.args.first().is_some_and(|first| !word.is_empty() && first.to_lowercase().starts_with(&word))
     };
+    // Whatever Composer's parser makes of them: a word that, with quotes and backslashes dropped
+    // and split at whitespace and `=`, abbreviates a one-word refused command to at least
+    // SHORTEST letters is refused wherever it stands. Composer's second parse after `global`
+    // unquotes, and a skipped option value can be the command after all; refusing too much is safe.
+    let pieces = || {
+        words.iter().flat_map(|w| {
+            w.split(|c: char| c.is_whitespace() || c == '=')
+                .map(|p| p.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect::<String>())
+        })
+    };
+    if let Some(r) = def
+        .refuse
+        .iter()
+        .filter(|r| r.args.len() == 1)
+        .find(|r| pieces().any(|p| p.chars().count() >= SHORTEST && names(&p, r)))
+    {
+        return Some(r);
+    }
     let mut at = 0;
     loop {
         while at < words.len() && words[at].starts_with('-') {
