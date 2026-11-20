@@ -1,8 +1,8 @@
 # Explicit runtime defaults
 
 Status: **approved 2026-11-19 and built on main** (plan `docs/superpowers/plans/2026-11-19-yard-explicit-defaults.md`,
-run natively, protocol 2.15); §7 lists what the build decided. `scripts/e2e-composer.sh` checks it on a
-real Mac and has not run in this form yet. Builder check done; §2.1 and §2.2 decided by the maintainer. Amends the runtimes design
+run natively, protocol 2.15); §7 lists what the build decided. `scripts/e2e-composer.sh` passed on
+the Mac mini on 2026-11-20 on its first run against yardd built from 171fee0, and `e2e-m4c.sh` after it. Builder check done; §2.1 and §2.2 decided by the maintainer. Amends the runtimes design
 (`2026-11-18-yard-runtimes-design.md` §7, §9.2, §21) and the main spec's PHP default (§4.5), and
 M4c's `default_node`.
 

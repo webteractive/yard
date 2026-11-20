@@ -249,7 +249,9 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   `docs/superpowers/specs/2026-11-19-yard-explicit-defaults-design.md` and planned in
   `docs/superpowers/plans/2026-11-19-yard-explicit-defaults.md` (both approved 2026-11-19, run
   natively), built on main with protocol 2.15; the spec's §7 lists what the build decided.
-  `scripts/e2e-composer.sh` checks it on a real Mac and has not run in this form yet.
+  `scripts/e2e-composer.sh` passed on the Mac mini on 2026-11-20 on its first run against yardd built
+  from 171fee0 (maintainer approved the run), and `e2e-m4c.sh`, whose cleanup now removes Node
+  before restoring `yard.toml`, passed after it.
 - PHP trusts Yard's CA (maintainer, 2026-11-17, from a cURL error 60 found moving the main Mac's
   Herd sites): reconcile writes `php/<v>/ca-bundle.pem` (brew's `ca-certificates` and
   `yard-ca.pem`) once a CA exists, and Yard's `php.ini` names it as `openssl.cafile` and
