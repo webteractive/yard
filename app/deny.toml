@@ -19,6 +19,7 @@ ignore = [
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz, via gpui_macos's text system; unmaintained, no known vulnerability" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via gpui_macos's text system; unmaintained, no known vulnerability" },
     { id = "RUSTSEC-2024-0436", reason = "paste, a proc macro gpui uses at build time; unmaintained, no known vulnerability" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono, via gpui; unmaintained (published 2026), no known vulnerability" },
     # Locked for Linux only (D-Bus and a Linux build macro); never built for Yard.app.
     { id = "RUSTSEC-2026-0371", reason = "zbus_names, Linux D-Bus in GPUI's tree; not built on macOS" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, Linux D-Bus in GPUI's tree; not built on macOS" },

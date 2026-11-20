@@ -164,6 +164,12 @@ fn parse_as(text: &str, file: &Path, kind: FileKind) -> Result<(ProjectFile, Opt
     let mut runtimes = BTreeMap::new();
     for (key, value) in raw.runtimes {
         let k = key.get_ref();
+        if !crate::runtimes::recipe::runtime_key(k) {
+            return Err(invalid(
+                Some(key.span()),
+                &format!("runtimes: {k:?} is not a runtime; a runtime is named like composer"),
+            ));
+        }
         if k == "php" || k == "node" {
             return Err(invalid(
                 Some(key.span()),
@@ -612,6 +618,24 @@ mod tests {
         let f = parse_ok("[runtimes]\ncomposer = \"2.2\"\n");
         assert_eq!(f.runtimes.len(), 1);
         assert_eq!(f.runtimes["composer"].to_string(), "2.2");
+    }
+
+    /// A runtime key is a recipe key (`[a-z][a-z0-9-]*`), so a hostile `.yard` cannot put
+    /// control characters into what `yard info` prints; the message escapes what it quotes.
+    #[test]
+    fn a_runtime_key_that_is_not_a_recipe_key_is_invalid() {
+        for key in [r#""\u001b]8;;x\u0007y""#, "Composer", r#""a b""#] {
+            let e = parse(&format!("[runtimes]\n{key} = \"2\"\n"), Path::new(FILE)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ProjectFileInvalid, "{key}");
+            assert!(!e.message.contains('\u{1b}') && !e.message.contains('\u{7}'), "{:?}", e.message);
+        }
+    }
+
+    #[test]
+    fn a_runtime_value_with_control_characters_is_quoted_escaped() {
+        let e = parse("[runtimes]\ncomposer = \"\\u001b]8;;x\\u0007y\"\n", Path::new(FILE)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(!e.message.contains('\u{1b}') && !e.message.contains('\u{7}'), "{:?}", e.message);
     }
 
     #[test]

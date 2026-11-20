@@ -437,6 +437,10 @@ fn self_update_is_refused_in_every_spelling() {
         &["SELF-UPDATE"],
         &["global", "self-update"],
         &["global", "-n", "self-up"],
+        // A `-d` value that names the command is refused: when an option Composer does not bind
+        // globally (`-r`) makes its first pass fail, Composer runs it as the command.
+        &["-d", "self-update", "install"],
+        &["-rd", "self-update"],
     ] {
         let out = run_as(&s, "composer", args);
         let (stdout, stderr) = texts(&out);
@@ -446,7 +450,7 @@ fn self_update_is_refused_in_every_spelling() {
     }
     for args in [
         &["search", "x"][..],
-        &["-d", "self-update", "install"],
+        &["-d", "./self-update", "install"],
         &["global", "require", "x/y"],
         &["require", "self-update/x"],
     ] {

@@ -14,6 +14,18 @@ uses_when = ["composer.json"]
 from = "2.3.0"
 php = "7.2.5"
 
+# Yard never installs these, whoever asks: a cloned project's pin can name any exact version.
+# CVE-2024-35241 and CVE-2024-35242 (command injection through the git and hg drivers, even
+# with --no-scripts) are fixed in 2.2.24 and 2.7.7.
+[[insecure]]
+below = "2.2.24"
+advisory = "CVE-2024-35241, CVE-2024-35242"
+
+[[insecure]]
+from = "2.3.0"
+below = "2.7.7"
+advisory = "CVE-2024-35241, CVE-2024-35242"
+
 [shims.composer]
 exec = ["{php}", "{home}/composer.phar"]
 refuse = [{ args = ["self-update"], hint = "yard runtime install composer <version>" },

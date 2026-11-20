@@ -70,6 +70,13 @@ pub fn parse_sites(text: Option<&str>, file: &Path) -> Result<SitesConfig, YardE
     };
     let raw: Raw = toml::from_str(text).map_err(|e| config_error(file, text, e.span(), e.message()))?;
     check_tunnels(&raw.sites, text, file)?;
+    for (name, site) in &raw.sites {
+        if let Some(k) = site.runtimes.keys().find(|k| !crate::runtimes::recipe::runtime_key(k)) {
+            let message =
+                format!("sites.{name}.runtimes: {k:?} is not a runtime; a runtime is named like composer");
+            return Err(config_error(file, text, None, &message));
+        }
+    }
     Ok(SitesConfig { sites: raw.sites })
 }
 
@@ -102,6 +109,14 @@ fn check_tunnels(sites: &BTreeMap<String, SiteEntry>, text: &str, file: &Path) -
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_site_runtime_key_that_is_not_a_recipe_key_is_invalid() {
+        let text = "[sites.shop]\npath = \"/code/shop\"\nruntimes = { \"\\u001bx\" = \"2\" }\n";
+        let e = parse_sites(Some(text), Path::new("/r/sites.toml")).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ConfigInvalid);
+        assert!(!e.message.contains('\u{1b}'), "{:?}", e.message);
+    }
 
     #[test]
     fn site_runtimes_are_parsed() {

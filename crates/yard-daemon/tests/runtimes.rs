@@ -255,6 +255,21 @@ async fn an_index_that_is_not_json_falls_back_to_the_pinned_lts() {
     assert!(error.message.contains("portal") && error.message.contains("not JSON"), "{}", error.message);
 }
 
+/// A Composer with a known command injection (CVE-2024-35241: below 2.2.24, and 2.3.0 to 2.7.6)
+/// is never installed, whoever asks: a cloned project's pin can name any exact version.
+#[tokio::test]
+async fn a_composer_with_a_known_flaw_is_refused_before_downloading() {
+    let f = fixture();
+    for v in ["2.0.0", "1.10.27", "2.2.23", "2.5.8", "2.7.6"] {
+        let (lines, error) = install(&f, &recipe(&f, "versions"), v).await;
+        let error = error.unwrap_or_else(|| panic!("{v} was installed"));
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "{v}");
+        assert!(error.message.contains("CVE-2024-35241"), "{v}: {}", error.message);
+        assert!(lines.iter().all(|l| !l.contains("downloading")), "{v}: {lines:?}");
+        assert!(!f.paths.install_root("composer", v).exists(), "{v}");
+    }
+}
+
 #[tokio::test]
 async fn a_partial_minor_is_refused_before_downloading() {
     let f = fixture();

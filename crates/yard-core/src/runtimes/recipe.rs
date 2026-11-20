@@ -32,6 +32,8 @@ pub struct RuntimeRecipe {
     /// `wake` overrides it.
     pub wake: bool,
     pub requires: Vec<Requires>,
+    /// Versions Yard never installs, each with the advisory a refusal names.
+    pub insecure: Vec<Insecure>,
     pub shims: BTreeMap<String, ShimDef>,
     /// Directories under `{home}` put first on the child's PATH.
     pub path: Vec<String>,
@@ -58,6 +60,22 @@ pub enum RunsOn {
 pub struct Requires {
     pub from: RuntimeVersion,
     pub php: RuntimeVersion,
+}
+
+/// An `[[insecure]]` range: versions from `from` (the first, when absent) up to, not
+/// including, `below` have the flaw `advisory` names, so Yard never installs them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Insecure {
+    pub from: Option<RuntimeVersion>,
+    pub below: RuntimeVersion,
+    pub advisory: String,
+}
+
+impl RuntimeRecipe {
+    /// The `[[insecure]]` range `v` falls in.
+    pub fn insecure_for(&self, v: &RuntimeVersion) -> Option<&Insecure> {
+        self.insecure.iter().find(|i| i.from.as_ref().is_none_or(|f| v >= f) && v < &i.below)
+    }
 }
 
 /// One shim: what it execs (placeholders unexpanded), the arguments Yard refuses, and its
@@ -222,10 +240,20 @@ struct Raw {
     #[serde(default)]
     requires: Vec<Spanned<RawRequires>>,
     #[serde(default)]
+    insecure: Vec<Spanned<RawInsecure>>,
+    #[serde(default)]
     shims: BTreeMap<Spanned<String>, Spanned<RawShim>>,
     source: toml::Table,
     #[serde(default)]
     versions: BTreeMap<Spanned<String>, Spanned<RawVersion>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawInsecure {
+    from: Option<String>,
+    below: String,
+    advisory: String,
 }
 
 #[derive(Deserialize)]
@@ -304,7 +332,8 @@ impl At<'_> {
     }
 }
 
-fn runtime_key(s: &str) -> bool {
+/// A runtime's key: `[a-z][a-z0-9-]*`, at most 32 characters (recipes, `[runtimes]` pins).
+pub fn runtime_key(s: &str) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
         && b.len() <= 32
@@ -501,6 +530,21 @@ pub fn parse_runtime_recipe(
         });
     }
 
+    let mut insecure = Vec::new();
+    for i in &raw.insecure {
+        let rule = i.get_ref();
+        let offset = i.span().start;
+        let from = rule.from.as_deref().map(|f| version(f, "[[insecure]] from", offset)).transpose()?;
+        let below = version(&rule.below, "[[insecure]] below", offset)?;
+        if from.as_ref().is_some_and(|f| f >= &below) {
+            return Err(at.at(i, "[[insecure]] below must come after from"));
+        }
+        if rule.advisory.trim().is_empty() {
+            return Err(at.at(i, "[[insecure]] needs an advisory, such as a CVE"));
+        }
+        insecure.push(Insecure { from, below, advisory: rule.advisory.clone() });
+    }
+
     let mut versions = BTreeMap::new();
     for (v, entry) in &raw.versions {
         let parsed = v
@@ -538,6 +582,7 @@ pub fn parse_runtime_recipe(
         runs_on,
         wake: raw.wake,
         requires,
+        insecure,
         shims,
         path,
         env,

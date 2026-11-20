@@ -209,3 +209,32 @@ fn a_shims_wake_overrides_the_recipes() {
     assert!(php.wakes("php"));
     assert!(!php.wakes("pecl"));
 }
+
+/// `[[insecure]]` names ranges Yard never installs, each with the advisory it reports.
+#[test]
+fn insecure_ranges_parse_and_match() {
+    let text = bun()
+        + "\n[[insecure]]\nbelow = \"1.1.0\"\nadvisory = \"CVE-0000-1\"\n\n[[insecure]]\nfrom = \"1.2.0\"\nbelow = \"1.2.5\"\nadvisory = \"CVE-0000-2\"\n";
+    let r = user(&text).unwrap();
+    let flaw = |v: &str| r.insecure_for(&v.parse().unwrap()).map(|i| i.advisory.clone());
+    assert_eq!(flaw("1.0.9").as_deref(), Some("CVE-0000-1"));
+    assert_eq!(flaw("1.1.0"), None);
+    assert_eq!(flaw("1.2.0").as_deref(), Some("CVE-0000-2"));
+    assert_eq!(flaw("1.2.4").as_deref(), Some("CVE-0000-2"));
+    assert_eq!(flaw("1.2.5"), None);
+    let backwards = bun() + "\n[[insecure]]\nfrom = \"1.2.5\"\nbelow = \"1.2.0\"\nadvisory = \"x\"\n";
+    assert!(err(&backwards).contains("below"), "{}", err(&backwards));
+}
+
+/// The carried Composer refuses what CVE-2024-35241 and CVE-2024-35242 cover.
+#[test]
+fn carried_composer_names_its_flawed_versions() {
+    let r = Runtimes::carried();
+    let composer = r.get("composer").unwrap().recipe().clone();
+    for v in ["1.10.27", "2.0.0", "2.2.23", "2.3.0", "2.7.6"] {
+        assert!(composer.insecure_for(&v.parse().unwrap()).is_some(), "{v}");
+    }
+    for v in ["2.2.24", "2.2.32", "2.7.7", "2.11.2"] {
+        assert!(composer.insecure_for(&v.parse().unwrap()).is_none(), "{v}");
+    }
+}

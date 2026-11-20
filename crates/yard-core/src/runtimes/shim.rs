@@ -11,20 +11,46 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use yard_proto::{ErrorCode, YardError};
 
-/// Composer's options that take the next argument as their value.
-const VALUE_OPTIONS: [&str; 2] = ["-d", "--working-dir"];
+/// Whether an option word takes the next word as its value: `--working-dir`, or a short-option
+/// cluster whose first `d` (`-d`, Composer's working directory) is its last letter, since
+/// Symfony's console gives `-d` the rest of a cluster (`-dn`) and the next word otherwise (`-nd`).
+fn takes_next(word: &str) -> bool {
+    if word == "--working-dir" {
+        return true;
+    }
+    match word.strip_prefix('-') {
+        Some(letters) if !letters.starts_with('-') => {
+            letters.find('d') == Some(letters.len().wrapping_sub(1))
+        }
+        _ => false,
+    }
+}
 
 /// The `refuse` entry `args` meet. The command is the first argument that is neither an
 /// option nor an option's value (`-d <dir>`), past `global`, which runs any command again;
 /// it matches a refused word it abbreviates, as Composer's console accepts `self-u` or
-/// `SELF-UPDATE`. Any further words of the entry follow it exactly. The install root is
-/// read-only besides, so a spelling this misses still cannot replace the phar.
+/// `SELF-UPDATE`. Any further words of the entry follow it exactly. A word taken as `-d`'s
+/// value that names a refused command is refused too: when an option Composer does not bind
+/// globally (`-r`, `--rollback`) makes its first pass fail, that word is the command after all.
+/// The install root is read-only besides, so a spelling this misses still cannot replace the phar.
 pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
     let words: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let names = |word: &str, r: &Refuse| {
+        let word = word.to_lowercase();
+        r.args.first().is_some_and(|first| !word.is_empty() && first.to_lowercase().starts_with(&word))
+    };
     let mut at = 0;
     loop {
         while at < words.len() && words[at].starts_with('-') {
-            at += if VALUE_OPTIONS.contains(&words[at].as_str()) { 2 } else { 1 };
+            if takes_next(&words[at]) {
+                let value = words.get(at + 1).map(String::as_str).unwrap_or_default();
+                if let Some(r) = def.refuse.iter().find(|r| names(value, r)) {
+                    return Some(r);
+                }
+                at += 2;
+            } else {
+                at += 1;
+            }
         }
         let command = words.get(at)?.to_lowercase();
         if !command.is_empty() && "global".starts_with(&command) && at + 1 < words.len() {
@@ -32,10 +58,7 @@ pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
             continue;
         }
         let rest = &words[at + 1..];
-        return def.refuse.iter().find(|r| {
-            let Some((first, more)) = r.args.split_first() else { return false };
-            !command.is_empty() && first.to_lowercase().starts_with(&command) && rest.starts_with(more)
-        });
+        return def.refuse.iter().find(|r| names(&command, r) && rest.starts_with(&r.args[1..]));
     }
 }
 
@@ -234,6 +257,34 @@ mod tests {
             brew.map(PathBuf::from),
             &Paths::new("/r"),
         )
+    }
+
+    /// A short-option cluster ending in `d` takes the next word as `-d`'s directory, as
+    /// Symfony's console reads it, so `-nd /tmp self-update` is still `self-update`; one with
+    /// `d` before its end carries the directory itself (`-d/tmp`, `-dn`).
+    #[test]
+    fn a_cluster_ending_in_d_takes_the_next_word() {
+        let r = composer();
+        let def = &r.shims["composer"];
+        for refused_args in [
+            &["-nd", "/tmp", "self-update"][..],
+            &["-qnd", "/tmp", "selfupdate"],
+            &["-d/tmp", "self-update"],
+            &["-dn", "self-update"],
+        ] {
+            assert!(refused(def, &args(refused_args)).is_some(), "{refused_args:?}");
+        }
+        // Composer binds only its global options first, and when another option (`-r`, a
+        // self-update one) makes that fail, the word after `-d` is the command after all.
+        for refused_args in [
+            &["-rd", "self-update"][..],
+            &["--rollback", "-nd", "self-update"],
+            &["--stable", "-nd", "SELF-UPDATE", "--set-channel-only"],
+            &["--working-dir", "selfupdate"],
+        ] {
+            assert!(refused(def, &args(refused_args)).is_some(), "{refused_args:?}");
+        }
+        assert!(refused(def, &args(&["-d", "/code/self-update", "install"])).is_none());
     }
 
     #[test]

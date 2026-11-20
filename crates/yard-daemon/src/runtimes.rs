@@ -95,9 +95,14 @@ pub async fn resolve_install(
         return Err(YardError::internal(format!("{} is not installed by download", recipe.name)));
     };
     let (version, hash) = match index {
-        None => pinned(recipe, spec, false).ok_or_else(|| not_listed(recipe, spec))?,
+        None => {
+            let (version, hash) = pinned(recipe, spec, false).ok_or_else(|| not_listed(recipe, spec))?;
+            refuse_insecure(recipe, &version)?;
+            (version, hash)
+        }
         Some(ix) => {
             let version = index_pick(job, recipe, ix, spec, opts).await?;
+            refuse_insecure(recipe, &version)?;
             let hash = match recipe.versions.get(&version) {
                 Some(VersionEntry::Sha256(h)) => h.clone(),
                 _ => {
@@ -114,6 +119,20 @@ pub async fn resolve_install(
         }
     };
     Ok((version.clone(), expand_version(url, &version.to_string()), hash))
+}
+
+/// Refuses a version in one of the recipe's `[[insecure]]` ranges, before anything is fetched:
+/// a cloned project's pin can name any exact version (runtimes spec §9).
+fn refuse_insecure(recipe: &RuntimeRecipe, version: &RuntimeVersion) -> Result<(), YardError> {
+    let Some(flaw) = recipe.insecure_for(version) else { return Ok(()) };
+    Err(YardError::new(
+        ErrorCode::InvalidArgument,
+        format!(
+            "{} {version} has a known security flaw ({}), so Yard does not install it; {} {} and later are fixed",
+            recipe.name, flaw.advisory, recipe.name, flaw.below
+        ),
+    )
+    .with_hint(format!("yard runtime install {} 2", recipe.key)))
 }
 
 async fn index_pick(

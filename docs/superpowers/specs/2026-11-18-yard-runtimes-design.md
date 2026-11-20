@@ -164,6 +164,11 @@ env = { BUN_INSTALL_CACHE_DIR = "{cache}" }
 # from = "2.3.0"
 # php = "7.2.5"
 
+# [[insecure]]                      # versions Yard never installs: from `from` (or the first)
+# from = "2.3.0"                    # up to, not including, `below`; a refusal names `advisory`
+# below = "2.7.7"
+# advisory = "CVE-2024-35241"
+
 [shims.bun]                         # one table per shim name
 exec = ["{home}/bin/bun"]           # default: ["{home}/bin/<name>"]
 [shims.bunx]
@@ -293,7 +298,10 @@ files that exist but cannot be used, sizes, BOMs and comments carries over.
 ### 7.1 `.yard`
 
 `[runtimes]` is a new table: `composer = "2.2"`, `bun = "1.2"`. `php` and `node` stay top-level. A
-key no loaded recipe defines is an unmet need, not an invalid file: `yard info` and doctor name it
+key must be named as a recipe key is (`[a-z][a-z0-9-]*`, at most 32 characters), else the file is
+invalid (`PROJECT_FILE_INVALID`; `CONFIG_INVALID` in `sites.toml`), so a cloned project cannot put
+terminal escapes into what `yard info` prints (0.1.11 security review). A well-named key no loaded
+recipe defines is an unmet need, not an invalid file: `yard info` and doctor name it
 (`RUNTIME_UNKNOWN`, hint: add `~/.yard/runtimes/<key>.toml`), the site is served (a runtime never
 puts a site on its setup page; nginx and PHP-FPM do not need it), and the shims ignore it **(my
 call, following the recipes spec's unknown-engine rule)**. An older yardd reads `[runtimes]` as an
@@ -334,6 +342,15 @@ uses_when = ["composer.json"]
 [[requires]]
 from = "2.3.0"
 php = "7.2.5"
+
+[[insecure]]
+below = "2.2.24"
+advisory = "CVE-2024-35241, CVE-2024-35242"
+
+[[insecure]]
+from = "2.3.0"
+below = "2.7.7"
+advisory = "CVE-2024-35241, CVE-2024-35242"
 
 [shims.composer]
 exec = ["{php}", "{home}/composer.phar"]
@@ -591,7 +608,10 @@ local HTTPS fixture.
   the runtime as closures; `resolve_node` runs on it, with Node's tests unchanged.
 - **`yard.toml`** refuses `[runtimes.php]` and `[runtimes.node]` (`default_php` and `default_node` say
   those).
-- **`refuse`** matches the command past options, an option's value (`-d <dir>`) and `global`, and any
+- **`refuse`** matches the command past options, an option's value (`-d <dir>`, and a short-option
+  cluster ending in `d`, `-nd <dir>`, as Symfony's console reads it) and `global`, and a word taken
+  as `-d`'s value that names a refused command is refused too (`-rd self-update`: when an option
+  Composer does not bind globally makes its first pass fail, that word is the command), and any
   abbreviation of a refused word in any case (`self-u`, `SELF-UPDATE`), as Composer's console accepts
   them. The real guard is that an install is read-only (files 0444, directories 0555) once it is in
   place: Composer's self-update refuses a phar it cannot write. Uninstall gives write access back,
@@ -615,3 +635,11 @@ local HTTPS fixture.
   default written by hand as a prefix is read as one, and the recipe rules and their `exclude` are
   gone.
 - **A `[runtimes]` key** that is not a bare TOML key is written quoted by `yard init`.
+- **Insecure versions (0.1.11 security review).** A cloned project's `[runtimes] composer` can name
+  any exact version, and Composer below 2.2.24 and from 2.3.0 below 2.7.7 runs commands through its
+  git and hg drivers even with `--no-scripts` (CVE-2024-35241, CVE-2024-35242). The recipe format
+  gained `[[insecure]]` ranges, and an install of a version in one is refused before anything is
+  fetched (`INVALID_ARGUMENT`, naming the advisory and the first fixed version, hint `yard runtime
+  install composer 2`), whoever asks; a version already installed keeps running. The checksum still
+  comes from getcomposer.org beside the phar, so it guards integrity, not authenticity, past TLS;
+  checking Composer's `.asc` signature is left for later.

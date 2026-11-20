@@ -25,7 +25,7 @@ impl FromStr for RuntimeVersion {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
-        numbers(s, 4).map(RuntimeVersion).ok_or_else(|| format!("\"{}\" is not a version", s.trim()))
+        numbers(s, 4).map(RuntimeVersion).ok_or_else(|| format!("{:?} is not a version", s.trim()))
     }
 }
 
@@ -91,7 +91,7 @@ impl TryFrom<String> for VersionSpec {
 impl VersionSpec {
     pub fn parse(s: &str) -> Result<VersionSpec, String> {
         numbers(s, 3).map(|parts| VersionSpec { parts }).ok_or_else(|| {
-            format!("\"{}\" is not a version spec; write a version such as 2.2 or 2.2.32", s.trim())
+            format!("{:?} is not a version spec; write a version such as 2.2 or 2.2.32", s.trim())
         })
     }
 
