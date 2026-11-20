@@ -226,15 +226,16 @@ fn insecure_ranges_parse_and_match() {
     assert!(err(&backwards).contains("below"), "{}", err(&backwards));
 }
 
-/// The carried Composer refuses what CVE-2024-35241 and CVE-2024-35242 cover.
+/// The carried Composer refuses every version a published composer/composer advisory covers:
+/// as of 2026-11-10, everything below 2.2.32 and from 2.3.0 below 2.11.2.
 #[test]
 fn carried_composer_names_its_flawed_versions() {
     let r = Runtimes::carried();
     let composer = r.get("composer").unwrap().recipe().clone();
-    for v in ["1.10.27", "2.0.0", "2.2.23", "2.3.0", "2.7.6"] {
+    for v in ["1.10.27", "2.0.0", "2.2.23", "2.2.31", "2.3.0", "2.7.7", "2.10.0", "2.11.1"] {
         assert!(composer.insecure_for(&v.parse().unwrap()).is_some(), "{v}");
     }
-    for v in ["2.2.24", "2.2.32", "2.7.7", "2.11.2"] {
+    for v in ["2.2.32", "2.2.33", "2.11.2", "2.12.0", "3.0.0"] {
         assert!(composer.insecure_for(&v.parse().unwrap()).is_none(), "{v}");
     }
 }

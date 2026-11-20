@@ -189,7 +189,7 @@ pub(super) async fn install(ctx: &Context, p: RuntimeInstallParams) -> Result<Jo
         && let Err(why) = index_version(&spec, &Default::default())
     {
         return Err(YardError::new(ErrorCode::InvalidArgument, why)
-            .with_hint(format!("yard runtime install {} 2.7.7", p.key)));
+            .with_hint(format!("yard runtime install {} 2.11.2", p.key)));
     }
     let (paths, opts, reconciler) = (ctx.paths.clone(), ctx.recipe_options.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("runtime-install", move |job: JobCtx| async move {

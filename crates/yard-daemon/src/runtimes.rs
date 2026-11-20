@@ -145,7 +145,7 @@ async fn index_pick(
     // Refused before anything is fetched: the answer does not depend on the index.
     if let Err(why) = index_version(spec, &BTreeMap::new()) {
         return Err(YardError::new(ErrorCode::InvalidArgument, why)
-            .with_hint(format!("yard runtime install {} 2.7.7", recipe.key)));
+            .with_hint(format!("yard runtime install {} 2.11.2", recipe.key)));
     }
     if spec.is_exact() {
         return Ok(RuntimeVersion(spec.parts.clone()));
@@ -161,12 +161,12 @@ async fn index_pick(
                     ErrorCode::InvalidArgument,
                     format!("{} lists no {} {spec}", ix.url, recipe.name),
                 )
-                .with_hint(format!("name an exact version: yard runtime install {} 2.7.7", recipe.key))
+                .with_hint(format!("name an exact version: yard runtime install {} 2.11.2", recipe.key))
             })
         }
         Err(why) => fallback().ok_or_else(|| {
             YardError::new(ErrorCode::JobFailed, format!("cannot read {}: {why}", ix.url)).with_hint(format!(
-                "check the network, or name an exact version: yard runtime install {} 2.7.7",
+                "check the network, or name an exact version: yard runtime install {} 2.11.2",
                 recipe.key
             ))
         }),

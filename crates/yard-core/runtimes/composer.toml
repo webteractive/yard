@@ -15,16 +15,17 @@ from = "2.3.0"
 php = "7.2.5"
 
 # Yard never installs these, whoever asks: a cloned project's pin can name any exact version.
-# CVE-2024-35241 and CVE-2024-35242 (command injection through the git and hg drivers, even
-# with --no-scripts) are fixed in 2.2.24 and 2.7.7.
+# Every published composer/composer advisory is covered; the latest (2026-11-10: arbitrary file
+# writes through symlinked zip entries, command execution and credential leaks from a hostile
+# composer.lock) are fixed in 2.2.32 and 2.11.2. A new advisory moves `below` here.
 [[insecure]]
-below = "2.2.24"
-advisory = "CVE-2024-35241, CVE-2024-35242"
+below = "2.2.32"
+advisory = "GHSA-w6hj-6587-3jh5 and earlier advisories"
 
 [[insecure]]
 from = "2.3.0"
-below = "2.7.7"
-advisory = "CVE-2024-35241, CVE-2024-35242"
+below = "2.11.2"
+advisory = "GHSA-w6hj-6587-3jh5, GHSA-jhfp-4ppm-crmm and earlier advisories"
 
 [shims.composer]
 exec = ["{php}", "{home}/composer.phar"]

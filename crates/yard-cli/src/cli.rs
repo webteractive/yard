@@ -626,7 +626,7 @@ pub enum RuntimeAction {
         key: String,
     },
     /// Install a version: composer 2 (the current line), 2.2 (the LTS for PHP below 7.2.5) or
-    /// an exact one such as 2.7.7. With none, the version this directory runs. Ctrl-C cancels.
+    /// an exact one such as 2.11.2. With none, the version this directory runs. Ctrl-C cancels.
     Install {
         /// The runtime: composer, php or node.
         key: String,

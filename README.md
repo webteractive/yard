@@ -21,7 +21,7 @@ To build Yard yourself or work on it, see [DEVELOPMENT.md](DEVELOPMENT.md).
   PHP below 7.2.5, which the default cannot run, gets its own pin to the 2.2 LTS, written by Yard
   in its managed `.yard` or `sites.toml` (a committed `.yard` is yours: `yard link` and `yard
   doctor` name the line to add), and a `.yard` can pin any version (`[runtimes] composer = "2.2"`) except one with a known
-  security flaw (below 2.2.24, and 2.3.0 to 2.7.6), which Yard never installs. `composer self-update` is refused: `yard runtime install
+  security flaw (any a published composer/composer advisory covers: below 2.2.32, and 2.3.0 to 2.11.1 as of 0.1.11), which Yard never installs. `composer self-update` is refused: `yard runtime install
   composer <version>` adds versions. Until Yard has installed a Composer, `composer` in a project
   on PHP 7.2.5 or later still runs brew's (saying so on stderr, and `yard doctor` lists those
   sites under `composer-brew`); this lasts one release. To move over, run `yard runtime install
@@ -243,7 +243,7 @@ error, 3 `yardd` is not running.
 | `yard node use <spec> [--site <name>]` / `unuse [--site <name>]` | yes | Pins a site's Node, in its managed `.yard` or else `sites.toml`, or removes that pin. Refused for a site with a committed `.yard`: edit its `node`. |
 | `yard runtimes` | yes | Every runtime (PHP, Node, Composer) with its shims, installed versions and default. |
 | `yard runtime list <key>` | yes | A runtime's installed versions, the default and the sites on each. |
-| `yard runtime install <key> [<spec>]` / `uninstall <key> <version>` | yes | Installs a version (`composer 2`, the current line; `2.2`, the LTS for PHP below 7.2.5; or an exact one such as `2.7.7`; with none, the one the current directory runs). `uninstall` is refused with `RUNTIME_IN_USE` while the default or a linked site would be left with no version to run. For `php` and `node` these are `yard php` and `yard node`. |
+| `yard runtime install <key> [<spec>]` / `uninstall <key> <version>` | yes | Installs a version (`composer 2`, the current line; `2.2`, the LTS for PHP below 7.2.5; or an exact one such as `2.11.2`; with none, the one the current directory runs). `uninstall` is refused with `RUNTIME_IN_USE` while the default or a linked site would be left with no version to run. For `php` and `node` these are `yard php` and `yard node`. |
 | `yard runtime default <key> <version>` | yes | The version for projects with no pin of their own (`[runtimes.<key>] default` in `yard.toml`), an exact installed version; it lists the sites whose PHP cannot run it and Yard cannot pin itself, with the fix for each. With none written, yardd writes the newest installed Composer at or above 2.3.0. Its version cannot be uninstalled until the default moves. |
 | `yard runtime use <key> <spec> [--site <name>]` / `unuse <key> [--site <name>]` | yes | Pins a site's version in its managed `.yard` or else `sites.toml`, or removes that pin. A site whose PHP cannot run the Composer default gets its pin back from Yard after `unuse`; `use` another version that runs instead. Refused for a site with a committed `.yard`: add `[runtimes] composer = "2.2"` to it yourself. |
 | `yard php config get\|set\|unset <key> [value] [--php <ver>]` | yes | Reads or changes your php.ini overrides (`99-overrides.ini`) and reloads that version's pool. |

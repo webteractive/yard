@@ -95,8 +95,8 @@ up what they add:
   own from `~/.yard/engines`, and removes everything it added. It skips Valkey where brew's `redis`
   is linked, since brew will not install the two side by side.
 - `e2e-composer.sh` checks Composer per project and the explicit defaults on PHP 7.1 and 8.4 (both
-  must be installed): installing Composer 2.7.7 writes it as yard.toml's default, which an 8.4
-  project then runs and installing the current 2.x does not move; a project isolated to 7.1 gets
+  must be installed): Composer 2.7.7, which a published advisory covers, is refused; installing the
+  current 2.x writes it as yard.toml's default, which an 8.4 project then runs; a project isolated to 7.1 gets
   2.2 from `yard runtime install composer` and yardd pins it there; `composer install` works in
   both; a `[runtimes] composer` pin moves a project; a committed `.yard` on 7.1 with no pin is
   refused with the line to add; `self-update` is refused; and `yard runtime uninstall` refuses the

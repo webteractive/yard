@@ -203,7 +203,7 @@ pub fn index_version(
     if ["1", "2", "2.2"].contains(&name.as_str()) {
         return Ok(channels.get(&name).cloned());
     }
-    Err(format!("Composer {name} is not a channel; name an exact version, such as 2.7.7"))
+    Err(format!("Composer {name} is not a channel; name an exact version, such as 2.11.2"))
 }
 
 /// The getcomposer.org channel a release belongs to: `2.2` for the 2.2 LTS, else its major.

@@ -35,7 +35,7 @@ fn fixture() -> Fixture {
     std::fs::create_dir_all(&site).unwrap();
     std::fs::write(site.join("versions"), INDEX).unwrap();
     let mut hashes = std::collections::BTreeMap::new();
-    for v in ["2.2.32", "2.11.2", "2.7.7"] {
+    for v in ["2.2.32", "2.11.2", "2.11.3"] {
         let d = site.join(v);
         std::fs::create_dir_all(&d).unwrap();
         let phar = format!("<?php echo 'Composer version {v}';\n");
@@ -145,9 +145,9 @@ async fn installs_the_current_line_with_its_requirement() {
     assert_eq!(got[0].0.to_string(), "2.11.2");
     assert_eq!(got[0].1.requires_php.as_ref().map(ToString::to_string).as_deref(), Some("7.2.5"));
     // An exact version the index does not list comes by the URL template.
-    let (lines, error) = install(&f, &recipe(&f, "versions"), "2.7.7").await;
+    let (lines, error) = install(&f, &recipe(&f, "versions"), "2.11.3").await;
     assert_eq!(error, None, "{lines:?}");
-    assert!(f.paths.install_root("composer", "2.7.7").join("composer.phar").is_file());
+    assert!(f.paths.install_root("composer", "2.11.3").join("composer.phar").is_file());
 }
 
 #[tokio::test]
@@ -255,16 +255,16 @@ async fn an_index_that_is_not_json_falls_back_to_the_pinned_lts() {
     assert!(error.message.contains("portal") && error.message.contains("not JSON"), "{}", error.message);
 }
 
-/// A Composer with a known command injection (CVE-2024-35241: below 2.2.24, and 2.3.0 to 2.7.6)
-/// is never installed, whoever asks: a cloned project's pin can name any exact version.
+/// A Composer a published advisory covers (below 2.2.32, and 2.3.0 to 2.11.1) is never
+/// installed, whoever asks: a cloned project's pin can name any exact version.
 #[tokio::test]
 async fn a_composer_with_a_known_flaw_is_refused_before_downloading() {
     let f = fixture();
-    for v in ["2.0.0", "1.10.27", "2.2.23", "2.5.8", "2.7.6"] {
+    for v in ["2.0.0", "1.10.27", "2.2.23", "2.2.31", "2.5.8", "2.7.7", "2.10.0", "2.11.1"] {
         let (lines, error) = install(&f, &recipe(&f, "versions"), v).await;
         let error = error.unwrap_or_else(|| panic!("{v} was installed"));
         assert_eq!(error.code, ErrorCode::InvalidArgument, "{v}");
-        assert!(error.message.contains("CVE-2024-35241"), "{v}: {}", error.message);
+        assert!(error.message.contains("GHSA-w6hj-6587-3jh5"), "{v}: {}", error.message);
         assert!(lines.iter().all(|l| !l.contains("downloading")), "{v}: {lines:?}");
         assert!(!f.paths.install_root("composer", v).exists(), "{v}");
     }

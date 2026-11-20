@@ -626,10 +626,11 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   holds) changed; ask the maintainer first. `shellcheck scripts/e2e-engines.sh` stays clean.
 - `scripts/e2e-composer.sh` — real-machine runtimes and explicit-defaults check after `e2e-m1.sh`, with
   two scratch projects under `$TMPDIR`, each with a `composer.json`: `yard runtime install composer
-  2.7.7` writes `[runtimes.composer] default = "2.7.7"` and says so, the 8.4 project (a committed
-  `.yard`) linked with `--yes` runs it, and installing the current 2.x leaves it there; the other
+  2.7.7` is refused (a published advisory covers it), `yard runtime install composer 2` writes
+  `[runtimes.composer] default = "<current>"` and says so, and the 8.4 project (a committed `.yard`)
+  linked with `--yes` runs it; the other
   project (no `.yard`) linked and isolated to 7.1 gets 2.2.x from `yard runtime install composer`
-  run in it, which yardd pins in `sites.toml` without moving the default; `composer install` runs in
+  run in it, which yardd pins in `sites.toml` without moving the default or the 8.4 project; `composer install` runs in
   both, `[runtimes] composer = "2.2"` moves the 8.4 project to 2.2, the committed `.yard` moved to
   `php = "7.1"` with no pin is refused with the line to add (and not edited), `self-update` is refused
   before and after options, and `yard runtime uninstall` is refused with `RUNTIME_IN_USE` for the

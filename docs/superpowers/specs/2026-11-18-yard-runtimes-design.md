@@ -166,8 +166,8 @@ env = { BUN_INSTALL_CACHE_DIR = "{cache}" }
 
 # [[insecure]]                      # versions Yard never installs: from `from` (or the first)
 # from = "2.3.0"                    # up to, not including, `below`; a refusal names `advisory`
-# below = "2.7.7"
-# advisory = "CVE-2024-35241"
+# below = "2.11.2"
+# advisory = "GHSA-w6hj-6587-3jh5"
 
 [shims.bun]                         # one table per shim name
 exec = ["{home}/bin/bun"]           # default: ["{home}/bin/<name>"]
@@ -261,7 +261,7 @@ leading `v` is accepted. Ranges, `latest` and `stable` are refused naming the fi
   round is `composer`. `https://getcomposer.org/versions` lists only each channel's newest release
   (`2` → 2.11.2, `2.2` → 2.2.32, `1` → 1.10.28 on 2026-11-18), so with an index **(my call)**:
   - a spec naming a channel (`2`, `2.2`, `1`) installs that channel's newest release;
-  - an exact version (`2.7.7`) installs that release by the URL template, whether or not the index
+  - an exact version (`2.11.2`) installs that release by the URL template, whether or not the index
     lists it (getcomposer.org keeps every release's phar and `.sha256sum`);
   - any other major.minor (`2.7`) is refused with the hint to name an exact version.
   - A `[versions]` entry in the same recipe is used when the index does not list its channel, so a
@@ -344,13 +344,13 @@ from = "2.3.0"
 php = "7.2.5"
 
 [[insecure]]
-below = "2.2.24"
-advisory = "CVE-2024-35241, CVE-2024-35242"
+below = "2.2.32"
+advisory = "GHSA-w6hj-6587-3jh5 and earlier advisories"
 
 [[insecure]]
 from = "2.3.0"
-below = "2.7.7"
-advisory = "CVE-2024-35241, CVE-2024-35242"
+below = "2.11.2"
+advisory = "GHSA-w6hj-6587-3jh5, GHSA-jhfp-4ppm-crmm and earlier advisories"
 
 [shims.composer]
 exec = ["{php}", "{home}/composer.phar"]
@@ -638,8 +638,12 @@ local HTTPS fixture.
   gone.
 - **A `[runtimes]` key** that is not a bare TOML key is written quoted by `yard init`.
 - **Insecure versions (0.1.11 security review).** A cloned project's `[runtimes] composer` can name
-  any exact version, and Composer below 2.2.24 and from 2.3.0 below 2.7.7 runs commands through its
-  git and hg drivers even with `--no-scripts` (CVE-2024-35241, CVE-2024-35242). The recipe format
+  any exact version, and every Composer below 2.2.32 and from 2.3.0 below 2.11.2 has a published
+  advisory a hostile project can reach: commands run through its git, hg and Perforce drivers even
+  with `--no-scripts` (CVE-2024-35241, CVE-2024-35242, CVE-2026-40176), files written outside
+  `vendor/`, and code run from a `composer.lock` (GHSA-w6hj-6587-3jh5, GHSA-jhfp-4ppm-crmm, both
+  2026-11-10). The ranges follow composer/composer's GitHub advisories; a new one moves `below` in
+  the carried recipe, in a release. The recipe format
   gained `[[insecure]]` ranges, and an install of a version in one is refused before anything is
   fetched (`INVALID_ARGUMENT`, naming the advisory and the first fixed version, hint `yard runtime
   install composer 2`), whoever asks; a version already installed keeps running. The checksum still

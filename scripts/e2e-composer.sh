@@ -2,8 +2,9 @@
 # Runtimes end-to-end check on a real Mac, after e2e-m1.sh passes: Composer per project, with
 # the explicit defaults (explicit-defaults spec).
 #
-# Installs an older exact Composer first and checks yardd writes it as the default, that linking
-# an 8.4 project (a committed .yard) runs it, and that installing the current 2.x never moves it.
+# Checks a Composer a published advisory covers (2.7.7) is refused, then installs the current 2.x
+# and checks yardd writes it as the default and that linking an 8.4 project (a committed .yard)
+# runs it.
 # Then links a second project with no .yard, isolates it to PHP 7.1, and checks that `yard runtime
 # install composer` there installs 2.2 and that yardd pins that site to it (no default moves).
 # Then: composer install works in both, a [runtimes] pin in the 8.4 project's .yard wins, the
@@ -95,27 +96,28 @@ composer_default() { sed -n '/^\[runtimes\.composer\]/,/^\[/s/^default = "\(.*\)
 # Waits up to 10 s for command $@ to succeed.
 within() { local _; for _ in $(seq 1 50); do if "$@"; then return 0; fi; sleep 0.2; done; return 1; }
 
-# 3. An older exact Composer becomes the written default; the 8.4 project runs it, and
-# installing the current 2.x never moves it.
-older=2.7.7
-"$yard" runtime install composer "$older" >"$work/install-older.out" 2>&1 \
-  || fail "yard runtime install composer $older failed: $(cat "$work/install-older.out")"
-grep -q "wrote \[runtimes.composer\] default = \"$older\"" "$work/install-older.out" \
-  || fail "the install did not say it wrote the default: $(cat "$work/install-older.out")"
-[[ $(composer_default) == "$older" ]] || fail "yard.toml's Composer default is '$(composer_default)', expected $older"
-pass "installing Composer $older wrote it as the default, and said so"
+# 3. A Composer with a published advisory is refused before anything is fetched; the current
+# 2.x becomes the written default, and the 8.4 project runs it. 3b checks another install never
+# moves it.
+if "$yard" runtime install composer 2.7.7 --json >"$work/install-flawed.out" 2>&1; then
+  fail "yard runtime install composer 2.7.7 succeeded: $(cat "$work/install-flawed.out")"
+fi
+grep -q 'known security flaw' "$work/install-flawed.out" || fail "the refusal said: $(cat "$work/install-flawed.out")"
+[[ ! -e $installs/2.7.7 ]] || fail "the refused 2.7.7 left $installs/2.7.7"
+pass "Composer 2.7.7, which a published advisory covers, is refused and nothing is installed"
+"$yard" runtime install composer 2 >"$work/install-current.out" 2>&1 \
+  || fail "yard runtime install composer 2 failed: $(cat "$work/install-current.out")"
+dflt="$(installed | grep -v '^2\.2\.' | head -n 1)"
+[[ -n $dflt ]] || fail "yard runtime install composer 2 installed nothing: $(cat "$work/install-current.out")"
+grep -q "wrote \[runtimes.composer\] default = \"$dflt\"" "$work/install-current.out" \
+  || fail "the install did not say it wrote the default: $(cat "$work/install-current.out")"
+[[ $(composer_default) == "$dflt" ]] || fail "yard.toml's Composer default is '$(composer_default)', expected $dflt"
+pass "installing Composer $dflt wrote it as the default, and said so"
 (cd "$work/$new" && "$yard" link "$new" --yes >"$work/link-$new.out" 2>&1) \
   || fail "yard link $new --yes failed: $(cat "$work/link-$new.out")"
 v="$(composer $new -V 2>&1)"
-[[ $v == *"Composer version $older "* ]] || fail "composer -V on PHP 8.4 printed '$v', expected the default $older"
-"$yard" runtime install composer 2 >"$work/install-current.out" 2>&1 \
-  || fail "yard runtime install composer 2 failed: $(cat "$work/install-current.out")"
-current="$(installed | grep -v "^$older\$" | grep -v '^2\.2\.' | head -n 1)"
-[[ -n $current ]] || fail "yard runtime install composer 2 installed nothing besides $older"
-[[ $(composer_default) == "$older" ]] || fail "installing $current moved the default to '$(composer_default)'"
-v="$(composer $new -V 2>&1)"
-[[ $v == *"Composer version $older "* ]] || fail "after installing $current, composer -V on PHP 8.4 printed '$v'"
-pass "installing Composer $current left the default, and the 8.4 project, on $older"
+[[ $v == *"Composer version $dflt "* ]] || fail "composer -V on PHP 8.4 printed '$v', expected the default $dflt"
+pass "the 8.4 project runs the default, Composer $dflt"
 
 # 3b. A project on PHP 7.1 gets its own pin when its Composer is installed, and no default moves.
 (cd "$work/$old" && "$yard" link "$old" --yes >"$work/link-$old.out" 2>&1) \
@@ -128,10 +130,12 @@ lts="$(installed | grep '^2\.2\.' | head -n 1)"
 pinned() { grep -q "composer = \"$lts\"" "$data/sites.toml"; }
 within pinned || fail "sites.toml has no composer = \"$lts\" for $old: $(cat "$data/sites.toml")"
 grep -q "for site $old" "$work/install-lts.out" || fail "the install did not say it pinned $old: $(cat "$work/install-lts.out")"
-[[ $(composer_default) == "$older" ]] || fail "installing $lts moved the default to '$(composer_default)'"
+[[ $(composer_default) == "$dflt" ]] || fail "installing $lts moved the default to '$(composer_default)'"
 v="$(composer $old -V 2>&1)"
 [[ $v == *"Composer version $lts "* ]] || fail "composer -V on PHP 7.1 printed '$v', expected its pin $lts"
-pass "PHP 7.1's project is pinned to Composer $lts, and the default stayed $older"
+v="$(composer $new -V 2>&1)"
+[[ $v == *"Composer version $dflt "* ]] || fail "after installing $lts, composer -V on PHP 8.4 printed '$v'"
+pass "PHP 7.1's project is pinned to Composer $lts, and the default, and the 8.4 project, stayed on $dflt"
 for f in "$installs"/*/.yard-install.toml; do
   [[ -f $f ]] || fail "no .yard-install.toml in $(dirname "$f")"
 done
@@ -152,7 +156,7 @@ v="$(composer $new -V 2>&1)"
 [[ $v == *"Composer version 2.2."* ]] || fail "with [runtimes] composer = \"2.2\", composer -V printed '$v'"
 pass "[runtimes] composer = \"2.2\" runs Composer 2.2 on PHP 8.4"
 printf 'php = "7.1"\n' >"$work/$new/.yard"
-if composer $new -V >"$work/refused.out" 2>&1; then fail "composer ran Composer $older on PHP 7.1: $(cat "$work/refused.out")"; fi
+if composer $new -V >"$work/refused.out" 2>&1; then fail "composer ran Composer $dflt on PHP 7.1: $(cat "$work/refused.out")"; fi
 grep -q "add \[runtimes\] composer = \"$lts\" to " "$work/refused.out" \
   || fail "the refusal named no line to add: $(cat "$work/refused.out")"
 [[ $(cat "$work/$new/.yard") == 'php = "7.1"' ]] || fail "the committed .yard was edited: $(cat "$work/$new/.yard")"
@@ -160,22 +164,26 @@ pass "a committed .yard on PHP 7.1 with no pin is refused with the line to add, 
 printf 'php = "8.4"\n' >"$work/$new/.yard"
 
 # 6. self-update is refused in every spelling, and the phar is read-only besides.
-for args in "self-update" "-n self-update" "--no-ansi selfupdate" "-d /tmp self-update" "self-u" "global self-update"; do
+for args in "self-update" "-n self-update" "--no-ansi selfupdate" "-d /tmp self-update" "self-u" "global self-update" \
+  "-rd self-update" "-dd d self-update"; do
   # shellcheck disable=SC2086 # the words are the arguments
   if composer $new $args >"$work/update.out" 2>&1; then fail "composer $args succeeded: $(cat "$work/update.out")"; fi
   grep -q 'managed by Yard' "$work/update.out" || fail "composer $args said: $(cat "$work/update.out")"
 done
+# global runs the rest again from one string, splitting an option word at its spaces.
+if composer $new global "-n self-update" >"$work/update.out" 2>&1; then fail "composer global '-n self-update' succeeded: $(cat "$work/update.out")"; fi
+grep -q 'managed by Yard' "$work/update.out" || fail "composer global '-n self-update' said: $(cat "$work/update.out")"
 for phar in "$installs"/*/composer.phar; do
   [[ ! -w $phar ]] || fail "$phar is writable"
 done
 pass "composer self-update is refused in every spelling, and the phar is read-only"
 
 # 7. yard runtime uninstall refuses the default and the version a site runs.
-if "$yard" runtime uninstall composer "$older" --json >"$work/uninstall-default.out" 2>&1; then
-  fail "yard runtime uninstall composer $older succeeded while it is the default"
+if "$yard" runtime uninstall composer "$dflt" --json >"$work/uninstall-default.out" 2>&1; then
+  fail "yard runtime uninstall composer $dflt succeeded while it is the default"
 fi
 grep -q 'RUNTIME_IN_USE' "$work/uninstall-default.out" || fail "yard runtime uninstall said: $(cat "$work/uninstall-default.out")"
-pass "yard runtime uninstall composer $older is refused while it is the default"
+pass "yard runtime uninstall composer $dflt is refused while it is the default"
 if "$yard" runtime uninstall composer "$lts" --json >"$work/uninstall.out" 2>&1; then
   fail "yard runtime uninstall composer $lts succeeded while $old runs it"
 fi
