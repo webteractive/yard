@@ -1,4 +1,4 @@
-//! `yard db` (db spec §6, §8): yardd picks and wakes the instance and builds every command;
+//! `yard <engine>`'s database verbs (db spec §6, §8): yardd picks and wakes the instance and builds every command;
 //! this side prints, opens the URL, and runs the client in the user's terminal.
 
 use super::{Ctx, Outcome, cwd, cwd_absolute};

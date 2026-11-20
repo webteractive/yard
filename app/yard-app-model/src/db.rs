@@ -1,5 +1,5 @@
 //! What the Services screen's database controls decide (db spec §8, §10): which instances have
-//! them, the `yard db dump` and `import` argument vectors the app runs, the Connect… sheet's
+//! them, the `yard <engine> dump` and `import` argument vectors the app runs, the Connect… sheet's
 //! fields and state line, and byte sizes in words.
 
 use crate::shell_words::split_words;
@@ -162,7 +162,7 @@ pub struct ConnectField {
     pub description: String,
 }
 
-/// The fields `yard db connect` prints, in its order (db spec §8): Host, Port, User when there is
+/// The fields `yard <engine> connect` prints, in its order (db spec §8): Host, Port, User when there is
 /// one, Password (`(none)` without one), Socket when there is one, URL.
 pub fn connect_fields(i: &ConnectInfo) -> Vec<ConnectField> {
     let field = |key, label: &'static str, value: String, copy: String| ConnectField {
@@ -232,7 +232,7 @@ pub fn no_handler(url: &str) -> YardError {
 }
 
 /// What a finished dump or import says in Activity, from the CLI's `--json` answer
-/// (`DbDumped` or `DbImported`), in `yard db dump`'s and `import`'s words.
+/// (`DbDumped` or `DbImported`), in `yard <engine> dump`'s and `import`'s words.
 pub fn outcome_text(answer: &serde_json::Value) -> String {
     if let Ok(i) = serde_json::from_value::<DbImported>(answer.clone()) {
         let created = if i.created { " (created it)" } else { "" };

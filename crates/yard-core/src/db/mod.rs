@@ -1,4 +1,4 @@
-//! `yard db` (db spec): which databases and instances a command means, the SQL Yard runs,
+//! `yard mysql` and `yard postgres` (db spec): which databases and instances a command means, the SQL Yard runs,
 //! what a GUI client needs to connect, and which PostgreSQL keg's tools to run. Pure.
 
 pub mod command;

@@ -1,4 +1,4 @@
-//! The SQL `yard db` runs through an instance's own client (db spec §6.1, §6.2, §6.6).
+//! The SQL `yard mysql` and `yard postgres` run through an instance's own client (db spec §6.1, §6.2, §6.6).
 
 use crate::services::engines::DbFlavor;
 use yard_proto::DbInfo;

@@ -131,7 +131,7 @@ pub fn env_text(blocks: &[EnvBlock]) -> String {
     rendered.join("\n")
 }
 
-/// `3.0 MB`, `80.0 KB`, `512 bytes`: the size `yard db` and `yard uninstall` print, and Yard.app shows.
+/// `3.0 MB`, `80.0 KB`, `512 bytes`: the size `yard <engine> dump` and `yard uninstall` print, and Yard.app shows.
 pub fn bytes_text(bytes: u64) -> String {
     match bytes {
         b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),

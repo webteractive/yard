@@ -258,7 +258,7 @@ fn error_of(env: &AppEnv, id: &str, cx: &mut TestAppContext) -> Option<String> {
     env.runner.read_with(cx, |r, _| r.errors.get(&ActionId(id.into())).map(|e| e.message.clone()))
 }
 
-/// Connect… asks yardd without waking anything and shows each field of `yard db connect` with a
+/// Connect… asks yardd without waking anything and shows each field of `yard <engine> connect` with a
 /// Copy button that says what it copies, Copy URL and Open.
 #[gpui::test]
 async fn connect_sheet_shows_every_field(cx: &mut TestAppContext) {
@@ -378,7 +378,7 @@ async fn a_list_waits_for_its_instance_to_run(cx: &mut TestAppContext) {
     assert_eq!(fake.count("db.list"), 1, "fetched once it runs");
 }
 
-/// The Dump… sheet runs `yard db dump` with exactly the sheet's choices; its progress reaches
+/// The Dump… sheet runs `yard <engine> dump` with exactly the sheet's choices; its progress reaches
 /// Activity and the sheet closes once the dump runs.
 #[gpui::test]
 async fn dump_runs_the_cli(cx: &mut TestAppContext) {
@@ -521,7 +521,7 @@ while :; do sleep 0.05; done"#,
     assert_eq!(error_of(&env, "service:mysql-8.4:dump", cx), None);
 }
 
-/// Import… runs `yard db import` with the name and switches the sheet holds, and lists the
+/// Import… runs `yard <engine> import` with the name and switches the sheet holds, and lists the
 /// databases again afterwards; Keep owners is offered for PostgreSQL only.
 #[gpui::test]
 async fn import_runs_the_cli(cx: &mut TestAppContext) {

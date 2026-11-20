@@ -687,7 +687,7 @@ if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
   if within 5 texts_have "is not a database name"; then
     ax type "Database name" chk_shop >/dev/null
     ax press Create >/dev/null
-    if within 15 sh -c "'$yard_bin' --root '$root' db list --service mysql-8.4 --json | jq -e 'any(.[0].databases[]; .name == \"chk_shop\")'" &&
+    if within 15 sh -c "'$yard_bin' --root '$root' mysql list --service mysql-8.4 --json | jq -e 'any(.[0].databases[]; .name == \"chk_shop\")'" &&
       within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .role == \"AXRow\" and .name == \"chk_shop\")'"; then
       pass "DB2 Create database… refuses a name Yard does not take in the sheet, then creates chk_shop, which the list shows"
     else
@@ -740,7 +740,7 @@ if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
     ax type Database chk_copy >/dev/null
     ax press Import >/dev/null
     count() { y mysql shell chk_copy --service mysql-8.4 -- -N -B -e "select count(*) from t" 2>/dev/null; }
-    if within 30 sh -c "[ \"\$('$yard_bin' --root '$root' db shell chk_copy --service mysql-8.4 -- -N -B -e 'select count(*) from t' 2>/dev/null)\" = 3 ]" &&
+    if within 30 sh -c "[ \"\$('$yard_bin' --root '$root' mysql shell chk_copy --service mysql-8.4 -- -N -B -e 'select count(*) from t' 2>/dev/null)\" = 3 ]" &&
       within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .role == \"AXRow\" and .name == \"chk_copy\")'"; then
       pass "DB4 Import… loads the gzipped dump from the open panel into a new chk_copy (3 rows), and the list shows it"
     else

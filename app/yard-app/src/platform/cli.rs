@@ -348,7 +348,7 @@ echo 'a note' >&2
 printf '%s' '{"instance":"mysql-8.4","name":"shop","file":"/tmp/x.sql","bytes":10}'"#,
         );
         let r = runner(Some(yard.clone()), false);
-        let mut run = r.stream(&strings(&["db", "dump", "shop", "/tmp/x.sql", "--", "--routines"]));
+        let mut run = r.stream(&strings(&["mysql", "dump", "shop", "/tmp/x.sql", "--", "--routines"]));
         let v = futures::executor::block_on(&mut run.done).unwrap();
         assert_eq!(v["bytes"], 10);
         let mut lines = vec![];
@@ -358,7 +358,7 @@ printf '%s' '{"instance":"mysql-8.4","name":"shop","file":"/tmp/x.sql","bytes":1
         assert_eq!(lines, [r#"{"bytes":5,"total":10}"#, "a note"]);
         assert_eq!(
             args(&yard),
-            ["--root", "/tmp/yard dev", "--json", "db", "dump", "shop", "/tmp/x.sql", "--", "--routines"]
+            ["--root", "/tmp/yard dev", "--json", "mysql", "dump", "shop", "/tmp/x.sql", "--", "--routines"]
         );
     }
 
@@ -373,7 +373,7 @@ echo '{"bytes":1,"total":null}' >&2
 while :; do sleep 0.05; done"#,
         );
         let r = runner(Some(yard), true);
-        let mut run = r.stream(&strings(&["db", "dump", "shop", "/tmp/x.sql"]));
+        let mut run = r.stream(&strings(&["mysql", "dump", "shop", "/tmp/x.sql"]));
         let first = futures::executor::block_on(run.lines.recv());
         assert_eq!(first.as_deref(), Some(r#"{"bytes":1,"total":null}"#));
         run.child.interrupt();
@@ -402,10 +402,10 @@ while :; do sleep 0.05; done"#,
             "echo 'mysqldump: Got error 1049' >&2\necho '{\"bytes\":0,\"total\":null}' >&2\nexit 2",
         );
         let r = runner(Some(yard), true);
-        let run = r.stream(&strings(&["db", "dump", "nope", "/tmp/x.sql"]));
+        let run = r.stream(&strings(&["mysql", "dump", "nope", "/tmp/x.sql"]));
         let e = futures::executor::block_on(run.done).unwrap_err();
-        assert_eq!(e.message, "yard db dump nope /tmp/x.sql exited 2: mysqldump: Got error 1049");
-        let missing = runner(None, true).stream(&strings(&["db", "list"]));
+        assert_eq!(e.message, "yard mysql dump nope /tmp/x.sql exited 2: mysqldump: Got error 1049");
+        let missing = runner(None, true).stream(&strings(&["mysql", "list"]));
         assert_eq!(futures::executor::block_on(missing.done).unwrap_err().message, "yard was not found");
     }
 
