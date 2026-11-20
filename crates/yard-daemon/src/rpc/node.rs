@@ -65,8 +65,9 @@ pub(super) async fn install(ctx: &Context, p: NodeInstallParams) -> Result<JobSt
     };
     let (paths, brew, reconciler) = (ctx.paths.clone(), ctx.brew.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("node-install", move |job: JobCtx| async move {
+        let since = crate::defaults::mark(&reconciler).await;
         crate::node::install_node(&job, &paths, &brew, spec).await?;
-        crate::defaults::reconcile_after_install(&job, &reconciler).await
+        crate::defaults::reconcile_after_install(&job, &reconciler, since, "node").await
     }))
 }
 

@@ -193,8 +193,9 @@ pub(super) async fn install(ctx: &Context, p: RuntimeInstallParams) -> Result<Jo
     }
     let (paths, opts, reconciler) = (ctx.paths.clone(), ctx.recipe_options.clone(), ctx.reconciler.clone());
     Ok(ctx.jobs.start("runtime-install", move |job: JobCtx| async move {
+        let since = crate::defaults::mark(&reconciler).await;
         crate::runtimes::install(&job, &paths, &recipe, spec, &opts).await?;
-        crate::defaults::reconcile_after_install(&job, &reconciler).await
+        crate::defaults::reconcile_after_install(&job, &reconciler, since, &recipe.key).await
     }))
 }
 

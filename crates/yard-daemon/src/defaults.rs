@@ -297,23 +297,49 @@ impl Written {
     }
 }
 
+/// Where the record of writes stands; an install job takes it when it begins, so a default the
+/// scan's reconcile writes while the install runs is still the job's to report.
+pub async fn mark(reconciler: &crate::reconcile::Reconciler) -> usize {
+    reconciler.state().await.defaults_written.len()
+}
+
 /// The reconcile an install job ends with (explicit-defaults spec §2.2): the fill-in may now
-/// write a default or a pin, and the job's output says which.
+/// write a default or a pin, and the job's output says which: those for `key` since `since`.
 pub async fn reconcile_after_install(
     job: &crate::jobs::JobCtx,
     reconciler: &crate::reconcile::Reconciler,
+    since: usize,
+    key: &str,
 ) -> Result<(), YardError> {
-    let before = reconciler.state().await.defaults_written.len();
     reconciler.reconcile().await?;
-    for w in reconciler.state().await.defaults_written.iter().skip(before) {
+    for w in written_by(&reconciler.state().await.defaults_written, since, key) {
         job.line(w.describe());
     }
     Ok(())
 }
 
+/// The writes for `key` after the first `since`.
+fn written_by<'a>(all: &'a [Written], since: usize, key: &str) -> Vec<&'a Written> {
+    all.iter().skip(since).filter(|w| w.key == key).collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Written;
+    use super::{Written, written_by};
+
+    fn w(key: &str, version: &str) -> Written {
+        Written { key: key.into(), site: None, line: format!("{key} = {version:?}"), version: version.into() }
+    }
+
+    /// An install job reports what was written for its runtime since it began, even when the
+    /// scan's reconcile wrote it before the job's own, and never another runtime's write.
+    #[test]
+    fn a_job_reports_its_runtimes_writes_since_it_began() {
+        let all = vec![w("composer", "2.7.7"), w("node", "22.23.5"), w("composer", "2.11.2")];
+        let mine: Vec<&str> = written_by(&all, 1, "composer").iter().map(|w| w.version.as_str()).collect();
+        assert_eq!(mine, ["2.11.2"]);
+        assert!(written_by(&all, 0, "php").is_empty());
+    }
 
     /// A pin yardd wrote comes back after `unuse` while the PHP still cannot run the default,
     /// so the message names what moves it, not what removes it.
