@@ -631,6 +631,15 @@ mod tests {
         }
     }
 
+    /// toml's own messages quote an unknown key as it is written, control characters and all.
+    #[test]
+    fn an_unknown_key_with_control_characters_is_escaped() {
+        let e = parse("\"\\u001b]0;pwn\\u0007\" = 1\n", Path::new(FILE)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ProjectFileInvalid);
+        assert!(!e.message.chars().any(char::is_control), "{:?}", e.message);
+        assert!(e.message.contains("unknown field"), "{:?}", e.message);
+    }
+
     #[test]
     fn a_runtime_value_with_control_characters_is_quoted_escaped() {
         let e = parse("[runtimes]\ncomposer = \"\\u001b]8;;x\\u0007y\"\n", Path::new(FILE)).unwrap_err();

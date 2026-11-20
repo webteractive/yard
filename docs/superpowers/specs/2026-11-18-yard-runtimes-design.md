@@ -609,7 +609,9 @@ local HTTPS fixture.
 - **`yard.toml`** refuses `[runtimes.php]` and `[runtimes.node]` (`default_php` and `default_node` say
   those).
 - **`refuse`** matches the command past options, an option's value (`-d <dir>`, and a short-option
-  cluster ending in `d`, `-nd <dir>`, as Symfony's console reads it) and `global`, and a word taken
+  word ending in `d`, `-nd <dir>` and `-dd d`, whose next word Symfony's console skips when it equals
+  the value `-d` bound) and `global`, after which an option word is split at whitespace (`global
+  "-n self-update"`, as Composer's second parse splits it), and a word taken
   as `-d`'s value that names a refused command is refused too (`-rd self-update`: when an option
   Composer does not bind globally makes its first pass fail, that word is the command), and any
   abbreviation of a refused word in any case (`self-u`, `SELF-UPDATE`), as Composer's console accepts

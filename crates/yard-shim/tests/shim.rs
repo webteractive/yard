@@ -441,6 +441,13 @@ fn self_update_is_refused_in_every_spelling() {
         // globally (`-r`) makes its first pass fail, Composer runs it as the command.
         &["-d", "self-update", "install"],
         &["-rd", "self-update"],
+        // Symfony skips the word after a cluster ending in `d` when it equals `-d`'s value,
+        // even when that value came from the cluster itself (`-dd` binds `d`).
+        &["-dd", "d", "self-update"],
+        &["-d/tmp/d", "/tmp/d", "self-update"],
+        // `global` re-parses its arguments as one string, splitting an option word at spaces.
+        &["global", "-n self-update"],
+        &["global", "-n self-update --x=y"],
     ] {
         let out = run_as(&s, "composer", args);
         let (stdout, stderr) = texts(&out);

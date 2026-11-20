@@ -31,7 +31,14 @@ pub(crate) fn located_error(
     hint: String,
 ) -> YardError {
     let (line, column) = span.map(|s| line_col(text, s.start)).unwrap_or((1, 1));
-    YardError::new(code, format!("{} line {line}, column {column}: {}", file.display(), message.trim()))
+    // toml quotes an unknown key as written, so a hostile file's key could carry control
+    // characters into a terminal.
+    let message: String = message
+        .trim()
+        .chars()
+        .map(|c| if c.is_control() { c.escape_debug().to_string() } else { c.to_string() })
+        .collect();
+    YardError::new(code, format!("{} line {line}, column {column}: {message}", file.display()))
         .with_hint(hint)
         .with_data(serde_json::json!({ "file": file.display().to_string(), "line": line, "column": column }))
 }
