@@ -15,6 +15,73 @@ use yard_proto::{ErrorCode, YardError};
 /// the shortest Composer resolves to `self-update` (`se` is also `search`).
 const SHORTEST: usize = 3;
 
+/// `word` and what PHP's `stripcslashes` makes of it, again and again: Composer's parse after
+/// `global` decodes escapes (`\x73` is `s`), once per `global`. Stops when nothing changes.
+fn unescapings(word: &str) -> Vec<String> {
+    let mut all = vec![word.to_string()];
+    while all.len() < 8 {
+        let next = stripcslashes(all.last().map(String::as_str).unwrap_or_default());
+        if all.contains(&next) {
+            break;
+        }
+        all.push(next);
+    }
+    all
+}
+
+/// PHP's `stripcslashes`: `\n`-style escapes, `\xH`/`\xHH` hex and `\O`–`\OOO` octal bytes, and a
+/// backslash before anything else dropped. Bytes that are not UTF-8 come out as U+FFFD.
+fn stripcslashes(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' || i + 1 == b.len() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let digits = |i: usize, max: usize, radix: u32| {
+            b[i..].iter().take(max).take_while(|c| (**c as char).is_digit(radix)).count()
+        };
+        let named = match b[i] {
+            b'n' => Some(b'\n'),
+            b't' => Some(b'\t'),
+            b'r' => Some(b'\r'),
+            b'a' => Some(7),
+            b'v' => Some(11),
+            b'b' => Some(8),
+            b'f' => Some(12),
+            _ => None,
+        };
+        if let Some(c) = named {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        match b[i] {
+            b'x' if digits(i + 1, 2, 16) > 0 => {
+                let n = digits(i + 1, 2, 16);
+                let text = std::str::from_utf8(&b[i + 1..i + 1 + n]).unwrap_or("0");
+                out.push(u8::from_str_radix(text, 16).unwrap_or(0));
+                i += 1 + n;
+            }
+            c if (c as char).is_digit(8) => {
+                let n = digits(i, 3, 8);
+                let text = std::str::from_utf8(&b[i..i + n]).unwrap_or("0");
+                out.push(u32::from_str_radix(text, 8).unwrap_or(0) as u8);
+                i += n;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether an option word may take the next word as its value: `--working-dir`, or a
 /// short-option word ending in `d` (`-d`, Composer's working directory). Symfony's console
 /// skips the next word when it equals the value bound to the word's last letter, wherever that
@@ -32,8 +99,10 @@ fn takes_next(word: &str) -> bool {
 /// globally (`-r`, `--rollback`) makes its first pass fail, that word is the command after all.
 /// After `global`, an option word is split at whitespace, as Composer's second parse splits it.
 /// Since each review of that parsing found another spelling, a one-word entry is also refused
-/// when any word, unquoted and split at whitespace and `=`, abbreviates it to SHORTEST letters
-/// or more, wherever it stands (`composer search self` too: refusing too much is safe).
+/// when any word, its escapes decoded, unquoted and split at whitespace and `=`, abbreviates it
+/// to SHORTEST letters or more, wherever it stands (`composer search self` too: refusing too
+/// much is safe). This guards against a mistake, not a hostile project: a `composer.json` script
+/// can run anything as the user, `chmod` the phar included.
 /// The install root is read-only besides, so a spelling this misses still cannot replace the phar.
 pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
     let mut words: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -41,14 +110,16 @@ pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
         let word = word.to_lowercase();
         r.args.first().is_some_and(|first| !word.is_empty() && first.to_lowercase().starts_with(&word))
     };
-    // Whatever Composer's parser makes of them: a word that, with quotes and backslashes dropped
-    // and split at whitespace and `=`, abbreviates a one-word refused command to at least
-    // SHORTEST letters is refused wherever it stands. Composer's second parse after `global`
-    // unquotes, and a skipped option value can be the command after all; refusing too much is safe.
+    // Whatever Composer's parser makes of them: a word that, with its escapes decoded as the parse
+    // after each `global` decodes them, then quotes and backslashes dropped and split at
+    // whitespace and `=`, abbreviates a one-word refused command to at least SHORTEST letters is
+    // refused wherever it stands. A skipped option value can be the command after all; refusing
+    // too much is safe.
     let pieces = || {
-        words.iter().flat_map(|w| {
+        words.iter().flat_map(|w| unescapings(w)).flat_map(|w| {
             w.split(|c: char| c.is_whitespace() || c == '=')
                 .map(|p| p.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect::<String>())
+                .collect::<Vec<_>>()
         })
     };
     if let Some(r) = def
@@ -233,6 +304,16 @@ pub fn missing(recipe: &RuntimeRecipe, spec: &VersionSpec, source: &PinSource) -
 mod tests {
     use super::*;
     use crate::runtimes::Runtimes;
+
+    #[test]
+    fn stripcslashes_decodes_as_php_does() {
+        assert_eq!(stripcslashes(r"\x73elf"), "self");
+        assert_eq!(stripcslashes(r"\123ELF"), "SELF");
+        assert_eq!(stripcslashes(r"\x5cx73"), r"\x73");
+        assert_eq!(stripcslashes(r"\q\x\\"), r"qx\");
+        assert_eq!(stripcslashes(r"a\tb\"), "a\tb\\");
+        assert_eq!(unescapings(r"\x5cx73elf"), [r"\x5cx73elf", r"\x73elf", "self"]);
+    }
     use crate::runtimes::select::InstallRecord;
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};

@@ -457,6 +457,11 @@ fn self_update_is_refused_in_every_spelling() {
         &["global", "-n \\self-update"],
         &["global", "-n global '-n self-update'"],
         &["--working-dir=x", "sel"],
+        // ...and decodes backslash escapes as PHP's stripcslashes does, once per `global`.
+        &["global", "\\x73elf-update"],
+        &["global", "\\123ELF"],
+        &["global", "-n '\\x73elf-update'"],
+        &["global", "global '\\x5cx73elf-update'"],
     ] {
         let out = run_as(&s, "composer", args);
         let (stdout, stderr) = texts(&out);
