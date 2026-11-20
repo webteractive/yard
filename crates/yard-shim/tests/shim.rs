@@ -475,6 +475,9 @@ fn self_update_is_refused_in_every_spelling() {
         &["global", "require", "x/y"],
         &["require", "self-update/x"],
         &["show", "se"],
+        // Outside `global`, an argument is only a command where Composer reads one.
+        &["init", "--description", "Self hosted app"],
+        &["run-script", "self"],
         &["require", "symfony/console", "--working-dir=./app"],
     ] {
         let out = run_as(&s, "composer", args);

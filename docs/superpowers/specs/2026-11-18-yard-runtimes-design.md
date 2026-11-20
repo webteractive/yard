@@ -617,11 +617,12 @@ local HTTPS fixture.
   abbreviation of a refused word in any case (`self-u`, `SELF-UPDATE`), as Composer's console accepts
   them. Because every security review of that parsing found another spelling (`global "-n
   'self-update'"` and `global '\x73elf-update'`, which Composer's parse after `global` unquotes and
-  decodes as PHP's `stripcslashes` does; `-d/dev/fd global …`), a one-word entry is also refused when
-  any argument, its escapes decoded (once per `global`, until nothing changes), quotes and
-  backslashes dropped and split at whitespace and `=`, abbreviates it to three letters or more,
-  wherever it stands (`sel` is the shortest Composer resolves; `se` is also `search`), so `composer
-  search self` is refused too. The refusal guards against a mistake, not a hostile project: a
+  decodes as PHP's `stripcslashes` does; `-d/dev/fd global …`), past the first argument naming
+  `global` (where Composer parses a second time) a one-word entry is also refused when any argument,
+  its escapes decoded (once per `global`, until nothing changes), quotes and backslashes dropped and
+  split at whitespace and `=`, abbreviates it to three letters or more, wherever it stands (`sel` is
+  the shortest Composer resolves; `se` is also `search`). Without `global`, `composer init
+  --description "Self hosted app"` and `composer run-script self` run. The refusal guards against a mistake, not a hostile project: a
   project's `composer.json` scripts run as the user and can do anything, `chmod` the phar included.
   The real guard against a mistake is that an install is read-only (files 0444, directories 0555) once it is in
   place: Composer's self-update refuses a phar it cannot write. Uninstall gives write access back,

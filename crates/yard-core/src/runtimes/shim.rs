@@ -15,6 +15,19 @@ use yard_proto::{ErrorCode, YardError};
 /// the shortest Composer resolves to `self-update` (`se` is also `search`).
 const SHORTEST: usize = 3;
 
+/// The words Composer's parse after `global` may find in `word`: each of its unescapings, split
+/// at whitespace and `=`, with quotes and backslashes dropped.
+fn pieces(word: &str) -> Vec<String> {
+    unescapings(word)
+        .iter()
+        .flat_map(|w| {
+            w.split(|c: char| c.is_whitespace() || c == '=')
+                .map(|p| p.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect::<String>())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// `word` and what PHP's `stripcslashes` makes of it, again and again: Composer's parse after
 /// `global` decodes escapes (`\x73` is `s`), once per `global`. Stops when nothing changes.
 fn unescapings(word: &str) -> Vec<String> {
@@ -98,11 +111,11 @@ fn takes_next(word: &str) -> bool {
 /// value that names a refused command is refused too: when an option Composer does not bind
 /// globally (`-r`, `--rollback`) makes its first pass fail, that word is the command after all.
 /// After `global`, an option word is split at whitespace, as Composer's second parse splits it.
-/// Since each review of that parsing found another spelling, a one-word entry is also refused
-/// when any word, its escapes decoded, unquoted and split at whitespace and `=`, abbreviates it
-/// to SHORTEST letters or more, wherever it stands (`composer search self` too: refusing too
-/// much is safe). This guards against a mistake, not a hostile project: a `composer.json` script
-/// can run anything as the user, `chmod` the phar included.
+/// Since each review of that parsing found another spelling, past a word naming `global` a
+/// one-word entry is also refused when any word, its escapes decoded, unquoted and split at
+/// whitespace and `=`, abbreviates it to SHORTEST letters or more, wherever it stands. This
+/// guards against a mistake, not a hostile project: a `composer.json` script can run anything as
+/// the user, `chmod` the phar included.
 /// The install root is read-only besides, so a spelling this misses still cannot replace the phar.
 pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
     let mut words: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -110,23 +123,22 @@ pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
         let word = word.to_lowercase();
         r.args.first().is_some_and(|first| !word.is_empty() && first.to_lowercase().starts_with(&word))
     };
-    // Whatever Composer's parser makes of them: a word that, with its escapes decoded as the parse
-    // after each `global` decodes them, then quotes and backslashes dropped and split at
-    // whitespace and `=`, abbreviates a one-word refused command to at least SHORTEST letters is
-    // refused wherever it stands. A skipped option value can be the command after all; refusing
-    // too much is safe.
-    let pieces = || {
-        words.iter().flat_map(|w| unescapings(w)).flat_map(|w| {
-            w.split(|c: char| c.is_whitespace() || c == '=')
-                .map(|p| p.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect::<String>())
-                .collect::<Vec<_>>()
+    // Composer reads the words after `global` a second time, unquoting them and decoding their
+    // escapes once per `global`, and a skipped option value can be `global` itself. So past the
+    // first word naming `global`, any word that, decoded, unquoted and split at whitespace and `=`,
+    // abbreviates a one-word refused command to at least SHORTEST letters is refused wherever it
+    // stands; refusing too much there is safe. Before it, a word is a command only where the
+    // parse below finds one.
+    let global_at = words.iter().position(|w| {
+        pieces(w).iter().any(|p| !p.is_empty() && "global".starts_with(p.to_lowercase().as_str()))
+    });
+    if let Some(g) = global_at
+        && let Some(r) = def.refuse.iter().filter(|r| r.args.len() == 1).find(|r| {
+            words[g + 1..]
+                .iter()
+                .flat_map(|w| pieces(w))
+                .any(|p| p.chars().count() >= SHORTEST && names(&p, r))
         })
-    };
-    if let Some(r) = def
-        .refuse
-        .iter()
-        .filter(|r| r.args.len() == 1)
-        .find(|r| pieces().any(|p| p.chars().count() >= SHORTEST && names(&p, r)))
     {
         return Some(r);
     }
