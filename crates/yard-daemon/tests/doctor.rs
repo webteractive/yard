@@ -2086,6 +2086,18 @@ fn runtime_ids(report: &DoctorReport) -> Vec<&str> {
 }
 
 #[tokio::test]
+async fn a_written_composer_default_that_is_gone_is_named_as_the_default() {
+    let e = env().await;
+    std::fs::write(e.fx.paths.yard_toml(), "[runtimes.composer]\ndefault = \"2.11.2\"\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    e.node_site("shop", &[("composer.json", "{}")], &dir);
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "runtime-missing:shop:composer");
+    assert_eq!(c.message, "shop needs Composer 2.11.2 (the default), which is not installed");
+    assert_eq!(c.hint.as_deref(), Some("yard runtime install composer 2.11.2"));
+}
+
+#[tokio::test]
 async fn doctor_warns_a_sites_missing_composer() {
     let e = env().await;
     let dir = tempfile::tempdir().unwrap();
@@ -2093,9 +2105,14 @@ async fn doctor_warns_a_sites_missing_composer() {
     let report = e.offline(&e.helper).await;
     let c = only(&report, "runtime-missing:shop:composer");
     assert_eq!(c.status, CheckStatus::Warn, "{c:?}");
-    assert_eq!(c.message, "shop needs Composer 2 (the default), which is not installed");
+    assert_eq!(c.message, "shop needs Composer 2, which is not installed");
     assert_eq!(c.hint.as_deref(), Some("yard runtime install composer 2"));
     put_composer(&e.fx.paths, "2.11.2");
+    // Installed, but yardd has not written it as the default yet.
+    let report = e.offline(&e.helper).await;
+    let c = only(&report, "runtime-missing:shop:composer");
+    assert_eq!(c.message, "shop needs Composer 2, and yard.toml names no Composer default yet");
+    assert_eq!(c.hint.as_deref(), Some("yard runtime default composer 2.11.2"));
     std::fs::write(e.fx.paths.yard_toml(), "[runtimes.composer]\ndefault = \"2.11.2\"\n").unwrap();
     assert!(runtime_ids(&e.offline(&e.helper).await).is_empty());
 }

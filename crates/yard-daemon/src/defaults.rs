@@ -5,15 +5,17 @@
 //!
 //! The check runs at the start of every reconcile, so a fresh Mac, a deleted line, an install
 //! and a site moved to an old PHP are all the same case. Its own writes cause one more
-//! reconcile, which finds nothing missing.
+//! reconcile, which finds nothing missing. A version installed without a command (copied in, or
+//! restored from a backup) is noticed by the periodic scan through [`Installed`].
 
 use crate::managed::{SiteFile, set_site_runtime, site_file};
 use crate::runtimes::{installed, php_full, resolve_at};
+use std::collections::BTreeMap;
 use std::path::Path;
 use toml_edit::value;
 use yard_core::brew::Brew;
 use yard_core::config::{SitesConfig, TomlFile, YardConfig, load_sites, load_yard};
-use yard_core::node::{FIRST_DEFAULT as FIRST_NODE, pick as pick_node};
+use yard_core::node::{FIRST_DEFAULT as FIRST_NODE, NodeVersion, pick as pick_node};
 use yard_core::runtimes::recipe::RuntimeRecipe;
 use yard_core::runtimes::select::{fill_candidate, fitting, needs_pin};
 use yard_core::runtimes::version::{RuntimeVersion, VersionSpec};
@@ -33,6 +35,41 @@ pub struct Written {
     pub line: String,
     /// The version written.
     pub version: String,
+}
+
+/// What is installed that [`fill`] reads: PHP's lines, Node's versions and each recipe runtime's.
+/// The reconcile records it before filling; the periodic scan reconciles when it differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    php: Vec<PhpVersion>,
+    node: Vec<NodeVersion>,
+    runtimes: BTreeMap<String, Vec<RuntimeVersion>>,
+}
+
+pub fn installed_now(paths: &Paths, runtimes: &Runtimes, brew: &Brew) -> Installed {
+    Installed {
+        php: brew.installed_php(&|p: &Path| p.exists(), &|p: &Path| std::fs::read_link(p).ok()),
+        node: crate::node::installed(paths),
+        runtimes: runtimes
+            .iter()
+            .filter(|r| r.kind() == RuntimeKind::Recipe)
+            .map(|r| (r.key().to_string(), versions(paths, r.key())))
+            .collect(),
+    }
+}
+
+/// The recipe runtimes `yard.toml` names no default for, each with the version [`fill`] would
+/// write for it, or `None` when nothing installed can be the default.
+pub fn unnamed(
+    paths: &Paths,
+    runtimes: &Runtimes,
+    yard: &YardConfig,
+) -> BTreeMap<String, Option<RuntimeVersion>> {
+    runtimes
+        .iter()
+        .filter(|r| r.kind() == RuntimeKind::Recipe && !yard.runtime_defaults.contains_key(r.key()))
+        .map(|r| (r.key().to_string(), fill_candidate(r.recipe(), &versions(paths, r.key()))))
+        .collect()
 }
 
 /// Writes every missing default, then every old-PHP pin, and answers what it wrote. Does

@@ -307,6 +307,14 @@ impl Reconciler {
     /// Whether brew's public roots or Yard's CA changed since PHP's CA bundle was made, or one
     /// appeared or went away. Nothing watches brew's `etc`, so the periodic scan asks; PHP reads
     /// the bundle on each connection, so a new one needs no restart.
+    /// A PHP, Node or runtime version installed or removed since the defaults were last filled
+    /// in, without a command that reconciles (copied in by hand, restored from a backup).
+    pub async fn installs_changed(&self) -> bool {
+        let state = self.state.lock().await;
+        let Some(seen) = &state.installs_seen else { return false };
+        crate::defaults::installed_now(&state.paths, &crate::runtimes::registry(), &state.brew) != *seen
+    }
+
     pub async fn php_ca_stale(&self) -> bool {
         let state = self.state.lock().await;
         let Some(snap) = &state.snapshot else { return false };
@@ -412,7 +420,11 @@ impl Reconciler {
 
         // 0b. Write any default that is missing, and the pins old-PHP sites need, before the
         // config is read (explicit-defaults spec §2.2).
-        let written = crate::defaults::fill(&state.paths, &crate::runtimes::registry(), &state.brew);
+        // What is installed is recorded first, so a version added while this runs is seen by
+        // the next scan.
+        let runtimes = crate::runtimes::registry();
+        state.installs_seen = Some(crate::defaults::installed_now(&state.paths, &runtimes, &state.brew));
+        let written = crate::defaults::fill(&state.paths, &runtimes, &state.brew);
         state.defaults_written.extend(written);
 
         // 1. Load config. A parse error keeps the last good state serving.

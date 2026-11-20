@@ -511,7 +511,8 @@ changes:** `.yard` `node`, `default_node`, `yard node install|uninstall|list|def
 ## 14. Doctor
 
 `runtime:<key>` (recipe broken or on its last good version), `runtime-missing:<site>:<key>` (a site
-uses it and its version is not installed), `runtime-unknown:<site>:<key>`, `composer-php:<site>` (the
+uses it and its version is not installed, or it falls back to a default `yard.toml` does not name yet;
+explicit-defaults spec §7), `runtime-unknown:<site>:<key>`, `composer-php:<site>` (the
 pinned Composer cannot run on the site's PHP), `composer-brew` (info, §9.3), `php-build:<build>`,
 `php-formula-gone:<build>`, and today's Node checks moved onto the contract.
 

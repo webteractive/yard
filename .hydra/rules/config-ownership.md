@@ -58,7 +58,9 @@ Herd overwriting user config is one of the pain points Yard exists to fix. Keep 
     linked site needs when its PHP cannot run the default, in its managed `.yard` or `sites.toml`
     (`managed::set_site_runtime`, as `yard runtime use`). Each through `TomlFile` (or
     `edit_managed`), only where nothing is written, so a written value is never moved and comments
-    survive; a committed `.yard` is never written. It logs each write, and doctor lists them.
+    survive; a committed `.yard` is never written. It logs each write, and doctor lists them. A
+    version installed without a command is caught by the periodic scan, which reconciles when the
+    installed versions differ from the last check's (`defaults::installed_now`).
   - `run/defaults.toml` is generated: the defaults of the last `yard.toml` a reconcile read whole
     (`render_defaults`, written atomically when it changed), which the shims use while a hand edit
     leaves `yard.toml` unreadable. Nobody edits it.

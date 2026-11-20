@@ -72,6 +72,9 @@ pub struct State {
     /// What the defaults check wrote since yardd started, oldest first (explicit-defaults
     /// spec §2.2), for doctor's `runtime-default-written` lines.
     pub defaults_written: Vec<crate::defaults::Written>,
+    /// What was installed when the defaults were last filled in; the periodic scan reconciles
+    /// when it differs. `None` before the first reconcile.
+    pub installs_seen: Option<crate::defaults::Installed>,
 }
 
 impl State {
@@ -91,6 +94,7 @@ impl State {
             recipes: crate::engines::RecipeLoader::default(),
             engines_changed: false,
             defaults_written: vec![],
+            installs_seen: None,
         })
     }
 }

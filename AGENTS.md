@@ -656,7 +656,8 @@ Mac that is not set up yet, follow Machines → Setting up a Mac first.
   `cmp` at the end. Restore permissions with a `trap`.
 - Drive it with `yard status`, `yard doctor`, `yard ports [check]`, `yard sites`, and
   `curl http://<site>.yard:8080/` for a site you linked. yardd applies a TOML or override
-  edit within about 2 s, and the docroot scan every 30 s.
+  edit within about 2 s, and the periodic scan every 30 s (docroots, certificates, PHP's CA bundle,
+  and versions installed without a command).
 - For a scratch site, `yard link <name>` run inside a scratch dir and `yard unlink <name>`
   afterwards, then delete the `nginx/overrides/<name>.conf` Yard created for it.
 - Never create directories in `~/Herd` (Herd parks it where it runs), and never touch Herd's

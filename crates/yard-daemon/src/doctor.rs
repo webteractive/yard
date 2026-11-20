@@ -25,6 +25,7 @@ use yard_core::project::{Loaded, Projects, ServiceWant};
 use yard_core::render::overrides_for;
 use yard_core::render::php::{ini_loads, is_stale};
 use yard_core::runtimes::RuntimeKind;
+use yard_core::runtimes::version::RuntimeVersion;
 use yard_core::services::brew_info;
 use yard_core::services::engines::{EngineKey, LineSpec, ServiceEngine, SourceSpec, versioned_lines};
 use yard_core::services::render::old_php_can_log_in;
@@ -297,7 +298,10 @@ pub async fn run(input: DoctorInput<'_>) -> DoctorReport {
         let on_brew = on_brew_composer(&sites, paths, brew, &registry);
         let pins = pin_checks(paths, brew, &registry, view.yard.as_ref());
         // A site that needs its own pin is named once, by its pin check.
-        let runtime = runtime_checks(&sites, &on_brew).into_iter().filter(|c| {
+        // With yard.toml unreadable nothing is known to be unnamed, and a default reads as named.
+        let unnamed =
+            view.yard.as_ref().map(|y| crate::defaults::unnamed(paths, &registry, y)).unwrap_or_default();
+        let runtime = runtime_checks(&sites, &on_brew, &unnamed).into_iter().filter(|c| {
             !pins.iter().any(|(site, key, _)| {
                 c.id == format!("runtime-missing:{site}:{key}")
                     || c.id == format!("runtime-spec:{site}:{key}")
@@ -728,7 +732,13 @@ fn not_exact_checks(
     checks
 }
 
-fn runtime_checks(sites: &[SiteInfo], on_brew: &[String]) -> Vec<Check> {
+/// `unnamed` is [`crate::defaults::unnamed`]: a site falling back to a default `yard.toml` does
+/// not name is offered a version, not running "the default".
+fn runtime_checks(
+    sites: &[SiteInfo],
+    on_brew: &[String],
+    unnamed: &BTreeMap<String, Option<RuntimeVersion>>,
+) -> Vec<Check> {
     let mut checks = vec![];
     for site in sites {
         for rt in &site.runtimes {
@@ -757,12 +767,32 @@ fn runtime_checks(sites: &[SiteInfo], on_brew: &[String]) -> Vec<Check> {
                     let hint = e.hint.clone().unwrap_or_else(|| "yard info shows the site's runtimes".into());
                     checks.push(warn(&format!("runtime-spec:{at}"), e.message.clone(), hint));
                 }
-                (None, Some(spec), None) => {
-                    let from = match (&rt.file, rt.source) {
-                        (Some(file), _) => file.clone(),
-                        (None, SettingSource::Default) => "the default".to_string(),
-                        (None, _) => "yard runtime use".to_string(),
+                (None, Some(spec), None) if rt.file.is_none() && rt.source == SettingSource::Default => {
+                    let (message, hint) = match unnamed.get(&rt.key) {
+                        // Installed: yardd writes it at its next reconcile, or this does now.
+                        Some(Some(v)) => (
+                            format!(
+                                "{} needs {} {spec}, and yard.toml names no {} default yet",
+                                site.name, rt.name, rt.name
+                            ),
+                            format!("yard runtime default {} {v}", rt.key),
+                        ),
+                        Some(None) => (
+                            format!("{} needs {} {spec}, which is not installed", site.name, rt.name),
+                            format!("yard runtime install {} {spec}", rt.key),
+                        ),
+                        None => (
+                            format!(
+                                "{} needs {} {spec} (the default), which is not installed",
+                                site.name, rt.name
+                            ),
+                            format!("yard runtime install {} {spec}", rt.key),
+                        ),
                     };
+                    checks.push(warn(&format!("runtime-missing:{at}"), message, hint));
+                }
+                (None, Some(spec), None) => {
+                    let from = rt.file.clone().unwrap_or_else(|| "yard runtime use".to_string());
                     checks.push(warn(
                         &format!("runtime-missing:{at}"),
                         format!("{} needs {} {spec} ({from}), which is not installed", site.name, rt.name),

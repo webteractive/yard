@@ -76,7 +76,10 @@ in again at the next check.
   every change to the TOMLs (so `yard link`, `init` and `isolate` too), and the reconcile each
   install job ends with. An upgrade, a fresh Mac whose PHP came from `brew install`, and the first
   `yard node install` are therefore all the same case **(decided while planning: one place for the
-  check, and an isolate's pin needs no code of its own)**.
+  check, and an isolate's pin needs no code of its own)**. A version installed without a command
+  (copied into `installs/`, restored from a backup, a PHP from `brew install`) is noticed by the
+  periodic scan (30 s), which reconciles when the installed PHP, Node or runtime versions differ
+  from those the last check saw (2026-11-20, from the e2e run).
 - **What it writes,** for a runtime with no default and at least one version installed:
   - PHP: `8.4` when 8.4 is installed (today's compiled-in value, so an upgrade changes nothing),
     else the newest installed line.
@@ -217,3 +220,8 @@ reconcile itself, as long as no shim can run against a `yard.toml` that is half 
   with nothing installed hints at `yard node install 22`.
 - **With `yard.toml` broken and no `run/defaults.toml`**, a pinned project still runs and an
   unpinned one fails with `yard.toml`'s own error, not "no default is written".
+- **Doctor tells an unnamed default from a missing one** (2026-11-20, from the e2e run): a site
+  falling back to a runtime default `yard.toml` does not name reads "needs Composer 2, and yard.toml
+  names no Composer default yet" with `yard runtime default composer <v>` when a version is
+  installed, and "needs Composer 2, which is not installed" when none is; "(the default)" is kept
+  for a written default whose version is gone.

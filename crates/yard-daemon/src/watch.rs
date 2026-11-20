@@ -5,7 +5,8 @@
 //! in `minio.<tld>`'s block), is tested with `nginx -t` and, if it passes, reloaded. Those
 //! instance directories are read from `services.toml` the same way. The other engines'
 //! `overrides.conf` are not watched: a restart of the instance applies them. Every
-//! `rescan`, sites whose docroot appeared or vanished since are reconciled too.
+//! `rescan`, sites whose docroot appeared or vanished since are reconciled too, and so is a PHP,
+//! Node or runtime version installed or removed without a command (so its default is written).
 //!
 //! Only those paths count. Yard's own writes under `nginx/`, `php/` and `state/` must not
 //! trigger a reconcile, or every reconcile would schedule the next one.
@@ -74,9 +75,10 @@ pub async fn spawn(ctx: Arc<Context>, debounce: Duration, rescan: Duration) -> J
                 _ = tick.tick() => {
                     let due = ctx.reconciler.docroots_stale().await
                         || ctx.reconciler.certs_due().await
-                        || ctx.reconciler.php_ca_stale().await;
+                        || ctx.reconciler.php_ca_stale().await
+                        || ctx.reconciler.installs_changed().await;
                     if due && let Err(e) = ctx.reconciler.reconcile().await {
-                        tracing::warn!("reconcile after a docroot, certificate or CA bundle change: {}", describe(&e));
+                        tracing::warn!("reconcile after a docroot, certificate, CA bundle or install change: {}", describe(&e));
                     }
                     continue;
                 }

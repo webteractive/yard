@@ -641,6 +641,19 @@ async fn a_written_default_is_never_moved_by_an_install() {
 }
 
 #[tokio::test]
+async fn a_version_put_in_by_hand_becomes_the_default_without_a_restart() {
+    let d = prepared("").await;
+    let d = d.start().await;
+    assert!(holds(d.fx.paths.yard_toml(), "default_php = \"8.4\"").await, "{}", yard_toml(&d.fx.paths));
+    // Nothing yardd watches changes: the periodic scan has to notice the new version.
+    put_composer(&d.fx.paths, "2.11.2");
+    assert!(holds(d.fx.paths.yard_toml(), "[runtimes.composer]").await, "{}", yard_toml(&d.fx.paths));
+    let (yard, _) = yard_core::config::load_yard(&d.fx.paths).unwrap();
+    assert_eq!(yard.runtime_defaults["composer"].to_string(), "2.11.2");
+    d.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn the_composer_default_needs_the_main_line() {
     let d = prepared("").await;
     put_composer(&d.fx.paths, "2.2.32");
