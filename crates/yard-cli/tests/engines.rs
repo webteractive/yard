@@ -182,13 +182,14 @@ fn recipe_engine_command_needs_yardd_not_a_known_command() {
     assert!(stderr(&unknown).contains("nope"), "{}", stderr(&unknown));
 }
 
+/// `yard db` was removed in 0.1.11; typing it names what replaced it and asks yardd nothing.
 #[test]
-fn yard_db_still_works_with_notice() {
+fn yard_db_is_gone_and_names_its_replacement() {
     let d = MockDaemon::start(&[("db.list", Ok(json!([])))]);
     let out = d.yard().args(["db", "list", "--service", "mysql-8.4"]).output().unwrap();
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stderr(&out).contains("yard db is going away: use yard <engine> <verb>"), "{}", stderr(&out));
-    assert!(d.params("db.list")[0].get("engine").is_none());
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stderr(&out).contains("yard db is gone: use yard <engine> <verb>"), "{}", stderr(&out));
+    assert!(d.params("db.list").is_empty());
 }
 
 #[test]

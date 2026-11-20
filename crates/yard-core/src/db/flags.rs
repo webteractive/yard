@@ -1,8 +1,8 @@
-//! The flags `yard db` passes through to a tool and the ones it refuses (db spec §7).
+//! The flags a database verb (`yard mysql dump`) passes through to a tool and the ones it refuses (db spec §7).
 
 use yard_proto::{DbAction, ErrorCode, YardError};
 
-/// A database tool `yard db` runs.
+/// A database tool a database verb runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Mysql,
@@ -37,9 +37,9 @@ pub enum DumpFormat {
     Directory,
 }
 
-const SERVER: &str = "yard db only talks to its own instance";
+const SERVER: &str = "Yard only talks to its own instance";
 const DATABASE: &str = "the database is the one you name";
-const OUTPUT: &str = "yard db writes the file";
+const OUTPUT: &str = "Yard writes the file";
 const RUNS: &str = "the file is what runs";
 
 /// A refused flag: its short letter (if any), its long name, and why.
@@ -120,7 +120,7 @@ pub fn check(tool: Tool, action: DbAction, args: &[String]) -> Result<(), YardEr
         value_next = !is_value && takes_value(tool, arg);
         if !tool.is_mysql() && !is_value && is_conninfo(arg) {
             return Err(YardError::new(ErrorCode::DbFlagReserved, format!("{arg}: {SERVER}"))
-                .with_hint("leave the connection string out; yard db sets the server and the database"));
+                .with_hint("leave the connection string out; Yard sets the server and the database"));
         }
         // getopt_long takes any unique prefix, down to one letter; MySQL 8.4 takes none.
         let shortest = if tool.is_mysql() { 3 } else { 1 };
@@ -138,7 +138,7 @@ pub fn check(tool: Tool, action: DbAction, args: &[String]) -> Result<(), YardEr
             let flag = arg.split('=').next().unwrap_or(arg);
             let flag = if flag.starts_with("--") { flag } else { &flag[..flag.len().min(2)] };
             return Err(YardError::new(ErrorCode::DbFlagReserved, format!("{flag}: {why}"))
-                .with_hint(format!("leave {flag} out; yard db sets the server, the database and the file")));
+                .with_hint(format!("leave {flag} out; Yard sets the server, the database and the file")));
         }
     }
     Ok(())
@@ -206,7 +206,7 @@ pub fn check_compress(tool: Tool, compress: bool, args: &[String]) -> Result<(),
         let flag = flag.split('=').next().unwrap_or(flag);
         return Err(YardError::new(
             ErrorCode::DbFlagReserved,
-            format!("{flag}: plain SQL is gzipped by yard db dump --compress"),
+            format!("{flag}: plain SQL is gzipped by dump --compress"),
         )
         .with_hint("--compress"));
     }

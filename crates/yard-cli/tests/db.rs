@@ -1,4 +1,4 @@
-//! `yard db` against `MockDaemon` (db spec §6, §8).
+//! `yard mysql` and `yard postgres` against `MockDaemon` (db spec §6, §8; recipes spec §9.1).
 
 mod support;
 
@@ -49,7 +49,7 @@ fn script(dir: &Path, name: &str, body: &str) -> String {
 #[test]
 fn list_snapshot() {
     let d = MockDaemon::start(&[("db.list", Ok(lists()))]);
-    let out = d.yard().args(["db", "list", "--service", "mysql-8.4"]).output().unwrap();
+    let out = d.yard().args(["mysql", "list", "--service", "mysql-8.4"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     insta::assert_snapshot!(stdout(&out));
 }
@@ -57,7 +57,7 @@ fn list_snapshot() {
 #[test]
 fn list_json_is_proto_shape() {
     let d = MockDaemon::start(&[("db.list", Ok(lists()))]);
-    let out = d.yard().args(["db", "list", "--service", "mysql-8.4", "--json"]).output().unwrap();
+    let out = d.yard().args(["mysql", "list", "--service", "mysql-8.4", "--json"]).output().unwrap();
     let parsed: Vec<yard_proto::DbInstanceList> = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(parsed.len(), 2);
 }
@@ -66,7 +66,7 @@ fn list_json_is_proto_shape() {
 fn db_sends_the_working_directory() {
     let d = MockDaemon::start(&[("db.list", Ok(json!([]))), ("db.connect", Ok(json!([])))]);
     let dir = tempfile::tempdir().unwrap();
-    let out = d.yard().args(["db", "list"]).current_dir(dir.path()).output().unwrap();
+    let out = d.yard().args(["mysql", "list"]).current_dir(dir.path()).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     let p = &d.params("db.list")[0];
     assert_eq!(Path::new(p["path"].as_str().unwrap()), dir.path().canonicalize().unwrap());
@@ -76,9 +76,9 @@ fn db_sends_the_working_directory() {
 #[test]
 fn service_flag_is_sent() {
     let d = MockDaemon::start(&[("db.list", Ok(json!([])))]);
-    let out = d.yard().args(["db", "list", "--service", "mysql-8.4"]).output().unwrap();
+    let out = d.yard().args(["mysql", "list", "--service", "mysql-8.4"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(d.params("db.list")[0], json!({"service": "mysql-8.4"}));
+    assert_eq!(d.params("db.list")[0], json!({"service": "mysql-8.4", "engine": "mysql"}));
     assert!(d.params("db.connect").is_empty(), "nothing to warn about with --service");
 }
 
@@ -88,7 +88,7 @@ fn list_without_service_warns_before_waking() {
         ("db.connect", Ok(json!([mysql_connect("stopped", true), redis_connect()]))),
         ("db.list", Ok(lists())),
     ]);
-    let out = d.yard().args(["db", "list"]).output().unwrap();
+    let out = d.yard().args(["mysql", "list"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stderr(&out).contains("waking mysql-8.4 to list its databases"), "{}", stderr(&out));
     assert!(!stderr(&out).contains("redis"));
@@ -100,33 +100,34 @@ fn create_says_what_it_did() {
         "db.create",
         Ok(json!({"instance": "mysql-8.4", "name": "shop", "created": true})),
     )]);
-    let out = d.yard().args(["db", "create", "shop", "--service", "mysql-8.4"]).output().unwrap();
+    let out = d.yard().args(["mysql", "create", "shop", "--service", "mysql-8.4"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "Created shop on mysql-8.4.\n");
-    assert_eq!(d.params("db.create")[0], json!({"service": "mysql-8.4", "name": "shop"}));
+    assert_eq!(d.params("db.create")[0], json!({"service": "mysql-8.4", "name": "shop", "engine": "mysql"}));
     let d = MockDaemon::start(&[(
         "db.create",
         Ok(json!({"instance": "mysql-8.4", "name": "shop", "created": false})),
     )]);
-    let out = d.yard().args(["db", "create", "shop", "--service", "mysql-8.4"]).output().unwrap();
+    let out = d.yard().args(["mysql", "create", "shop", "--service", "mysql-8.4"]).output().unwrap();
     assert_eq!(stdout(&out), "shop already exists on mysql-8.4.\n");
 }
 
 #[test]
 fn connect_snapshot_mysql_sleeping() {
     let d = MockDaemon::start(&[("db.connect", Ok(json!([mysql_connect("stopped", true)])))]);
-    let out = d.yard().args(["db", "connect", "mysql-8.4"]).output().unwrap();
+    let out = d.yard().args(["mysql", "connect", "mysql-8.4"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     insta::assert_snapshot!(stdout(&out));
-    assert_eq!(d.params("db.connect")[0], json!({"service": "mysql-8.4", "wake": false}));
+    assert_eq!(d.params("db.connect")[0], json!({"service": "mysql-8.4", "engine": "mysql", "wake": false}));
 }
 
 #[test]
-fn connect_snapshot_postgres_and_redis() {
-    let d = MockDaemon::start(&[("db.connect", Ok(json!([pg_connect(), redis_connect()])))]);
-    let out = d.yard().args(["db", "connect"]).output().unwrap();
+fn connect_snapshot_postgres() {
+    let d = MockDaemon::start(&[("db.connect", Ok(json!([pg_connect()])))]);
+    let out = d.yard().args(["pgsql", "connect"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     insta::assert_snapshot!(stdout(&out));
+    assert_eq!(d.params("db.connect")[0]["engine"], "postgres");
 }
 
 #[test]
@@ -137,13 +138,13 @@ fn open_opens_the_url_with_the_database() {
     let d = MockDaemon::start(&[("db.connect", Ok(json!([mysql_connect("running", false)])))]);
     let out = d
         .yard()
-        .args(["db", "open", "shop", "--service", "mysql-8.4"])
+        .args(["mysql", "open", "shop", "--service", "mysql-8.4"])
         .env("YARD_OPEN", &open)
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(std::fs::read_to_string(&log).unwrap(), "mysql://root@127.0.0.1:3307/shop\n");
-    assert_eq!(d.params("db.connect")[0], json!({"service": "mysql-8.4", "wake": true}));
+    assert_eq!(d.params("db.connect")[0], json!({"service": "mysql-8.4", "engine": "mysql", "wake": true}));
 }
 
 #[test]
@@ -152,7 +153,7 @@ fn open_falls_back_to_details() {
     let open = script(dir.path(), "open", "exit 1");
     let d = MockDaemon::start(&[("db.connect", Ok(json!([mysql_connect("running", false)])))]);
     let out =
-        d.yard().args(["db", "open", "--service", "mysql-8.4"]).env("YARD_OPEN", &open).output().unwrap();
+        d.yard().args(["mysql", "open", "--service", "mysql-8.4"]).env("YARD_OPEN", &open).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(stdout(&out).contains("URL       mysql://root@127.0.0.1:3307"), "{}", stdout(&out));
     assert!(stderr(&out).contains("error: no app opens mysql:// URLs"), "{}", stderr(&out));
@@ -169,7 +170,7 @@ fn shell_execs_the_answered_program() {
     let d = MockDaemon::start(&[("db.command", Ok(cmd))]);
     let out = d
         .yard()
-        .args(["db", "shell", "app", "--", "-c", "select 1"])
+        .args(["postgres", "shell", "app", "--", "-c", "select 1"])
         .env("PGHOST", "elsewhere")
         .output()
         .unwrap();
@@ -215,7 +216,7 @@ fn dump_writes_plain_by_default() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &["shop"])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -238,7 +239,7 @@ fn dump_compress_gzips() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "--compress", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "--compress", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -256,7 +257,7 @@ fn gz_name_without_compress_is_refused() {
     let d = MockDaemon::start(&[]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "shop.sql.gz", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "shop.sql.gz", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -274,7 +275,7 @@ fn existing_file_needs_overwrite() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "shop.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -282,7 +283,7 @@ fn existing_file_needs_overwrite() {
     assert!(stderr(&out).contains("--overwrite"), "{}", stderr(&out));
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "shop.sql", "--overwrite", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "shop.sql", "--overwrite", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -302,7 +303,7 @@ fn failed_dump_leaves_nothing() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -320,7 +321,7 @@ fn ctrl_c_leaves_no_partial() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
     let child = d
         .yard_process()
-        .args(["db", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -349,7 +350,7 @@ fn custom_format_name_and_no_gzip() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &["-Fc"])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "app", "--service", "postgres-17", "--", "-Fc"])
+        .args(["postgres", "dump", "app", "--service", "postgres-17", "--", "-Fc"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -369,7 +370,7 @@ fn directory_format_is_written_by_the_tool() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &["-Fd"])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "app", "app.dir", "--service", "postgres-17", "--", "-Fd"])
+        .args(["postgres", "dump", "app", "app.dir", "--service", "postgres-17", "--", "-Fd"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -386,7 +387,7 @@ fn progress_json_lines() {
     let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "x.sql", "--progress-json", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "x.sql", "--progress-json", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -419,7 +420,7 @@ fn import_streams_the_file() {
     )]);
     let out = d
         .yard()
-        .args(["db", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -445,7 +446,7 @@ fn import_gunzips_by_content() {
     )]);
     let out = d
         .yard()
-        .args(["db", "import", "shop", "dump.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "dump.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -461,7 +462,7 @@ fn a_missing_file_creates_nothing() {
     for file in ["missing.sql", "empty.sql"] {
         let out = d
             .yard()
-            .args(["db", "import", "shop", file, "--service", "mysql-8.4"])
+            .args(["mysql", "import", "shop", file, "--service", "mysql-8.4"])
             .current_dir(cwd.path())
             .output()
             .unwrap();
@@ -486,7 +487,7 @@ fn a_switching_dump_stops_before_the_statement() {
     )]);
     let out = d
         .yard()
-        .args(["db", "import", "shop", "all.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "all.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -509,7 +510,7 @@ fn owner_statements_are_skipped_and_counted() {
     let d = MockDaemon::start(&[("db.command", Ok(import_command(&capturing(tools.path()), filter, false)))]);
     let out = d
         .yard()
-        .args(["db", "import", "app", "app.sql", "--service", "postgres-17"])
+        .args(["postgres", "import", "app", "app.sql", "--service", "postgres-17"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -519,7 +520,7 @@ fn owner_statements_are_skipped_and_counted() {
     let out = d
         .yard()
         .args([
-            "db",
+            "postgres",
             "import",
             "app",
             "app.sql",
@@ -547,7 +548,7 @@ fn archive_goes_to_pg_restore() {
     )]);
     let out = d
         .yard()
-        .args(["db", "import", "app", "app.dump", "--service", "postgres-17"])
+        .args(["postgres", "import", "app", "app.dump", "--service", "postgres-17"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -573,7 +574,7 @@ fn failure_says_what_stays() {
         MockDaemon::start(&[("db.command", Ok(import_command(&program, json!({"kind": "mysql"}), false)))]);
     let out = d
         .yard()
-        .args(["db", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -597,7 +598,7 @@ fn ctrl_c_says_what_stays() {
         MockDaemon::start(&[("db.command", Ok(import_command(&program, json!({"kind": "mysql"}), false)))]);
     let child = d
         .yard_process()
-        .args(["db", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "shop.sql", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -626,7 +627,7 @@ fn dump_never_replaces_a_directory() {
     let d = MockDaemon::start(&[]);
     let out = d
         .yard()
-        .args(["db", "dump", "shop", "project", "--overwrite", "--service", "mysql-8.4"])
+        .args(["mysql", "dump", "shop", "project", "--overwrite", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -655,7 +656,7 @@ fn a_truncated_gzip_fails() {
     )]);
     let out = d
         .yard()
-        .args(["db", "import", "shop", "cut.sql.gz", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "cut.sql.gz", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -670,7 +671,7 @@ fn a_gzip_with_nothing_inside_creates_nothing() {
     let d = MockDaemon::start(&[]);
     let out = d
         .yard()
-        .args(["db", "import", "shop", "junk.sql.gz", "--service", "mysql-8.4"])
+        .args(["mysql", "import", "shop", "junk.sql.gz", "--service", "mysql-8.4"])
         .current_dir(cwd.path())
         .output()
         .unwrap();
@@ -689,7 +690,7 @@ fn ctrl_c_to_the_whole_group_is_a_cancel() {
         let d = MockDaemon::start(&[("db.command", Ok(command_for(&program, &[])))]);
         let child = d
             .yard_process()
-            .args(["db", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
+            .args(["mysql", "dump", "shop", "x.sql", "--service", "mysql-8.4"])
             .current_dir(cwd.path())
             .process_group(0)
             .stdout(std::process::Stdio::null())

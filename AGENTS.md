@@ -215,8 +215,8 @@ from M6, `Yard.app` (Rust, GPUI) are pure JSON-RPC clients of the daemon.
   recipe's `{node}` left empty in the add's program check. `checklist.sh` then passed 77/77, with its
   new R5 (a recipe dropped into `engines/` is offered by the Add picker without a restart); its first
   run failed DB3 because `ax.js save` typed the name over a selection Command-A had not made, so it
-  now sets the name field's value through accessibility and reads it back. `yard db` keeps working for one
-  release with a notice, and is removed in the release after the one that ships this. A server
+  now sets the name field's value through accessibility and reads it back. `yard db` kept working for 0.1.10
+  with a notice and was removed for 0.1.11; typing it names the engine commands. A server
   contract (nginx) may come later; FrankenPHP (a php-fpm alternative, so a runtime) is tabled.
 - Runtimes (maintainer, 2026-11-18): a `Runtime` contract in Rust with every runtime defined by a
   recipe (Composer a plain one, Node on the `fnm` source, PHP on the `php` driver; user recipes in
@@ -603,7 +603,7 @@ none). On a Mac without one, follow "Setting up a Mac" above and write down what
   resolver changed or `~/.cloudflared` was created; ask the maintainer first.
   `shellcheck scripts/e2e-m5.sh` stays clean.
 
-- `scripts/e2e-db.sh` — real-machine `yard mysql`/`yard postgres` check (it also checks `yard db` still works with its notice) after `e2e-m1.sh`, on the real instances (each
+- `scripts/e2e-db.sh` — real-machine `yard mysql`/`yard postgres` check (it also checks that `yard db` is gone and names its replacement) after `e2e-m1.sh`, on the real instances (each
   engine's only one, else `mysql-8.4` and `postgres-17`; `YARD_DB_MYSQL`/`YARD_DB_PG` name others): creates scratch databases named
   `yard_e2e_<pid>_*`, imports plain, gzipped and `pg_dump -Fc` fixtures (one with an owner role the
   instance lacks, one plain with `OWNER TO`), checks a `mysqldump --databases` dump is refused before

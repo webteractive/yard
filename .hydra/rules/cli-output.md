@@ -14,11 +14,12 @@ triggers:
   says what to do next (`No sites yet. Serve a project with yard link, run inside it.`).
 - `yard <engine> [verb] …` arrives as clap's external subcommand (recipes spec §9.1): the CLI loads
   the engines itself (`yard_daemon::engines::load_once`, so a recipe's command works with yardd
-  down), maps `pgsql` to `postgres`, and parses the rest as `yard db <verb>` would, with the
-  engine set on `DbAt` (never a flag); it parses with `yard db`'s own command renamed `yard <what was typed>`, so
-  help and usage errors say `yard mysql list`, never `yard db list`. A verb the engine lacks, or an unknown word, exits 2.
-  `yard db` is hidden and prints `yard db is going away: use yard <engine> <verb>` on stderr; a
-  recipe key may not be a CLI command (`YARD_COMMANDS`, kept equal by a test).
+  down), maps `pgsql` to `postgres`, and parses the rest with `cli::EngineArgs` (the database
+  verbs and their flags), with the engine set on `DbAt` (never a flag); it is named `yard <what was
+  typed>`, so help and usage errors say `yard mysql list`. A verb the engine lacks, or an unknown
+  word, exits 2. `yard db` was removed in 0.1.11: it exits 2 with `yard db is gone: use yard
+  <engine> <verb> …`, and `db` stays reserved. A recipe key may not be a CLI command
+  (`YARD_COMMANDS`, kept equal by a test).
 - Exit codes are part of the interface: 0 success, 1 Yard error (stderr
   `error: <message>` then `  hint: <hint>`), 2 usage, 3 `yardd is not running → yard start`
   (`DAEMON_NOT_RUNNING` under `--json`). `doctor` and `ports check` also exit 1 when a

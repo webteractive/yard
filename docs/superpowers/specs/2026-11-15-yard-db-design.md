@@ -9,7 +9,8 @@ creates databases", M4b spec §2) as §2 says, and builds on the M4b service mod
 
 **Superseded in part on 2026-11-16:** the `yard db <verb>` surface is replaced by per-engine commands
 (`yard mysql <verb>`, `yard postgres <verb>`), with the same verbs, flags and behaviour; see
-`docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` §9.1.
+`docs/superpowers/specs/2026-11-16-yard-service-recipes-design.md` §9.1. `yard db` itself was removed
+for 0.1.11; "yard db" below names the verbs as the engine commands now take them.
 
 Decisions marked **(maintainer)** are the maintainer's, from the 2026-11-15 conversation. Decisions
 marked **(builder's call)** were made while writing this and can be reversed on their own.

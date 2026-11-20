@@ -198,14 +198,6 @@ pub enum Command {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Work with the databases on the MySQL and PostgreSQL instances: list, create, connect,
-    /// open, shell, dump and import. Nothing here drops a database or makes users. Going away:
-    /// use yard mysql and yard postgres.
-    #[command(hide = true)]
-    Db {
-        #[command(subcommand)]
-        action: DbSub,
-    },
     /// Print the .env lines for a project's services (or one instance). Writes no file.
     ///
     /// In a linked project, or with --site, it prints the services the project's .yard
@@ -356,7 +348,25 @@ pub enum ServiceAction {
     },
 }
 
-/// Which instance a `yard db` command means.
+/// The database verbs of `yard <engine>` (recipes spec §9.1): list, create, connect, open, shell,
+/// dump and import. Parsed on their own, as `yard <what was typed>`, since `yard db`, which they
+/// came from, was removed in 0.1.11. Nothing here drops a database or makes users.
+#[derive(Debug, Parser)]
+#[command(disable_version_flag = true)]
+pub struct EngineArgs {
+    /// Print machine-readable JSON instead of human output.
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Use this data root instead of YARD_ROOT or ~/.yard.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub root: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub action: DbSub,
+}
+
+/// Which instance a `yard <engine>` database verb means.
 #[derive(Debug, Clone, Default, clap::Args)]
 pub struct DbAt {
     /// The instance, e.g. mysql-8.4 (see yard services). Defaults to the database the
@@ -391,7 +401,7 @@ pub enum DbSub {
     /// Show what a GUI client (TablePlus, Sequel Ace, DBeaver, DataGrip) needs to connect: host,
     /// port, user, password, socket and URL. Wakes nothing.
     Connect {
-        /// The instance, e.g. mysql-8.4; defaults as for the other db commands, and outside a
+        /// The instance, e.g. mysql-8.4; defaults as for the other verbs, and outside a
         /// project every MySQL, PostgreSQL and Redis instance is shown.
         instance: Option<String>,
         /// The site whose .yard picks the instance.
@@ -760,10 +770,11 @@ mod tests {
     use yard_core::services::engines::YARD_COMMANDS;
 
     /// A recipe key may not be a Yard command, so `yard <key>` always reaches its engine: the
-    /// reserved list is exactly the CLI's commands and aliases, plus `help` and `pgsql`.
+    /// reserved list is exactly the CLI's commands and aliases, plus `help`, `pgsql` and `db`.
     #[test]
     fn yard_commands_cover_the_cli() {
-        let mut names: BTreeSet<String> = BTreeSet::from(["help".to_string(), "pgsql".to_string()]);
+        // `db` stays reserved so `yard db` always says what replaced it.
+        let mut names: BTreeSet<String> = ["help", "pgsql", "db"].map(str::to_string).into();
         for c in Cli::command().get_subcommands() {
             names.insert(c.get_name().to_string());
             names.extend(c.get_all_aliases().map(str::to_string));

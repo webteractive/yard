@@ -180,8 +180,8 @@ URL, and `yard mysql open shop` opens the database in the app that handles `mysq
 something wakes it: `yard mysql open`, `yard mysql` (the prompt) or `yard service start` do, and a
 client's open connection then keeps it awake.
 
-`yard db <verb>` still works for this release and says which command replaces it; the release
-after removes it.
+`yard db <verb>`, which these replaced, was removed in 0.1.11; typing it names the engine
+commands.
 
 ## Service recipes
 

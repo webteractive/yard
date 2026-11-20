@@ -87,8 +87,8 @@ up what they add:
   visitor's address, and `yard untunnel` leaves nothing behind.
 - `e2e-db.sh` creates, imports and dumps scratch databases through `yard mysql` and
   `yard postgres` on the real instances (each engine's only one, else `mysql-8.4` and
-  `postgres-17`; `YARD_DB_MYSQL` and `YARD_DB_PG` name others), and checks that `yard db` still
-  works with its notice.
+  `postgres-17`; `YARD_DB_MYSQL` and `YARD_DB_PG` name others), and checks that `yard db` is
+  gone and names what replaced it.
 - `e2e-engines.sh` adds the carried Valkey, Memcached, Meilisearch and Typesense recipes
   (installing what is missing, Typesense's checksummed download included), asks each a question,
   checks the instance secrets and `meilisearch.yard`, then adds a `path` and an `npm` recipe of its

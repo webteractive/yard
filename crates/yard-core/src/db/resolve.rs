@@ -1,4 +1,4 @@
-//! Which instance a `yard db` command means (db spec §5).
+//! Which instance a database verb (`yard mysql list`) means (db spec §5).
 
 use crate::services::ServiceEngine;
 use yard_proto::{ErrorCode, YardError};
@@ -55,7 +55,7 @@ pub fn pick(
         if !allow(found) {
             return Err(YardError::new(
                 ErrorCode::DbUnsupportedEngine,
-                format!("{name} is {}; yard db works on MySQL and PostgreSQL instances", found.display),
+                format!("{name} is {}; its databases are not MySQL or PostgreSQL", found.display),
             )
             .with_hint("yard services lists the instances"));
         }

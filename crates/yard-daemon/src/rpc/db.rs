@@ -128,7 +128,7 @@ pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbComma
                 ErrorCode::InvalidArgument,
                 "that is a PostgreSQL archive; import it into a PostgreSQL instance",
             )
-            .with_hint("yard db import <name> <file> --service <postgres instance>"));
+            .with_hint("yard postgres import <name> <file>"));
         }
     };
     // Refused flags never wake anything.
@@ -151,7 +151,7 @@ pub(super) async fn command(ctx: &Context, p: DbCommandParams) -> Result<DbComma
                     ErrorCode::DbNotEmpty,
                     format!("{name} on {instance} already has tables; an import adds to what is there"),
                 )
-                .with_hint(format!("yard db import {name} <file> --into-existing")));
+                .with_hint(format!("yard {} import {name} <file> --into-existing", command_of(&instance))));
             }
         }
     }
@@ -488,4 +488,10 @@ async fn query(
         return Err(failed(format!("{instance}'s client failed: {last}"), tail));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The engine command an instance's databases go through: `postgres` for `postgres-17`.
+fn command_of(instance: &str) -> String {
+    yard_core::services::parse_instance(instance)
+        .map_or_else(|| "mysql".to_string(), |(key, _)| key.to_string())
 }

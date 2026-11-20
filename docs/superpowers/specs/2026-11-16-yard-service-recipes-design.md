@@ -368,7 +368,9 @@ yard <recipe-key> …             # whatever the recipe supports
 - **`yard db` goes away over one release (builder's call).** It shipped in 0.1.8: the release that
   brings the engine commands keeps `yard db <verb>` working and prints `yard db is going away: use
   yard <engine> <verb>` on stderr; the release after removes it. Yard.app and `scripts/e2e-db.sh`
-  move to the new commands in the same change.
+  move to the new commands in the same change. (0.1.10 shipped the engine commands; `yard db` was
+  removed for 0.1.11, and typing it exits 2 with `yard db is gone: use yard <engine> <verb>`. The
+  verbs are now parsed by their own `EngineArgs`, not by `yard db`'s command.)
 - **MariaDB,** when it comes, is a built-in with MySQL's database support and gets `yard mariadb`
   with no CLI work.
 

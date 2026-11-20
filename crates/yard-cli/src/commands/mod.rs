@@ -66,23 +66,10 @@ impl Ctx {
     }
 }
 
-/// The verb a `yard db` subcommand is, for the notice that names its replacement.
-fn db_verb(action: &DbSub) -> &'static str {
-    match action {
-        DbSub::List { .. } => "list",
-        DbSub::Create { .. } => "create",
-        DbSub::Connect { .. } => "connect",
-        DbSub::Open { .. } => "open",
-        DbSub::Shell { .. } => "shell",
-        DbSub::Dump { .. } => "dump",
-        DbSub::Import { .. } => "import",
-    }
-}
-
-/// Runs a database verb; `engine` limits the instance to that engine's (`yard mysql`).
-pub(crate) async fn db_action(ctx: &Ctx, action: DbSub, engine: Option<String>) -> Outcome {
+/// Runs a database verb, limited to `engine`'s instances (`yard mysql list`).
+pub(crate) async fn db_action(ctx: &Ctx, action: DbSub, engine: String) -> Outcome {
     let with = |mut at: DbAt| {
-        at.engine = engine.clone();
+        at.engine = Some(engine.clone());
         at
     };
     match action {
@@ -213,13 +200,6 @@ pub async fn run(cli: Cli) -> i32 {
                 services::sleep_after(&ctx, instance, after).await
             }
         },
-        Command::Db { action } => {
-            eprintln!(
-                "yard db is going away: use yard <engine> <verb> (yard mysql {0}, yard postgres {0})",
-                db_verb(&action)
-            );
-            db_action(&ctx, action, None).await
-        }
         Command::External(args) => engine_cmd::run(&ctx, args).await,
         Command::Env { site, service } => env::env(&ctx, site, service).await,
         Command::Info { site } => info::info(&ctx, site).await,

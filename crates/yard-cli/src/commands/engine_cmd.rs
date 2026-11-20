@@ -1,9 +1,9 @@
 //! `yard <engine> [verb] …`: each engine's own command (recipes spec §9.1). The engine is any
-//! the CLI knows, recipes included, read without yardd; a database verb is parsed exactly as
-//! `yard db <verb>` is and runs limited to that engine's instances.
+//! the CLI knows, recipes included, read without yardd; a database verb is parsed by
+//! `EngineArgs` and runs limited to that engine's instances.
 
 use super::{Ctx, Outcome, db_action};
-use crate::cli::{Cli, DbSub};
+use crate::cli::EngineArgs;
 use clap::{CommandFactory, FromArgMatches};
 use serde_json::Value;
 use std::ffi::OsString;
@@ -22,6 +22,12 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
     let paths = trailing_root(&rest).map_or_else(|| ctx.paths.clone(), yard_core::Paths::new);
     let engines = yard_daemon::engines::load_once(&paths, &Default::default());
     let Some(engine) = engines.get(&key).cloned() else {
+        if key == "db" {
+            eprintln!(
+                "error: yard db is gone: use yard <engine> <verb> (yard mysql list, yard postgres dump …)"
+            );
+            return Ok(2);
+        }
         eprintln!("error: unrecognized subcommand '{written}'\n\nFor more information, try 'yard --help'.");
         return Ok(2);
     };
@@ -38,16 +44,14 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
         let ctx = Ctx { paths, json: ctx.json, root_overridden, security: ctx.security.clone() };
         return open_console(&ctx, &key).await;
     }
-    // Parsed by `yard db`'s own command, named after what was typed, so help and usage errors
-    // say `yard mysql list`, not `yard db list`. Built first, so the global flags reach it.
-    let mut cli = Cli::command();
-    cli.build();
-    let Some(db) = cli.find_subcommand("db") else { return Ok(2) };
-    let mut db = db.clone().bin_name(format!("yard {written}"));
-    let argv = [format!("yard {written}"), verb.name().to_string()].into_iter().chain(tail);
-    let parsed = db
+    // Named after what was typed, so help and usage errors say `yard mysql list`.
+    let name = format!("yard {written}");
+    let mut cmd = EngineArgs::command().bin_name(name.clone());
+    let argv = [name, verb.name().to_string()].into_iter().chain(tail);
+    let parsed = cmd
         .try_get_matches_from_mut(argv)
-        .and_then(|m| Ok((DbSub::from_arg_matches(&m)?, m.get_flag("json"))));
+        .and_then(|m| EngineArgs::from_arg_matches(&m))
+        .map(|a| (a.action, a.json));
     let (action, json) = match parsed {
         Ok(parsed) => parsed,
         Err(e) => {
@@ -56,10 +60,10 @@ pub async fn run(ctx: &Ctx, args: Vec<OsString>) -> Outcome {
         }
     };
     let ctx = Ctx { paths, json: ctx.json || json, root_overridden, security: ctx.security.clone() };
-    db_action(&ctx, action, Some(key)).await
+    db_action(&ctx, action, key).await
 }
 
-/// The flags of `yard db`'s verbs that take a value: the word after one is never the verb.
+/// The flags of the database verbs that take a value: the word after one is never the verb.
 const VALUE_FLAGS: [&str; 3] = ["--service", "--site", "--root"];
 
 /// The `--root` among `args` before any `--`, in either spelling.

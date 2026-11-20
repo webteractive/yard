@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `yard mysql` and `yard postgres` (once `yard db`) end-to-end check on a real Mac (db spec §12), after e2e-m1.sh passes.
+# `yard mysql` and `yard postgres` (`yard db` until 0.1.11) end-to-end check on a real Mac (db spec §12), after e2e-m1.sh passes.
 #
 # On the real MySQL and PostgreSQL instances (YARD_DB_MYSQL and YARD_DB_PG; each defaults to the
 # engine's only instance, else mysql-8.4 and postgres-17; a missing PostgreSQL instance skips its
@@ -130,10 +130,12 @@ rows_my() { my -e "SELECT COUNT(*) FROM \`$1\`.t"; }
 [[ $(code "$yard" mysql create "${prefix}_e" --service "$mysql_instance") == ok ]] || fail "db create"
 [[ $("$yard" mysql create "${prefix}_e" --service "$mysql_instance" --json | jq -r .created) == false ]] || fail "a second create said created"
 pass "db create makes a database once"
-# yard db still works for one release, and says what replaces it (recipes spec §9.1).
-"$yard" db list --service "$mysql_instance" 2>&1 >/dev/null | grep -q "yard db is going away" \
-  || fail "yard db did not print its notice"
-pass "yard db still works and names yard <engine>"
+# yard db is gone, and says what replaced it (recipes spec §9.1).
+if "$yard" db list --service "$mysql_instance" >/dev/null 2>"$work/db-gone"; then
+  fail "yard db still runs"
+fi
+grep -q "yard db is gone: use yard <engine> <verb>" "$work/db-gone" || fail "yard db did not name its replacement"
+pass "yard db is gone and names yard <engine>"
 
 "$yard" mysql import "${prefix}_a" plain.sql --service "$mysql_instance" >/dev/null || fail "plain import"
 [[ $(rows_my "${prefix}_a") == 3 ]] || fail "plain import rows"

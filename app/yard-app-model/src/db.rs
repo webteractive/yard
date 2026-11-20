@@ -58,7 +58,7 @@ pub struct DumpRequest {
     pub extra: String,
 }
 
-/// `yard db dump <name> <file> [--compress] [--overwrite] --progress-json --service <i> [-- <words>]`.
+/// `yard <engine> dump <name> <file> [--compress] [--overwrite] --progress-json --service <i> [-- <words>]`.
 /// The engine command an instance's databases go through: `postgres` for `postgres-17`.
 fn engine_of(instance: &str) -> String {
     yard_core::services::parse_instance(instance)
@@ -97,7 +97,7 @@ pub struct ImportRequest {
     pub extra: String,
 }
 
-/// `yard db import <name> <file> [--into-existing] [--keep-owners] --progress-json --service <i>
+/// `yard <engine> import <name> <file> [--into-existing] [--keep-owners] --progress-json --service <i>
 /// [-- <words>]`, after the name is checked.
 pub fn import_args(r: &ImportRequest) -> Result<Vec<String>, YardError> {
     let database = database_name(&r.database)?;
@@ -130,14 +130,17 @@ pub fn suggested_name(file: &str) -> String {
     name
 }
 
-/// The state line `yard db connect` prints after the instance's name: whether it is up, and how
+/// The state line `yard <engine> connect` prints after the instance's name: whether it is up, and how
 /// to wake or start it.
 pub fn connect_state(i: &ConnectInfo) -> String {
     let n = &i.instance;
     match &i.state {
         ServiceState::Running => "running".to_string(),
         ServiceState::Stopped if i.sleeping => {
-            format!("sleeping — Open, yard db open or yard db shell wakes it; or yard service start {n}")
+            format!(
+                "sleeping — Open, yard {0} open or yard {0} shell wakes it; or yard service start {n}",
+                i.engine
+            )
         }
         ServiceState::Stopped => format!("stopped — yard service start {n}"),
         ServiceState::Starting => "starting".to_string(),

@@ -652,15 +652,15 @@ if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
   y service sleep-after mysql-8.4 off >/dev/null
   within 60 sh -c "'$yard_bin' --root '$root' services --json | jq -e 'any(.[]; .name == \"mysql-8.4\" and .state == \"running\")'" ||
     die "the scratch mysql-8.4 did not start (see $out/service-add-mysql.log)"
-  db_names() { y db list --service mysql-8.4 --json | jq -c '[.[0].databases[].name] | sort'; }
+  db_names() { y mysql list --service mysql-8.4 --json | jq -c '[.[0].databases[].name] | sort'; }
   mkdir -p "$root/dumps"
   ax tab Services >/dev/null
   ax row mysql-8.4 >/dev/null
   sleep 1
   shot services-mysql
 
-  # DB1: Connect… shows what yard db connect says, each field with a Copy that says what it copies
-  url="$(y db connect mysql-8.4 --json | jq -r '.[0].url')"
+  # DB1: Connect… shows what yard mysql connect says, each field with a Copy that says what it copies
+  url="$(y mysql connect mysql-8.4 --json | jq -r '.[0].url')"
   ax press "Connect…" mysql-8.4 >/dev/null
   if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e --arg u '$url' 'any(.[]; .role == \"AXStaticText\" and .value == \$u)'"; then
     shot connect
@@ -671,7 +671,7 @@ if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
     copied="$(pbpaste)"
     pbcopy <"$clip_backup"
     if texts_have "127.0.0.1" && texts_have "28382" && texts_have "(none)" && [[ "$described" -ge 5 && "$copied" == "$url" ]]; then
-      pass "DB1 Connect… shows yard db connect's fields ($url), $described Copy buttons say what they copy, and Copy URL copies it"
+      pass "DB1 Connect… shows yard mysql connect's fields ($url), $described Copy buttons say what they copy, and Copy URL copies it"
     else
       fail "DB1 Connect…" "copied [$copied], $described described Copy buttons, $(texts | grep -m3 -F -e 127.0.0.1 -e 28382 | tr '\n' ';')"
     fi
@@ -697,7 +697,7 @@ if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
     fail "DB2 a bad name was not refused in the sheet" "$(texts | tail -3 | tr '\n' ';')"
     ax key escape >/dev/null
   fi
-  y db shell chk_shop --service mysql-8.4 -- -e "create table t (id int); insert into t values (1), (2), (3)" >/dev/null 2>&1 ||
+  y mysql shell chk_shop --service mysql-8.4 -- -e "create table t (id int); insert into t values (1), (2), (3)" >/dev/null 2>&1 ||
     note "DB2 could not add a table to chk_shop"
 
   # DB3: Dump… through the save panel; bad Extra options stay in the sheet; Activity shows the bytes
@@ -739,7 +739,7 @@ if [[ -d "$(brew --prefix)/opt/mysql@8.4" ]]; then
   if within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .name == \"Into existing\")'"; then
     ax type Database chk_copy >/dev/null
     ax press Import >/dev/null
-    count() { y db shell chk_copy --service mysql-8.4 -- -N -B -e "select count(*) from t" 2>/dev/null; }
+    count() { y mysql shell chk_copy --service mysql-8.4 -- -N -B -e "select count(*) from t" 2>/dev/null; }
     if within 30 sh -c "[ \"\$('$yard_bin' --root '$root' db shell chk_copy --service mysql-8.4 -- -N -B -e 'select count(*) from t' 2>/dev/null)\" = 3 ]" &&
       within 10 sh -c "osascript -l JavaScript '$ax_js' tree | jq -e 'any(.[]; .role == \"AXRow\" and .name == \"chk_copy\")'"; then
       pass "DB4 Import… loads the gzipped dump from the open panel into a new chk_copy (3 rows), and the list shows it"

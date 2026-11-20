@@ -611,8 +611,8 @@ in it rather than dropped). A picker's popup closes on a click outside it. Confi
   **Port…**). From 2026-11-15 (db spec §10) a MySQL or PostgreSQL instance's detail also has
   **Databases** (`db.list`, fetched only while it runs, else **List databases** wakes it; each row
   **Open** and **Dump…**), **Create database…** (`db.create`), **Import…** and **Connect…** (§8's
-  fields with Copy, Copy URL and Open); Redis has **Connect…**. Dumps and imports run `yard db
-  dump|import --progress-json` through `CliRunner::stream`, as Activity cards with their bytes and
+  fields with Copy, Copy URL and Open); Redis has **Connect…**. Dumps and imports run `yard <engine>
+  dump|import --progress-json` (`yard db` until the recipes spec) through `CliRunner::stream`, as Activity cards with their bytes and
   Cancel (SIGINT), and Quit asks while one runs.
 - **PHP:** each version from `php.list { available: true }` (§13): installed or not, default,
   sites on it, pool state. **Install** and **Uninstall** are jobs; **Make default**
