@@ -29,17 +29,17 @@ fn pieces(word: &str) -> Vec<String> {
 }
 
 /// `word` and what PHP's `stripcslashes` makes of it, again and again: Composer's parse after
-/// `global` decodes escapes (`\x73` is `s`), once per `global`. Stops when nothing changes.
+/// `global` decodes escapes (`\x73` is `s`), once per `global`, however many there are. Stops
+/// when nothing changes, which it must: every change makes the word shorter.
 fn unescapings(word: &str) -> Vec<String> {
     let mut all = vec![word.to_string()];
-    while all.len() < 8 {
+    loop {
         let next = stripcslashes(all.last().map(String::as_str).unwrap_or_default());
-        if all.contains(&next) {
-            break;
+        if all.last() == Some(&next) {
+            return all;
         }
         all.push(next);
     }
-    all
 }
 
 /// PHP's `stripcslashes`: `\n`-style escapes, `\xH`/`\xHH` hex and `\O`–`\OOO` octal bytes, and a
@@ -111,7 +111,7 @@ fn takes_next(word: &str) -> bool {
 /// value that names a refused command is refused too: when an option Composer does not bind
 /// globally (`-r`, `--rollback`) makes its first pass fail, that word is the command after all.
 /// After `global`, an option word is split at whitespace, as Composer's second parse splits it.
-/// Since each review of that parsing found another spelling, past a word naming `global` a
+/// Since each review of that parsing found another spelling, when a word names `global` a
 /// one-word entry is also refused when any word, its escapes decoded, unquoted and split at
 /// whitespace and `=`, abbreviates it to SHORTEST letters or more, wherever it stands. This
 /// guards against a mistake, not a hostile project: a `composer.json` script can run anything as
@@ -123,21 +123,19 @@ pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
         let word = word.to_lowercase();
         r.args.first().is_some_and(|first| !word.is_empty() && first.to_lowercase().starts_with(&word))
     };
-    // Composer reads the words after `global` a second time, unquoting them and decoding their
-    // escapes once per `global`, and a skipped option value can be `global` itself. So past the
-    // first word naming `global`, any word that, decoded, unquoted and split at whitespace and `=`,
-    // abbreviates a one-word refused command to at least SHORTEST letters is refused wherever it
-    // stands; refusing too much there is safe. Before it, a word is a command only where the
-    // parse below finds one.
-    let global_at = words.iter().position(|w| {
+    // With `global` among them, Composer reads the words a second time from one string (an
+    // option word before `global` written as typed), unquoting them and decoding their escapes
+    // once per `global`, and a skipped option value can be `global` itself. So once a word names
+    // `global`, any word that, decoded, unquoted and split at whitespace and `=`, abbreviates a
+    // one-word refused command to at least SHORTEST letters is refused wherever it stands;
+    // refusing too much there is safe. Without one, a word is a command only where the parse
+    // below finds one.
+    let names_global = words.iter().position(|w| {
         pieces(w).iter().any(|p| !p.is_empty() && "global".starts_with(p.to_lowercase().as_str()))
     });
-    if let Some(g) = global_at
+    if names_global.is_some()
         && let Some(r) = def.refuse.iter().filter(|r| r.args.len() == 1).find(|r| {
-            words[g + 1..]
-                .iter()
-                .flat_map(|w| pieces(w))
-                .any(|p| p.chars().count() >= SHORTEST && names(&p, r))
+            words.iter().flat_map(|w| pieces(w)).any(|p| p.chars().count() >= SHORTEST && names(&p, r))
         })
     {
         return Some(r);

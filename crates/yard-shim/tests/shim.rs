@@ -462,6 +462,9 @@ fn self_update_is_refused_in_every_spelling() {
         &["global", "\\123ELF"],
         &["global", "-n '\\x73elf-update'"],
         &["global", "global '\\x5cx73elf-update'"],
+        // An option word before `global` is written out as typed for the second parse too.
+        &["-n self-update", "global"],
+        &["-n 'self-update'", "global"],
     ] {
         let out = run_as(&s, "composer", args);
         let (stdout, stderr) = texts(&out);
@@ -469,6 +472,12 @@ fn self_update_is_refused_in_every_spelling() {
         assert!(stderr.contains("is managed by Yard"), "{args:?}: {stderr}");
         assert!(stderr.contains("hint: yard runtime install composer <version>"), "{args:?}: {stderr}");
     }
+    // Each nested `global` decodes once more; however deep, the shim decodes as far.
+    let mut deep: Vec<String> = vec!["global".to_string(); 9];
+    deep.push(format!("\\x5c{}x73elf-update", "x5c".repeat(7)));
+    let deep: Vec<&str> = deep.iter().map(String::as_str).collect();
+    let out = run_as(&s, "composer", &deep);
+    assert_eq!(out.status.code(), Some(1), "{deep:?}: {}", texts(&out).0);
     for args in [
         &["search", "x"][..],
         &["-d", "./self-update", "install"],

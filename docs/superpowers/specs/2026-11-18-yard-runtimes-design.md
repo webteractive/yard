@@ -617,8 +617,9 @@ local HTTPS fixture.
   abbreviation of a refused word in any case (`self-u`, `SELF-UPDATE`), as Composer's console accepts
   them. Because every security review of that parsing found another spelling (`global "-n
   'self-update'"` and `global '\x73elf-update'`, which Composer's parse after `global` unquotes and
-  decodes as PHP's `stripcslashes` does; `-d/dev/fd global …`), past the first argument naming
-  `global` (where Composer parses a second time) a one-word entry is also refused when any argument,
+  decodes as PHP's `stripcslashes` does; `-d/dev/fd global …`; `"-n self-update" global`, an option
+  word before `global` being written out as typed for the second parse), once an argument names
+  `global` (so Composer parses a second time) a one-word entry is also refused when any argument,
   its escapes decoded (once per `global`, until nothing changes), quotes and backslashes dropped and
   split at whitespace and `=`, abbreviates it to three letters or more, wherever it stands (`sel` is
   the shortest Composer resolves; `se` is also `search`). Without `global`, `composer init
