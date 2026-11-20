@@ -15,31 +15,60 @@ use yard_proto::{ErrorCode, YardError};
 /// the shortest Composer resolves to `self-update` (`se` is also `search`).
 const SHORTEST: usize = 3;
 
-/// The words Composer's parse after `global` may find in `word`: each of its unescapings, split
-/// at whitespace and `=`, with quotes and backslashes dropped.
-fn pieces(word: &str) -> Vec<String> {
-    unescapings(word)
-        .iter()
-        .flat_map(|w| {
-            w.split(|c: char| c.is_whitespace() || c == '=')
-                .map(|p| p.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect::<String>())
-                .collect::<Vec<_>>()
-        })
-        .collect()
+/// How many times the shim decodes a word's escapes while `global` is named; a word still
+/// changing after that is refused. Composer decodes once per nested `global`, and no one nests
+/// sixteen by mistake.
+const MAX_DECODES: usize = 16;
+
+/// `word` split at whitespace and `=`, with quotes and backslashes dropped: the words a parse
+/// that unquotes may find in it.
+fn split_unquoted(word: &str) -> impl Iterator<Item = String> + '_ {
+    word.split(|c: char| c.is_whitespace() || c == '=')
+        .map(|p| p.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect::<String>())
 }
 
-/// `word` and what PHP's `stripcslashes` makes of it, again and again: Composer's parse after
-/// `global` decodes escapes (`\x73` is `s`), once per `global`, however many there are. Stops
-/// when nothing changes, which it must: every change makes the word shorter.
-fn unescapings(word: &str) -> Vec<String> {
-    let mut all = vec![word.to_string()];
-    loop {
-        let next = stripcslashes(all.last().map(String::as_str).unwrap_or_default());
-        if all.last() == Some(&next) {
-            return all;
+/// `text` with every run of `g`, `gl`, … `global` (any case) removed, as Composer's `global`
+/// removes the first such word it finds in the line it rebuilds, even from inside a word.
+fn without_global(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let (bytes, mut out, mut i) = (lower.as_bytes(), String::with_capacity(text.len()), 0);
+    while i < text.len() {
+        let run = b"global".iter().zip(&bytes[i..]).take_while(|(a, b)| a == b).count();
+        if run > 0 {
+            i += run;
+            continue;
         }
-        all.push(next);
+        let c = text[i..].chars().next().unwrap_or_default();
+        out.push(c);
+        i += c.len_utf8().max(1);
     }
+    out
+}
+
+/// Whether `word`, read as Composer's parses after `global` may read it, abbreviates `name` to
+/// at least SHORTEST letters: as written and after each PHP `stripcslashes` (once per nested
+/// `global`), each also without its `global` runs, unquoted and split. A word still changing
+/// after MAX_DECODES rounds counts as a match. Only the latest round is kept, so a long word
+/// costs MAX_DECODES passes over it.
+fn read_as(word: &str, name: &dyn Fn(&str) -> bool) -> bool {
+    let hit = |text: &str| {
+        [text.to_string(), without_global(text)]
+            .iter()
+            .flat_map(|t| split_unquoted(t).collect::<Vec<_>>())
+            .any(|p| p.chars().count() >= SHORTEST && name(&p))
+    };
+    let mut current = word.to_string();
+    for _ in 0..MAX_DECODES {
+        if hit(&current) {
+            return true;
+        }
+        let next = stripcslashes(&current);
+        if next == current {
+            return false;
+        }
+        current = next;
+    }
+    true
 }
 
 /// PHP's `stripcslashes`: `\n`-style escapes, `\xH`/`\xHH` hex and `\O`–`\OOO` octal bytes, and a
@@ -124,19 +153,20 @@ pub fn refused<'a>(def: &'a ShimDef, args: &[OsString]) -> Option<&'a Refuse> {
         r.args.first().is_some_and(|first| !word.is_empty() && first.to_lowercase().starts_with(&word))
     };
     // With `global` among them, Composer reads the words a second time from one string (an
-    // option word before `global` written as typed), unquoting them and decoding their escapes
-    // once per `global`, and a skipped option value can be `global` itself. So once a word names
-    // `global`, any word that, decoded, unquoted and split at whitespace and `=`, abbreviates a
-    // one-word refused command to at least SHORTEST letters is refused wherever it stands;
-    // refusing too much there is safe. Without one, a word is a command only where the parse
-    // below finds one.
-    let names_global = words.iter().position(|w| {
-        pieces(w).iter().any(|p| !p.is_empty() && "global".starts_with(p.to_lowercase().as_str()))
-    });
-    if names_global.is_some()
-        && let Some(r) = def.refuse.iter().filter(|r| r.args.len() == 1).find(|r| {
-            words.iter().flat_map(|w| pieces(w)).any(|p| p.chars().count() >= SHORTEST && names(&p, r))
-        })
+    // option word before `global` written as typed), unquoting them, decoding their escapes once
+    // per `global` and deleting the first `g`…`global` run it finds, and a skipped option value
+    // can be `global` itself. So once a word names `global`, any word that `read_as` finds
+    // abbreviating a one-word refused command is refused wherever it stands; refusing too much
+    // there is safe. Without one, a word is a command only where the parse below finds one.
+    let names_global = words
+        .iter()
+        .any(|w| split_unquoted(w).any(|p| !p.is_empty() && "global".starts_with(p.to_lowercase().as_str())));
+    if names_global
+        && let Some(r) = def
+            .refuse
+            .iter()
+            .filter(|r| r.args.len() == 1)
+            .find(|r| words.iter().any(|w| read_as(w, &|p: &str| names(p, r))))
     {
         return Some(r);
     }
@@ -322,7 +352,7 @@ mod tests {
         assert_eq!(stripcslashes(r"\x5cx73"), r"\x73");
         assert_eq!(stripcslashes(r"\q\x\\"), r"qx\");
         assert_eq!(stripcslashes(r"a\tb\"), "a\tb\\");
-        assert_eq!(unescapings(r"\x5cx73elf"), [r"\x5cx73elf", r"\x73elf", "self"]);
+        assert_eq!(without_global("selgf-uGLOBpdate glo"), "self-update ");
     }
     use crate::runtimes::select::InstallRecord;
     use std::ffi::OsString;

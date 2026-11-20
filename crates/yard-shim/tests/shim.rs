@@ -472,6 +472,23 @@ fn self_update_is_refused_in_every_spelling() {
         assert!(stderr.contains("is managed by Yard"), "{args:?}: {stderr}");
         assert!(stderr.contains("hint: yard runtime install composer <version>"), "{args:?}: {stderr}");
     }
+    // `global` deletes the first `g`…`global` it finds in the rebuilt line, even inside a word.
+    let out = run_as(&s, "composer", &["-n sel\"g\"f-update -nd", "global"]);
+    assert_eq!(out.status.code(), Some(1), "sel\"g\"f: {}", texts(&out).0);
+    // A word decoded past MAX_DECODES rounds while `global` is named is refused, and a long word
+    // costs linear time, with or without `global`.
+    let mut deeper: Vec<String> = vec!["global".to_string(); 2];
+    deeper.push(format!("\\x5c{}x73elf-update", "x5c".repeat(40)));
+    let deeper: Vec<&str> = deeper.iter().map(String::as_str).collect();
+    let out = run_as(&s, "composer", &deeper);
+    assert_eq!(out.status.code(), Some(1), "deeper: {}", texts(&out).0);
+    let long = format!("\\x5c{}", "x5c".repeat(30_000));
+    let started = std::time::Instant::now();
+    let out = run_as(&s, "composer", &["require", &long]);
+    assert!(out.status.success(), "{}", texts(&out).1);
+    let out = run_as(&s, "composer", &["global", "require", &long]);
+    assert_eq!(out.status.code(), Some(1), "a long undecodable word under global: {}", texts(&out).0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(3), "took {:?}", started.elapsed());
     // Each nested `global` decodes once more; however deep, the shim decodes as far.
     let mut deep: Vec<String> = vec!["global".to_string(); 9];
     deep.push(format!("\\x5c{}x73elf-update", "x5c".repeat(7)));

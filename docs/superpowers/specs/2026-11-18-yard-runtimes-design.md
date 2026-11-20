@@ -620,10 +620,15 @@ local HTTPS fixture.
   decodes as PHP's `stripcslashes` does; `-d/dev/fd global …`; `"-n self-update" global`, an option
   word before `global` being written out as typed for the second parse), once an argument names
   `global` (so Composer parses a second time) a one-word entry is also refused when any argument,
-  its escapes decoded (once per `global`, until nothing changes), quotes and backslashes dropped and
-  split at whitespace and `=`, abbreviates it to three letters or more, wherever it stands (`sel` is
-  the shortest Composer resolves; `se` is also `search`). Without `global`, `composer init
-  --description "Self hosted app"` and `composer run-script self` run. The refusal guards against a mistake, not a hostile project: a
+  as written or with its escapes decoded (once per nested `global`; a word still changing after 16
+  rounds is refused), each also with its `g`…`global` runs removed (`global` deletes the first one
+  it finds in the line it rebuilds, even inside a word: `sel"g"f-update`), quotes and backslashes
+  dropped and split at whitespace and `=`, abbreviates it to three letters or more, wherever it
+  stands (`sel` is the shortest Composer resolves; `se` is also `search`). Only the latest decoding
+  is kept, so a long argument costs at most 16 passes. Without `global`, `composer init
+  --description "Self hosted app"` and `composer run-script self` run. Symfony's "Did you mean …?"
+  prompt (`composer elf-up`, `composer glob-n self-update`) can still reach self-update once the
+  user answers yes. The refusal guards against a mistake, not a hostile project: a
   project's `composer.json` scripts run as the user and can do anything, `chmod` the phar included.
   The real guard against a mistake is that an install is read-only (files 0444, directories 0555) once it is in
   place: Composer's self-update refuses a phar it cannot write. Uninstall gives write access back,
